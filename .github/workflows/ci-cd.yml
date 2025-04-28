@@ -1,0 +1,39 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main # Trigger on push to main branch
+
+  pull_request:
+    branches:
+      - main # Trigger on pull requests to main
+
+jobs:
+  test-and-lint:
+    name: Test and Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv pip install --system --no-cache -r pyproject.toml --all-extras
+
+      - name: Lint with Ruff
+        run: uv run ruff check .
+
+      - name: Format with Ruff
+        run: uv run ruff format --check .
+
+      - name: Run tests with Pytest
+        run: uv run pytest

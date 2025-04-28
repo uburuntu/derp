@@ -1,0 +1,21 @@
+[project]
+name = "derp"
+version = "0.1.0"
+description = "AI-powered friendly Telegram bot"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aiocache>=0.12.3",
+    "aiogram[fast,i18n,redis]>=3.20.0.post0",
+    "pydantic>=2.11.3",
+    "pydantic-settings>=2.9.1",
+    "throttler>=1.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "pytest>=8.3.5",
+    "ruff>=0.11.7",
+    "uv>=0.6.17",
+]
