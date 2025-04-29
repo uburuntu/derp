@@ -1,10 +1,9 @@
 """Configuration settings using Pydantic."""
 
 from typing import Literal
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 from pydantic import Field, HttpUrl
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Docs: https://docs.pydantic.dev/2.8/concepts/pydantic_settings/
 

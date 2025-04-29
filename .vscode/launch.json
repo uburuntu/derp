@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run Derp Bot (dev)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "derp",
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Run Derp Bot (prod)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "derp",
+            "envFile": "${workspaceFolder}/.env.prod"
+        },
+    ]
+}
