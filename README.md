@@ -28,5 +28,6 @@ uv run ruff check .
 ## Environment Variables
 
 Copy `.env.example` to `.env` and configure:
+
 - `BOT_TOKEN`: Your Telegram bot token
 - Other settings as needed

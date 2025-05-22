@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import Field, HttpUrl
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Docs: https://docs.pydantic.dev/2.8/concepts/pydantic_settings/
@@ -21,11 +21,10 @@ class Settings(BaseSettings):
     # Token got from https://t.me/BotFather
     telegram_bot_token: str
 
-    # Chat to forward runtime exceptions
-    events_chat_id: int | None = None
+    # Gel (ex EdgeDB) database connection string
+    gel_instance: str
 
-    # URL to trigger every minute to detect app's crashes
-    health_check_url: HttpUrl | None = None
+    gel_secret_key: str
 
     # --- Non essentials ---
 
@@ -35,10 +34,7 @@ class Settings(BaseSettings):
         ]
     )
 
-    mechmath_chat_id: int = -1001091546301
     rmbk_id: int = 28006241
-
-    surprise_gif: str = "https://t.me/mechmath/743455"
 
     model_config = SettingsConfigDict(
         # `.env.prod` takes priority over `.env`
