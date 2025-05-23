@@ -225,6 +225,7 @@ dependencies = [
     { name = "aiocache" },
     { name = "aiogram", extra = ["fast", "i18n", "redis"] },
     { name = "babel" },
+    { name = "gel" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "throttler" },
@@ -243,6 +244,7 @@ requires-dist = [
     { name = "aiocache", specifier = ">=0.12.3" },
     { name = "aiogram", extras = ["fast", "i18n", "redis"], specifier = ">=3.20.0.post0" },
     { name = "babel", specifier = ">=2.13.1" },
+    { name = "gel", specifier = ">=3.1.0" },
     { name = "pydantic", specifier = ">=2.11.3" },
     { name = "pydantic-settings", specifier = ">=2.9.1" },
     { name = "throttler", specifier = ">=1.2.2" },
@@ -297,6 +299,22 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d3/c3/0fc2c97dea550df9afd072a37c1e95421652e3206bbeaa02378b24c2b480/frozenlist-1.6.0-cp313-cp313t-win32.whl", hash = "sha256:a4d96dc5bcdbd834ec6b0f91027817214216b5b30316494d2b1aebffb87c534f", size = 128797, upload_time = "2025-04-17T22:38:14.013Z" },
     { url = "https://files.pythonhosted.org/packages/ae/f5/79c9320c5656b1965634fe4be9c82b12a3305bdbc58ad9cb941131107b20/frozenlist-1.6.0-cp313-cp313t-win_amd64.whl", hash = "sha256:e18036cb4caa17ea151fd5f3d70be9d354c99eb8cf817a3ccde8a7873b074348", size = 134709, upload_time = "2025-04-17T22:38:15.551Z" },
     { url = "https://files.pythonhosted.org/packages/71/3e/b04a0adda73bd52b390d730071c0d577073d3d26740ee1bad25c3ad0f37b/frozenlist-1.6.0-py3-none-any.whl", hash = "sha256:535eec9987adb04701266b92745d6cdcef2e77669299359c3009c3404dd5d191", size = 12404, upload_time = "2025-04-17T22:38:51.668Z" },
+]
+
+[[package]]
+name = "gel"
+version = "3.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9c/70/84cee8eb48a2760893e60e8267502bc16ddef2197dd41f20c103a3f04e01/gel-3.1.0.tar.gz", hash = "sha256:3bb0b21167e00c976675a7d5dd73c21002e659651bf9de7fa46cd418bfa3eb85", size = 1331332, upload_time = "2025-04-29T20:44:49.659Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d1/f4/69cf0d0753e93526659d4810d7816d33a6c72f2934b26d14da283602d175/gel-3.1.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:f5e41f4ddc86e054256e81302905e671647577c1aed7249e1781aee1e0cb2f7c", size = 907956, upload_time = "2025-04-29T20:44:28.285Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/1b/88cc28e5c58e912b9d74f5b27bb41203af88cac9ea6cf329ccb9f4a23fab/gel-3.1.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:cd20c45beec358197293ad5c1fcf7fd383153e0d8d7038322085cf27436dc975", size = 863463, upload_time = "2025-04-29T20:44:29.906Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/52/57ce33203a606dac51abf16aaa2388d31a4efac434bb3730dc22494cea13/gel-3.1.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8a526e11ba696d1cf6c876c08afe6ab5f762a227faaa3b78523ebc2511567609", size = 4619168, upload_time = "2025-04-29T20:44:32.895Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/ad/eb7958f8197ba763054a706892c4948753f210c6f82ce46f7de9d13d4f94/gel-3.1.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c06f11fcde231d6264dbe0b19d7b2942767a196e9c6f2cabf22fbb04094134af", size = 4729625, upload_time = "2025-04-29T20:44:34.747Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/62/7b89eb81430f5714bf56f257679998a9a09f327f60d3c061dece5b5b2797/gel-3.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:48235a5082f03d7eccbcaa4255260c8a3cdb2cfd123f121dd6b0d3ebc51421ac", size = 831743, upload_time = "2025-04-29T20:44:36.992Z" },
 ]
 
 [[package]]

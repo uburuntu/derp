@@ -1,0 +1,143 @@
+module meta {
+    abstract type HasCreated {
+        required created_at: datetime {
+            rewrite insert using (datetime_of_statement())
+        }
+        index on (.created_at);
+    }
+
+    abstract type HasUpdated {
+        required updated_at: datetime {
+            rewrite insert using (datetime_of_statement());
+            
+            rewrite update using (
+                datetime_of_statement()
+                if (<json>__subject__ {**} != <json>__old__ {**})
+                else __old__.updated_at
+            );
+        }
+        index on (.updated_at);
+    }
+
+    abstract type HasMetadata {
+        metadata: json {
+            default := <json>'{}';
+        }
+    }
+
+    abstract type HasExpiration {
+        expires_at: datetime {
+            default := datetime_of_statement() + <cal::relative_duration>'30 days';
+        }
+        index on (.expires_at);
+
+        is_expired := .expires_at < datetime_of_statement();
+    }
+}
+
+module telegram {
+    type User extending meta::HasCreated, meta::HasUpdated, meta::HasMetadata {
+        annotation title := 'Telegram User';
+        annotation description := 'Represents a Telegram user or bot';
+
+        required user_id: int64 {
+            constraint exclusive;
+        }
+        required is_bot: bool;
+        required first_name: str;
+
+        last_name: str;
+        username: str;
+        language_code: str;
+        is_premium: bool {
+            default := false;
+        }
+        added_to_attachment_menu: bool {
+            default := false;
+        }
+
+        # Computed properties
+        full_name := (
+            .first_name ++ ((' ' ++ .last_name) if exists .last_name else '')
+        );
+        display_name := (
+            ('@' ++ .username) if exists .username else .full_name
+        );
+
+        # Backlinks
+        multi updates := .<from_user[is BotUpdate];
+
+        index on (.user_id);
+    }
+
+    type Chat extending meta::HasCreated, meta::HasUpdated, meta::HasMetadata {
+        annotation title := 'Telegram Chat';
+        annotation description := 'Represents a Telegram chat';
+
+        required chat_id: int64 {
+            constraint exclusive;
+        }
+        required type: str;
+
+        title: str;
+        username: str;
+        first_name: str;
+        last_name: str;
+        is_forum: bool {
+            default := false;
+        }
+
+        # Computed properties
+        display_name := (
+            .title if exists .title 
+            else (('@' ++ .username) if exists .username 
+                  else (.first_name ++ ((' ' ++ .last_name) if exists .last_name else '')))
+        );
+
+        # Backlinks
+        multi updates := .<chat[is BotUpdate];
+
+        # Indexes for common queries
+        index on (.chat_id);
+    }
+
+    type BotUpdate extending meta::HasCreated, meta::HasExpiration {
+        annotation title := 'Telegram Update';
+        annotation description := 'Represents an incoming Telegram update with TTL';
+
+        required update_id: int64;
+        required update_type: str;
+        required raw_data: json;
+
+        handled: bool {
+            default := false;
+        }
+
+        # Relations to users and chats
+        from_user: User {
+            on target delete allow;
+        }
+        chat: Chat {
+            on target delete allow;
+        }
+
+        # Indexes for efficient querying
+        index on (.update_type);
+        index on (.handled);
+        index on ((.update_type, .handled));
+        index on (.from_user);
+        index on (.chat);
+    }
+
+    # Alias for easier querying of non-expired updates
+    alias ActiveBotUpdates := (
+        select BotUpdate 
+        filter not .is_expired
+    );
+
+    # Alias for expired updates (for cleanup)
+    alias ExpiredBotUpdates := (
+        select BotUpdate 
+        filter .is_expired
+    );
+} 
