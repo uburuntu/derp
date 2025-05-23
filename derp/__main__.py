@@ -5,12 +5,8 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-
-# Remove MemoryStorage import if no longer needed
-# from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.i18n import I18n
-
-# Import SimpleI18nMiddleware instead of FSMI18nMiddleware
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
 from .common.utils import get_logger
@@ -19,13 +15,10 @@ from .handlers import basic
 from .middlewares.event_context import EventContextMiddleware
 from .middlewares.log_updates import LogUpdatesMiddleware
 
-logger = get_logger("Main")
-
-# Configure i18n
-i18n = I18n(path="derp/locales", default_locale="en", domain="messages")
-
 
 async def main():
+    logger = get_logger("Main")
+
     default = DefaultBotProperties(
         parse_mode="HTML",
         disable_notification=True,
@@ -39,22 +32,16 @@ async def main():
         default=default,
     )
 
-    # Log initial bot details
     bot_info = await bot.get_me()
     logger.info(
         f"Starting bot: {bot_info.full_name} (@{bot_info.username}) [ID: {bot_info.id}]"
     )
     logger.info(f"Environment: {settings.environment}")
 
-    # Remove storage if not used elsewhere
-    # dp = Dispatcher(storage=MemoryStorage())
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())
 
-    # Setup SimpleI18nMiddleware
+    i18n = I18n(path="derp/locales", default_locale="en", domain="messages")
     SimpleI18nMiddleware(i18n).setup(dp)
-
-    # Remove FSM middleware registration
-    # FSMI18nMiddleware(i18n).setup(dp)
 
     dp.update.outer_middleware(LogUpdatesMiddleware())
     dp.update.middleware(EventContextMiddleware())
