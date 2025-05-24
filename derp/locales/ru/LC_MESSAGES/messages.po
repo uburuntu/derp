@@ -27,3 +27,11 @@ msgstr ""
 msgid "I'm a friendly AI-powered Telegram bot"
 msgstr ""
 
+#: derp/handlers/ai_response.py:XXX
+msgid "🤔 I'm having trouble thinking right now. Try again in a moment."
+msgstr "🤔 У меня сейчас проблемы с мышлением. Попробуйте ещё раз через минуту."
+
+#: derp/handlers/ai_response.py:XXX
+msgid "😅 Something went wrong. I couldn't process that message."
+msgstr "😅 Что-то пошло не так. Я не смог обработать это сообщение."
+

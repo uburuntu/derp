@@ -10,7 +10,10 @@ dependencies = [
     "aiojobs>=1.4.0",
     "babel>=2.13.1",
     "gel>=3.1.0",
+    "logfire>=3.16.0",
     "pydantic>=2.11.3",
+    "pydantic-ai[logfire]>=0.2.6",
+    "pydantic-ai-slim[duckduckgo]>=0.2.6",
     "pydantic-settings>=2.9.1",
     "throttler>=1.2.2",
 ]
@@ -19,6 +22,7 @@ dependencies = [
 dev = [
     "black>=25.1.0",
     "pytest>=8.3.5",
+    "pytest-asyncio>=0.26.0",
     "ruff>=0.11.7",
     "uv>=0.6.17",
 ]

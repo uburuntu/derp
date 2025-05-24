@@ -26,6 +26,12 @@ class Settings(BaseSettings):
 
     gel_secret_key: str
 
+    # OpenAI API key for Pydantic AI
+    openai_api_key: str
+
+    # Logfire token
+    logfire_token: str
+
     # --- Non essentials ---
 
     admin_ids: set[int] = Field(

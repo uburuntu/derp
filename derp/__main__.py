@@ -3,6 +3,7 @@
 import asyncio
 import logging
 
+import logfire
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -12,10 +13,13 @@ from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 from .common.database import get_database_client
 from .common.utils import get_logger
 from .config import settings
-from .handlers import basic
+from .handlers import ai_response, basic
 from .middlewares.database_logger import DatabaseLoggerMiddleware
 from .middlewares.event_context import EventContextMiddleware
 from .middlewares.log_updates import LogUpdatesMiddleware
+
+logfire.configure(token=settings.logfire_token)
+logfire.instrument_pydantic_ai()
 
 
 async def main():
@@ -52,10 +56,10 @@ async def main():
     dp.update.outer_middleware(DatabaseLoggerMiddleware())
     dp.update.middleware(EventContextMiddleware())
 
-    dp.include_routers(basic.router)
+    dp.include_routers(basic.router, ai_response.router)
 
-    if settings.environment != "prod":
-        await bot.delete_webhook(drop_pending_updates=True)
+    # if settings.environment != "prod":
+    #     await bot.delete_webhook(drop_pending_updates=True)
 
     try:
         await dp.start_polling(bot)
