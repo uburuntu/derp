@@ -9,9 +9,11 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
+from .common.database import get_database_client
 from .common.utils import get_logger
 from .config import settings
 from .handlers import basic
+from .middlewares.database_logger import DatabaseLoggerMiddleware
 from .middlewares.event_context import EventContextMiddleware
 from .middlewares.log_updates import LogUpdatesMiddleware
 
@@ -43,7 +45,11 @@ async def main():
     i18n = I18n(path="derp/locales", default_locale="en", domain="messages")
     SimpleI18nMiddleware(i18n).setup(dp)
 
+    # Initialize middlewares
+    db_middleware = DatabaseLoggerMiddleware()
+
     dp.update.outer_middleware(LogUpdatesMiddleware())
+    dp.update.outer_middleware(DatabaseLoggerMiddleware())
     dp.update.middleware(EventContextMiddleware())
 
     dp.include_routers(basic.router)
@@ -51,7 +57,13 @@ async def main():
     if settings.environment != "prod":
         await bot.delete_webhook(drop_pending_updates=True)
 
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        # Cleanup resources
+        await db_middleware.close()
+        db_client = get_database_client()
+        await db_client.disconnect()
 
 
 if __name__ == "__main__":

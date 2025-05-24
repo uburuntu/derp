@@ -1,5 +1,4 @@
 import time
-
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -9,6 +8,7 @@ from aiogram.types import (
     TelegramObject,
     Update,
 )
+
 from ..common.tg import chat_info, decompose_update, user_info
 from ..common.utils import get_logger
 
