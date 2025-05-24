@@ -12,9 +12,15 @@ AI-powered friendly Telegram bot built with aiogram and Pydantic AI.
 
 ## Quick Start
 
+### Development
+
 ```bash
 # Install dependencies
-uv pip install --system -r pyproject.toml --all-extras
+uv sync
+
+# Copy environment file and configure
+cp env.example .env
+# Edit .env with your actual values
 
 # Run the bot
 uv run -m derp
@@ -24,18 +30,39 @@ uv run black .
 
 # Lint code
 uv run ruff check .
+
+# Run tests
+uv run pytest tests/ -v
 ```
 
-## Development
+### Production Deployment
 
-- Python 3.13+
-- Uses uv for dependency management
-- Ruff for linting and formatting
-- Docker support included
+```bash
+# Copy and configure environment
+cp env.example .env
+# Edit .env with production values
+
+# Deploy using the provided script
+./scripts/deploy.sh
+```
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and configure:
+Copy `env.example` to `.env` and configure:
 
-- `BOT_TOKEN`: Your Telegram bot token
-- Other settings as needed
+- `TELEGRAM_BOT_TOKEN`: Your Telegram bot token from @BotFather
+- `GEL_INSTANCE`: Your Gel (EdgeDB) database instance URL
+- `GEL_SECRET_KEY`: Your Gel database secret key
+- `OPENAI_API_KEY`: Your OpenAI API key for AI responses
+- `LOGFIRE_TOKEN`: Your Logfire token for logging
+- `ENVIRONMENT`: Set to "dev" or "prod"
+- `IS_DOCKER`: Set to "true" when running in Docker
+
+## Requirements
+
+- Python 3.13+
+- uv for dependency management
+- Docker (for production deployment)
+- Gel (EdgeDB) database
+- OpenAI API access
+- Logfire account (for logging)

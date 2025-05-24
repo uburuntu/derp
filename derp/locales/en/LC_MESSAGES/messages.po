@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-04-28 20:23+0100\n"
+"POT-Creation-Date: 2025-05-24 23:56+0100\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -18,19 +18,19 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.13.1\n"
 
+#: derp/handlers/ai_response.py:136
+msgid "🤔 I'm having trouble thinking right now. Try again in a moment."
+msgstr ""
+
+#: derp/handlers/ai_response.py:141
+msgid "😅 Something went wrong. I couldn't process that message."
+msgstr ""
+
 #: derp/handlers/basic.py:12
 msgid "Hello, {name}!"
 msgstr ""
 
 #: derp/handlers/basic.py:18
 msgid "I'm a friendly AI-powered Telegram bot"
-msgstr ""
-
-#: derp/handlers/ai_response.py:XXX
-msgid "🤔 I'm having trouble thinking right now. Try again in a moment."
-msgstr ""
-
-#: derp/handlers/ai_response.py:XXX
-msgid "😅 Something went wrong. I couldn't process that message."
 msgstr ""
 

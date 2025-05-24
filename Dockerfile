@@ -1,43 +1,48 @@
-# Use an official Python runtime as a parent image
-FROM python:3.13-slim as base
+# syntax=docker/dockerfile:1
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+# Use the official uv image based on Python 3.13 bookworm slim
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm AS builder
 
-# Install uv
-RUN pip install --no-cache-dir uv
+# Set environment variables for uv
+ENV UV_CACHE_DIR=/opt/uv-cache/
+ENV UV_SYSTEM_PYTHON=1
 
-# Set the working directory in the container
+# Set the working directory
 WORKDIR /app
 
-# --- Builder Stage ---
-FROM base as builder
-
-# Copy the dependency definitions
-COPY pyproject.toml ./
-# If you generate a uv.lock file locally, uncomment the next line
-# COPY uv.lock ./
-
-# Install dependencies using uv
-# Use --frozen-lockfile if you have a uv.lock file
-RUN uv pip install --system --no-cache -r pyproject.toml --all-extras
-# Alternatively, if using uv.lock:
-# RUN uv pip sync --system --no-cache uv.lock
-
-# --- Runtime Stage ---
-FROM base as runtime
-
-# Copy the installed dependencies from the builder stage
-COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Install dependencies first (separate layer for better caching)
+# This layer will only rebuild if pyproject.toml or uv.lock changes
+RUN --mount=type=cache,target=/opt/uv-cache/ \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --locked --no-install-project --no-editable
 
 # Copy the application code
-COPY ./derp ./derp
+COPY . /app
 
-# Expose port if the application needs it (unlikely for a simple bot)
-# EXPOSE 8080
+# Install the project itself in non-editable mode
+RUN --mount=type=cache,target=/opt/uv-cache/ \
+    uv sync --locked --no-editable
 
-# Define the command to run the application
-# This assumes your main script is in derp/main.py
-CMD ["python", "-m", "derp.main"] 
+# Production stage - smaller final image
+FROM python:3.13-slim AS runtime
+
+# Copy the virtual environment from builder stage
+COPY --from=builder --chown=app:app /app/.venv /app/.venv
+
+# Copy application code
+COPY --from=builder --chown=app:app /app/derp /app/derp
+
+# Create non-root user for security
+RUN groupadd --gid=1000 app && \
+    useradd --uid=1000 --gid=app --shell=/bin/bash --create-home app
+
+# Set working directory and switch to non-root user
+WORKDIR /app
+USER app
+
+# Ensure the virtual environment is in PATH
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Set the default command
+CMD ["python", "-m", "derp"] 

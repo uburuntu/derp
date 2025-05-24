@@ -58,8 +58,9 @@ async def main():
 
     dp.include_routers(basic.router, ai_response.router)
 
-    # if settings.environment != "prod":
-    #     await bot.delete_webhook(drop_pending_updates=True)
+    # Clear webhook in development environment
+    if settings.environment == "dev":
+        await bot.delete_webhook(drop_pending_updates=True)
 
     try:
         await dp.start_polling(bot)

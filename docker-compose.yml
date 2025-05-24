@@ -6,28 +6,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Use BuildKit for better caching and features
+      cache_from:
+        - ghcr.io/astral-sh/uv:python3.13-bookworm
     container_name: derp_bot
     # Mount the .env file into the container for secret management
     # Make sure a .env file exists in the project root
     env_file:
       - .env
+    # Security: run as non-root, read-only filesystem where possible
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     # Automatically restart the container if it crashes or the system reboots
-    restart: always
-    # Optional: Mount the source code for development (comment out for production)
-    # volumes:
-    #   - ./derp:/app/derp
-    # Optional: Set logging driver and options
-    # logging:
-    #   driver: "json-file"
-    #   options:
-    #     max-size: "10m"
-    #     max-file: "3"
-
-# Optional: Define networks if needed
-# networks:
-#   default:
-#     driver: bridge
-
-# Optional: Define volumes if needed for persistent data
-# volumes:
-#   data: 
+    restart: unless-stopped

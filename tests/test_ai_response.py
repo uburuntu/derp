@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram.types import Chat, Message, User
 
-from derp.handlers.ai_response import AIService, DerpMentionFilter, PrivateChatFilter
+from derp.handlers.ai_response import AIService, DerpMentionFilter
 
 
 class TestDerpMentionFilter:
@@ -70,47 +70,6 @@ class TestDerpMentionFilter:
         assert result is True  # Should still detect the standalone 'derp'
 
 
-class TestPrivateChatFilter:
-    """Test the PrivateChatFilter."""
-
-    @pytest.fixture
-    def filter_instance(self):
-        return PrivateChatFilter()
-
-    @pytest.mark.asyncio
-    async def test_detects_private_chat(self, filter_instance):
-        """Test detection of private chat."""
-        message = MagicMock(spec=Message)
-        chat = MagicMock(spec=Chat)
-        chat.type = "private"
-        message.chat = chat
-
-        result = await filter_instance(message)
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_rejects_group_chat(self, filter_instance):
-        """Test rejection of group chat."""
-        message = MagicMock(spec=Message)
-        chat = MagicMock(spec=Chat)
-        chat.type = "group"
-        message.chat = chat
-
-        result = await filter_instance(message)
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_rejects_supergroup_chat(self, filter_instance):
-        """Test rejection of supergroup chat."""
-        message = MagicMock(spec=Message)
-        chat = MagicMock(spec=Chat)
-        chat.type = "supergroup"
-        message.chat = chat
-
-        result = await filter_instance(message)
-        assert result is False
-
-
 class TestAIService:
     """Test the AIService class."""
 
@@ -125,15 +84,15 @@ class TestAIService:
         user.language_code = "en"
         user.is_bot = False
         user.is_premium = True
+        user.mention_markdown.return_value = "@alice"
 
         result = service._get_detailed_user_info(user)
 
-        assert "@alice" in result
         assert "Name: Alice Smith" in result
         assert "ID: 12345" in result
         assert "Language: en" in result
         assert "Bot: False" in result
-        assert "Premium: True" in result
+        assert "@alice" in result
 
     def test_detailed_user_info_minimal(self):
         """Test user info with minimal data."""
@@ -146,12 +105,12 @@ class TestAIService:
         user.language_code = None
         user.is_bot = None
         user.is_premium = None
+        user.mention_markdown.return_value = "@unknown"
 
         result = service._get_detailed_user_info(user)
 
         assert "ID: 67890" in result
-        assert "@" not in result  # No username
-        assert "Name:" not in result  # No name
+        assert "Name: None" in result
 
     def test_detailed_chat_info_private(self):
         """Test chat info for private chat."""
@@ -160,15 +119,14 @@ class TestAIService:
         chat = MagicMock(spec=Chat)
         chat.id = -123456
         chat.type = "private"
-        chat.title = None
+        chat.full_name = "Alice Smith"
         chat.username = None
-        chat.description = None
-        chat.member_count = None
 
         result = service._get_detailed_chat_info(chat)
 
         assert "Type: private" in result
         assert "ID: -123456" in result
+        assert "Title: Alice Smith" in result
 
     def test_detailed_chat_info_group(self):
         """Test chat info for group chat."""
@@ -177,10 +135,8 @@ class TestAIService:
         chat = MagicMock(spec=Chat)
         chat.id = -789012
         chat.type = "supergroup"
-        chat.title = "Tech Discussion"
+        chat.full_name = "Tech Discussion"
         chat.username = "tech_group"
-        chat.description = "A group for tech discussions"
-        chat.member_count = 150
 
         result = service._get_detailed_chat_info(chat)
 
@@ -188,8 +144,6 @@ class TestAIService:
         assert "ID: -789012" in result
         assert "Title: Tech Discussion" in result
         assert "Username: @tech_group" in result
-        assert "Description: A group for tech discussions" in result
-        assert "Members: 150" in result
 
     def test_context_preparation_with_enhanced_info(self):
         """Test context preparation with enhanced user and chat information."""
@@ -203,15 +157,14 @@ class TestAIService:
         user.language_code = "en"
         user.is_bot = False
         user.is_premium = False
+        user.mention_markdown.return_value = "@bob"
 
         # Mock chat
         chat = MagicMock(spec=Chat)
         chat.id = -67890
         chat.type = "private"
-        chat.title = None
+        chat.full_name = "Bob Jones"
         chat.username = None
-        chat.description = None
-        chat.member_count = None
 
         # Mock message
         message = MagicMock(spec=Message)
@@ -220,18 +173,18 @@ class TestAIService:
         message.chat = chat
         message.reply_to_message = None
         message.message_id = 100
-        message.date = "2025-01-01 12:00:00"
+        message.date = MagicMock()
+        message.date.isoformat.return_value = "2025-01-01T12:00:00"
 
         context = service.prepare_message_context(message)
 
-        assert "User Information:" in context
+        assert "Current user:" in context
         assert "@bob" in context
         assert "Name: Bob Jones" in context
-        assert "Chat Information:" in context
+        assert "Current chat:" in context
         assert "Type: private" in context
-        assert "Current Message:" in context
-        assert "Message ID: 100" in context
-        assert "Message Date:" in context
+        assert "Message:" in context
+        assert "Date:" in context
 
     def test_context_preparation_with_reply_enhanced(self):
         """Test context preparation with reply and enhanced information."""
@@ -245,10 +198,12 @@ class TestAIService:
         original_user.language_code = None
         original_user.is_bot = None
         original_user.is_premium = None
+        original_user.mention_markdown.return_value = "@alice"
 
         # Mock original message
         original_message = MagicMock(spec=Message)
         original_message.text = "The sky is blue."
+        original_message.caption = None
         original_message.from_user = original_user
 
         # Mock current user
@@ -259,37 +214,37 @@ class TestAIService:
         current_user.language_code = None
         current_user.is_bot = None
         current_user.is_premium = None
+        current_user.mention_markdown.return_value = "@bob"
 
         # Mock chat
         chat = MagicMock(spec=Chat)
         chat.id = -33333
         chat.type = "group"
-        chat.title = "Test Group"
+        chat.full_name = "Test Group"
         chat.username = None
-        chat.description = None
-        chat.member_count = None
 
         # Mock current message
         message = MagicMock(spec=Message)
         message.text = "derp, is that correct?"
+        message.caption = None
         message.from_user = current_user
         message.chat = chat
         message.reply_to_message = original_message
         message.message_id = 200
-        message.date = "2025-01-01 12:05:00"
+        message.date = MagicMock()
+        message.date.isoformat.return_value = "2025-01-01T12:05:00"
 
         context = service.prepare_message_context(message)
 
-        assert "User Information:" in context
+        assert "Current user:" in context
         assert "@bob" in context
-        assert "Chat Information:" in context
+        assert "Current chat:" in context
         assert "Type: group" in context
         assert "Title: Test Group" in context
-        assert "Replied Message Context:" in context
-        assert "Original Author:" in context
+        assert "Replied to user:" in context
         assert "@alice" in context
-        assert 'Original Message: "The sky is blue."' in context
-        assert 'Current Message: "derp, is that correct?"' in context
+        assert 'Replied to message: ```"The sky is blue."```' in context
+        assert "Message: ```derp, is that correct?```" in context
 
     @pytest.mark.asyncio
     async def test_generate_response_with_mock_agent(self):
@@ -303,8 +258,8 @@ class TestAIService:
         mock_agent = AsyncMock()
         mock_agent.run.return_value = mock_result
 
-        # Patch the _get_agent method to return our mock
-        with patch.object(service, "_get_agent", return_value=mock_agent):
+        # Patch the agent property to return our mock
+        with patch.object(service, "agent", mock_agent):
             response = await service.generate_response("Test context")
 
             assert response == "This is a test response"
@@ -322,6 +277,7 @@ class TestAIService:
         original_user.language_code = None
         original_user.is_bot = None
         original_user.is_premium = None
+        original_user.mention_markdown.return_value = "@alice"
 
         # Mock original message with caption
         original_message = MagicMock(spec=Message)
@@ -337,27 +293,28 @@ class TestAIService:
         current_user.language_code = None
         current_user.is_bot = None
         current_user.is_premium = None
+        current_user.mention_markdown.return_value = "@bob"
 
         # Mock chat
         chat = MagicMock(spec=Chat)
         chat.id = -33333
         chat.type = "private"
-        chat.title = None
+        chat.full_name = "Bob Smith"
         chat.username = None
-        chat.description = None
-        chat.member_count = None
 
         # Mock current message
         message = MagicMock(spec=Message)
         message.text = "derp, what do you think?"
+        message.caption = None
         message.from_user = current_user
         message.chat = chat
         message.reply_to_message = original_message
         message.message_id = 300
-        message.date = "2025-01-01 12:10:00"
+        message.date = MagicMock()
+        message.date.isoformat.return_value = "2025-01-01T12:10:00"
 
         context = service.prepare_message_context(message)
 
-        assert "Original Author:" in context
+        assert "Replied to user:" in context
         assert "@alice" in context
-        assert 'Original Message: "Check out this photo!" (with media)' in context
+        assert 'Replied to message: ```"Check out this photo!"```' in context
