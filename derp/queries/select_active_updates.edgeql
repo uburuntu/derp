@@ -1,5 +1,5 @@
-# Select ActiveUpdates per chat_id, sorted in ascending order
-# Parameters: $chat_id
+# Select ActiveUpdates per chat_id, sorted in descending order (most recent first)
+# Parameters: $chat_id, $limit
 select telegram::ActiveBotUpdates {
     id,
     update_id,
@@ -20,4 +20,5 @@ select telegram::ActiveBotUpdates {
     }
 }
 filter .chat.chat_id = <int64>$chat_id
-order by .update_id asc; 
+order by .created_at desc
+limit <int64>$limit; 

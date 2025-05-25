@@ -1,55 +1,47 @@
 """AI-powered response handler for messages mentioning 'derp' or 'дерп' and /derp command."""
 
-import re
 from functools import cached_property
 from typing import Any
 
+import logfire
 from aiogram import F, Router
-from aiogram.filters import BaseFilter, Command, or_f
+from aiogram.filters import Command
 from aiogram.handlers import MessageHandler
-from aiogram.types import Chat, Message, User
+from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
 from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ..common.utils import get_logger
+from ..common.database import get_database_client
 from ..config import settings
+from ..filters import DerpMentionFilter
+from ..queries.select_active_updates_async_edgeql import select_active_updates
 
 router = Router(name="ai")
-logger = get_logger("AIResponse")
 
 
-class DerpMentionFilter(BaseFilter):
-    """Filter for messages that mention 'derp' or 'дерп'."""
+@router.message(DerpMentionFilter())
+@router.message(Command("derp"))
+@router.message(F.chat.type == "private")
+class DerpResponseHandler(MessageHandler):
+    """Class-based message handler for AI responses when 'derp' is mentioned, /derp command is used, or in private chats."""
 
-    async def __call__(self, message: Message) -> bool:
-        if not message.text:
-            return False
-
-        # Case-insensitive check for "derp" in English or Russian
-        pattern = r"\b(derp|дерп)\b"
-        return bool(re.search(pattern, message.text, re.IGNORECASE))
-
-
-class AIService:
-    """Service class for handling AI operations. Reusable for future agentic tools."""
-
-    def __init__(self):
-        self._system_prompt = (
-            "You are a helpful, conversational assistant in Telegram, called Derp. "
-            "Reply in the user's language, using Markdown (bold, italic, underline, strikethrough, code, link only). "
-            "Be concise, friendly, and clear—responses under 200 words unless more detail is requested. "
-            "Personalize replies using user and chat context, when needed. "
-            "Transliterate names to match the user's language (e.g., Ramzan → Рамзан). "
-            "If users are ironic or joking, you can be a bit sarcastic in response; don't get offended. "
-            "You can't see the sent media yet. "
-            "Don't finish your response with follow up questions like `If you need more details, let me know`. "
-        )
+    _system_prompt = (
+        "You are a helpful, conversational assistant in Telegram, called Derp. "
+        "Reply in the user's message language, using Markdown (bold, italic, underline, strikethrough, code, link only). "
+        "Be concise, friendly, and clear—responses under 200 words unless more detail is requested. "
+        "Personalize replies using user and chat context, when needed. "
+        "Transliterate names to match your output's language (e.g., Ramzan → Рамзан). "
+        "If users are ironic or joking, you can be a bit sarcastic in response; don't get offended. "
+        "You can't see the sent media yet. "
+        "Don't finish your response with follow up questions like `If you need more details, let me know`. "
+    )
 
     @cached_property
     def agent(self) -> Agent:
+        """Get the PydanticAI agent instance."""
         model = OpenAIModel(
             "o3-mini", provider=OpenAIProvider(api_key=settings.openai_api_key)
         )
@@ -57,86 +49,47 @@ class AIService:
             model, tools=[duckduckgo_search_tool()], system_prompt=self._system_prompt
         )
 
-    async def generate_response(self, context: str) -> str:
-        """Generate AI response for given context."""
-        result = await self.agent.run(context)
-        return result.output
+    async def _generate_context(self, message: Message) -> str:
+        """Generate context for the AI prompt from the message and recent chat history."""
+        context_parts = []
 
-    def prepare_message_context(self, message: Message) -> str:
-        lines = [
-            f"Current user: {self._get_detailed_user_info(message.from_user)}",
-            f"Current chat: {self._get_detailed_chat_info(message.chat)}",
-        ]
-
-        if message.reply_to_message:
-            reply_to = message.reply_to_message
-            reply_to_text = (
-                reply_to.text or reply_to.caption or "(media message without text)"
+        # Add recent chat history
+        db_client = get_database_client()
+        async with db_client.get_executor() as executor:
+            recent_updates = await select_active_updates(
+                executor, chat_id=message.chat.id, limit=10
             )
-            lines.append(
-                f"Replied to user: {self._get_detailed_user_info(reply_to.from_user)}"
-            )
-            lines.append(f'Replied to message: ```"{reply_to_text}"```')
 
-        message_text = message.text or message.caption or "(media message without text)"
-        lines.append(f"Message: ```{message_text}```")
-        lines.append(f"Date: {message.date.isoformat()}")
+        if recent_updates:
+            context_parts.append("--- Recent Chat History ---")
+            for update in reversed(recent_updates):  # Show oldest first
+                context_parts.append(f"Update: {update.raw_data}")
 
-        return "\n".join(lines)
+        # Add current message
+        context_parts.append("--- Current Message ---")
+        context_parts.append(message.model_dump_json(exclude_none=True))
 
-    def _get_detailed_user_info(self, user: User) -> str:
-        """Get comprehensive user information."""
-
-        info_parts = [
-            f"Name: {user.full_name}",
-            f"ID: {user.id}",
-            f"Bot: {user.is_bot}",
-            f"Link to mention: {user.mention_markdown()}",
-            f"@{user.username}" if user.username else "",
-            f"Language: {user.language_code}" if user.language_code else "",
-        ]
-        return " | ".join(filter(None, info_parts))
-
-    def _get_detailed_chat_info(self, chat: Chat) -> str:
-        """Get comprehensive chat information."""
-
-        info_parts = [
-            f"Type: {chat.type}",
-            f"Title: {chat.full_name}",
-            f"ID: {chat.id}",
-            f"Username: @{chat.username}" if chat.username else "",
-        ]
-
-        return " | ".join(filter(None, info_parts))
-
-
-# Create a shared AI service instance
-ai_service = AIService()
-
-
-@router.message(or_f(DerpMentionFilter(), Command("derp"), F.chat.type == "private"))
-class DerpResponseHandler(MessageHandler):
-    """Class-based message handler for AI responses when 'derp' is mentioned, /derp command is used, or in private chats."""
+        return "\n".join(context_parts)
 
     async def handle(self) -> Any:
         """Handle messages that mention 'derp', use /derp command, or are in private chats."""
         try:
-            # Prepare comprehensive context using the AI service
-            context = ai_service.prepare_message_context(self.event)
+            # Generate context around the incoming message
+            context = await self._generate_context(self.event)
 
             # Generate AI response
-            response_text = await ai_service.generate_response(context)
+            result = await self.agent.run(context)
+            response_text = result.output
 
             # Return the response using SendMessage
             return await self.event.reply(response_text, parse_mode="Markdown")
 
-        except ModelRetry as e:
-            logger.error(f"Model retry error: {e}")
+        except ModelRetry:
             return await self.event.reply(
                 _("🤔 I'm having trouble thinking right now. Try again in a moment.")
             )
-        except Exception as e:
-            logger.error(f"Error in AI response handler: {e}")
+        except Exception:
+            logfire.error("Error in AI response handler", _exc_info=True)
             return await self.event.reply(
                 _("😅 Something went wrong. I couldn't process that message.")
             )

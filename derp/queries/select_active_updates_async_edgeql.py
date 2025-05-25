@@ -58,11 +58,12 @@ async def select_active_updates(
     executor: gel.AsyncIOExecutor,
     *,
     chat_id: int,
+    limit: int,
 ) -> list[SelectActiveUpdatesResult]:
     return await executor.query(
         """\
-        # Select ActiveUpdates per chat_id, sorted in ascending order
-        # Parameters: $chat_id
+        # Select ActiveUpdates per chat_id, sorted in descending order (most recent first)
+        # Parameters: $chat_id, $limit
         select telegram::ActiveBotUpdates {
             id,
             update_id,
@@ -83,7 +84,9 @@ async def select_active_updates(
             }
         }
         filter .chat.chat_id = <int64>$chat_id
-        order by .update_id asc;\
+        order by .created_at desc
+        limit <int64>$limit;\
         """,
         chat_id=chat_id,
+        limit=limit,
     )

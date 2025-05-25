@@ -11,19 +11,36 @@ from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
 from .common.database import get_database_client
-from .common.utils import get_logger
 from .config import settings
 from .handlers import ai_response, basic
 from .middlewares.database_logger import DatabaseLoggerMiddleware
 from .middlewares.event_context import EventContextMiddleware
 from .middlewares.log_updates import LogUpdatesMiddleware
 
-logfire.configure(token=settings.logfire_token)
+# Configure logfire with basic settings
+logfire.configure(
+    token=settings.logfire_token,
+    service_name=settings.app_name,
+    environment=settings.environment,
+)
+
 logfire.instrument_pydantic_ai()
+logfire.instrument_system_metrics()
+logfire.instrument_pydantic(record="failure", include={"aiogram"})
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s][%(name)s][%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+        logfire.LogfireLoggingHandler(fallback=None),
+    ],
+)
 
 
 async def main():
-    logger = get_logger("Main")
+    logger = logging.getLogger("Main")
 
     default = DefaultBotProperties(
         parse_mode="HTML",
@@ -58,10 +75,6 @@ async def main():
 
     dp.include_routers(basic.router, ai_response.router)
 
-    # Clear webhook in development environment
-    if settings.environment == "dev":
-        await bot.delete_webhook(drop_pending_updates=True)
-
     try:
         await dp.start_polling(bot)
     finally:
@@ -76,3 +89,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("App stopped! Good bye.")
+    except Exception:
+        logfire.fatal("App crashed", _exc_info=True)
+        raise

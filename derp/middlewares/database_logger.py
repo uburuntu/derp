@@ -11,12 +11,10 @@ from aiogram.types import TelegramObject, Update
 
 from ..common.database import get_database_client
 from ..common.tg import decompose_update
-from ..common.utils import get_logger
 
 
 class DatabaseLoggerMiddleware(BaseMiddleware):
     def __init__(self):
-        self.logger = get_logger(__name__)
         self.db_client = get_database_client()
 
     @cached_property

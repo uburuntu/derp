@@ -1,4 +1,3 @@
-import logging
 import random
 
 
@@ -14,20 +13,3 @@ def percent_chance(percent: float) -> bool:
         raise ValueError(f"`percent` should be between 0. an 100., not {percent}")
     chance = percent / 100.0
     return random.random() < chance
-
-
-def get_logger(component_name: str, level=logging.DEBUG) -> logging.Logger:
-    logger = logging.Logger(component_name)
-    logger.setLevel(level)
-
-    formatter = logging.Formatter(
-        "[%(asctime)s][%(name)s][%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    handler_console = logging.StreamHandler()
-    handler_console.setFormatter(formatter)
-    handler_console.setLevel(level)
-    logger.addHandler(handler_console)
-
-    return logger

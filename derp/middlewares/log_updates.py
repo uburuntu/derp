@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -10,7 +11,6 @@ from aiogram.types import (
 )
 
 from ..common.tg import chat_info, decompose_update, user_info
-from ..common.utils import get_logger
 
 
 class LogUpdatesMiddleware(BaseMiddleware):
@@ -19,7 +19,8 @@ class LogUpdatesMiddleware(BaseMiddleware):
     """
 
     def __init__(self):
-        self.logger = get_logger("Update")
+        self.logger = logging.getLogger("Update")
+        self.logger.setLevel(logging.DEBUG)
 
     @classmethod
     def log_string(cls, update: Update, elapsed_ms: int) -> str:
