@@ -6,7 +6,6 @@ from typing import Any
 
 import aiojobs
 from aiogram import BaseMiddleware
-from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.types import TelegramObject, Update
 
 from ..common.database import get_database_client
@@ -58,16 +57,14 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
             coro = self.db_client.upsert_chat_record(sender_chat)
             await self.scheduler.spawn(coro)
 
-        response = await handler(event, data)
-
         coro = self.db_client.insert_bot_update_record(
             update_id=event.update_id,
             update_type=update_type,
             raw_data=raw_data,
             user_id=user_id,
             chat_id=chat_id,
-            handled=response is not UNHANDLED,
+            handled=False,
         )
         await self.scheduler.spawn(coro)
 
-        return response
+        return await handler(event, data)

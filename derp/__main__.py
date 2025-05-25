@@ -7,6 +7,7 @@ import logfire
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.utils.chat_action import ChatActionMiddleware
 from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
@@ -72,6 +73,7 @@ async def main():
     dp.update.outer_middleware(LogUpdatesMiddleware())
     dp.update.outer_middleware(DatabaseLoggerMiddleware())
     dp.update.middleware(EventContextMiddleware())
+    dp.update.middleware(ChatActionMiddleware())
 
     dp.include_routers(basic.router, ai_response.router)
 

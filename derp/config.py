@@ -49,5 +49,9 @@ class Settings(BaseSettings):
         extra="ignore",  # Ignore extra fields from .env
     )
 
+    @property
+    def bot_id(self) -> int:
+        return int(self.telegram_bot_token.split(":")[0])
+
 
 settings = Settings()

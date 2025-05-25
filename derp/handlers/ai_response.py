@@ -4,10 +4,10 @@ from functools import cached_property
 from typing import Any
 
 import logfire
-from aiogram import F, Router
+from aiogram import F, Router, flags
 from aiogram.filters import Command
 from aiogram.handlers import MessageHandler
-from aiogram.types import Message
+from aiogram.types import Message, Update
 from aiogram.utils.i18n import gettext as _
 from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
@@ -25,6 +25,8 @@ router = Router(name="ai")
 @router.message(DerpMentionFilter())
 @router.message(Command("derp"))
 @router.message(F.chat.type == "private")
+@router.message(F.reply_to_message.from_user.id == settings.bot_id)
+@flags.chat_action("typing")
 class DerpResponseHandler(MessageHandler):
     """Class-based message handler for AI responses when 'derp' is mentioned, /derp command is used, or in private chats."""
 
@@ -57,7 +59,7 @@ class DerpResponseHandler(MessageHandler):
         db_client = get_database_client()
         async with db_client.get_executor() as executor:
             recent_updates = await select_active_updates(
-                executor, chat_id=message.chat.id, limit=10
+                executor, chat_id=message.chat.id, limit=15
             )
 
         if recent_updates:
@@ -82,7 +84,25 @@ class DerpResponseHandler(MessageHandler):
             response_text = result.output
 
             # Return the response using SendMessage
-            return await self.event.reply(response_text, parse_mode="Markdown")
+            message = await self.event.reply(response_text, parse_mode="Markdown")
+
+            # Add my message to the database
+            db_client = get_database_client()
+            update = Update.model_validate(
+                {
+                    "update_id": 0,
+                    "message": message,
+                }
+            )
+            await db_client.insert_bot_update_record(
+                update_id=0,
+                update_type="message",
+                raw_data=update.model_dump(exclude_none=True, exclude_defaults=True),
+                user_id=message.from_user.id,
+                chat_id=message.chat.id,
+            )
+
+            return message
 
         except ModelRetry:
             return await self.event.reply(
