@@ -26,6 +26,8 @@ class Settings(BaseSettings):
 
     gel_secret_key: str
 
+    default_llm_model: str
+
     # OpenAI API key for Pydantic AI
     openai_api_key: str
 

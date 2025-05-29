@@ -1,3 +1,5 @@
+using extension ai;
+
 module meta {
     abstract type HasCreated {
         required created_at: datetime {
