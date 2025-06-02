@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 import dataclasses
-import datetime
 import gel
 import uuid
 
@@ -28,11 +27,6 @@ class NoPydanticValidation:
 @dataclasses.dataclass
 class UpsertChatResult(NoPydanticValidation):
     id: uuid.UUID
-    chat_id: int
-    display_name: str | None
-    type: str
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
 
 
 async def upsert_chat(
@@ -45,44 +39,31 @@ async def upsert_chat(
     first_name: str | None = None,
     last_name: str | None = None,
     is_forum: bool | None = None,
-    metadata: str | None = None,
 ) -> UpsertChatResult:
     return await executor.query_single(
         """\
         # Upsert Chat (insert or update based on chat_id)
-        # Parameters: $chat_id, $type, $title?, $username?, $first_name?, $last_name?, $is_forum?, $metadata?
-        select (
-            insert telegram::Chat {
-                chat_id := <int64>$chat_id,
+        insert telegram::Chat {
+            chat_id := <int64>$chat_id,
+            type := <str>$type,
+            title := <optional str>$title,
+            username := <optional str>$username,
+            first_name := <optional str>$first_name,
+            last_name := <optional str>$last_name,
+            is_forum := <optional bool>$is_forum ?? false,
+        }
+        unless conflict on .chat_id
+        else (
+            update telegram::Chat
+            set {
                 type := <str>$type,
                 title := <optional str>$title,
                 username := <optional str>$username,
                 first_name := <optional str>$first_name,
                 last_name := <optional str>$last_name,
                 is_forum := <optional bool>$is_forum ?? false,
-                metadata := <optional json>$metadata ?? <json>'{}'
             }
-            unless conflict on .chat_id
-            else (
-                update telegram::Chat
-                set {
-                    type := <str>$type,
-                    title := <optional str>$title,
-                    username := <optional str>$username,
-                    first_name := <optional str>$first_name,
-                    last_name := <optional str>$last_name,
-                    is_forum := <optional bool>$is_forum ?? false,
-                    metadata := <optional json>$metadata ?? <json>'{}'
-                }
-            )
-        ) {
-            id,
-            chat_id,
-            display_name,
-            type,
-            created_at,
-            updated_at
-        };\
+        );\
         """,
         chat_id=chat_id,
         type=type,
@@ -91,5 +72,4 @@ async def upsert_chat(
         first_name=first_name,
         last_name=last_name,
         is_forum=is_forum,
-        metadata=metadata,
     )

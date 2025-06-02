@@ -42,7 +42,6 @@ async def insert_bot_update(
     return await executor.query_single(
         """\
         # Insert BotUpdate
-        # Parameters: $update_id, $update_type, $raw_data, $user_id?, $chat_id?, $handled?
         with
             user := (select telegram::User filter .user_id = <optional int64>$user_id limit 1),
             chat := (select telegram::Chat filter .chat_id = <optional int64>$chat_id limit 1)

@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 import dataclasses
-import datetime
 import gel
 import uuid
 
@@ -28,10 +27,6 @@ class NoPydanticValidation:
 @dataclasses.dataclass
 class UpsertUserResult(NoPydanticValidation):
     id: uuid.UUID
-    user_id: int
-    display_name: str | None
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
 
 
 async def upsert_user(
@@ -45,15 +40,24 @@ async def upsert_user(
     language_code: str | None = None,
     is_premium: bool | None = None,
     added_to_attachment_menu: bool | None = None,
-    metadata: str | None = None,
 ) -> UpsertUserResult:
     return await executor.query_single(
         """\
         # Upsert User (insert or update based on user_id)
-        # Parameters: $user_id, $is_bot, $first_name, $last_name?, $username?, $language_code?, $is_premium?, $added_to_attachment_menu?, $metadata?
-        select (
-            insert telegram::User {
-                user_id := <int64>$user_id,
+        insert telegram::User {
+            user_id := <int64>$user_id,
+            is_bot := <bool>$is_bot,
+            first_name := <str>$first_name,
+            last_name := <optional str>$last_name,
+            username := <optional str>$username,
+            language_code := <optional str>$language_code,
+            is_premium := <optional bool>$is_premium ?? false,
+            added_to_attachment_menu := <optional bool>$added_to_attachment_menu ?? false,
+        }
+        unless conflict on .user_id
+        else (
+            update telegram::User
+            set {
                 is_bot := <bool>$is_bot,
                 first_name := <str>$first_name,
                 last_name := <optional str>$last_name,
@@ -61,29 +65,8 @@ async def upsert_user(
                 language_code := <optional str>$language_code,
                 is_premium := <optional bool>$is_premium ?? false,
                 added_to_attachment_menu := <optional bool>$added_to_attachment_menu ?? false,
-                metadata := <optional json>$metadata ?? <json>'{}'
             }
-            unless conflict on .user_id
-            else (
-                update telegram::User
-                set {
-                    is_bot := <bool>$is_bot,
-                    first_name := <str>$first_name,
-                    last_name := <optional str>$last_name,
-                    username := <optional str>$username,
-                    language_code := <optional str>$language_code,
-                    is_premium := <optional bool>$is_premium ?? false,
-                    added_to_attachment_menu := <optional bool>$added_to_attachment_menu ?? false,
-                    metadata := <optional json>$metadata ?? <json>'{}'
-                }
-            )
-        ) {
-            id,
-            user_id,
-            display_name,
-            created_at,
-            updated_at
-        };\
+        );\
         """,
         user_id=user_id,
         is_bot=is_bot,
@@ -93,5 +76,4 @@ async def upsert_user(
         language_code=language_code,
         is_premium=is_premium,
         added_to_attachment_menu=added_to_attachment_menu,
-        metadata=metadata,
     )

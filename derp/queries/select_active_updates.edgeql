@@ -1,5 +1,4 @@
 # Select ActiveUpdates per chat_id, sorted in descending order (most recent first)
-# Parameters: $chat_id, $limit
 select telegram::ActiveBotUpdates {
     id,
     update_id,

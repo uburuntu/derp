@@ -80,11 +80,6 @@ class DatabaseClient:
                 language_code=user.language_code,
                 is_premium=user.is_premium,
                 added_to_attachment_menu=user.added_to_attachment_menu,
-                metadata=(
-                    json.dumps({})
-                    if not hasattr(user, "metadata")
-                    else json.dumps(user.metadata)
-                ),
             )
 
     async def upsert_chat_record(self, chat: Chat) -> Any:
@@ -99,11 +94,6 @@ class DatabaseClient:
                 first_name=chat.first_name,
                 last_name=chat.last_name,
                 is_forum=chat.is_forum,
-                metadata=(
-                    json.dumps({})
-                    if not hasattr(chat, "metadata")
-                    else json.dumps(chat.metadata)
-                ),
             )
 
 
