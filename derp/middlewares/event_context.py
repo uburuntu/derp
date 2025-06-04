@@ -4,11 +4,16 @@ from typing import Any
 from aiogram.dispatcher.middlewares.user_context import UserContextMiddleware
 from aiogram.types import TelegramObject, Update
 
+from derp.common.database import DatabaseClient
+
 
 class EventContextMiddleware(UserContextMiddleware):
     """
     Extracts event's main entities to the handler's parameters
     """
+
+    def __init__(self, db: DatabaseClient):
+        self.db = db
 
     async def __call__(
         self,
@@ -20,6 +25,7 @@ class EventContextMiddleware(UserContextMiddleware):
             raise RuntimeError("Got an unexpected event type")
 
         data["bot"] = event.bot
+        data["db"] = self.db
 
         event_context = self.resolve_event_context(event=event)
 

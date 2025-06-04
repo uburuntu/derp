@@ -8,13 +8,13 @@ import aiojobs
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update
 
-from ..common.database import get_database_client
+from ..common.database import DatabaseClient
 from ..common.tg import decompose_update
 
 
 class DatabaseLoggerMiddleware(BaseMiddleware):
-    def __init__(self):
-        self.db_client = get_database_client()
+    def __init__(self, db: DatabaseClient):
+        self.db = db
 
     @cached_property
     def scheduler(self) -> aiojobs.Scheduler:
@@ -46,18 +46,18 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
         chat_id = chat and chat.id
 
         if user:
-            coro = self.db_client.upsert_user_record(user)
+            coro = self.db.upsert_user_record(user)
             await self.scheduler.spawn(coro)
 
         if chat:
-            coro = self.db_client.upsert_chat_record(chat)
+            coro = self.db.upsert_chat_record(chat)
             await self.scheduler.spawn(coro)
 
         if sender_chat:
-            coro = self.db_client.upsert_chat_record(sender_chat)
+            coro = self.db.upsert_chat_record(sender_chat)
             await self.scheduler.spawn(coro)
 
-        coro = self.db_client.insert_bot_update_record(
+        coro = self.db.insert_bot_update_record(
             update_id=event.update_id,
             update_type=update_type,
             raw_data=raw_data,

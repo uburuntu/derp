@@ -13,7 +13,8 @@ from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
 from .common.database import get_database_client
 from .config import settings
-from .handlers import ai_response, basic
+from .handlers import ai_response, basic, chat_settings
+from .middlewares.chat_settings import ChatSettingsMiddleware
 from .middlewares.database_logger import DatabaseLoggerMiddleware
 from .middlewares.event_context import EventContextMiddleware
 from .middlewares.log_updates import LogUpdatesMiddleware
@@ -68,22 +69,31 @@ async def main():
     SimpleI18nMiddleware(i18n).setup(dp)
 
     # Initialize middlewares
-    db_middleware = DatabaseLoggerMiddleware()
+    db = get_database_client()
+    db_middleware = DatabaseLoggerMiddleware(db=db)
 
+    # Outer middlewares (run before filters)
     dp.update.outer_middleware(LogUpdatesMiddleware())
-    dp.update.outer_middleware(DatabaseLoggerMiddleware())
-    dp.update.middleware(EventContextMiddleware())
-    dp.update.middleware(ChatActionMiddleware())
+    dp.update.outer_middleware(db_middleware)
 
-    dp.include_routers(basic.router, ai_response.router)
+    # Inner middlewares (run after filters, before resolved handlers)
+    dp.update.middleware(EventContextMiddleware(db=db))
+    dp.update.middleware(ChatActionMiddleware())
+    dp.update.middleware(ChatSettingsMiddleware(db=db))
+
+    dp.include_routers(
+        basic.router,
+        chat_settings.router,
+        # Must be the last one to handle all unhandled messages
+        ai_response.router,
+    )
 
     try:
         await dp.start_polling(bot)
     finally:
         # Cleanup resources
         await db_middleware.close()
-        db_client = get_database_client()
-        await db_client.disconnect()
+        await db.disconnect()
 
 
 if __name__ == "__main__":

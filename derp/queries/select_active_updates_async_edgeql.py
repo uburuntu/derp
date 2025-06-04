@@ -83,7 +83,7 @@ async def select_active_updates(
             }
         }
         filter .chat.chat_id = <int64>$chat_id
-        order by .created_at desc
+        order by .created_at asc
         limit <int64>$limit;\
         """,
         chat_id=chat_id,

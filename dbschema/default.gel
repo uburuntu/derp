@@ -21,12 +21,6 @@ module meta {
         index on (.updated_at);
     }
 
-    abstract type HasMetadata {
-        metadata: json {
-            default := <json>'{}';
-        }
-    }
-
     abstract type HasExpiration {
         expires_at: datetime {
             default := datetime_of_statement() + <cal::relative_duration>'30 days';
@@ -38,7 +32,7 @@ module meta {
 }
 
 module telegram {
-    type User extending meta::HasCreated, meta::HasUpdated, meta::HasMetadata {
+    type User extending meta::HasCreated, meta::HasUpdated {
         annotation title := 'Telegram User';
         annotation description := 'Represents a Telegram user or bot';
 
@@ -72,7 +66,7 @@ module telegram {
         index on (.user_id);
     }
 
-    type Chat extending meta::HasCreated, meta::HasUpdated, meta::HasMetadata {
+    type Chat extending meta::HasCreated, meta::HasUpdated, ChatSettings {
         annotation title := 'Telegram Chat';
         annotation description := 'Represents a Telegram chat';
 
@@ -101,6 +95,15 @@ module telegram {
 
         # Indexes for common queries
         index on (.chat_id);
+    }
+
+    abstract type ChatSettings {
+        annotation title := 'Telegram Chat Settings';
+        annotation description := 'Chat settings, adjustable by participants';
+
+        llm_memory: str {
+            constraint max_len_value(1024);
+        }
     }
 
     type BotUpdate extending meta::HasCreated, meta::HasExpiration {

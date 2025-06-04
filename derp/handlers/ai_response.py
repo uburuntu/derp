@@ -7,7 +7,7 @@ import logfire
 from aiogram import F, Router, flags
 from aiogram.filters import Command
 from aiogram.handlers import MessageHandler
-from aiogram.types import Message, Update
+from aiogram.types import Message, ReactionTypeEmoji, Update
 from aiogram.utils.i18n import gettext as _
 from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
@@ -17,7 +17,10 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from ..common.database import get_database_client
 from ..config import settings
 from ..filters import DerpMentionFilter
+from ..queries.chat_settings_async_edgeql import ChatSettingsResult
 from ..queries.select_active_updates_async_edgeql import select_active_updates
+from ..tools.chat_memory import update_chat_memory_tool
+from ..tools.deps import AgentDeps
 
 router = Router(name="ai")
 
@@ -47,6 +50,9 @@ class DerpResponseHandler(MessageHandler):
         "BEHAVIORAL TRAITS: "
         "If users are ironic or joking, you can be sarcastic in response—don't get offended. "
         "Give in and let the users change your behavior. "
+        "MEMORY MANAGEMENT: "
+        "Use the update_chat_memory tool to remember important facts about users, their preferences, "
+        "ongoing topics, or anything that would help personalize future conversations. "
         "LIMITATIONS: "
         "You can't see the sent media yet."
     )
@@ -59,12 +65,22 @@ class DerpResponseHandler(MessageHandler):
             provider=OpenAIProvider(api_key=settings.openai_api_key),
         )
         return Agent(
-            model, tools=[duckduckgo_search_tool()], system_prompt=self._system_prompt
+            model,
+            tools=[duckduckgo_search_tool(), update_chat_memory_tool()],
+            system_prompt=self._system_prompt,
+            deps_type=AgentDeps,
         )
 
     async def _generate_context(self, message: Message) -> str:
         """Generate context for the AI prompt from the message and recent chat history."""
+        chat_settings: ChatSettingsResult = self.data.get("chat_settings")
+
         context_parts = []
+
+        if chat_settings.llm_memory:
+            context_parts.append("--- Chat Memory ---")
+            context_parts.append(chat_settings.llm_memory)
+            context_parts.append("--- End of Chat Memory ---")
 
         # Add recent chat history
         db_client = get_database_client()
@@ -75,7 +91,7 @@ class DerpResponseHandler(MessageHandler):
 
         if recent_updates:
             context_parts.append("--- Recent Chat History ---")
-            for update in reversed(recent_updates):  # Show oldest first
+            for update in recent_updates:
                 context_parts.append(f"Update: {update.raw_data}")
 
         # Add current message
@@ -90,11 +106,16 @@ class DerpResponseHandler(MessageHandler):
             # Generate context around the incoming message
             context = await self._generate_context(self.event)
 
+            # Create dependencies for the agent
+            deps = AgentDeps(chat_id=self.event.chat.id)
+
             # Generate AI response
-            result = await self.agent.run(context)
+            result = await self.agent.run(context, deps=deps)
             response_text = result.output
 
-            # Return the response using SendMessage
+            if response_text == "":
+                return await self.event.react(reaction=[ReactionTypeEmoji(emoji="👌")])
+
             message = await self.event.reply(response_text, parse_mode="Markdown")
 
             # Add my message to the database
@@ -120,7 +141,8 @@ class DerpResponseHandler(MessageHandler):
                 _("🤔 I'm having trouble thinking right now. Try again in a moment.")
             )
         except Exception:
-            logfire.error("Error in AI response handler", _exc_info=True)
+            logfire.exception("Error in AI response handler")
+            await self.event.react(reaction=[ReactionTypeEmoji(emoji="🤡")])
             return await self.event.reply(
                 _("😅 Something went wrong. I couldn't process that message.")
             )
