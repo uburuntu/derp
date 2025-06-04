@@ -1,5 +1,6 @@
 """Chat memory management tool for PydanticAI agents."""
 
+from aiogram import html
 from pydantic_ai import RunContext
 from pydantic_ai.tools import Tool
 
@@ -21,10 +22,14 @@ async def update_chat_memory(ctx: RunContext[AgentDeps], full_memory: str) -> st
     db_client = get_database_client()
     async with db_client.get_executor() as executor:
         await update_chat_settings(
-            executor, chat_id=ctx.deps.chat_id, llm_memory=full_memory.strip()
+            executor, chat_id=ctx.deps.message.chat.id, llm_memory=full_memory.strip()
         )
+    await ctx.deps.message.reply(
+        "(System message) Memory updated:\n"
+        + html.expandable_blockquote(html.quote(full_memory.strip()))
+    )
 
-    return f"✅ Memory updated successfully. New memory length: {len(full_memory)} characters."
+    return f"Memory updated successfully. New memory length: {len(full_memory)} characters."
 
 
 def update_chat_memory_tool() -> Tool:

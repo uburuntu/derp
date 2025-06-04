@@ -13,7 +13,7 @@ dependencies = [
     "logfire[aiohttp,httpx,system-metrics]>=3.16.0",
     "pydantic>=2.11.3",
     "pydantic-ai[logfire]>=0.2.6",
-    "pydantic-ai-slim[duckduckgo]>=0.2.6",
+    "pydantic-ai-slim[duckduckgo,google]>=0.2.6",
     "pydantic-settings>=2.9.1",
     "throttler>=1.2.2",
 ]

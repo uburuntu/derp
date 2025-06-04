@@ -1,23 +1,11 @@
-# Select ActiveUpdates per chat_id, sorted in descending order (most recent first)
-select telegram::ActiveBotUpdates {
-    id,
-    update_id,
-    update_type,
+# Select the most recent ActiveUpdates per chat_id, then sort them in ascending order (oldest first)
+with recent_updates := (
+    select telegram::ActiveBotUpdates
+    filter .chat.chat_id = <int64>$chat_id
+    order by .created_at desc
+    limit <int64>$limit
+)
+select recent_updates {
     raw_data,
-    handled,
-    created_at,
-    expires_at,
-    from_user: {
-        user_id,
-        display_name,
-        is_bot
-    },
-    chat: {
-        chat_id,
-        display_name,
-        type
-    }
 }
-filter .chat.chat_id = <int64>$chat_id
-order by .created_at asc
-limit <int64>$limit; 
+order by .created_at asc;

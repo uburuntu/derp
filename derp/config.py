@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # OpenAI API key for Pydantic AI
     openai_api_key: str
 
+    # Google API key for Pydantic AI
+    google_api_key: str
+
+    # OpenRouter API key for Pydantic AI
+    openrouter_api_key: str
+
     # Logfire token
     logfire_token: str
 

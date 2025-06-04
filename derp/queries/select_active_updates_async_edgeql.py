@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 import dataclasses
-import datetime
 import gel
 import uuid
 
@@ -28,30 +27,7 @@ class NoPydanticValidation:
 @dataclasses.dataclass
 class SelectActiveUpdatesResult(NoPydanticValidation):
     id: uuid.UUID
-    update_id: int
-    update_type: str
     raw_data: str
-    handled: bool | None
-    created_at: datetime.datetime
-    expires_at: datetime.datetime | None
-    from_user: SelectActiveUpdatesResultFromUser | None
-    chat: SelectActiveUpdatesResultChat | None
-
-
-@dataclasses.dataclass
-class SelectActiveUpdatesResultChat(NoPydanticValidation):
-    id: uuid.UUID
-    chat_id: int
-    display_name: str | None
-    type: str
-
-
-@dataclasses.dataclass
-class SelectActiveUpdatesResultFromUser(NoPydanticValidation):
-    id: uuid.UUID
-    user_id: int
-    display_name: str | None
-    is_bot: bool
 
 
 async def select_active_updates(
@@ -62,29 +38,17 @@ async def select_active_updates(
 ) -> list[SelectActiveUpdatesResult]:
     return await executor.query(
         """\
-        # Select ActiveUpdates per chat_id, sorted in descending order (most recent first)
-        select telegram::ActiveBotUpdates {
-            id,
-            update_id,
-            update_type,
+        # Select the most recent ActiveUpdates per chat_id, then sort them in ascending order (oldest first)
+        with recent_updates := (
+            select telegram::ActiveBotUpdates
+            filter .chat.chat_id = <int64>$chat_id
+            order by .created_at desc
+            limit <int64>$limit
+        )
+        select recent_updates {
             raw_data,
-            handled,
-            created_at,
-            expires_at,
-            from_user: {
-                user_id,
-                display_name,
-                is_bot
-            },
-            chat: {
-                chat_id,
-                display_name,
-                type
-            }
         }
-        filter .chat.chat_id = <int64>$chat_id
-        order by .created_at asc
-        limit <int64>$limit;\
+        order by .created_at asc;\
         """,
         chat_id=chat_id,
         limit=limit,
