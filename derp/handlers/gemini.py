@@ -596,7 +596,7 @@ class GeminiResponseHandler(MessageHandler):
 
         text_response = self._format_response_text(
             text_parts, code_blocks, execution_results
-        )
+        )[:1000]
         sent_message = None
 
         # Send text response if available
