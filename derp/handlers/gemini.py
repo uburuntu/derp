@@ -439,8 +439,8 @@ class GeminiResponseHandler(MessageHandler):
         tools.extend(
             [
                 types.Tool(google_search=types.GoogleSearch()),
-                # types.Tool(url_context=types.UrlContext()),
-                types.Tool(code_execution=types.ToolCodeExecutionDict()),
+                types.Tool(url_context=types.UrlContext()),
+                # types.Tool(code_execution=types.ToolCodeExecutionDict()),
             ]
         )
 
