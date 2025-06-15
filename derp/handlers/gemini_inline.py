@@ -13,6 +13,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineQuery,
     InlineQueryResultArticle,
+    InlineQueryResultsButton,
     InputTextMessageContent,
 )
 from aiogram.utils.i18n import gettext as _
@@ -76,7 +77,14 @@ async def gemini_inline_query(query: InlineQuery) -> Any:
             ]
         ),
     )
-    await query.answer([result], cache_time=300)
+    await query.answer(
+        [result],
+        button=InlineQueryResultsButton(
+            text=_("Start personal chat"),
+            start_parameter="start",
+        ),
+        cache_time=300,
+    )
 
 
 @router.chosen_inline_result()
