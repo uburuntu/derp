@@ -308,7 +308,6 @@ async def extract_media_for_gemini(message: Message) -> list[types.Part]:
 @router.message(Command("derp"))
 @router.message(F.chat.type == "private")
 @router.message(F.reply_to_message.from_user.id == settings.bot_id)
-@flags.chat_action
 class GeminiResponseHandler(MessageHandler):
     """Class-based message handler for AI responses using Google's native Gemini API."""
 
@@ -339,6 +338,8 @@ class GeminiResponseHandler(MessageHandler):
         "## Personalization & Context\n"
         "- Use available chat memory and conversation history to provide personalized responses\n"
         "- Reference previous conversations, user preferences, and ongoing topics when relevant\n"
+        "- Only media (images, videos, audio, and documents) in the current message or reply will be attached; "
+        "media from earlier messages won't be included—ask users to reply to the message with the media if needed.\n"
         "- Adapt to each chat's unique dynamics and user relationships\n\n"
         "## Personality & Behavior\n"
         "**Natural Opinions & Preferences:**\n"
@@ -369,13 +370,13 @@ class GeminiResponseHandler(MessageHandler):
         "**Google Search:**\n"
         "- Use for current events, recent information, facts, or real-time data\n"
         "- Essential for questions about current news, stock prices, weather, etc.\n\n"
-        # "**URL Context Analysis:**\n"
-        # "- Use when users share links or ask about web content\n"
-        # "- Analyze and summarize web pages, articles, or documents\n\n"
-        "**Python Code Execution:**\n"
-        "- Use for calculations, data analysis, and problem-solving\n"
-        "- Create visualizations with matplotlib when helpful\n"
-        "- Process data, perform mathematical operations, or demonstrate concepts\n\n"
+        "**URL Context Analysis:**\n"
+        "- Use when users share links or ask about web content\n"
+        "- Analyze and summarize web pages, articles, or documents\n\n"
+        # "**Python Code Execution:**\n"
+        # "- Use for calculations, data analysis, and problem-solving\n"
+        # "- Create visualizations with matplotlib when helpful\n"
+        # "- Process data, perform mathematical operations, or demonstrate concepts\n\n"
         # "**Memory Storage:**\n"
         # "- Store important conversation context using update_chat_memory\n"
         # "- Remember user preferences, ongoing topics, and relationship dynamics\n\n"
@@ -611,6 +612,7 @@ class GeminiResponseHandler(MessageHandler):
 
         return sent_message
 
+    @flags.chat_action
     async def handle(self) -> Any:
         """Handle messages using Gemini API."""
         try:
