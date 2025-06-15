@@ -1,11 +1,12 @@
 """Aiogram middleware for logging updates to Gel database."""
 
+import asyncio
 from collections.abc import Awaitable, Callable
-from functools import cached_property
 from typing import Any
+from uuid import UUID
 
-import aiojobs
 from aiogram import BaseMiddleware
+from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.types import TelegramObject, Update
 
 from ..common.database import DatabaseClient
@@ -15,17 +16,6 @@ from ..common.tg import decompose_update
 class DatabaseLoggerMiddleware(BaseMiddleware):
     def __init__(self, db: DatabaseClient):
         self.db = db
-
-    @cached_property
-    def scheduler(self) -> aiojobs.Scheduler:
-        """Get the scheduler instance."""
-        return aiojobs.Scheduler(
-            close_timeout=0.3, limit=100, pending_limit=10_000, exception_handler=None
-        )
-
-    async def close(self) -> None:
-        """Close the scheduler and cleanup resources."""
-        await self.scheduler.close()
 
     async def __call__(
         self,
@@ -42,29 +32,36 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
         )
         _, user, sender_chat, chat, _ = decompose_update(event)
 
-        user_id = user and user.id
-        chat_id = chat and chat.id
-
-        if user:
-            coro = self.db.upsert_user_record(user)
-            await self.scheduler.spawn(coro)
-
-        if chat:
-            coro = self.db.upsert_chat_record(chat)
-            await self.scheduler.spawn(coro)
-
-        if sender_chat:
-            coro = self.db.upsert_chat_record(sender_chat)
-            await self.scheduler.spawn(coro)
-
-        coro = self.db.insert_bot_update_record(
-            update_id=event.update_id,
-            update_type=update_type,
-            raw_data=raw_data,
-            user_id=user_id,
-            chat_id=chat_id,
-            handled=False,
+        # Start the database operation but don't block the request
+        insert_task = asyncio.create_task(
+            self.db.create_bot_update_with_upserts(
+                update_id=event.update_id,
+                update_type=update_type,
+                raw_data=raw_data,
+                user=user,
+                chat=chat,
+                sender_chat=sender_chat,
+                handled=False,  # Initially mark as not handled
+            )
         )
-        await self.scheduler.spawn(coro)
 
-        return await handler(event, data)
+        # Put the task in data so handlers can await it if needed
+        data["db_task"] = insert_task
+
+        # Execute the handler (without blocking on database)
+        response = await handler(event, data)
+
+        # Now await the database operation completion
+        bot_update_id: UUID = await insert_task
+
+        # Update the handled status based on whether the response was handled
+        handled = response is not UNHANDLED
+        update_handled_task = asyncio.create_task(
+            self.db.update_bot_update_handled_status(
+                bot_update_id=bot_update_id,
+                handled=handled,
+            )
+        )
+        await update_handled_task
+
+        return response

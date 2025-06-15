@@ -72,11 +72,10 @@ async def main():
 
     # Initialize middlewares
     db = get_database_client()
-    db_middleware = DatabaseLoggerMiddleware(db=db)
 
     # Outer middlewares (run before filters)
     dp.update.outer_middleware(LogUpdatesMiddleware())
-    dp.update.outer_middleware(db_middleware)
+    dp.update.outer_middleware(DatabaseLoggerMiddleware(db=db))
 
     # Inner middlewares (run after filters, before resolved handlers)
     dp.update.middleware(EventContextMiddleware(db=db))
@@ -94,8 +93,6 @@ async def main():
     try:
         await dp.start_polling(bot)
     finally:
-        # Cleanup resources
-        await db_middleware.close()
         await db.disconnect()
 
 

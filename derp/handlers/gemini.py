@@ -657,19 +657,24 @@ class GeminiResponseHandler(MessageHandler):
             sent_message = await self._send_complete_response(final_response)
 
             if sent_message:
-                # Store bot's response in database
+                # Wait for the middleware's database task to complete first to avoid race conditions
+                if "db_task" in self.data:
+                    await self.data["db_task"]
+
+                # Store bot's response in database using the new method
                 db_client = get_database_client()
                 update = Update.model_validate(
                     {"update_id": 0, "message": sent_message}
                 )
-                await db_client.insert_bot_update_record(
+                await db_client.create_bot_update_with_upserts(
                     update_id=0,
                     update_type="message",
                     raw_data=update.model_dump(
                         exclude_none=True, exclude_defaults=True
                     ),
-                    user_id=sent_message.from_user.id,
-                    chat_id=sent_message.chat.id,
+                    user=sent_message.from_user,
+                    chat=sent_message.chat,
+                    sender_chat=None,
                 )
 
             return sent_message

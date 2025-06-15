@@ -259,7 +259,11 @@ class DerpResponseHandler(MessageHandler):
                         md.quote(response_text), parse_mode="Markdown"
                     )
 
-            # Add my message to the database
+            # Wait for the middleware's database task to complete first to avoid race conditions
+            if "db_task" in self.data:
+                await self.data["db_task"]
+
+            # Add my message to the database using the new method
             db_client = get_database_client()
             update = Update.model_validate(
                 {
@@ -267,12 +271,13 @@ class DerpResponseHandler(MessageHandler):
                     "message": message,
                 }
             )
-            await db_client.insert_bot_update_record(
+            await db_client.create_bot_update_with_upserts(
                 update_id=0,
                 update_type="message",
                 raw_data=update.model_dump(exclude_none=True, exclude_defaults=True),
-                user_id=message.from_user.id,
-                chat_id=message.chat.id,
+                user=message.from_user,
+                chat=message.chat,
+                sender_chat=None,
             )
 
             return message

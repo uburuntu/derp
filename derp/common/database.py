@@ -4,14 +4,16 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
+from uuid import UUID
 
 import gel
 from aiogram.types import Chat, User
 
 from ..config import settings
-from ..queries.insert_bot_update_async_edgeql import insert_bot_update
-from ..queries.upsert_chat_async_edgeql import upsert_chat
-from ..queries.upsert_user_async_edgeql import upsert_user
+from ..queries.create_bot_update_with_upserts_async_edgeql import (
+    create_bot_update_with_upserts,
+)
+from ..queries.update_bot_update_handled_async_edgeql import update_bot_update_handled
 
 
 class DatabaseClient:
@@ -46,54 +48,65 @@ class DatabaseClient:
         assert self._client is not None
         yield self._client
 
-    async def insert_bot_update_record(
+    async def create_bot_update_with_upserts(
         self,
         update_id: int,
         update_type: str,
         raw_data: dict[str, Any],
-        user_id: int | None = None,
-        chat_id: int | None = None,
+        user: User | None = None,
+        chat: Chat | None = None,
+        sender_chat: Chat | None = None,
         handled: bool = False,
-    ) -> Any:
-        """Insert a BotUpdate record."""
+    ) -> UUID:
+        """Atomically upsert user and chat records, then insert BotUpdate. Returns BotUpdate id."""
         async with self.get_executor() as executor:
-            return await insert_bot_update(
+            result = await create_bot_update_with_upserts(
                 executor,
                 update_id=update_id,
                 update_type=update_type,
                 raw_data=json.dumps(raw_data),
-                user_id=user_id,
-                chat_id=chat_id,
                 handled=handled,
+                # User parameters with consistent naming
+                user_id=user.id if user else None,
+                user_is_bot=user.is_bot if user else None,
+                user_first_name=user.first_name if user else None,
+                user_last_name=user.last_name if user else None,
+                user_username=user.username if user else None,
+                user_language_code=user.language_code if user else None,
+                user_is_premium=user.is_premium if user else None,
+                user_added_to_attachment_menu=(
+                    user.added_to_attachment_menu if user else None
+                ),
+                # Chat parameters with consistent naming
+                chat_id=chat.id if chat else None,
+                chat_type=chat.type if chat else None,
+                chat_title=chat.title if chat else None,
+                chat_username=chat.username if chat else None,
+                chat_first_name=chat.first_name if chat else None,
+                chat_last_name=chat.last_name if chat else None,
+                chat_is_forum=chat.is_forum if chat else None,
+                # Sender chat parameters with consistent naming
+                sender_chat_id=sender_chat.id if sender_chat else None,
+                sender_chat_type=sender_chat.type if sender_chat else None,
+                sender_chat_title=sender_chat.title if sender_chat else None,
+                sender_chat_username=sender_chat.username if sender_chat else None,
+                sender_chat_first_name=sender_chat.first_name if sender_chat else None,
+                sender_chat_last_name=sender_chat.last_name if sender_chat else None,
+                sender_chat_is_forum=sender_chat.is_forum if sender_chat else None,
             )
+            return result.id
 
-    async def upsert_user_record(self, user: User) -> Any:
-        """Upsert a User record."""
+    async def update_bot_update_handled_status(
+        self,
+        bot_update_id: UUID,
+        handled: bool,
+    ) -> Any:
+        """Update the handled status of a BotUpdate record by its id."""
         async with self.get_executor() as executor:
-            return await upsert_user(
+            return await update_bot_update_handled(
                 executor,
-                user_id=user.id,
-                is_bot=user.is_bot,
-                first_name=user.first_name,
-                last_name=user.last_name,
-                username=user.username,
-                language_code=user.language_code,
-                is_premium=user.is_premium,
-                added_to_attachment_menu=user.added_to_attachment_menu,
-            )
-
-    async def upsert_chat_record(self, chat: Chat) -> Any:
-        """Upsert a Chat record."""
-        async with self.get_executor() as executor:
-            return await upsert_chat(
-                executor,
-                chat_id=chat.id,
-                type=chat.type,
-                title=chat.title,
-                username=chat.username,
-                first_name=chat.first_name,
-                last_name=chat.last_name,
-                is_forum=chat.is_forum,
+                bot_update_id=bot_update_id,
+                handled=handled,
             )
 
 
