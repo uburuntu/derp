@@ -27,6 +27,10 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
             raise RuntimeError("Got an unexpected event type")
 
         update_type = event.event_type
+
+        if update_type == "inline_query":
+            return await handler(event, data)
+
         raw_data = event.model_dump(
             exclude_unset=True, exclude_defaults=True, exclude_none=True
         )
@@ -55,13 +59,10 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
         bot_update_id: UUID = await insert_task
 
         # Update the handled status based on whether the response was handled
-        handled = response is not UNHANDLED
-        update_handled_task = asyncio.create_task(
-            self.db.update_bot_update_handled_status(
+        if response is not UNHANDLED:
+            await self.db.update_bot_update_handled_status(
                 bot_update_id=bot_update_id,
-                handled=handled,
+                handled=True,
             )
-        )
-        await update_handled_task
 
         return response

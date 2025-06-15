@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-05-24 23:56+0100\n"
+"POT-Creation-Date: 2025-06-15 23:39+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,11 +17,11 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.13.1\n"
 
-#: derp/handlers/ai_response.py:136
+#: derp/handlers/ai_response.py:287
 msgid "🤔 I'm having trouble thinking right now. Try again in a moment."
 msgstr ""
 
-#: derp/handlers/ai_response.py:141
+#: derp/handlers/ai_response.py:292
 msgid "😅 Something went wrong. I couldn't process that message."
 msgstr ""
 
@@ -31,5 +31,41 @@ msgstr ""
 
 #: derp/handlers/basic.py:18
 msgid "I'm a friendly AI-powered Telegram bot"
+msgstr ""
+
+#: derp/handlers/gemini.py:282
+msgid "😅 Something went wrong with Gemini. I couldn't process that message."
+msgstr ""
+
+#: derp/handlers/gemini_inline.py:32 derp/handlers/gemini_inline.py:59
+msgid "🤖 Ask Derp"
+msgstr ""
+
+#: derp/handlers/gemini_inline.py:33
+msgid "Start typing to get an AI-powered response."
+msgstr ""
+
+#: derp/handlers/gemini_inline.py:35
+msgid "🤖 Please enter a prompt for Derp AI."
+msgstr ""
+
+#: derp/handlers/gemini_inline.py:41 derp/handlers/gemini_inline.py:72
+msgid "Add Derp to your chat"
+msgstr ""
+
+#: derp/handlers/gemini_inline.py:60
+msgid "Get an AI-powered response for: {user_input}"
+msgstr ""
+
+#: derp/handlers/gemini_inline.py:65
+msgid "🧠 Thinking about: {user_input}"
+msgstr ""
+
+#: derp/handlers/gemini_inline.py:113
+msgid "🤯 My circuits are a bit tangled. I couldn't generate a response."
+msgstr ""
+
+#: derp/handlers/gemini_inline.py:119
+msgid "😅 Something went wrong with Gemini. I couldn't process that."
 msgstr ""
 

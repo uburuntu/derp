@@ -13,7 +13,7 @@ from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
 from .common.database import get_database_client
 from .config import settings
-from .handlers import basic, chat_settings, gemini
+from .handlers import basic, chat_settings, gemini, gemini_inline
 from .middlewares.chat_settings import ChatSettingsMiddleware
 from .middlewares.database_logger import DatabaseLoggerMiddleware
 from .middlewares.event_context import EventContextMiddleware
@@ -86,6 +86,7 @@ async def main():
         basic.router,
         chat_settings.router,
         gemini.router,
+        gemini_inline.router,
         # Must be the last one to handle all unhandled messages
         # ai_response.router,
     )

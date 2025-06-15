@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-05-24 23:56+0100\n"
+"POT-Creation-Date: 2025-06-15 23:39+0100\n"
 "PO-Revision-Date: 2025-04-28 20:27+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ru\n"
@@ -19,11 +19,11 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.13.1\n"
 
-#: derp/handlers/ai_response.py:136
+#: derp/handlers/ai_response.py:287
 msgid "🤔 I'm having trouble thinking right now. Try again in a moment."
 msgstr "🤔 У меня сейчас проблемы с мышлением. Попробуйте ещё раз через минуту."
 
-#: derp/handlers/ai_response.py:141
+#: derp/handlers/ai_response.py:292
 msgid "😅 Something went wrong. I couldn't process that message."
 msgstr "😅 Что-то пошло не так. Я не смог обработать это сообщение."
 
@@ -34,4 +34,54 @@ msgstr "Привет, {name}!"
 #: derp/handlers/basic.py:18
 msgid "I'm a friendly AI-powered Telegram bot"
 msgstr "Я - дружелюбный бот, работающий на искусственном интеллекте"
+
+#: derp/handlers/gemini.py:282
+#, fuzzy
+msgid "😅 Something went wrong with Gemini. I couldn't process that message."
+msgstr "😅 Что-то пошло не так с Gemini. Я не смог обработать это сообщение."
+
+#: derp/handlers/gemini_inline.py:32 derp/handlers/gemini_inline.py:59
+msgid "🤖 Ask Derp"
+msgstr "🤖 Спросить Derp"
+
+#: derp/handlers/gemini_inline.py:33
+msgid "Start typing to get an AI-powered response."
+msgstr "Начните печатать, чтобы получить ответ от ИИ."
+
+#: derp/handlers/gemini_inline.py:35
+msgid "🤖 Please enter a prompt for Derp AI."
+msgstr "🤖 Пожалуйста, введите запрос для Derp AI."
+
+#: derp/handlers/gemini_inline.py:41 derp/handlers/gemini_inline.py:72
+msgid "Add Derp to your chat"
+msgstr "Добавить Derp в ваш чат"
+
+#: derp/handlers/gemini_inline.py:60
+msgid "Get an AI-powered response for: {user_input}"
+msgstr "Получить ответ от ИИ на: {user_input}"
+
+#: derp/handlers/gemini_inline.py:65
+msgid "🧠 Thinking about: {user_input}"
+msgstr "🧠 Думаю над: {user_input}"
+
+#: derp/handlers/gemini_inline.py:113
+msgid "🤯 My circuits are a bit tangled. I couldn't generate a response."
+msgstr "🤯 Мои схемы немного запутались. Не могу сгенерировать ответ."
+
+#: derp/handlers/gemini_inline.py:119
+#, fuzzy
+msgid "😅 Something went wrong with Gemini. I couldn't process that."
+msgstr "😅 Что-то пошло не так с Gemini. Не удалось это обработать."
+
+#: derp/handlers/gemini.py:347
+msgid "😅 Something went wrong with Gemini. I couldn't process that message."
+msgstr "😅 Что-то пошло не так с Gemini. Я не смог обработать это сообщение."
+
+#: derp/tools/memory.py:28
+msgid ""
+"Memory exceeds 1024 characters limit. Current length is {len_full_memory)} "
+"characters. Please provide a shorter memory state."
+msgstr ""
+"Лимит памяти в 1024 символа превышен. Текущая длина: {len_full_memory} "
+"символов. Пожалуйста, предоставьте более короткое состояние памяти."
 

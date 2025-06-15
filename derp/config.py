@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     # Token got from https://t.me/BotFather
     telegram_bot_token: str
+    bot_username: str = "DerpRobot"
 
     # Gel (ex EdgeDB) database connection string
     gel_instance: str
