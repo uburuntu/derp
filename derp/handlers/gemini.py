@@ -255,20 +255,25 @@ class GeminiResponseHandler(MessageHandler):
                     await self.data["db_task"]
 
                 # Store bot's response in database
-                db_client = get_database_client()
-                update = Update.model_validate(
-                    {"update_id": 0, "message": sent_message}
-                )
-                await db_client.create_bot_update_with_upserts(
-                    update_id=0,
-                    update_type="message",
-                    raw_data=update.model_dump(
-                        exclude_none=True, exclude_defaults=True
-                    ),
-                    user=sent_message.from_user,
-                    chat=sent_message.chat,
-                    sender_chat=None,
-                )
+                try:
+                    db_client = get_database_client()
+                    update = Update.model_validate(
+                        {"update_id": 0, "message": sent_message}
+                    )
+                    await db_client.create_bot_update_with_upserts(
+                        update_id=0,
+                        update_type="message",
+                        raw_data=update.model_dump(
+                            exclude_none=True, exclude_defaults=True
+                        ),
+                        user=sent_message.from_user,
+                        chat=sent_message.chat,
+                        sender_chat=None,
+                    )
+                except Exception as e:
+                    logfire.exception(
+                        "Failed to store bot response in database", error=str(e)
+                    )
 
             return sent_message
 
