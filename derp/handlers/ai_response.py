@@ -233,6 +233,7 @@ class DerpResponseHandler(MessageHandler):
 
     async def handle(self) -> Any:
         """Handle messages that mention 'derp', use /derp command, or are in private chats."""
+        message: Message | None = None
         try:
             # Build context for the AI agent
             context = [await self._generate_context(self.event)]
@@ -264,21 +265,25 @@ class DerpResponseHandler(MessageHandler):
                 await self.data["db_task"]
 
             # Add my message to the database using the new method
-            db_client = get_database_client()
-            update = Update.model_validate(
-                {
-                    "update_id": 0,
-                    "message": message,
-                }
-            )
-            await db_client.create_bot_update_with_upserts(
-                update_id=0,
-                update_type="message",
-                raw_data=update.model_dump(exclude_none=True, exclude_defaults=True),
-                user=message.from_user,
-                chat=message.chat,
-                sender_chat=None,
-            )
+            try:
+                db_client = get_database_client()
+                update = Update.model_validate(
+                    {
+                        "update_id": 0,
+                        "message": message,
+                    }
+                )
+                await db_client.create_bot_update_with_upserts(
+                    update_id=0,
+                    update_type="message",
+                    raw_data=update.model_dump(exclude_none=True, exclude_defaults=True),
+                    user=message.from_user,
+                    chat=message.chat,
+                    sender_chat=None,
+                )
+                logfire.info(f"Logged bot message {message.message_id} to database successfully")
+            except Exception:
+                logfire.exception("Failed to log bot message to database")
 
             return message
 
@@ -287,7 +292,11 @@ class DerpResponseHandler(MessageHandler):
                 _("🤔 I'm having trouble thinking right now. Try again in a moment.")
             )
         except Exception:
-            logfire.exception("Error in AI response handler")
-            return await self.event.reply(
-                _("😅 Something went wrong. I couldn't process that message.")
-            )
+            if message is None:
+                logfire.exception("Error in AI response handler")
+                return await self.event.reply(
+                    _("😅 Something went wrong. I couldn't process that message.")
+                )
+            else:
+                logfire.exception("Error after sending AI response")
+                return message
