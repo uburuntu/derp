@@ -174,7 +174,7 @@ class GeminiResponseHandler(MessageHandler):
             return await self.event.reply(text, parse_mode="Markdown")
         except aiogram.exceptions.TelegramBadRequest as exc:
             if "can't parse entities" in exc.message:
-                return await self.event.reply(md.quote(text), parse_mode="Markdown")
+                return await self.event.reply(text, parse_mode=None)
             raise
 
     async def _send_image(
