@@ -1,6 +1,7 @@
 """Configuration settings using Pydantic."""
 
-from typing import Literal
+import itertools
+from typing import Iterable, Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,7 +35,7 @@ class Settings(BaseSettings):
 
     # Google API key for Pydantic AI
     google_api_key: str
-    google_api_extra_keys: list[str] = Field(default_factory=list)
+    google_api_extra_keys: str
 
     # OpenRouter API key for Pydantic AI
     openrouter_api_key: str
@@ -62,6 +63,14 @@ class Settings(BaseSettings):
     @property
     def bot_id(self) -> int:
         return int(self.telegram_bot_token.split(":")[0])
+
+    @property
+    def google_api_keys(self) -> list[str]:
+        return [self.google_api_key] + self.google_api_extra_keys.split(",")
+
+    @property
+    def google_api_key_iter(self) -> Iterable[str]:
+        return itertools.cycle(self.google_api_keys)
 
 
 settings = Settings()

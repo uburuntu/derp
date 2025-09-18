@@ -26,9 +26,19 @@ class DatabaseClient:
     async def connect(self) -> None:
         """Connect to the Gel database."""
         if self._client is None:
-            self._client = gel.create_async_client(
-                dsn=settings.gel_instance,
-                secret_key=settings.gel_secret_key,
+            self._client = (
+                gel.create_async_client(
+                    dsn=settings.gel_instance,
+                    secret_key=settings.gel_secret_key,
+                )
+                .with_transaction_options(
+                    gel.TransactionOptions(
+                        isolation=gel.IsolationLevel.PreferRepeatableRead
+                    ),
+                )
+                .with_retry_options(
+                    gel.RetryOptions(attempts=2),
+                )
             )
             self.logger.info("Connected to Gel database")
 

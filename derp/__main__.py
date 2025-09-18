@@ -64,6 +64,7 @@ async def main():
         f"Starting bot: {bot_info.full_name} (@{bot_info.username}) [ID: {bot_info.id}]"
     )
     logger.info(f"Environment: {settings.environment}")
+    logger.info(f"Found {len(settings.google_api_keys)} Google API keys")
 
     dp = Dispatcher(storage=MemoryStorage())
 
