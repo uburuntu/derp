@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     # Google API key for Pydantic AI
     google_api_key: str
+    google_api_extra_keys: list[str] = Field(default_factory=list)
 
     # OpenRouter API key for Pydantic AI
     openrouter_api_key: str

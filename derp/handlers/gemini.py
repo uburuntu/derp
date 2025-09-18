@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from functools import cached_property
 from typing import Any
 
 import aiogram.exceptions
@@ -105,7 +104,6 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
 class GeminiResponseHandler(MessageHandler):
     """Class-based message handler for AI responses using Google's native Gemini API."""
 
-    @cached_property
     def gemini(self) -> Gemini:
         """Get the Gemini service instance."""
         return Gemini()

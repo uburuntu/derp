@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import itertools
 from dataclasses import dataclass, field
 from typing import Any, Callable, get_type_hints
 
@@ -187,11 +188,17 @@ class _FunctionCallHandler:
         return final_response
 
 
+google_api_keys = [settings.google_api_key] + settings.google_api_extra_keys
+google_api_key_iter = itertools.cycle(google_api_keys)
+
+logfire.info(f"Detected {len(google_api_keys)} Google API keys")
+
+
 class Gemini:
     """A wrapper for the Gemini API providing a builder pattern for requests."""
 
     def __init__(self, api_key: str | None = None) -> None:
-        api_key = api_key or settings.google_api_key
+        api_key = api_key or next(google_api_key_iter)
         if not api_key:
             raise ValueError("Google API key is required for Gemini API")
         self.client = genai.Client(api_key=api_key)
