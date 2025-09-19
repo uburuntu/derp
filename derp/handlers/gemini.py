@@ -255,7 +255,6 @@ class GeminiResponseHandler(MessageHandler):
                         await self.data["db_task"]
                 except Exception as e:
                     logfire.exception("Failed to complete database task", error=str(e))
-                    return sent_message
 
                 # Store bot's response in database
                 try:
