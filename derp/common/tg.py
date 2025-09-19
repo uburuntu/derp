@@ -240,7 +240,8 @@ class ExtractedMedia(BaseModel):
             return self.media.mime_type or "application/octet-stream"
         elif isinstance(self.media, Sticker):
             if self.media.is_animated:
-                return "application/json"  # Lottie animation
+                # Lottie JSON animation
+                return "application/json"
             elif self.media.is_video:
                 return "video/webm"
             else:
@@ -252,48 +253,11 @@ class ExtractedMedia(BaseModel):
         elif isinstance(self.media, VideoNote):
             return "video/mp4"
         elif isinstance(self.media, Audio):
-            return self.media.mime_type or "audio/mp3"
+            return self.media.mime_type or "audio/mpeg"
         elif isinstance(self.media, Voice):
             return self.media.mime_type or "audio/ogg"
 
         return "application/octet-stream"
-        """Generate appropriate filename with extension based on media type."""
-        base_name = f"file_{self.file_id[:8]}"
-
-        if isinstance(self.media, PhotoSize):
-            return f"{base_name}.jpg"
-        elif isinstance(self.media, Document):
-            if self.media.file_name:
-                return self.media.file_name
-            # Guess extension from mime type
-            if self.media.mime_type:
-                if self.media.mime_type.startswith("image/"):
-                    ext = self.media.mime_type.split("/")[-1]
-                    return f"{base_name}.{ext}"
-                elif self.media.mime_type.startswith("video/"):
-                    ext = self.media.mime_type.split("/")[-1]
-                    return f"{base_name}.{ext}"
-            return f"{base_name}"
-        elif isinstance(self.media, Sticker):
-            if self.media.is_animated:
-                return f"{base_name}.lottie"
-            if self.media.is_video:
-                return f"{base_name}.mp4"
-            return f"{base_name}.webp"
-        elif isinstance(self.media, Video):
-            return f"{base_name}.mp4"
-        elif isinstance(self.media, Animation):
-            return f"{base_name}.mp4"
-        elif isinstance(self.media, VideoNote):
-            return f"{base_name}.mp4"
-        elif isinstance(self.media, Audio):
-            if hasattr(self.media, "file_name") and self.media.file_name:
-                return self.media.file_name
-            return f"{base_name}.mp3"
-        elif isinstance(self.media, Voice):
-            return f"{base_name}.ogg"
-
-        return f"{base_name}"
 
     async def download(self) -> bytes:
         """Download the media and return raw bytes."""
