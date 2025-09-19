@@ -278,8 +278,10 @@ class GeminiResponseHandler(MessageHandler):
 
         except Exception:
             logfire.exception("Error in Gemini response handler")
-            return await self.event.reply(
-                _(
-                    "😅 Something went wrong with Gemini. I couldn't process that message."
+            if sent_message is not None:
+                return await self.event.reply(
+                    _(
+                        "😅 Something went wrong with Gemini. I couldn't process that message."
+                    )
                 )
-            )
+            return sent_message
