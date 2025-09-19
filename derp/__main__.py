@@ -13,7 +13,7 @@ from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
 from .common.database import get_database_client
 from .config import settings
-from .handlers import basic, chat_settings, gemini, gemini_inline
+from .handlers import basic, chat_settings, gemini, gemini_image, gemini_inline
 from .middlewares.chat_settings import ChatSettingsMiddleware
 from .middlewares.database_logger import DatabaseLoggerMiddleware
 from .middlewares.event_context import EventContextMiddleware
@@ -86,9 +86,10 @@ async def main():
     dp.include_routers(
         basic.router,
         chat_settings.router,
-        gemini.router,
+        gemini_image.router,
         gemini_inline.router,
         # Must be the last one to handle all unhandled messages
+        gemini.router,
     )
 
     try:
