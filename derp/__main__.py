@@ -89,7 +89,6 @@ async def main():
         gemini.router,
         gemini_inline.router,
         # Must be the last one to handle all unhandled messages
-        # ai_response.router,
     )
 
     try:

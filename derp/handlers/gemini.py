@@ -251,7 +251,7 @@ class GeminiResponseHandler(MessageHandler):
                 try:
                     if "db_task" in self.data:
                         await self.data["db_task"]
-                except Exception as e:
+                except Exception:
                     logfire.exception("Failed to complete database task")
 
                 # Store bot's response in database
@@ -270,7 +270,7 @@ class GeminiResponseHandler(MessageHandler):
                         chat=sent_message.chat,
                         sender_chat=None,
                     )
-                except Exception as e:
+                except Exception:
                     logfire.exception("Failed to store bot response in database")
 
             return sent_message
