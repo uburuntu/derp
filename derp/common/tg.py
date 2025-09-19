@@ -389,7 +389,7 @@ class Extractor:
         only_reply = auto()
 
     @classmethod
-    async def _extract_photo_from_message(
+    def _extract_photo_from_message(
         cls, message: Message
     ) -> Optional[Union[PhotoSize, Document, Sticker]]:
         """Extract photo-like content from a single message."""
@@ -410,6 +410,13 @@ class Extractor:
         ):
             return message.sticker
 
+        return None
+
+    @classmethod
+    async def _extract_profile_photo_from_message(
+        cls, message: Message
+    ) -> Optional[Union[PhotoSize, Document, Sticker]]:
+        """Extract profile photo from a single message."""
         if message.forward_from:
             if pp := await profile_photo(message.forward_from):
                 return pp
@@ -493,7 +500,10 @@ class Extractor:
 
     @classmethod
     async def photo(
-        cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
+        cls,
+        message: Message,
+        with_profile_photo: bool = False,
+        reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin,
     ) -> Optional[ExtractedPhoto]:
         """
         Extract photo from message or its reply.
@@ -510,6 +520,14 @@ class Extractor:
         )
         if media:
             return ExtractedPhoto(message=source_message, media=media)
+
+        if with_profile_photo:
+            source_message, media = await cls._extract_with_policy(
+                message, cls._extract_profile_photo_from_message, reply_policy
+            )
+            if media:
+                return ExtractedPhoto(message=source_message, media=media)
+
         return None
 
     @classmethod
