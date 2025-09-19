@@ -2,6 +2,8 @@
 
 AI-powered friendly Telegram bot built with aiogram and Pydantic AI.
 
+For contributor guidelines (structure, style, and workflows), see AGENTS.md.
+
 ## Features
 
 - **Class-Based Handlers**: Uses aiogram's class-based MessageHandler for clean, structured code
@@ -16,23 +18,21 @@ AI-powered friendly Telegram bot built with aiogram and Pydantic AI.
 
 ```bash
 # Install dependencies
-uv sync
+make install
 
 # Copy environment file and configure
 cp env.example .env
 # Edit .env with your actual values
 
 # Run the bot
-uv run -m derp
+make run
 
-# Format code
-uv run black .
-
-# Lint code
-uv run ruff check .
+# Lint and format
+make lint
+make format
 
 # Run tests
-uv run pytest tests/ -v
+make test
 ```
 
 ### Production Deployment
@@ -42,8 +42,10 @@ uv run pytest tests/ -v
 cp env.example .env
 # Edit .env with production values
 
-# Deploy using the provided script
-./scripts/deploy.sh
+# Build and run with Docker
+make docker-up
+# Stop containers
+make docker-down
 ```
 
 ## Environment Variables
@@ -66,3 +68,14 @@ Copy `env.example` to `.env` and configure:
 - Gel (EdgeDB) database
 - OpenAI API access
 - Logfire account (for logging)
+
+## Common Make Targets
+
+- install: `uv sync`
+- run: `uv run -m derp`
+- lint: `uv run ruff check .`
+- format: `uv run ruff format .`
+- test: `uv run pytest -q`
+- i18n: `make i18n-extract`, `make i18n-update`, `make i18n-compile`, `make i18n-init LOCALE=fr`
+- gel codegen: `make gel-codegen`
+- docker: `make docker-up`, `make docker-down`
