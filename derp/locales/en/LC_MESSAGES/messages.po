@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-06-15 23:39+0100\n"
+"POT-Creation-Date: 2025-09-19 12:21+0300\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -16,17 +16,10 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.13.1\n"
-
-#: derp/handlers/ai_response.py:287
-msgid "🤔 I'm having trouble thinking right now. Try again in a moment."
-msgstr ""
-
-#: derp/handlers/ai_response.py:292
-msgid "😅 Something went wrong. I couldn't process that message."
-msgstr ""
+"Generated-By: Babel 2.17.0\n"
 
 #: derp/handlers/basic.py:12
+#, python-brace-format
 msgid "Hello, {name}!"
 msgstr "Hello, {name}!"
 
@@ -38,43 +31,59 @@ msgstr "I'm a friendly AI-powered Telegram bot"
 msgid "😅 Something went wrong with Gemini. I couldn't process that message."
 msgstr "😅 Something went wrong with Gemini. I couldn't process that message."
 
-#: derp/handlers/gemini_inline.py:32 derp/handlers/gemini_inline.py:59
+#: derp/handlers/gemini_inline.py:33 derp/handlers/gemini_inline.py:60
 msgid "🤖 Ask Derp"
 msgstr "🤖 Ask Derp"
 
-#: derp/handlers/gemini_inline.py:33
+#: derp/handlers/gemini_inline.py:34
 msgid "Start typing to get an AI-powered response."
 msgstr "Start typing to get an AI-powered response."
 
-#: derp/handlers/gemini_inline.py:35
+#: derp/handlers/gemini_inline.py:36
 msgid "🤖 Please enter a prompt for Derp AI."
 msgstr "🤖 Please enter a prompt for Derp AI."
 
-#: derp/handlers/gemini_inline.py:41 derp/handlers/gemini_inline.py:72
+#: derp/handlers/gemini_inline.py:42 derp/handlers/gemini_inline.py:73
+#: derp/handlers/gemini_inline.py:123
 msgid "Add Derp to your chat"
 msgstr "Add Derp to your chat"
 
-#: derp/handlers/gemini_inline.py:60
+#: derp/handlers/gemini_inline.py:61
+#, python-brace-format
 msgid "Get an AI-powered response for: {user_input}"
 msgstr "Get an AI-powered response for: {user_input}"
 
-#: derp/handlers/gemini_inline.py:65
+#: derp/handlers/gemini_inline.py:66
+#, python-brace-format
 msgid "🧠 Thinking about: {user_input}"
 msgstr "🧠 Thinking about: {user_input}"
 
-#: derp/handlers/gemini_inline.py:113
+#: derp/handlers/gemini_inline.py:83
+msgid "Start personal chat"
+msgstr ""
+
+#: derp/handlers/gemini_inline.py:132
 msgid "🤯 My circuits are a bit tangled. I couldn't generate a response."
 msgstr "🤯 My circuits are a bit tangled. I couldn't generate a response."
 
-#: derp/handlers/gemini_inline.py:119
+#: derp/handlers/gemini_inline.py:138
 msgid "😅 Something went wrong with Gemini. I couldn't process that."
 msgstr "😅 Something went wrong with Gemini. I couldn't process that."
 
-#: derp/tools/memory.py:28
-msgid ""
-"Memory exceeds 1024 characters limit. Current length is {len_full_memory)} "
-"characters. Please provide a shorter memory state."
-msgstr ""
-"Memory exceeds 1024 characters limit. Current length is {len_full_memory)} "
-"characters. Please provide a shorter memory state."
+#~ msgid "🤔 I'm having trouble thinking right now. Try again in a moment."
+#~ msgstr ""
+
+#~ msgid "😅 Something went wrong. I couldn't process that message."
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Memory exceeds 1024 characters limit. "
+#~ "Current length is {len_full_memory)} "
+#~ "characters. Please provide a shorter "
+#~ "memory state."
+#~ msgstr ""
+#~ "Memory exceeds 1024 characters limit. "
+#~ "Current length is {len_full_memory)} "
+#~ "characters. Please provide a shorter "
+#~ "memory state."
 
