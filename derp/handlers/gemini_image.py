@@ -72,7 +72,9 @@ def _to_filename(mime: str, idx: int) -> str:
     ext = (
         "png"
         if mime.endswith("png")
-        else "jpg" if mime.endswith(("jpeg", "jpg")) else "png"
+        else "jpg"
+        if mime.endswith(("jpeg", "jpg"))
+        else "png"
     )
     return f"gemini_image_{idx}.{ext}"
 

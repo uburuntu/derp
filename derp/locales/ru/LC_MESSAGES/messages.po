@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-09-19 12:21+0300\n"
+"POT-Creation-Date: 2025-09-20 01:48+0200\n"
 "PO-Revision-Date: 2025-04-28 20:27+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ru\n"
@@ -28,10 +28,40 @@ msgstr "Привет, {name}!"
 msgid "I'm a friendly AI-powered Telegram bot"
 msgstr "Я - дружелюбный бот, работающий на искусственном интеллекте"
 
-#: derp/handlers/gemini.py:282
+#: derp/handlers/gemini.py:284
 #, fuzzy
 msgid "😅 Something went wrong with Gemini. I couldn't process that message."
 msgstr "😅 Что-то пошло не так с Gemini. Я не смог обработать это сообщение."
+
+#: derp/handlers/gemini_image.py:86
+msgid "🤷 No image generated."
+msgstr "🤷 Изображение не сгенерировано."
+
+#: derp/handlers/gemini_image.py:121
+msgid "Usage: /imagine <prompt>"
+msgstr "Использование: /imagine <запрос>"
+
+#: derp/handlers/gemini_image.py:136
+msgid "😅 Something went wrong while generating the image. Try again later."
+msgstr "😅 Что-то пошло не так при генерации изображения. Попробуйте позже."
+
+#: derp/handlers/gemini_image.py:145
+msgid "Reply to an image and use: /edit <prompt>"
+msgstr "Ответьте на изображение и используйте: /edit <запрос>"
+
+#: derp/handlers/gemini_image.py:150
+msgid "Please reply to an image (photo/document sticker) to edit it."
+msgstr ""
+"Пожалуйста, ответьте на изображение (фото/документ/стикер), чтобы его "
+"отредактировать."
+
+#: derp/handlers/gemini_image.py:169
+msgid "😅 Something went wrong while editing the image. Try again later."
+msgstr "😅 Что-то пошло не так при редактировании изображения. Попробуйте позже."
+
+#: derp/handlers/gemini_image.py:177
+msgid "🔒 This feature is only available for premium users and chats."
+msgstr "🔒 Эта функция доступна только для премиум-пользователей и чатов."
 
 #: derp/handlers/gemini_inline.py:33 derp/handlers/gemini_inline.py:60
 msgid "🤖 Ask Derp"
@@ -62,7 +92,7 @@ msgstr "🧠 Думаю над: {user_input}"
 
 #: derp/handlers/gemini_inline.py:83
 msgid "Start personal chat"
-msgstr ""
+msgstr "Начать личный чат"
 
 #: derp/handlers/gemini_inline.py:132
 msgid "🤯 My circuits are a bit tangled. I couldn't generate a response."

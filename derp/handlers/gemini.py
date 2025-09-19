@@ -216,9 +216,7 @@ class GeminiResponseHandler(MessageHandler):
 
             # Build request
             request = (
-                self.gemini.create_request()
-                .with_google_search()
-                .with_url_context()
+                self.gemini.create_request().with_google_search().with_url_context()
                 # .with_tool(update_chat_memory, deps) # Uncomment to enable memory
             )
 

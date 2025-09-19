@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-09-19 12:21+0300\n"
+"POT-Creation-Date: 2025-09-20 01:48+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -26,8 +26,36 @@ msgstr ""
 msgid "I'm a friendly AI-powered Telegram bot"
 msgstr ""
 
-#: derp/handlers/gemini.py:282
+#: derp/handlers/gemini.py:284
 msgid "😅 Something went wrong with Gemini. I couldn't process that message."
+msgstr ""
+
+#: derp/handlers/gemini_image.py:86
+msgid "🤷 No image generated."
+msgstr ""
+
+#: derp/handlers/gemini_image.py:121
+msgid "Usage: /imagine <prompt>"
+msgstr ""
+
+#: derp/handlers/gemini_image.py:136
+msgid "😅 Something went wrong while generating the image. Try again later."
+msgstr ""
+
+#: derp/handlers/gemini_image.py:145
+msgid "Reply to an image and use: /edit <prompt>"
+msgstr ""
+
+#: derp/handlers/gemini_image.py:150
+msgid "Please reply to an image (photo/document sticker) to edit it."
+msgstr ""
+
+#: derp/handlers/gemini_image.py:169
+msgid "😅 Something went wrong while editing the image. Try again later."
+msgstr ""
+
+#: derp/handlers/gemini_image.py:177
+msgid "🔒 This feature is only available for premium users and chats."
 msgstr ""
 
 #: derp/handlers/gemini_inline.py:33 derp/handlers/gemini_inline.py:60
