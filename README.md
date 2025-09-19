@@ -17,8 +17,11 @@ For contributor guidelines (structure, style, and workflows), see AGENTS.md.
 ### Development
 
 ```bash
-# Install dependencies
-make install
+# Create venv and sync deps (silent)
+make venv
+
+# Activate virtual environment
+source .venv/bin/activate
 
 # Copy environment file and configure
 cp env.example .env
@@ -72,6 +75,7 @@ Copy `env.example` to `.env` and configure:
 ## Common Make Targets
 
 - install: `uv sync`
+- venv: create/reuse `.venv` and sync deps (quiet)
 - run: `uv run -m derp`
 - lint: `uv run ruff check .`
 - format: `uv run ruff format .`

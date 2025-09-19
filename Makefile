@@ -1,6 +1,13 @@
 # Default goal
 .DEFAULT_GOAL := help
 
+## Create or reuse .venv and sync deps quietly
+venv:
+	@test -d .venv || uv venv --quiet
+	@uv sync --quiet
+	@echo "To activate the venv in your current shell, run:"
+	@echo "  source .venv/bin/activate"
+
 ## Install dependencies
 install:
 	uv sync
@@ -63,6 +70,7 @@ docker-down:
 ## Show this help
 help:
 	@echo "Available targets:"
+	@echo "  venv           Create/reuse .venv and sync deps (quiet)"
 	@echo "  install        Install dependencies (uv sync)"
 	@echo "  run            Run the bot locally"
 	@echo "  lint           Lint with Ruff"
@@ -70,12 +78,10 @@ help:
 	@echo "  test           Run tests (quiet)"
 	@echo "  test-verbose   Run tests (verbose)"
 	@echo "  i18n           Extract, update, and compile translations"
-	@echo "  i18n-extract   Extract i18n messages"
-	@echo "  i18n-update    Update .po from .pot"
-	@echo "  i18n-compile   Compile translations"
 	@echo "  i18n-init      Initialize new locale (LOCALE=xx)"
 	@echo "  gel-codegen    Generate Gel query bindings"
 	@echo "  docker-up      Build and start with Docker"
 	@echo "  docker-down    Stop Docker services"
 
-.PHONY: install run lint format test test-verbose i18n i18n-extract i18n-update i18n-compile i18n-init gel-codegen docker-up docker-down help
+.PHONY: venv install activate run lint format test test-verbose i18n i18n-extract i18n-update i18n-compile i18n-init gel-codegen docker-up docker-down help
+

@@ -11,14 +11,18 @@
 - `dbschema/`: Gel database schema and migrations.
 
 ## Build, Test, and Development Commands
-- Install deps: `uv sync`
-- Run bot locally: `uv run -m derp`
-- Lint: `uv run ruff check .`
-- Format: `uv run ruff format .` (or `uv run black .` if preferred locally)
-- Tests: `uv run pytest -q`
-- i18n: `./scripts/i18n_extract.sh`, `./scripts/i18n_update.sh`, `./scripts/i18n_compile.sh`
-- Gel codegen: `./scripts/gel_codegen.sh`
-- Docker (optional): `docker compose up --build -d`
+- Bootstrap env: `make venv` (creates `.venv` and syncs deps quietly)
+- Install deps: `make install` (runs `uv sync`)
+- Run bot locally: `make run`
+- Lint: `make lint` (Ruff)
+- Format: `make format` (Ruff format)
+- Tests: `make test` (quiet) or `make test-verbose`
+- i18n: `make i18n` (extract → update → compile)
+  - Subcommands: `make i18n-extract`, `make i18n-update`, `make i18n-compile`
+  - Init new locale: `make i18n-init LOCALE=fr`
+- Gel codegen: `make gel-codegen`
+- Docker: `make docker-up` (build/start) and `make docker-down` (stop)
+- Help: `make help` (lists available targets)
 
 ## Coding Style & Naming Conventions
 - Python 3.13+, 4‑space indentation, type hints required.
