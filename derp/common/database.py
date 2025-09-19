@@ -37,7 +37,7 @@ class DatabaseClient:
                     ),
                 )
                 .with_retry_options(
-                    gel.RetryOptions(attempts=2),
+                    gel.RetryOptions(attempts=4),
                 )
             )
             self.logger.info("Connected to Gel database")
