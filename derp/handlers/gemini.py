@@ -34,7 +34,7 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
     media_parts: list[dict[str, Any]] = []
 
     # Extract photo (includes image documents and static stickers)
-    if photo := Extractor.photo(message):
+    if photo := await Extractor.photo(message):
         try:
             image_data = await photo.download()
             media_parts.append(
@@ -48,7 +48,7 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
             logfire.warning(f"Failed to download photo: {e}")
 
     # Extract video (includes video stickers, animations, video notes)
-    if video := Extractor.video(message):
+    if video := await Extractor.video(message):
         try:
             video_data = await video.download()
             media_parts.append(
@@ -64,7 +64,7 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
             logfire.warning(f"Failed to download video: {e}")
 
     # Extract audio (includes audio files and voice messages)
-    if audio := Extractor.audio(message):
+    if audio := await Extractor.audio(message):
         try:
             audio_data = await audio.download()
             media_parts.append(
@@ -81,7 +81,7 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
 
     # Extract document (includes PDF, Word, Excel, etc.)
     if (
-        document := Extractor.document(message)
+        document := await Extractor.document(message)
     ) and document.media_type == "application/pdf":
         try:
             document_data = await document.download()
@@ -216,7 +216,9 @@ class GeminiResponseHandler(MessageHandler):
 
             # Build request
             request = (
-                self.gemini.create_request().with_google_search().with_url_context()
+                self.gemini.create_request()
+                .with_google_search()
+                .with_url_context()
                 # .with_tool(update_chat_memory, deps) # Uncomment to enable memory
             )
 

@@ -1,3 +1,4 @@
+import asyncio
 from enum import IntEnum, auto
 from typing import Optional, Union
 
@@ -107,6 +108,13 @@ def decompose_update(
         info = update.as_json()
 
     return f, user, sender_chat, chat, info
+
+
+async def profile_photo(u: User) -> PhotoSize | None:
+    photos = await u.get_profile_photos(limit=1)
+    if photos.total_count < 1:
+        return None
+    return photos.photos[0][-1]
 
 
 async def create_sensitive_url_from_file_id(bot: Bot, file_id: str) -> str:
@@ -381,7 +389,7 @@ class Extractor:
         only_reply = auto()
 
     @classmethod
-    def _extract_photo_from_message(
+    async def _extract_photo_from_message(
         cls, message: Message
     ) -> Optional[Union[PhotoSize, Document, Sticker]]:
         """Extract photo-like content from a single message."""
@@ -402,7 +410,11 @@ class Extractor:
         ):
             return message.sticker
 
-        return None
+        if message.forward_from:
+            if pp := await profile_photo(message.forward_from):
+                return pp
+
+        return await profile_photo(message.from_user)
 
     @classmethod
     def _extract_video_from_message(
@@ -433,23 +445,29 @@ class Extractor:
         return message.text or message.caption
 
     @classmethod
-    def _extract_with_policy(
+    async def _extract_with_policy(
         cls,
         message: Message,
         extractor_func,
         reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin,
     ):
         """Extract content using the specified reply policy."""
+
+        async def call_extractor(msg):
+            if asyncio.iscoroutinefunction(extractor_func):
+                return await extractor_func(msg)
+            return extractor_func(msg)
+
         if reply_policy == cls.ReplyPolicy.only_origin:
-            return message, extractor_func(message)
+            return message, await call_extractor(message)
 
         elif reply_policy == cls.ReplyPolicy.prefer_origin:
-            result = extractor_func(message)
+            result = await call_extractor(message)
             if result:
                 return message, result
 
             if message.reply_to_message:
-                reply_result = extractor_func(message.reply_to_message)
+                reply_result = await call_extractor(message.reply_to_message)
                 if reply_result:
                     return message.reply_to_message, reply_result
 
@@ -457,16 +475,16 @@ class Extractor:
 
         elif reply_policy == cls.ReplyPolicy.prefer_reply:
             if message.reply_to_message:
-                reply_result = extractor_func(message.reply_to_message)
+                reply_result = await call_extractor(message.reply_to_message)
                 if reply_result:
                     return message.reply_to_message, reply_result
 
-            result = extractor_func(message)
+            result = await call_extractor(message)
             return message, result
 
         elif reply_policy == cls.ReplyPolicy.only_reply:
             if message.reply_to_message:
-                reply_result = extractor_func(message.reply_to_message)
+                reply_result = await call_extractor(message.reply_to_message)
                 return message.reply_to_message, reply_result
 
             return message, None
@@ -474,7 +492,7 @@ class Extractor:
         return message, None
 
     @classmethod
-    def photo(
+    async def photo(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
     ) -> Optional[ExtractedPhoto]:
         """
@@ -487,7 +505,7 @@ class Extractor:
         Returns:
             ExtractedPhoto object or None if no photo found
         """
-        source_message, media = cls._extract_with_policy(
+        source_message, media = await cls._extract_with_policy(
             message, cls._extract_photo_from_message, reply_policy
         )
         if media:
@@ -495,7 +513,7 @@ class Extractor:
         return None
 
     @classmethod
-    def video(
+    async def video(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
     ) -> Optional[ExtractedVideo]:
         """
@@ -508,7 +526,7 @@ class Extractor:
         Returns:
             ExtractedVideo object or None if no video found
         """
-        source_message, media = cls._extract_with_policy(
+        source_message, media = await cls._extract_with_policy(
             message, cls._extract_video_from_message, reply_policy
         )
         if media:
@@ -516,7 +534,7 @@ class Extractor:
         return None
 
     @classmethod
-    def audio(
+    async def audio(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
     ) -> Optional[ExtractedAudio]:
         """
@@ -529,7 +547,7 @@ class Extractor:
         Returns:
             ExtractedAudio object or None if no audio found
         """
-        source_message, media = cls._extract_with_policy(
+        source_message, media = await cls._extract_with_policy(
             message, cls._extract_audio_from_message, reply_policy
         )
         if media:
@@ -537,7 +555,7 @@ class Extractor:
         return None
 
     @classmethod
-    def document(
+    async def document(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
     ) -> Optional[ExtractedDocument]:
         """
@@ -550,7 +568,7 @@ class Extractor:
         Returns:
             ExtractedDocument object or None if no document found
         """
-        source_message, media = cls._extract_with_policy(
+        source_message, media = await cls._extract_with_policy(
             message, cls._extract_document_from_message, reply_policy
         )
         if media:
@@ -558,7 +576,7 @@ class Extractor:
         return None
 
     @classmethod
-    def text(
+    async def text(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
     ) -> Optional[ExtractedText]:
         """
@@ -571,7 +589,7 @@ class Extractor:
         Returns:
             ExtractedText object or None if no text found
         """
-        source_message, text_content = cls._extract_with_policy(
+        source_message, text_content = await cls._extract_with_policy(
             message, cls._extract_text_from_message, reply_policy
         )
         if text_content:
@@ -579,7 +597,7 @@ class Extractor:
         return None
 
     @classmethod
-    def all_media(
+    async def all_media(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
     ) -> tuple[
         Optional[ExtractedPhoto],
@@ -598,10 +616,11 @@ class Extractor:
         Returns:
             Tuple of (photo, video, audio, document, text) - any can be None
         """
-        return (
+        photo, video, audio, document, text = await asyncio.gather(
             cls.photo(message, reply_policy),
             cls.video(message, reply_policy),
             cls.audio(message, reply_policy),
             cls.document(message, reply_policy),
             cls.text(message, reply_policy),
         )
+        return photo, video, audio, document, text
