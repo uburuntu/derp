@@ -28,9 +28,7 @@ class MetaInfo(BaseModel):
         return self.command or self.hashtag or ""
 
     @property
-    def target(self) -> Message:
-        # Prefer the original message if it already contains text or
-        # if it's not a pure text message.
+    def target_message(self) -> Message:
         if self.text or (
             self.message.content_type and self.message.content_type != "text"
         ):
@@ -40,6 +38,16 @@ class MetaInfo(BaseModel):
             return self.message.reply_to_message
 
         return self.message
+
+    @property
+    def target_text(self) -> str:
+        if self.text:
+            return self.text
+
+        if reply_to := self.message.reply_to_message:
+            return reply_to.text or reply_to.caption or ""
+
+        return ""
 
 
 class MetaCommand(BaseFilter):
