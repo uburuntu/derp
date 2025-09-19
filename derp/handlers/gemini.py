@@ -250,8 +250,12 @@ class GeminiResponseHandler(MessageHandler):
 
             if sent_message:
                 # Wait for the middleware's database task to complete first to avoid race conditions
-                if "db_task" in self.data:
-                    await self.data["db_task"]
+                try: 
+                    if "db_task" in self.data:
+                        await self.data["db_task"]
+                except Exception as e:
+                    logfire.exception("Failed to complete database task", error=str(e))
+                    return sent_message
 
                 # Store bot's response in database
                 try:
