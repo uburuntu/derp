@@ -25,6 +25,12 @@ test:
 test-verbose:
 	uv run pytest -v
 
+## Run full i18n pipeline (extract -> update -> compile)
+i18n:
+	$(MAKE) i18n-extract
+	$(MAKE) i18n-update
+	$(MAKE) i18n-compile
+
 ## Extract i18n messages -> derp/locales/messages.pot
 i18n-extract:
 	uv run pybabel extract -k _:1,1t -k _:1,2 --input-dirs=derp -o derp/locales/messages.pot --project=derp --version=0.1
@@ -63,6 +69,7 @@ help:
 	@echo "  format         Format with Ruff"
 	@echo "  test           Run tests (quiet)"
 	@echo "  test-verbose   Run tests (verbose)"
+	@echo "  i18n           Extract, update, and compile translations"
 	@echo "  i18n-extract   Extract i18n messages"
 	@echo "  i18n-update    Update .po from .pot"
 	@echo "  i18n-compile   Compile translations"
@@ -71,4 +78,4 @@ help:
 	@echo "  docker-up      Build and start with Docker"
 	@echo "  docker-down    Stop Docker services"
 
-.PHONY: install run lint format test test-verbose i18n-extract i18n-update i18n-compile i18n-init gel-codegen docker-up docker-down help
+.PHONY: install run lint format test test-verbose i18n i18n-extract i18n-update i18n-compile i18n-init gel-codegen docker-up docker-down help

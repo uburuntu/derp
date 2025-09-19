@@ -76,6 +76,7 @@ Copy `env.example` to `.env` and configure:
 - lint: `uv run ruff check .`
 - format: `uv run ruff format .`
 - test: `uv run pytest -q`
-- i18n: `make i18n-extract`, `make i18n-update`, `make i18n-compile`, `make i18n-init LOCALE=fr`
+- i18n: `make i18n` (extract + update + compile)
+- i18n init: `make i18n-init LOCALE=fr`
 - gel codegen: `make gel-codegen`
 - docker: `make docker-up`, `make docker-down`
