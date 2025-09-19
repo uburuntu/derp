@@ -276,12 +276,16 @@ class DerpResponseHandler(MessageHandler):
                 await db_client.create_bot_update_with_upserts(
                     update_id=0,
                     update_type="message",
-                    raw_data=update.model_dump(exclude_none=True, exclude_defaults=True),
+                    raw_data=update.model_dump(
+                        exclude_none=True, exclude_defaults=True
+                    ),
                     user=message.from_user,
                     chat=message.chat,
                     sender_chat=None,
                 )
-                logfire.info(f"Logged bot message {message.message_id} to database successfully")
+                logfire.info(
+                    f"Logged bot message {message.message_id} to database successfully"
+                )
             except Exception:
                 logfire.exception("Failed to log bot message to database")
 
