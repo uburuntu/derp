@@ -216,9 +216,7 @@ class GeminiResponseHandler(MessageHandler):
 
             # Build request
             request = (
-                self.gemini.create_request()
-                .with_google_search()
-                .with_url_context()
+                self.gemini.create_request().with_google_search().with_url_context()
                 # .with_tool(update_chat_memory, deps) # Uncomment to enable memory
             )
 
@@ -250,7 +248,7 @@ class GeminiResponseHandler(MessageHandler):
 
             if sent_message:
                 # Wait for the middleware's database task to complete first to avoid race conditions
-                try: 
+                try:
                     if "db_task" in self.data:
                         await self.data["db_task"]
                 except Exception as e:
