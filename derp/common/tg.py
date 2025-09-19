@@ -207,8 +207,8 @@ async def reply_with_attachment(
             return await send(message.reply_animation)
         case "document":
             return await send(message.reply_document)
-        case None:
-            return await message.reply(text, disable_web_page_preview=False)
+
+    return await message.reply(text, disable_web_page_preview=False)
 
 
 class ExtractedMedia(BaseModel):
