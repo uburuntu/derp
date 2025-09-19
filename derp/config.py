@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # Google API key for Pydantic AI
     google_api_key: str
     google_api_extra_keys: str
+    google_api_paid_key: str
 
     # OpenRouter API key for Pydantic AI
     openrouter_api_key: str
@@ -52,6 +53,13 @@ class Settings(BaseSettings):
     )
 
     rmbk_id: int = 28006241
+
+    premium_chat_ids: set[int] = Field(
+        default_factory=lambda: [
+            28006241,  # @rm_bk
+            -1001174590460,  # Related
+        ]
+    )
 
     model_config = SettingsConfigDict(
         # `.env.prod` takes priority over `.env`
