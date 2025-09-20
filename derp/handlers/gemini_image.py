@@ -11,9 +11,9 @@ from google import genai
 from google.genai import types
 from google.genai.types import GenerateContentResponse
 
-from ..common.meta import MetaCommand, MetaInfo
-from ..common.tg import Extractor
+from ..common.extractor import Extractor
 from ..config import settings
+from ..filters.meta import MetaCommand, MetaInfo
 
 router = Router(name="gemini_image")
 
@@ -70,13 +70,7 @@ def _extract_first_text(response: GenerateContentResponse) -> str | None:
 
 
 def _to_filename(mime: str, idx: int) -> str:
-    ext = (
-        "png"
-        if mime.endswith("png")
-        else "jpg"
-        if mime.endswith(("jpeg", "jpg"))
-        else "png"
-    )
+    ext = "jpg" if mime.endswith(("jpeg", "jpg")) else "png"
     return f"gemini_image_{idx}.{ext}"
 
 

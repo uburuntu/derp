@@ -35,9 +35,9 @@ async def cmd_help(message: Message):
         "• /clear_memory - Clear LLM memory for this chat\n"
         "• /help - Show this help message\n\n"
         "You can also:\n"
-        "• Mention me (@derp) in group chats\n"
+        "• Mention me (@DerpRobot) in group chats\n"
         "• Reply to my messages\n"
         "• Use me in private chats\n"
-        "• Use inline mode: @derp <query>"
+        "• Use inline mode: @DerpRobot <query>"
     )
     return await message.reply(html.quote(help_text))

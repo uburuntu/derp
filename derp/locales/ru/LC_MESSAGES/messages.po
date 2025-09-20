@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-09-20 10:17+0200\n"
+"POT-Creation-Date: 2025-09-20 14:12+0200\n"
 "PO-Revision-Date: 2025-04-28 20:27+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ru\n"
@@ -50,6 +50,7 @@ msgstr ""
 " мной общаться!"
 
 #: derp/handlers/basic.py:28
+#, fuzzy
 msgid ""
 "I'm a friendly AI-powered Telegram bot\n"
 "\n"
@@ -63,10 +64,10 @@ msgid ""
 "• /help - Show this help message\n"
 "\n"
 "You can also:\n"
-"• Mention me (@derp) in group chats\n"
+"• Mention me (@DerpRobot) in group chats\n"
 "• Reply to my messages\n"
 "• Use me in private chats\n"
-"• Use inline mode: @derp <query>"
+"• Use inline mode: @DerpRobot <query>"
 msgstr ""
 "Я дружелюбный бот, работающий на искусственном интеллекте\n"
 "\n"
@@ -80,43 +81,43 @@ msgstr ""
 "• /help - Показать это сообщение помощи\n"
 "\n"
 "Вы также можете:\n"
-"• Упомянуть меня (@derp) в групповых чатах\n"
+"• Упомянуть меня (@DerpRobot) в групповых чатах\n"
 "• Ответить на мои сообщения\n"
 "• Использовать меня в личных чатах\n"
-"• Использовать инлайн-режим: @derp <запрос>"
+"• Использовать инлайн-режим: @DerpRobot <запрос>"
 
 #: derp/handlers/gemini.py:282
 #, fuzzy
 msgid "😅 Something went wrong with Gemini. I couldn't process that message."
 msgstr "😅 Что-то пошло не так с Gemini. Я не смог обработать это сообщение."
 
-#: derp/handlers/gemini_image.py:86
+#: derp/handlers/gemini_image.py:89
 msgid "🤷 No image generated."
 msgstr "🤷 Изображение не сгенерировано."
 
-#: derp/handlers/gemini_image.py:124
+#: derp/handlers/gemini_image.py:128
 msgid "Usage: /imagine <prompt>"
 msgstr "Использование: /imagine <запрос>"
 
-#: derp/handlers/gemini_image.py:139
+#: derp/handlers/gemini_image.py:143
 msgid "😅 Something went wrong while generating the image. Try again later."
 msgstr "😅 Что-то пошло не так при генерации изображения. Попробуйте позже."
 
-#: derp/handlers/gemini_image.py:151
+#: derp/handlers/gemini_image.py:156
 msgid "Reply to an image and use: /edit <prompt>"
 msgstr "Ответьте на изображение и используйте: /edit <запрос>"
 
-#: derp/handlers/gemini_image.py:156
+#: derp/handlers/gemini_image.py:161
 msgid "Please reply to an image (photo/document sticker) to edit it."
 msgstr ""
 "Пожалуйста, ответьте на изображение (фото/документ/стикер), чтобы его "
 "отредактировать."
 
-#: derp/handlers/gemini_image.py:175
+#: derp/handlers/gemini_image.py:180
 msgid "😅 Something went wrong while editing the image. Try again later."
 msgstr "😅 Что-то пошло не так при редактировании изображения. Попробуйте позже."
 
-#: derp/handlers/gemini_image.py:183
+#: derp/handlers/gemini_image.py:188
 msgid "🔒 This feature is only available for premium users and chats."
 msgstr "🔒 Эта функция доступна только для премиум-пользователей и чатов."
 
