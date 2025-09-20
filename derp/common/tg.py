@@ -71,10 +71,14 @@ def decompose_update(
         info = f.data
     elif f := update.shipping_query:
         user = f.from_user
-        info = f.as_json()
+        info = f.model_dump_json(
+            exclude_unset=True, exclude_defaults=True, exclude_none=True
+        )
     elif f := update.pre_checkout_query:
         user = f.from_user
-        info = f.as_json()
+        info = f.model_dump_json(
+            exclude_unset=True, exclude_defaults=True, exclude_none=True
+        )
     elif f := update.poll:
         info = (
             f"{one_liner(f.question, cut_len=50)} ({f.id}),"
@@ -92,7 +96,9 @@ def decompose_update(
         )
     else:
         f = update
-        info = update.as_json()
+        info = update.model_dump_json(
+            exclude_unset=True, exclude_defaults=True, exclude_none=True
+        )
 
     return f, user, sender_chat, chat, info
 
