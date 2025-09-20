@@ -159,11 +159,14 @@ class _FunctionCallHandler:
             and function_call_count < max_function_calls
         ):
             function_call_count += 1
-            logfire.info(f"Processing function call {function_call_count}")
+            logfire.info(
+                "gemini_function_call_iteration",
+                iteration=function_call_count,
+                total_allowed=max_function_calls,
+            )
 
             function_responses: list[types.Part] = []
             for func_call in response.candidates[0].function_calls:
-                logfire.info(f"Executing function: {func_call.name}")
                 result = await self.tool_registry.execute(
                     func_call.name, func_call.args, deps
                 )
@@ -180,9 +183,13 @@ class _FunctionCallHandler:
                 ]
             )
 
-            response = self.client.models.generate_content(
-                model=self.model_name, contents=contents, config=config
-            )
+            # Follow-up model call after tool execution (minimal span)
+            with logfire.span("genai.generate") as span:
+                span.set_attribute("gen_ai.system", "google")
+                span.set_attribute("gen_ai.request.model", self.model_name)
+                response = self.client.models.generate_content(
+                    model=self.model_name, contents=contents, config=config
+                )
             final_response = response
 
         return final_response
@@ -347,11 +354,15 @@ class GeminiRequestBuilder:
             tools=gemini_tools, system_instruction=system_instruction
         )
 
-        response = self.client.models.generate_content(
-            model=self._model_name,
-            contents=contents,
-            config=config,
-        )
+        # Primary model call (minimal span)
+        with logfire.span("genai.generate") as span:
+            span.set_attribute("gen_ai.system", "google")
+            span.set_attribute("gen_ai.request.model", self._model_name)
+            response = self.client.models.generate_content(
+                model=self._model_name,
+                contents=contents,
+                config=config,
+            )
 
         if (
             self._tool_registry.declarations

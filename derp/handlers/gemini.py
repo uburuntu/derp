@@ -43,9 +43,8 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
                     "mime_type": photo.media_type or "image/jpeg",
                 }
             )
-            logfire.info(f"Extracted photo from message {photo.message.message_id}")
-        except Exception as e:
-            logfire.warning(f"Failed to download photo: {e}")
+        except Exception:
+            logfire.exception("photo_download_failed")
 
     # Extract video (includes video stickers, animations, video notes)
     if video := await Extractor.video(message):
@@ -57,11 +56,8 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
                     "mime_type": video.media_type or "video/mp4",
                 }
             )
-            logfire.info(
-                f"Extracted video from message {video.message.message_id}, duration: {video.duration}s"
-            )
-        except Exception as e:
-            logfire.warning(f"Failed to download video: {e}")
+        except Exception:
+            logfire.exception("video_download_failed")
 
     # Extract audio (includes audio files and voice messages)
     if audio := await Extractor.audio(message):
@@ -73,11 +69,8 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
                     "mime_type": audio.media_type or "audio/ogg",
                 }
             )
-            logfire.info(
-                f"Extracted audio from message {audio.message.message_id}, duration: {audio.duration}s"
-            )
-        except Exception as e:
-            logfire.warning(f"Failed to download audio: {e}")
+        except Exception:
+            logfire.exception("audio_download_failed")
 
     # Extract document (includes PDF, Word, Excel, etc.)
     if (
@@ -88,11 +81,8 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
             media_parts.append(
                 {"data": document_data, "mime_type": document.media_type}
             )
-            logfire.info(
-                f"Extracted document from message {document.message.message_id}"
-            )
-        except Exception as e:
-            logfire.warning(f"Failed to download document: {e}")
+        except Exception:
+            logfire.exception("document_download_failed")
 
     return media_parts
 
@@ -247,47 +237,60 @@ class GeminiResponseHandler(MessageHandler):
     async def handle(self) -> Any:
         """Handle messages using Gemini API."""
         try:
-            # Create tool dependencies
-            # chat_settings: ChatSettingsResult | None = self.data.get("chat_settings")
-            # deps = ToolDeps(
-            #     message=self.event,
-            #     chat_settings=chat_settings,
-            #     db_client=get_database_client(),
-            # )
-
-            # Build request
-            request = (
-                self.gemini.create_request().with_google_search().with_url_context()
-                # .with_tool(update_chat_memory, deps) # Uncomment to enable memory
-            )
-
-            context = await self._generate_context(self.event)
-            request.with_text(context)
-
-            media_parts = await extract_media_for_gemini(self.event)
-            for media in media_parts:
-                request.with_media(media["data"], media["mime_type"])
-
-            # Execute request
-            final_response = await request.execute()
-
-            # Check if we have any content to send
-            if not final_response.has_content:
-                return await self.event.react(reaction=[ReactionTypeEmoji(emoji="👌")])
-
-            # Send the complete response
-            text_response = self._format_response_text(final_response)[:4000]
-
-            sent_message = None
-            if text_response:
-                sent_message = await self._send_text_safely(text_response)
-
-            for image_data in final_response.images:
-                sent_message = (
-                    await self._send_image(image_data, sent_message) or sent_message
+            with logfire.span(
+                "gemini_generate",
+                model=settings.default_llm_model.lower(),
+                chat_id=self.event.chat.id,
+                user_id=self.event.from_user and self.event.from_user.id,
+            ):
+                # Build request
+                request = (
+                    self.gemini.create_request().with_google_search().with_url_context()
                 )
 
-            return sent_message
+                context = await self._generate_context(self.event)
+                request.with_text(context)
+                logfire.debug(
+                    "gemini_context_built",
+                    context_chars=len(context),
+                    recent_messages=context.count('"message_id"'),
+                )
+
+                media_parts = await extract_media_for_gemini(self.event)
+                for media in media_parts:
+                    request.with_media(media["data"], media["mime_type"])
+
+                logfire.debug("gemini_request_started")
+
+                # Execute request
+                final_response = await request.execute()
+                logfire.info(
+                    "gemini_response_received",
+                    has_text=bool(final_response.text_parts),
+                    code_blocks=len(final_response.code_blocks),
+                    images=len(final_response.images),
+                    exec_results=len(final_response.execution_results),
+                )
+
+                # Check if we have any content to send
+                if not final_response.has_content:
+                    return await self.event.react(
+                        reaction=[ReactionTypeEmoji(emoji="👌")]
+                    )
+
+                # Send the complete response
+                text_response = self._format_response_text(final_response)[:4000]
+
+                sent_message = None
+                if text_response:
+                    sent_message = await self._send_text_safely(text_response)
+
+                for image_data in final_response.images:
+                    sent_message = (
+                        await self._send_image(image_data, sent_message) or sent_message
+                    )
+
+                return sent_message
 
         except Exception:
             logfire.exception("Error in Gemini response handler")

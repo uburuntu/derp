@@ -39,7 +39,7 @@ async def update_chat_memory(full_memory: str, deps: ToolDeps) -> str:
 
         # Update memory in database
         if not deps.db_client:
-            logfire.warning("No database client available for memory update")
+            logfire.warning("memory_update_no_db", chat_id=deps.message.chat.id)
             return "Database not available for memory storage"
 
         async with deps.db_client.get_executor() as executor:
@@ -56,10 +56,12 @@ async def update_chat_memory(full_memory: str, deps: ToolDeps) -> str:
         )
 
         logfire.info(
-            f"Memory updated for chat {deps.message.chat.id}, length: {len(full_memory)}"
+            "memory_updated",
+            chat_id=deps.message.chat.id,
+            length=len(full_memory),
         )
         return f"Memory updated successfully. New memory length: {len(full_memory)} characters."
 
-    except Exception as e:
-        logfire.warning(f"Failed to update chat memory: {e}")
-        return f"Failed to store memory: {str(e)}"
+    except Exception:
+        logfire.exception("memory_update_failed", chat_id=deps.message.chat.id)
+        return "Failed to store memory"

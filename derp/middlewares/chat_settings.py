@@ -3,6 +3,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import gel
+import logfire
 from aiogram import BaseMiddleware
 from aiogram.dispatcher.middlewares.user_context import EVENT_CHAT_KEY
 from aiogram.types import Chat, TelegramObject
@@ -38,6 +39,6 @@ class ChatSettingsMiddleware(BaseMiddleware):
                 data["chat_settings"] = await chat_settings(executor, chat_id=chat.id)
 
         except Exception:
-            self.logger.exception(f"Failed to load chat settings for chat {chat.id}")
+            logfire.exception("chat_settings_load_failed", chat_id=chat.id)
 
         return await handler(event, data)

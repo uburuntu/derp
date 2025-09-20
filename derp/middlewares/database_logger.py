@@ -66,9 +66,14 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
         except Exception as exc:
             logfire.warning("persist_inbound_failed", _exc_info=exc)
 
-        # Execute the handler
+        # Execute the handler with Logfire baggage for correlation across spans/logs
         try:
-            response = await handler(event, data)
+            with logfire.set_baggage(
+                update_id=str(event.update_id),
+                chat_id=str(chat.id) if chat else None,
+                user_id=str(user.id) if user else None,
+            ):
+                response = await handler(event, data)
         finally:
             # Clear context to avoid leaks to unrelated tasks
             update_ctx.reset(token)

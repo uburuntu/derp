@@ -1,8 +1,8 @@
-import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import logfire
 from aiogram import BaseMiddleware
 from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.types import (
@@ -17,10 +17,6 @@ class LogUpdatesMiddleware(BaseMiddleware):
     """
     Extracts essential info from the Telegram update and prints a log
     """
-
-    def __init__(self):
-        self.logger = logging.getLogger("Update")
-        self.logger.setLevel(logging.DEBUG)
 
     @classmethod
     def log_string(cls, update: Update, elapsed_ms: int) -> str:
@@ -52,6 +48,8 @@ class LogUpdatesMiddleware(BaseMiddleware):
         log = self.log_string(update=event, elapsed_ms=elapsed_ms)
 
         if response is UNHANDLED:
-            return self.logger.debug(log)
+            logfire.debug(log)
+            return response
 
-        return self.logger.info(log)
+        logfire.info(log)
+        return response
