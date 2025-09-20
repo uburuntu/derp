@@ -18,8 +18,8 @@ from aiogram.types import (
 from aiogram.utils.i18n import gettext as _
 
 from ..common.database import get_database_client
-from ..common.llm_gemini import Gemini, GeminiResult
 from ..common.extractor import Extractor
+from ..common.llm_gemini import Gemini, GeminiResult
 from ..config import settings
 from ..filters import DerpMentionFilter
 from ..queries.chat_settings_async_edgeql import ChatSettingsResult

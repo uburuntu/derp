@@ -445,4 +445,3 @@ class Extractor:
             cls.text(message, reply_policy),
         )
         return photo, video, audio, document, text
-
