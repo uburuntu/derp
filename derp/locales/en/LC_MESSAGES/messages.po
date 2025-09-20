@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-09-20 01:48+0200\n"
+"POT-Creation-Date: 2025-09-20 10:17+0200\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -20,44 +20,100 @@ msgstr ""
 
 #: derp/handlers/basic.py:12
 #, python-brace-format
-msgid "Hello, {name}!"
-msgstr "Hello, {name}!"
+msgid ""
+"👋 Hello, {name}!\n"
+"\n"
+"I'm Derp, your AI-powered Telegram assistant powered by Google's Gemini.\n"
+"\n"
+"I can help you with:\n"
+"• 🤖 AI conversations and questions\n"
+"• 🎨 Image generation and editing (premium)\n"
+"• 📝 Code generation and analysis\n"
+"• 🔍 Web search and research\n"
+"• 💭 Chat memory management\n"
+"\n"
+"Type /help to see all available commands, or just start chatting with me!"
+msgstr ""
+"👋 Hello, {name}!\n"
+"\n"
+"I'm Derp, your AI-powered Telegram assistant powered by Google's Gemini.\n"
+"\n"
+"I can help you with:\n"
+"• 🤖 AI conversations and questions\n"
+"• 🎨 Image generation and editing (premium)\n"
+"• 📝 Code generation and analysis\n"
+"• 🔍 Web search and research\n"
+"• 💭 Chat memory management\n"
+"\n"
+"Type /help to see all available commands, or just start chatting with me!"
 
-#: derp/handlers/basic.py:18
-msgid "I'm a friendly AI-powered Telegram bot"
-msgstr "I'm a friendly AI-powered Telegram bot"
+#: derp/handlers/basic.py:28
+msgid ""
+"I'm a friendly AI-powered Telegram bot\n"
+"\n"
+"Available commands:\n"
+"• /derp - Trigger AI response\n"
+"• /imagine <prompt> - Generate images with AI (premium)\n"
+"• /edit <prompt> - Edit images with AI (premium)\n"
+"• /settings - Show current chat settings\n"
+"• /set_memory <text> - Set LLM memory for this chat\n"
+"• /clear_memory - Clear LLM memory for this chat\n"
+"• /help - Show this help message\n"
+"\n"
+"You can also:\n"
+"• Mention me (@derp) in group chats\n"
+"• Reply to my messages\n"
+"• Use me in private chats\n"
+"• Use inline mode: @derp <query>"
+msgstr ""
+"I'm a friendly AI-powered Telegram bot\n"
+"\n"
+"Available commands:\n"
+"• /derp - Trigger AI response\n"
+"• /imagine <prompt> - Generate images with AI (premium)\n"
+"• /edit <prompt> - Edit images with AI (premium)\n"
+"• /settings - Show current chat settings\n"
+"• /set_memory <text> - Set LLM memory for this chat\n"
+"• /clear_memory - Clear LLM memory for this chat\n"
+"• /help - Show this help message\n"
+"\n"
+"You can also:\n"
+"• Mention me (@derp) in group chats\n"
+"• Reply to my messages\n"
+"• Use me in private chats\n"
+"• Use inline mode: @derp <query>"
 
-#: derp/handlers/gemini.py:284
+#: derp/handlers/gemini.py:282
 msgid "😅 Something went wrong with Gemini. I couldn't process that message."
 msgstr "😅 Something went wrong with Gemini. I couldn't process that message."
 
 #: derp/handlers/gemini_image.py:86
 msgid "🤷 No image generated."
-msgstr ""
+msgstr "🤷 No image generated."
 
-#: derp/handlers/gemini_image.py:121
+#: derp/handlers/gemini_image.py:124
 msgid "Usage: /imagine <prompt>"
-msgstr ""
+msgstr "Usage: /imagine <prompt>"
 
-#: derp/handlers/gemini_image.py:136
+#: derp/handlers/gemini_image.py:139
 msgid "😅 Something went wrong while generating the image. Try again later."
-msgstr ""
+msgstr "😅 Something went wrong while generating the image. Try again later."
 
-#: derp/handlers/gemini_image.py:145
+#: derp/handlers/gemini_image.py:151
 msgid "Reply to an image and use: /edit <prompt>"
-msgstr ""
+msgstr "Reply to an image and use: /edit <prompt>"
 
-#: derp/handlers/gemini_image.py:150
+#: derp/handlers/gemini_image.py:156
 msgid "Please reply to an image (photo/document sticker) to edit it."
-msgstr ""
+msgstr "Please reply to an image (photo/document sticker) to edit it."
 
-#: derp/handlers/gemini_image.py:169
+#: derp/handlers/gemini_image.py:175
 msgid "😅 Something went wrong while editing the image. Try again later."
-msgstr ""
+msgstr "😅 Something went wrong while editing the image. Try again later."
 
-#: derp/handlers/gemini_image.py:177
+#: derp/handlers/gemini_image.py:183
 msgid "🔒 This feature is only available for premium users and chats."
-msgstr ""
+msgstr "🔒 This feature is only available for premium users and chats."
 
 #: derp/handlers/gemini_inline.py:33 derp/handlers/gemini_inline.py:60
 msgid "🤖 Ask Derp"
@@ -88,7 +144,7 @@ msgstr "🧠 Thinking about: {user_input}"
 
 #: derp/handlers/gemini_inline.py:83
 msgid "Start personal chat"
-msgstr ""
+msgstr "Start personal chat"
 
 #: derp/handlers/gemini_inline.py:132
 msgid "🤯 My circuits are a bit tangled. I couldn't generate a response."
@@ -114,4 +170,10 @@ msgstr "😅 Something went wrong with Gemini. I couldn't process that."
 #~ "Current length is {len_full_memory)} "
 #~ "characters. Please provide a shorter "
 #~ "memory state."
+
+#~ msgid "Hello, {name}!"
+#~ msgstr "Hello, {name}!"
+
+#~ msgid "I'm a friendly AI-powered Telegram bot"
+#~ msgstr "I'm a friendly AI-powered Telegram bot"
 

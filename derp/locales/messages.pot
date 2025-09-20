@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-09-20 01:48+0200\n"
+"POT-Creation-Date: 2025-09-20 10:17+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -19,14 +19,42 @@ msgstr ""
 
 #: derp/handlers/basic.py:12
 #, python-brace-format
-msgid "Hello, {name}!"
+msgid ""
+"👋 Hello, {name}!\n"
+"\n"
+"I'm Derp, your AI-powered Telegram assistant powered by Google's Gemini.\n"
+"\n"
+"I can help you with:\n"
+"• 🤖 AI conversations and questions\n"
+"• 🎨 Image generation and editing (premium)\n"
+"• 📝 Code generation and analysis\n"
+"• 🔍 Web search and research\n"
+"• 💭 Chat memory management\n"
+"\n"
+"Type /help to see all available commands, or just start chatting with me!"
 msgstr ""
 
-#: derp/handlers/basic.py:18
-msgid "I'm a friendly AI-powered Telegram bot"
+#: derp/handlers/basic.py:28
+msgid ""
+"I'm a friendly AI-powered Telegram bot\n"
+"\n"
+"Available commands:\n"
+"• /derp - Trigger AI response\n"
+"• /imagine <prompt> - Generate images with AI (premium)\n"
+"• /edit <prompt> - Edit images with AI (premium)\n"
+"• /settings - Show current chat settings\n"
+"• /set_memory <text> - Set LLM memory for this chat\n"
+"• /clear_memory - Clear LLM memory for this chat\n"
+"• /help - Show this help message\n"
+"\n"
+"You can also:\n"
+"• Mention me (@derp) in group chats\n"
+"• Reply to my messages\n"
+"• Use me in private chats\n"
+"• Use inline mode: @derp <query>"
 msgstr ""
 
-#: derp/handlers/gemini.py:284
+#: derp/handlers/gemini.py:282
 msgid "😅 Something went wrong with Gemini. I couldn't process that message."
 msgstr ""
 
@@ -34,27 +62,27 @@ msgstr ""
 msgid "🤷 No image generated."
 msgstr ""
 
-#: derp/handlers/gemini_image.py:121
+#: derp/handlers/gemini_image.py:124
 msgid "Usage: /imagine <prompt>"
 msgstr ""
 
-#: derp/handlers/gemini_image.py:136
+#: derp/handlers/gemini_image.py:139
 msgid "😅 Something went wrong while generating the image. Try again later."
 msgstr ""
 
-#: derp/handlers/gemini_image.py:145
+#: derp/handlers/gemini_image.py:151
 msgid "Reply to an image and use: /edit <prompt>"
 msgstr ""
 
-#: derp/handlers/gemini_image.py:150
+#: derp/handlers/gemini_image.py:156
 msgid "Please reply to an image (photo/document sticker) to edit it."
 msgstr ""
 
-#: derp/handlers/gemini_image.py:169
+#: derp/handlers/gemini_image.py:175
 msgid "😅 Something went wrong while editing the image. Try again later."
 msgstr ""
 
-#: derp/handlers/gemini_image.py:177
+#: derp/handlers/gemini_image.py:183
 msgid "🔒 This feature is only available for premium users and chats."
 msgstr ""
 
