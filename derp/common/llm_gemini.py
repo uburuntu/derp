@@ -215,7 +215,6 @@ class GeminiRequestBuilder:
         "**Language & Format:**\n"
         "- Always respond in the same language as the user's message\n"
         "- Use this Markdown formatting only: **bold**, *italic*, __underline__, ~~strikethrough~~, `code`, ```code block```, [links](url)\n"
-        "- Use escaping for special characters: \\*, \\_, \\~ when needed\n"
         "- Make lists using dashes (-) only, not asterisks (*)\n"
         "- Transliterate names to match your response language (e.g., John → Джон when responding in Russian)\n\n"
         "**Response Length:**\n"
