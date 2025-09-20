@@ -145,4 +145,55 @@ module telegram {
         select BotUpdate 
         filter .is_expired
     );
-} 
+
+    #
+    # Cleaned conversation stream that consolidates inbound/outbound messages
+    # and their edits/deletions. BotUpdate remains the source of truth; this
+    # table is a projection that is safe to mutate on deltas.
+    #
+    type MessageLog extending meta::HasCreated, meta::HasUpdated {
+        annotation title := 'Conversation Message Log';
+        annotation description := 'Cleaned messages and edits for easy querying';
+
+        # Natural key for upserts: chat_id:thread_id:message_id
+        required message_key: str {
+            constraint exclusive;
+        }
+
+        # Direction: 'in' for inbound user/channel posts, 'out' for bot actions
+        required direction: str;
+
+        # Telegram identifiers
+        required message_id: int64;
+        thread_id: int64;
+
+        # Relations
+        required chat: Chat { on target delete allow; }
+        from_user: User { on target delete allow; }
+
+        # Content
+        content_type: str { default := 'text'; }
+        text: str;  # Markdown-rendered text; captions normalized into text
+        media_group_id: str;
+        attachment_type: str;
+        attachment_file_id: str;
+
+        # Reply threading
+        reply_to_message_id: int64;
+
+        # Original timestamps from Telegram
+        tg_date: datetime;
+        edited_at: datetime;
+        deleted_at: datetime;
+        is_deleted := exists .deleted_at;
+
+        # Last originating update for traceability (may be empty for background sends)
+        source_update: BotUpdate { on target delete allow; }
+
+        # Indexes for common lookups
+        index on (.message_key);
+        index on (.chat);
+        index on ((.chat, .message_id));
+        index on (.media_group_id);
+    }
+}

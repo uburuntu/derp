@@ -14,6 +14,7 @@ from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 from .common.database import get_database_client
 from .config import settings
 from .handlers import basic, chat_settings, gemini, gemini_image, gemini_inline
+from .middlewares.api_persist import PersistBotActionsMiddleware
 from .middlewares.chat_settings import ChatSettingsMiddleware
 from .middlewares.database_logger import DatabaseLoggerMiddleware
 from .middlewares.event_context import EventContextMiddleware
@@ -73,6 +74,9 @@ async def main():
     # Initialize middlewares
     db = get_database_client()
 
+    # Persist all outbound API calls to cleaned MessageLog table
+    bot.session.middleware(PersistBotActionsMiddleware(db=db))
+
     # Outer middlewares (run before filters)
     dp.update.outer_middleware(LogUpdatesMiddleware())
     dp.update.outer_middleware(DatabaseLoggerMiddleware(db=db))
@@ -92,7 +96,9 @@ async def main():
     )
 
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(
+            bot, allowed_updates=dp.resolve_used_update_types() + ["edited_message"]
+        )
     finally:
         await db.disconnect()
 

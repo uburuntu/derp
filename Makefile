@@ -54,7 +54,7 @@ i18n-init:
 
 ## Generate Gel query code
 gel-codegen:
-	uv run gel-py
+	uv run gel-py -I uburuntu/derp
 
 ## Build and start services with Docker
 docker-up:

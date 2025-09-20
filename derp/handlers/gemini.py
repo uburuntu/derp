@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import aiogram.exceptions
@@ -13,7 +14,6 @@ from aiogram.types import (
     BufferedInputFile,
     Message,
     ReactionTypeEmoji,
-    Update,
 )
 from aiogram.utils.i18n import gettext as _
 
@@ -23,7 +23,7 @@ from ..common.llm_gemini import Gemini, GeminiResult
 from ..config import settings
 from ..filters import DerpMentionFilter
 from ..queries.chat_settings_async_edgeql import ChatSettingsResult
-from ..queries.select_active_updates_async_edgeql import select_active_updates
+from ..queries.select_recent_messages_async_edgeql import select_recent_messages
 
 router = Router(name="gemini")
 
@@ -97,6 +97,81 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
     return media_parts
 
 
+async def _build_context(
+    message: Message, chat_settings: ChatSettingsResult | None
+) -> str:
+    """Build the exact context Derp uses for Gemini.
+
+    This function is reused by both /context and the Gemini handler.
+    """
+    context_parts: list[str] = []
+
+    context_parts.extend(
+        [
+            "# CHAT",
+            json.dumps(
+                message.chat.model_dump(
+                    exclude_defaults=True, exclude_none=True, exclude_unset=True
+                )
+            ),
+        ]
+    )
+
+    if chat_settings and chat_settings.llm_memory:
+        context_parts.extend(["# CHAT MEMORY", chat_settings.llm_memory])
+
+    # Recent chat history from cleaned MessageLog
+    db_client = get_database_client()
+    async with db_client.get_executor() as executor:
+        recent_msgs = await select_recent_messages(
+            executor, chat_id=message.chat.id, limit=100
+        )
+
+    if recent_msgs:
+        context_parts.append("# RECENT CHAT HISTORY")
+        context_parts.extend(
+            json.dumps(
+                {
+                    "message_id": m.message_id,
+                    "sender": m.from_user
+                    and {
+                        "user_id": m.from_user.user_id,
+                        "name": m.from_user.display_name,
+                        "username": m.from_user.username,
+                    },
+                    "date": m.tg_date and m.tg_date.isoformat(),
+                    "content": m.content_type,
+                    "text": m.text,
+                    "reply_to": m.reply_to_message_id,
+                    "attachment": m.attachment_type,
+                },
+                ensure_ascii=False,
+            )
+            for m in recent_msgs
+        )
+
+    # Current message
+    context_parts.extend(
+        [
+            "# CURRENT MESSAGE",
+            message.model_dump_json(
+                exclude_defaults=True, exclude_none=True, exclude_unset=True
+            ),
+        ]
+    )
+
+    return "\n".join(context_parts)
+
+
+@router.message(Command("context"), F.from_user.id.in_(settings.admin_ids))
+async def show_context(
+    message: Message, chat_settings: ChatSettingsResult | None
+) -> None:
+    ctx = await _build_context(message, chat_settings)
+    stats = f"Context length: {len(ctx)} characters, included {ctx.count('message_id')} messages"
+    await message.reply(stats)
+
+
 @router.message(DerpMentionFilter())
 @router.message(Command("derp"))
 @router.message(F.chat.type == "private")
@@ -110,42 +185,8 @@ class GeminiResponseHandler(MessageHandler):
         return Gemini()
 
     async def _generate_context(self, message: Message) -> str:
-        """Generate context for the AI prompt from the message and recent chat history."""
         chat_settings: ChatSettingsResult | None = self.data.get("chat_settings")
-        context_parts: list[str] = []
-
-        if chat_settings and chat_settings.llm_memory:
-            context_parts.extend(
-                [
-                    "--- Chat Memory ---",
-                    chat_settings.llm_memory,
-                ]
-            )
-
-        # Add recent chat history
-        db_client = get_database_client()
-        async with db_client.get_executor() as executor:
-            recent_updates = await select_active_updates(
-                executor, chat_id=message.chat.id, limit=15
-            )
-
-        if recent_updates:
-            context_parts.append("--- Recent Chat History ---")
-            context_parts.extend(
-                f"Update: {update.raw_data}" for update in recent_updates
-            )
-
-        # Add current message
-        context_parts.extend(
-            [
-                "--- Current Message ---",
-                message.model_dump_json(
-                    exclude_defaults=True, exclude_none=True, exclude_unset=True
-                ),
-            ]
-        )
-
-        return "\n".join(context_parts)
+        return await _build_context(message, chat_settings)
 
     def _format_response_text(self, result: GeminiResult) -> str:
         """Format response data into a cohesive text message."""
@@ -245,33 +286,6 @@ class GeminiResponseHandler(MessageHandler):
                 sent_message = (
                     await self._send_image(image_data, sent_message) or sent_message
                 )
-
-            if sent_message:
-                # Wait for the middleware's database task to complete first to avoid race conditions
-                try:
-                    if "db_task" in self.data:
-                        await self.data["db_task"]
-                except Exception:
-                    logfire.exception("Failed to complete database task")
-
-                # Store bot's response in database
-                try:
-                    db_client = get_database_client()
-                    update = Update.model_validate(
-                        {"update_id": 0, "message": sent_message}
-                    )
-                    await db_client.create_bot_update_with_upserts(
-                        update_id=0,
-                        update_type="message",
-                        raw_data=update.model_dump(
-                            exclude_none=True, exclude_defaults=True
-                        ),
-                        user=sent_message.from_user,
-                        chat=sent_message.chat,
-                        sender_chat=None,
-                    )
-                except Exception:
-                    logfire.exception("Failed to store bot response in database")
 
             return sent_message
 

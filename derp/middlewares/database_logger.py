@@ -1,16 +1,18 @@
 """Aiogram middleware for logging updates to Gel database."""
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
+import logfire
 from aiogram import BaseMiddleware
 from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.types import TelegramObject, Update
 
 from ..common.database import DatabaseClient
+from ..common.message_log import upsert_message_from_update
 from ..common.tg import decompose_update
+from ..common.update_context import UpdateContext, update_ctx
 
 
 class DatabaseLoggerMiddleware(BaseMiddleware):
@@ -36,27 +38,40 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
         )
         _, user, sender_chat, chat, _ = decompose_update(event)
 
-        # Start the database operation but don't block the request
-        insert_task = asyncio.create_task(
-            self.db.create_bot_update_with_upserts(
+        # Insert BotUpdate immediately so Chat/User exist for projections
+        bot_update_id: UUID = await self.db.create_bot_update_with_upserts(
+            update_id=event.update_id,
+            update_type=update_type,
+            raw_data=raw_data,
+            user=user,
+            chat=chat,
+            sender_chat=sender_chat,
+            handled=False,
+        )
+
+        # Expose correlation context to downstream (e.g., API session middleware)
+        token = update_ctx.set(
+            UpdateContext(
                 update_id=event.update_id,
-                update_type=update_type,
-                raw_data=raw_data,
-                user=user,
-                chat=chat,
-                sender_chat=sender_chat,
-                handled=False,  # Initially mark as not handled
+                chat_id=chat and chat.id,
+                user_id=user and user.id,
+                thread_id=event.message and event.message.message_thread_id,
             )
         )
 
-        # Put the task in data so handlers can await it if needed
-        data["db_task"] = insert_task
+        # Project inbound message to MessageLog BEFORE handler to allow context reads
+        try:
+            async with self.db.get_executor() as executor:
+                await upsert_message_from_update(executor, update=event, direction="in")
+        except Exception as exc:
+            logfire.warning("persist_inbound_failed", _exc_info=exc)
 
-        # Execute the handler (without blocking on database)
-        response = await handler(event, data)
-
-        # Now await the database operation completion
-        bot_update_id: UUID = await insert_task
+        # Execute the handler
+        try:
+            response = await handler(event, data)
+        finally:
+            # Clear context to avoid leaks to unrelated tasks
+            update_ctx.reset(token)
 
         # Update the handled status based on whether the response was handled
         if response is not UNHANDLED:
