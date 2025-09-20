@@ -48,8 +48,8 @@ class LogUpdatesMiddleware(BaseMiddleware):
         log = self.log_string(update=event, elapsed_ms=elapsed_ms)
 
         if response is UNHANDLED:
-            logfire.debug(log)
+            logfire.debug("{message}", message=log)
             return response
 
-        logfire.info(log)
+        logfire.info("{message}", message=log)
         return response

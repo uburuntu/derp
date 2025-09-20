@@ -68,11 +68,13 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
 
         # Execute the handler with Logfire baggage for correlation across spans/logs
         try:
-            with logfire.set_baggage(
-                update_id=str(event.update_id),
-                chat_id=str(chat.id) if chat else None,
-                user_id=str(user.id) if user else None,
-            ):
+            baggage: dict[str, str] = {"update_id": str(event.update_id)}
+            if chat and chat.id is not None:
+                baggage["chat_id"] = str(chat.id)
+            if user and user.id is not None:
+                baggage["user_id"] = str(user.id)
+
+            with logfire.set_baggage(**baggage):
                 response = await handler(event, data)
         finally:
             # Clear context to avoid leaks to unrelated tasks

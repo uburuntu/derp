@@ -28,6 +28,7 @@ async def cmd_help(message: Message):
         "I'm a friendly AI-powered Telegram bot\n\n"
         "Available commands:\n"
         "• /derp - Trigger AI response\n"
+        "• /donate [stars] - Support the bot with Telegram Stars (default 20)\n"
         "• /imagine <prompt> - Generate images with AI (premium)\n"
         "• /edit <prompt> - Edit images with AI (premium)\n"
         "• /settings - Show current chat settings\n"
