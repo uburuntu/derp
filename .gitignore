@@ -151,6 +151,9 @@ cython_debug/
 # VSCode
 # .vscode/
 
+# Dev tunnel artifacts
+.cfdev/
+
 # Secrets
 *.env
 .env.*

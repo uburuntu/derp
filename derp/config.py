@@ -46,6 +46,11 @@ class Settings(BaseSettings):
 
     # --- Non essentials ---
 
+    # WebApp server config
+    webapp_host: str = "127.0.0.1"
+    webapp_port: int = 8081
+    webapp_public_base: str | None = "https://tribe-dryer-idle-book.trycloudflare.com"
+
     admin_ids: set[int] = Field(
         default_factory=lambda: [
             28006241,  # @rm_bk

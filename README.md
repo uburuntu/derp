@@ -74,3 +74,79 @@ Copy `env.example` to `.env` and configure:
 - i18n init: `make i18n-init LOCALE=fr`
 - gel codegen: `make gel-codegen`
 - docker: `make docker-up`, `make docker-down`
+
+## WebApp (Gemini)
+
+- Local server: `http://127.0.0.1:8081/webapp`
+- In Telegram, send `/webapp` or use the menu button.
+
+### Dev: auto Cloudflare Tunnel (Makefile only)
+
+Use Make targets (no helper scripts). In `ENVIRONMENT=dev`, this starts a TryCloudflare tunnel, captures the URL, sets `WEBAPP_PUBLIC_BASE`, and runs the bot.
+
+```bash
+ENVIRONMENT=dev make run-dev
+```
+
+Notes:
+- If `WEBAPP_PUBLIC_BASE` is set, no tunnel is started.
+- If `cloudflared` is missing, falls back to local run (no public URL).
+- In `ENVIRONMENT!=dev`, no tunnel is started.
+
+### VS Code launch.json workflow
+
+VS Code: start the tunnel separately and use the generated env file:
+
+```bash
+make tunnel-up
+# This writes .env.webapp with WEBAPP_PUBLIC_BASE=<trycloudflare-url>
+```
+
+Add both `.env` and `.env.webapp` to `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Derp Bot",
+      "type": "python",
+      "request": "launch",
+      "module": "derp",
+      "envFile": ["${workspaceFolder}/.env", "${workspaceFolder}/.env.webapp"],
+      "console": "integratedTerminal"
+    }
+  ]
+}
+```
+
+Stop the tunnel when finished:
+
+```bash
+make tunnel-down
+```
+
+Alternatively, run a tunnel manually:
+
+```
+WEBAPP_HOST=127.0.0.1 WEBAPP_PORT=8081 make tunnel
+```
+
+Or set the public base yourself and run:
+
+```bash
+export WEBAPP_PUBLIC_BASE=https://tribe-dryer-idle-book.trycloudflare.com
+uv run python -m derp
+```
+
+### Production
+
+No Cloudflare in prod. Deploy behind your domain/reverse proxy and set:
+
+```
+WEBAPP_PUBLIC_BASE=https://your.domain
+```
+
+The bot will open `https://your.domain/webapp`.
+
+The bot sets a chat menu button pointing to `${WEBAPP_PUBLIC_BASE}/webapp`, and the `/webapp` command opens the same URL.

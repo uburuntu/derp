@@ -1,4 +1,4 @@
-"""Main entry point for the Telegram bot."""
+"""Main entry point for the Telegram bot with optional WebApp server."""
 
 import asyncio
 import logging
@@ -7,17 +7,21 @@ import logfire
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import MenuButtonWebApp, WebAppInfo
 from aiogram.utils.chat_action import ChatActionMiddleware
 from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
+from aiohttp import web
 
 from .common.database import get_database_client
 from .config import settings
 from .handlers import basic, chat_settings, gemini, gemini_image, gemini_inline
+from .handlers import webapp as webapp_handlers
 from .middlewares.chat_settings import ChatSettingsMiddleware
 from .middlewares.database_logger import DatabaseLoggerMiddleware
 from .middlewares.event_context import EventContextMiddleware
 from .middlewares.log_updates import LogUpdatesMiddleware
+from .webapp.server import create_app as create_webapp
 
 # Configure logfire with basic settings
 logfire.configure(
@@ -85,16 +89,56 @@ async def main():
     dp.include_routers(
         basic.router,
         chat_settings.router,
+        webapp_handlers.router,
         gemini_image.router,
         gemini_inline.router,
         # Must be the last one to handle all unhandled messages
         gemini.router,
     )
 
+    # Start WebApp server (aiohttp) alongside polling
+    runner: web.AppRunner | None = None
+    site: web.TCPSite | None = None
+    try:
+        webapp_app = create_webapp(bot)
+        runner = web.AppRunner(webapp_app)
+        await runner.setup()
+        site = web.TCPSite(
+            runner,
+            host=getattr(settings, "webapp_host", "127.0.0.1"),
+            port=getattr(settings, "webapp_port", 8081),
+        )
+        await site.start()
+        logger.info(
+            f"WebApp server started at http://{getattr(settings, 'webapp_host', '127.0.0.1')}:{getattr(settings, 'webapp_port', 8081)}/webapp"
+        )
+    except Exception:
+        logfire.exception("Failed to start WebApp server")
+
+    # Optionally set default chat menu button to open WebApp
+    try:
+        public_base = settings.webapp_public_base
+        if public_base:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="Derp Studio",
+                    web_app=WebAppInfo(url=f"{public_base.rstrip('/')}/webapp"),
+                )
+            )
+            logger.info(f"Chat menu button set to {public_base}/webapp")
+        else:
+            logger.info("WEBAPP_PUBLIC_BASE not set; use /webapp command to open UI")
+    except Exception:
+        logfire.exception("Failed to set chat menu button")
+
     try:
         await dp.start_polling(bot)
     finally:
         await db.disconnect()
+        if site:
+            await site.stop()
+        if runner:
+            await runner.cleanup()
 
 
 if __name__ == "__main__":

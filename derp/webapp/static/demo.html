@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Derp · Gemini Studio</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?1"></script>
+  <style>
+    :root {
+      color-scheme: var(--tg-color-scheme);
+      --bg: var(--tg-theme-bg-color, #0f1115);
+      --text: var(--tg-theme-text-color, #e6e6e6);
+      --muted: var(--tg-theme-hint-color, #8a8f98);
+      --card: color-mix(in oklab, var(--bg) 86%, #ffffff 14%);
+      --border: color-mix(in oklab, var(--bg) 85%, #ffffff 15%);
+      --btn: var(--tg-theme-button-color, #5aa6ee);
+      --btn-text: var(--tg-theme-button-text-color, #fff);
+      --accent: color-mix(in oklab, var(--btn) 70%, #9b59b6 30%);
+      --shadow: 0 10px 25px rgba(0,0,0,.18);
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, sans-serif;
+      background: radial-gradient(1200px 600px at 90% -10%, color-mix(in oklab, var(--btn) 10%, transparent), transparent 60%),
+                  radial-gradient(1000px 500px at -20% 10%, color-mix(in oklab, var(--accent) 12%, transparent), transparent 60%),
+                  var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container { padding: 18px 16px 28px; max-width: 980px; margin: 0 auto; }
+
+    .header { display: grid; gap: 10px; align-items: center; grid-template-columns: 48px 1fr; margin-bottom: 10px; }
+    .logo { width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center;
+      background: linear-gradient(135deg, color-mix(in oklab, var(--btn) 70%, #4ade80 30%), var(--accent));
+      box-shadow: var(--shadow);
+    }
+    .logo svg { filter: drop-shadow(0 2px 6px rgba(0,0,0,.25)); }
+    .title { font-size: 18px; font-weight: 700; letter-spacing: .2px; }
+    .subtitle { font-size: 13px; color: var(--muted); }
+
+    .toolbar { display: flex; gap: 8px; align-items: center; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; mask-image: linear-gradient(to right, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%); grid-column: 1 / -1; }
+    .toolbar::-webkit-scrollbar { height: 6px; }
+    .toolbar::-webkit-scrollbar-thumb { background: transparent; }
+    .chip { padding: 8px 10px; border: 1px solid var(--border); color: var(--text); background: color-mix(in oklab, var(--bg) 92%, #fff 8%);
+      border-radius: 999px; font-size: 12px; cursor: pointer; user-select: none; }
+    .chip:hover { border-color: color-mix(in oklab, var(--btn) 30%, var(--border)); }
+
+    .grid { display: grid; gap: 12px; grid-template-columns: 1fr; }
+    @media (min-width: 980px) { .grid { grid-template-columns: 1.1fr .9fr; } }
+
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: clip; }
+    .card-header { padding: 14px 14px 0; display: flex; align-items: center; justify-content: space-between; }
+    .card-title { font-size: 14px; font-weight: 600; opacity: .95; }
+    .card-body { padding: 12px 14px 16px; }
+
+    .prompt { width: 100%; min-height: 120px; padding: 12px 12px 40px; border-radius: 12px; border: 1px dashed var(--border); background: color-mix(in oklab, var(--bg) 96%, #fff 4%); color: var(--text); resize: vertical; }
+    .prompt:focus { outline: none; border-color: color-mix(in oklab, var(--btn) 30%, var(--border)); }
+
+    .actions { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 10px; }
+    @media (min-width: 520px) { .actions { grid-template-columns: 1fr 1fr; } }
+    .btn { appearance: none; border: none; border-radius: 12px; padding: 12px 14px; font-weight: 700; letter-spacing: .2px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 10px; box-shadow: var(--shadow); }
+    .btn-primary { background: linear-gradient(135deg, var(--btn), var(--accent)); color: var(--btn-text); }
+    .btn-ghost { background: color-mix(in oklab, var(--bg) 90%, #fff 10%); color: var(--text); border: 1px solid var(--border); }
+    .btn[disabled] { opacity: .6; cursor: default; box-shadow: none; }
+
+    .drop { margin-top: 10px; border: 1px dashed var(--border); border-radius: 12px; min-height: 72px; display: grid; place-items: center; color: var(--muted); background: color-mix(in oklab, var(--bg) 94%, #fff 6%); text-align: center; padding: 12px; }
+    @media (min-width: 520px) { .drop { min-height: 100px; } }
+    .drop.drag { border-color: var(--btn); color: var(--text); background: color-mix(in oklab, var(--bg) 90%, var(--btn) 10%); }
+
+    .preview { margin-top: 10px; position: relative; }
+    .preview img { width: 100%; border-radius: 12px; border: 1px solid var(--border); display: block; }
+    .preview .remove { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,.55); border: none; color: #fff; border-radius: 999px; width: 34px; height: 34px; display: grid; place-items: center; cursor: pointer; }
+
+    .out { display: grid; gap: 10px; }
+    .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .tab { border: 1px solid var(--border); background: color-mix(in oklab, var(--bg) 92%, #fff 8%); color: var(--text); border-radius: 10px; padding: 8px 10px; font-weight: 600; cursor: pointer; }
+    .tab.active { border-color: color-mix(in oklab, var(--btn) 40%, var(--border)); background: color-mix(in oklab, var(--bg) 85%, var(--btn) 15%); }
+    .panel { background: color-mix(in oklab, var(--bg) 92%, #fff 8%); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    .panel .bar { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; font-size: 12px; color: var(--muted); }
+    .panel .content { padding: 12px; }
+    .panel pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: transparent; color: var(--text); max-height: 40vh; overflow: auto; }
+    .toolbar-btn { background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
+
+    /* Mobile: show one output at a time using tabs */
+    .panel { display: none; }
+    .panel.show { display: block; }
+    @media (min-width: 980px) {
+      .tabs { display: none; }
+      .panel { display: block; }
+    }
+
+    .status { font-size: 12px; color: var(--muted); min-height: 18px; }
+    .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 24px; background: rgba(0,0,0,.8); color: #fff; padding: 10px 14px; border-radius: 999px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .2s ease; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+
+    .spinner { width: 18px; height: 18px; border: 2px solid #ffffff44; border-top-color: #fff; border-radius: 50%; animation: spin .9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg) } }
+  </style>
+</head>
+<body style="visibility:hidden;">
+  <div class="container">
+    <div class="header">
+      <div class="logo" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2l2.39 4.84 5.34.78-3.86 3.77.91 5.31L12 14.77 7.22 16.7l.91-5.31L4.27 7.62l5.34-.78L12 2z" fill="white"/>
+        </svg>
+      </div>
+      <div>
+        <div class="title">Derp · Gemini Studio</div>
+        <div class="subtitle">Multimodal prompts · Instant image gen · Telegram-ready</div>
+      </div>
+      <div class="toolbar">
+        <div class="chip" data-template="Summarize the content concisely.">Summarize</div>
+        <div class="chip" data-template="Translate to Russian keeping tone.">Translate 🇷🇺</div>
+        <div class="chip" data-template="Explain this like I'm five years old.">ELI5</div>
+        <div class="chip" data-template="Write clean Python code with comments.">Code 🐍</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- Left: Prompt & Controls -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Your Prompt</div>
+          <div class="status" id="status"></div>
+        </div>
+        <div class="card-body">
+          <textarea id="prompt" class="prompt" placeholder="Describe what you want…"></textarea>
+          <div class="actions">
+            <button id="gen_text" class="btn btn-primary">
+              <span class="spinner" id="spin_text" style="display:none"></span>
+              <span>Generate Text</span>
+            </button>
+            <button id="gen_image" class="btn btn-ghost">Generate Image</button>
+          </div>
+          <div id="drop" class="drop">
+            <div>
+              <div style="font-weight:700; margin-bottom:4px;">Attach an image</div>
+              <div style="font-size:12px; color:var(--muted)">Drag & drop, or tap to choose</div>
+            </div>
+            <input id="image" type="file" accept="image/*" style="display:none" />
+          </div>
+          <div id="preview" class="preview" style="display:none">
+            <img id="img_prev" alt="Selected image preview" />
+            <button class="remove" id="remove_img" title="Remove image">✕</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Output -->
+      <div class="out">
+        <div class="tabs" role="tablist">
+          <button id="tab_text" class="tab active" role="tab" aria-controls="panel_text" aria-selected="true">Text</button>
+          <button id="tab_image" class="tab" role="tab" aria-controls="panel_image" aria-selected="false">Image</button>
+        </div>
+        <div class="panel" id="panel_text">
+          <div class="bar">
+            <div>Text Output</div>
+            <div>
+              <button class="toolbar-btn" id="copy_text">Copy</button>
+              <button class="toolbar-btn" id="clear_text">Clear</button>
+            </div>
+          </div>
+          <div class="content"><pre id="text_out"></pre></div>
+        </div>
+        <div class="panel" id="panel_image">
+          <div class="bar">
+            <div>Image Output</div>
+            <div>
+              <button class="toolbar-btn" id="download_img">Download</button>
+              <button class="toolbar-btn" id="clear_img">Clear</button>
+            </div>
+          </div>
+          <div class="content">
+            <img id="img_out" alt="Generated image" style="max-width:100%; border-radius:12px; display:none" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    Telegram.WebApp.ready();
+    const initData = Telegram.WebApp.initData || '';
+    const initDataUnsafe = Telegram.WebApp.initDataUnsafe || {};
+
+    // Helpers
+    const $ = (q) => document.querySelector(q);
+    const statusEl = $('#status');
+    const toast = (msg) => { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 1800); };
+    const busy = (b) => {
+      $('#gen_text').disabled = b; $('#gen_image').disabled = b;
+      $('#spin_text').style.display = b ? '' : 'none';
+      Telegram.WebApp.MainButton.setText(b ? 'Working…' : 'Close').show();
+    };
+    const setStatus = (s) => statusEl.textContent = s || '';
+
+    // Prompt chips
+    document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
+      const t = c.getAttribute('data-template') || '';
+      const p = $('#prompt');
+      p.value = (p.value ? p.value + '\n' : '') + t;
+      p.focus();
+    }));
+
+    // Dropzone
+    const drop = $('#drop'); const fileInput = $('#image');
+    const previewWrap = $('#preview'); const previewImg = $('#img_prev');
+    const removeBtn = $('#remove_img');
+    const openPicker = () => fileInput.click();
+    const setPreview = (file) => {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => { previewImg.src = reader.result; previewWrap.style.display = ''; };
+      reader.readAsDataURL(file);
+    };
+    drop.addEventListener('click', openPicker);
+    drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('drag'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+    drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('drag'); const f=e.dataTransfer.files?.[0]; if (f) { fileInput.files = e.dataTransfer.files; setPreview(f); } });
+    fileInput.addEventListener('change', () => { const f=fileInput.files?.[0]; if (f) setPreview(f); });
+    removeBtn.addEventListener('click', () => { fileInput.value = ''; previewWrap.style.display='none'; previewImg.src=''; });
+
+    async function postForm(url, formData) {
+      formData.append('_auth', initData);
+      const resp = await fetch(url, { method: 'POST', body: formData });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return await resp.json();
+    }
+
+    async function generateText() {
+      if (!initDataUnsafe.query_id) { alert('WebViewQueryId not defined'); return; }
+      const fd = new FormData();
+      const prompt = $('#prompt').value || 'Describe this image';
+      fd.append('prompt', prompt);
+      const file = fileInput.files?.[0]; if (file) fd.append('image', file, file.name);
+      busy(true); setStatus('Generating text…');
+      try {
+        const res = await postForm('/webapp/generateText', fd);
+        if (res.ok) {
+          $('#text_out').textContent = res.text || '';
+          setStatus('Done'); toast('Text ready');
+        } else { throw new Error(res.err || 'Unknown error'); }
+      } catch (e) { setStatus('Error'); toast('Failed: ' + (e?.message || e)); }
+      finally { busy(false); }
+    }
+
+    async function generateImage() {
+      if (!initDataUnsafe.query_id) { alert('WebViewQueryId not defined'); return; }
+      const fd = new FormData();
+      const prompt = $('#prompt').value || 'A cute robot doodle';
+      fd.append('prompt', prompt);
+      busy(true); setStatus('Generating image…');
+      try {
+        const res = await postForm('/webapp/generateImage', fd);
+        if (res.ok && res.image_b64) {
+          const mime = res.mime || 'image/png';
+          $('#img_out').src = 'data:' + mime + ';base64,' + res.image_b64;
+          $('#img_out').style.display = '';
+          setStatus('Done'); toast('Image ready');
+        } else { throw new Error(res.err || 'Unknown error'); }
+      } catch (e) { setStatus('Error'); toast('Failed: ' + (e?.message || e)); }
+      finally { busy(false); }
+    }
+
+    // Tabs (mobile)
+    const activateTab = (name) => {
+      const isText = name === 'text';
+      $('#tab_text').classList.toggle('active', isText);
+      $('#tab_image').classList.toggle('active', !isText);
+      $('#tab_text').setAttribute('aria-selected', String(isText));
+      $('#tab_image').setAttribute('aria-selected', String(!isText));
+      $('#panel_text').classList.toggle('show', isText);
+      $('#panel_image').classList.toggle('show', !isText);
+    };
+    $('#tab_text').addEventListener('click', () => activateTab('text'));
+    $('#tab_image').addEventListener('click', () => activateTab('image'));
+    // default
+    activateTab('text');
+
+    // Actions
+    $('#gen_text').addEventListener('click', generateText);
+    $('#gen_image').addEventListener('click', generateImage);
+    $('#prompt').addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') generateText(); });
+    $('#copy_text').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('#text_out').textContent || ''); toast('Copied'); } catch {} });
+    $('#clear_text').addEventListener('click', () => { $('#text_out').textContent=''; });
+    $('#clear_img').addEventListener('click', () => { $('#img_out').style.display='none'; $('#img_out').src=''; });
+    $('#download_img').addEventListener('click', () => {
+      const img = $('#img_out'); if (!img.src) return;
+      const a = document.createElement('a'); a.href = img.src; a.download = 'gemini_image.png'; a.click();
+    });
+
+    Telegram.WebApp.MainButton.setText('Close').show().onClick(() => Telegram.WebApp.close());
+    document.body.style.visibility = '';
+  </script>
+</body>
+</html>
