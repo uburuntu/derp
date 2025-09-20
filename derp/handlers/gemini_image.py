@@ -72,9 +72,7 @@ def _to_filename(mime: str, idx: int) -> str:
     ext = (
         "png"
         if mime.endswith("png")
-        else "jpg"
-        if mime.endswith(("jpeg", "jpg"))
-        else "png"
+        else "jpg" if mime.endswith(("jpeg", "jpg")) else "png"
     )
     return f"gemini_image_{idx}.{ext}"
 
@@ -115,8 +113,11 @@ async def _send_images(
     return sent_messages[-1]
 
 
-@router.message(MetaCommand("imagine"), F.chat.id.in_(settings.premium_chat_ids))
-@router.message(MetaCommand("imagine"), F.from_user.id.in_(settings.premium_chat_ids))
+@router.message(
+    F.chat.id.in_(settings.premium_chat_ids)
+    | F.from_user.id.in_(settings.premium_chat_ids),
+    MetaCommand("imagine", "image", "img", "р", "и"),
+)
 async def handle_imagine(message: Message, meta: MetaInfo) -> Message:
     prompt = meta.target_text
     if not prompt:
@@ -139,8 +140,11 @@ async def handle_imagine(message: Message, meta: MetaInfo) -> Message:
         )
 
 
-@router.message(MetaCommand("edit"), F.chat.id.in_(settings.premium_chat_ids))
-@router.message(MetaCommand("edit"), F.from_user.id.in_(settings.premium_chat_ids))
+@router.message(
+    F.chat.id.in_(settings.premium_chat_ids)
+    | F.from_user.id.in_(settings.premium_chat_ids),
+    MetaCommand("edit", "ed", "е"),
+)
 async def handle_edit(message: Message, meta: MetaInfo) -> Message:
     prompt = meta.target_text
     if not prompt:

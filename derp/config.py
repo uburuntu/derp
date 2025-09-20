@@ -58,6 +58,7 @@ class Settings(BaseSettings):
         default_factory=lambda: [
             28006241,  # @rm_bk
             -1001174590460,  # Related
+            -1001130715084,  # Солнышки
         ]
     )
 
