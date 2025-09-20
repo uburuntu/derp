@@ -40,4 +40,4 @@ async def cmd_help(message: Message):
         "• Use me in private chats\n"
         "• Use inline mode: @derp <query>"
     )
-    return await message.reply(help_text)
+    return await message.reply(html.quote(help_text))
