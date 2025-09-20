@@ -18,7 +18,7 @@ run:
 
 ## Lint code with Ruff
 lint:
-	uv run ruff check .
+	uv run ruff check . --fix
 
 ## Format code with Ruff
 format:
