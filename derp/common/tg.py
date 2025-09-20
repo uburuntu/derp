@@ -523,7 +523,9 @@ class Extractor:
 
         if with_profile_photo:
             source_message, media = await cls._extract_with_policy(
-                message, cls._extract_profile_photo_from_message, reply_policy
+                message,
+                cls._extract_profile_photo_from_message,
+                cls.ReplyPolicy.prefer_reply,
             )
             if media:
                 return ExtractedPhoto(message=source_message, media=media)
