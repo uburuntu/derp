@@ -1,16 +1,6 @@
 # Derp Telegram Bot
 
-AI-powered friendly Telegram bot built with aiogram and Pydantic AI.
-
-For contributor guidelines (structure, style, and workflows), see AGENTS.md.
-
-## Features
-
-- **Class-Based Handlers**: Uses aiogram's class-based MessageHandler for clean, structured code
-- **Modular AI Service**: Reusable AI service designed for future agentic tool integration
-- **Context-Aware Responses**: Analyzes reply-to messages to provide relevant answers
-- **Multi-language Support**: Works with both English ("derp") and Russian ("дерп")
-- **Configurable AI Models**: Uses OpenAI o3-mini by default, with Groq Llama 3.1 fallback
+AI-powered friendly Telegram bot built with aiogram.
 
 ## Quick Start
 

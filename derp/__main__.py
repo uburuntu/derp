@@ -26,11 +26,10 @@ logfire.configure(
     environment=settings.environment,
 )
 
-logfire.instrument_pydantic_ai()
 if settings.environment == "dev":
     logfire.instrument_httpx(capture_all=True)
 logfire.instrument_system_metrics()
-logfire.instrument_pydantic(record="failure", include={"aiogram"})
+logfire.instrument_pydantic(record="failure")
 
 logging.basicConfig(
     level=logging.INFO,
