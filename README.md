@@ -20,9 +20,10 @@ cp env.example .env
 # Run the bot
 make run
 
-# Lint and format
+# Lint and format (all three are synonyms)
 make lint
 make format
+make f
 
 # Run tests
 make test
@@ -67,8 +68,7 @@ Copy `env.example` to `.env` and configure:
 - install: `uv sync`
 - venv: create/reuse `.venv` and sync deps (quiet)
 - run: `uv run -m derp`
-- lint: `uv run ruff check .`
-- format: `uv run ruff format .`
+- lint/format/f: `uv run ruff format .` + `uv run ruff check . --fix`
 - test: `uv run pytest -q`
 - i18n: `make i18n` (extract + update + compile)
 - i18n init: `make i18n-init LOCALE=fr`

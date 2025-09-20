@@ -1,7 +1,8 @@
 """Configuration settings using Pydantic."""
 
 import itertools
-from typing import Iterable, Literal
+from collections.abc import Iterable
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict

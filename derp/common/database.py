@@ -55,7 +55,6 @@ class DatabaseClient:
         if not self._client:
             await self.connect()
 
-        assert self._client is not None
         yield self._client
 
     async def create_bot_update_with_upserts(

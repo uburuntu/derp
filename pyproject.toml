@@ -19,7 +19,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "black>=25.9.0",
     "pytest>=8.3.5",
     "pytest-asyncio>=0.26.0",
     "ruff>=0.13.1",
@@ -28,3 +27,35 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+extend-exclude = [
+    "derp/queries",  # Generated code
+]
+
+target-version = "py313"
+
+[tool.ruff.lint]
+# Extend Ruff's default rules (E4, E7, E9, F) with additional quality rules
+extend-select = [
+    "W",    # pycodestyle warnings
+    "B",    # flake8-bugbear (common bugs)
+    "C4",   # flake8-comprehensions
+    "I",    # isort (import sorting)
+    "UP",   # pyupgrade (modernize syntax)
+    "N",    # pep8-naming
+    "A",    # flake8-builtins
+    "S",    # flake8-bandit (security)
+    "T20",  # flake8-print
+]
+
+ignore = ["S311"]
+
+# Allow unused variables when underscore-prefixed
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+# Per-file ignores for common patterns
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+"tests/*" = ["S101", "T20"]  # Allow assert and print in tests
+"scripts/*" = ["T20"]  # Allow print in scripts

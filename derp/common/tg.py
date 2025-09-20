@@ -1,6 +1,5 @@
 import asyncio
 from enum import IntEnum, auto
-from typing import Optional, Union
 
 import httpx
 from aiogram import Bot
@@ -223,9 +222,9 @@ class ExtractedMedia(BaseModel):
     """Base class for extracted media content."""
 
     message: Message
-    media: Union[
-        PhotoSize, Document, Sticker, Video, Animation, VideoNote, Audio, Voice
-    ]
+    media: (
+        PhotoSize | Document | Sticker | Video | Animation | VideoNote | Audio | Voice
+    )
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -235,7 +234,7 @@ class ExtractedMedia(BaseModel):
         return self.media.file_id
 
     @property
-    def file_size(self) -> Optional[int]:
+    def file_size(self) -> int | None:
         """Get the file size if available."""
         return getattr(self.media, "file_size", None)
 
@@ -278,21 +277,21 @@ class ExtractedMedia(BaseModel):
                 response.raise_for_status()
                 return response.content
         except Exception as e:
-            raise RuntimeError(f"Failed to download media: {e}")
+            raise RuntimeError("Failed to download media") from e
 
 
 class ExtractedPhoto(ExtractedMedia):
     """Extracted photo content."""
 
-    media: Union[PhotoSize, Document, Sticker]
+    media: PhotoSize | Document | Sticker
 
     @property
-    def width(self) -> Optional[int]:
+    def width(self) -> int | None:
         """Get photo width if available."""
         return getattr(self.media, "width", None)
 
     @property
-    def height(self) -> Optional[int]:
+    def height(self) -> int | None:
         """Get photo height if available."""
         return getattr(self.media, "height", None)
 
@@ -300,20 +299,20 @@ class ExtractedPhoto(ExtractedMedia):
 class ExtractedVideo(ExtractedMedia):
     """Extracted video content."""
 
-    media: Union[Video, Animation, VideoNote, Sticker]
+    media: Video | Animation | VideoNote | Sticker
 
     @property
-    def duration(self) -> Optional[int]:
+    def duration(self) -> int | None:
         """Get video duration if available."""
         return getattr(self.media, "duration", None)
 
     @property
-    def width(self) -> Optional[int]:
+    def width(self) -> int | None:
         """Get video width if available."""
         return getattr(self.media, "width", None)
 
     @property
-    def height(self) -> Optional[int]:
+    def height(self) -> int | None:
         """Get video height if available."""
         return getattr(self.media, "height", None)
 
@@ -321,20 +320,20 @@ class ExtractedVideo(ExtractedMedia):
 class ExtractedAudio(ExtractedMedia):
     """Extracted audio content."""
 
-    media: Union[Audio, Voice]
+    media: Audio | Voice
 
     @property
-    def duration(self) -> Optional[int]:
+    def duration(self) -> int | None:
         """Get audio duration if available."""
         return getattr(self.media, "duration", None)
 
     @property
-    def title(self) -> Optional[str]:
+    def title(self) -> str | None:
         """Get audio title if available."""
         return getattr(self.media, "title", None)
 
     @property
-    def performer(self) -> Optional[str]:
+    def performer(self) -> str | None:
         """Get audio performer if available."""
         return getattr(self.media, "performer", None)
 
@@ -345,12 +344,12 @@ class ExtractedDocument(ExtractedMedia):
     media: Document
 
     @property
-    def mime_type(self) -> Optional[str]:
+    def mime_type(self) -> str | None:
         """Get document MIME type."""
         return self.media.mime_type
 
     @property
-    def file_name(self) -> Optional[str]:
+    def file_name(self) -> str | None:
         """Get original filename."""
         return self.media.file_name
 
@@ -391,7 +390,7 @@ class Extractor:
     @classmethod
     def _extract_photo_from_message(
         cls, message: Message
-    ) -> Optional[Union[PhotoSize, Document, Sticker]]:
+    ) -> PhotoSize | Document | Sticker | None:
         """Extract photo-like content from a single message."""
         if message.photo:
             return message.photo[-1]  # Get the largest photo
@@ -415,7 +414,7 @@ class Extractor:
     @classmethod
     async def _extract_profile_photo_from_message(
         cls, message: Message
-    ) -> Optional[Union[PhotoSize, Document, Sticker]]:
+    ) -> PhotoSize | Document | Sticker | None:
         """Extract profile photo from a single message."""
         if message.forward_from:
             if pp := await profile_photo(message.forward_from):
@@ -426,7 +425,7 @@ class Extractor:
     @classmethod
     def _extract_video_from_message(
         cls, message: Message
-    ) -> Optional[Union[Video, Animation, VideoNote, Sticker]]:
+    ) -> Video | Animation | VideoNote | Sticker | None:
         """Extract video-like content from a single message."""
         # Only include video stickers, skip animated ones (they're SVG)
         if message.sticker and message.sticker.is_video:
@@ -435,19 +434,17 @@ class Extractor:
         return message.video or message.animation or message.video_note
 
     @classmethod
-    def _extract_audio_from_message(
-        cls, message: Message
-    ) -> Optional[Union[Audio, Voice]]:
+    def _extract_audio_from_message(cls, message: Message) -> Audio | Voice | None:
         """Extract audio content from a single message."""
         return message.audio or message.voice
 
     @classmethod
-    def _extract_document_from_message(cls, message: Message) -> Optional[Document]:
+    def _extract_document_from_message(cls, message: Message) -> Document | None:
         """Extract document from a single message."""
         return message.document
 
     @classmethod
-    def _extract_text_from_message(cls, message: Message) -> Optional[str]:
+    def _extract_text_from_message(cls, message: Message) -> str | None:
         """Extract text content from a single message."""
         return message.text or message.caption
 
@@ -504,7 +501,7 @@ class Extractor:
         message: Message,
         with_profile_photo: bool = False,
         reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin,
-    ) -> Optional[ExtractedPhoto]:
+    ) -> ExtractedPhoto | None:
         """
         Extract photo from message or its reply.
 
@@ -535,7 +532,7 @@ class Extractor:
     @classmethod
     async def video(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
-    ) -> Optional[ExtractedVideo]:
+    ) -> ExtractedVideo | None:
         """
         Extract video from message or its reply.
 
@@ -556,7 +553,7 @@ class Extractor:
     @classmethod
     async def audio(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
-    ) -> Optional[ExtractedAudio]:
+    ) -> ExtractedAudio | None:
         """
         Extract audio from message or its reply.
 
@@ -577,7 +574,7 @@ class Extractor:
     @classmethod
     async def document(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
-    ) -> Optional[ExtractedDocument]:
+    ) -> ExtractedDocument | None:
         """
         Extract document from message or its reply.
 
@@ -598,7 +595,7 @@ class Extractor:
     @classmethod
     async def text(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
-    ) -> Optional[ExtractedText]:
+    ) -> ExtractedText | None:
         """
         Extract text from message or its reply (includes both text and caption).
 
@@ -620,11 +617,11 @@ class Extractor:
     async def all_media(
         cls, message: Message, reply_policy: ReplyPolicy = ReplyPolicy.prefer_origin
     ) -> tuple[
-        Optional[ExtractedPhoto],
-        Optional[ExtractedVideo],
-        Optional[ExtractedAudio],
-        Optional[ExtractedDocument],
-        Optional[ExtractedText],
+        ExtractedPhoto | None,
+        ExtractedVideo | None,
+        ExtractedAudio | None,
+        ExtractedDocument | None,
+        ExtractedText | None,
     ]:
         """
         Extract all media types from message or its reply in one call.

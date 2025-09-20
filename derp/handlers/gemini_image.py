@@ -43,6 +43,7 @@ def _extract_images(response: GenerateContentResponse) -> list[tuple[bytes, str]
                     try:
                         data = base64.b64decode(data)
                     except Exception:
+                        logfire.exception("Failed to decode inline data")
                         continue
                 if isinstance(data, (bytes, bytearray)):
                     images.append((bytes(data), mime))
@@ -72,7 +73,9 @@ def _to_filename(mime: str, idx: int) -> str:
     ext = (
         "png"
         if mime.endswith("png")
-        else "jpg" if mime.endswith(("jpeg", "jpg")) else "png"
+        else "jpg"
+        if mime.endswith(("jpeg", "jpg"))
+        else "png"
     )
     return f"gemini_image_{idx}.{ext}"
 

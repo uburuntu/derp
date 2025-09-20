@@ -16,13 +16,10 @@ install:
 run:
 	uv run -m derp
 
-## Lint code with Ruff
-lint:
-	uv run ruff check . --fix
-
-## Format code with Ruff
-format:
+## Lint and format code with Ruff
+lint format f:
 	uv run ruff format .
+	uv run ruff check . --fix
 
 ## Run tests (quiet)
 test:
@@ -73,8 +70,7 @@ help:
 	@echo "  venv           Create/reuse .venv and sync deps (quiet)"
 	@echo "  install        Install dependencies (uv sync)"
 	@echo "  run            Run the bot locally"
-	@echo "  lint           Lint with Ruff"
-	@echo "  format         Format with Ruff"
+	@echo "  lint/format/f  Lint and format with Ruff"
 	@echo "  test           Run tests (quiet)"
 	@echo "  test-verbose   Run tests (verbose)"
 	@echo "  i18n           Extract, update, and compile translations"
@@ -83,5 +79,5 @@ help:
 	@echo "  docker-up      Build and start with Docker"
 	@echo "  docker-down    Stop Docker services"
 
-.PHONY: venv install activate run lint format test test-verbose i18n i18n-extract i18n-update i18n-compile i18n-init gel-codegen docker-up docker-down help
+.PHONY: venv install activate run lint format f test test-verbose i18n i18n-extract i18n-update i18n-compile i18n-init gel-codegen docker-up docker-down help
 
