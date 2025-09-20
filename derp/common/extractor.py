@@ -37,7 +37,7 @@ class ExtractedMedia(BaseModel):
     @property
     def file_size(self) -> int | None:
         """Get the file size if available."""
-        return getattr(self.media, "file_size", None)
+        return self.media.file_size
 
     @property
     def media_type(self) -> str:
@@ -89,12 +89,12 @@ class ExtractedPhoto(ExtractedMedia):
     @property
     def width(self) -> int | None:
         """Get photo width if available."""
-        return getattr(self.media, "width", None)
+        return self.media.width
 
     @property
     def height(self) -> int | None:
         """Get photo height if available."""
-        return getattr(self.media, "height", None)
+        return self.media.height
 
 
 class ExtractedVideo(ExtractedMedia):
@@ -105,17 +105,17 @@ class ExtractedVideo(ExtractedMedia):
     @property
     def duration(self) -> int | None:
         """Get video duration if available."""
-        return getattr(self.media, "duration", None)
+        return self.media.duration
 
     @property
     def width(self) -> int | None:
         """Get video width if available."""
-        return getattr(self.media, "width", None)
+        return self.media.width
 
     @property
     def height(self) -> int | None:
         """Get video height if available."""
-        return getattr(self.media, "height", None)
+        return self.media.height
 
 
 class ExtractedAudio(ExtractedMedia):
@@ -126,17 +126,17 @@ class ExtractedAudio(ExtractedMedia):
     @property
     def duration(self) -> int | None:
         """Get audio duration if available."""
-        return getattr(self.media, "duration", None)
+        return self.media.duration
 
     @property
     def title(self) -> str | None:
         """Get audio title if available."""
-        return getattr(self.media, "title", None)
+        return self.media.title
 
     @property
     def performer(self) -> str | None:
         """Get audio performer if available."""
-        return getattr(self.media, "performer", None)
+        return self.media.performer
 
 
 class ExtractedDocument(ExtractedMedia):

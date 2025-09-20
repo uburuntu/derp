@@ -28,44 +28,49 @@ def _get_genai_client() -> genai.Client:
 def _extract_images(response: GenerateContentResponse) -> list[tuple[bytes, str]]:
     """Return a list of (data, mime_type) tuples from inline image parts."""
     images: list[tuple[bytes, str]] = []
+
     try:
-        candidates = getattr(response, "candidates", None) or []
-        if not candidates:
+        if not response.candidates:
             return images
-        content = getattr(candidates[0], "content", None)
-        parts = getattr(content, "parts", None) or []
-        for part in parts:
-            inline = getattr(part, "inline_data", None)
-            mime = getattr(inline, "mime_type", "") if inline else ""
-            if inline and mime.startswith("image/"):
-                data = getattr(inline, "data", b"")
-                if isinstance(data, str):
-                    try:
-                        data = base64.b64decode(data)
-                    except Exception:
-                        logfire.exception("Failed to decode inline data")
-                        continue
-                if isinstance(data, (bytes, bytearray)):
-                    images.append((bytes(data), mime))
+
+        content = response.candidates[0].content
+        if not content or not content.parts:
+            return images
+
+        for part in content.parts:
+            if not part.inline_data:
+                continue
+
+            inline = part.inline_data
+            if not inline.mime_type or not inline.mime_type.startswith("image/"):
+                continue
+
+            data = base64.b64decode(inline.data)
+            images.append((data, inline.mime_type))
+
     except Exception:
         logfire.exception("Failed to extract images from Gemini response")
+
     return images
 
 
 def _extract_first_text(response: GenerateContentResponse) -> str | None:
     """Return the first text part from the response, if any."""
     try:
-        candidates = getattr(response, "candidates", None) or []
-        if not candidates:
+        if not response.candidates:
             return None
-        content = getattr(candidates[0], "content", None)
-        parts = getattr(content, "parts", None) or []
-        for part in parts:
-            text = getattr(part, "text", None)
-            if text:
-                return text
+
+        content = response.candidates[0].content
+        if not content or not content.parts:
+            return None
+
+        for part in content.parts:
+            if part.text:
+                return part.text
+
     except Exception:
         logfire.exception("Failed to extract text from Gemini response")
+
     return None
 
 
