@@ -116,7 +116,7 @@ async def _send_images(
 @router.message(
     F.chat.id.in_(settings.premium_chat_ids)
     | F.from_user.id.in_(settings.premium_chat_ids),
-    MetaCommand("imagine", "image", "img", "р", "и"),
+    MetaCommand("imagine", "image", "img", "и"),
 )
 async def handle_imagine(message: Message, meta: MetaInfo) -> Message:
     prompt = meta.target_text
@@ -143,7 +143,7 @@ async def handle_imagine(message: Message, meta: MetaInfo) -> Message:
 @router.message(
     F.chat.id.in_(settings.premium_chat_ids)
     | F.from_user.id.in_(settings.premium_chat_ids),
-    MetaCommand("edit", "ed", "е"),
+    MetaCommand("edit", "ed", "e", "е"),
 )
 async def handle_edit(message: Message, meta: MetaInfo) -> Message:
     prompt = meta.target_text
