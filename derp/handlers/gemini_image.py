@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 
 import logfire
-from aiogram import F, Router
+from aiogram import F, Router, flags
 from aiogram.types import BufferedInputFile, Message
 from aiogram.utils.i18n import gettext as _
 from aiogram.utils.media_group import MediaGroupBuilder
@@ -118,6 +118,7 @@ async def _send_images(
     | F.from_user.id.in_(settings.premium_chat_ids),
     MetaCommand("imagine", "image", "img", "и"),
 )
+@flags.chat_action(initial_sleep=2, action="upload_photo")
 async def handle_imagine(message: Message, meta: MetaInfo) -> Message:
     prompt = meta.target_text
     if not prompt:
@@ -145,6 +146,7 @@ async def handle_imagine(message: Message, meta: MetaInfo) -> Message:
     | F.from_user.id.in_(settings.premium_chat_ids),
     MetaCommand("edit", "ed", "e", "е"),
 )
+@flags.chat_action(initial_sleep=2, action="upload_photo")
 async def handle_edit(message: Message, meta: MetaInfo) -> Message:
     prompt = meta.target_text
     if not prompt:
