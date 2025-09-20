@@ -5,9 +5,9 @@ description = "AI-powered friendly Telegram bot"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "aiocache>=0.12.3",
+    "aiocache==0.12.3",
     "aiogram[fast,i18n,redis]==3.22.0",
-    "aiojobs>=1.4.0",
+    "aiojobs==1.4.0",
     "babel==2.17.0",
     "gel==3.1.0",
     "google-genai==1.38.0",
