@@ -322,6 +322,14 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 - **Backpressure/Throttling:** `ThrottleUsersMiddleware` available to drop concurrent messages per user. For CPU/IO offload with timeouts, see `derp/common/executor.py` (thread/process pools with `ThrottlerSimultaneous` and per‑task timeouts).
 - **Error Handling:** Handlers catch and log exceptions, replying with friendly fallbacks; image pipelines degrade to text if no images are returned.
 
+## Telegram/Aiogram Guidelines
+
+- Direct fields: aiogram types are Pydantic models; access fields directly (they exist and may be `None`), avoid `getattr(..., "field", None)` for defined attributes.
+- Short-circuit idioms: prefer concise patterns for optionals like `user and user.id` and `user and user.username or ""`.
+- Logging: instrument decision points with `logfire` and include identifiers (chat_id, user_id, payload) for traceability.
+- Resilience: wrap network sends in try/except, degrade gracefully (e.g., fall back from media to text), and ensure auxiliary failures don’t impact the core user flow.
+- Comments: keep comments purposeful (document intent/invariants); avoid restating obvious behavior that the code already conveys.
+
 ## Major Libraries
 
 - **aiogram 3.x:** Telegram bot framework (routers, middleware, filters, FSM, i18n).

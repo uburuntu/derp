@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-09-20 14:12+0200\n"
+"POT-Creation-Date: 2025-09-21 22:12+0200\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -54,6 +54,7 @@ msgid ""
 "\n"
 "Available commands:\n"
 "• /derp - Trigger AI response\n"
+"• /donate [stars] - Support the bot with Telegram Stars (default 20)\n"
 "• /imagine <prompt> - Generate images with AI (premium)\n"
 "• /edit <prompt> - Edit images with AI (premium)\n"
 "• /settings - Show current chat settings\n"
@@ -84,35 +85,216 @@ msgstr ""
 "• Use me in private chats\n"
 "• Use inline mode: @DerpRobot <query>"
 
-#: derp/handlers/gemini.py:282
+#: derp/handlers/donations.py:41
+msgid "keep Derp caffeinated"
+msgstr "keep Derp caffeinated"
+
+#: derp/handlers/donations.py:42
+msgid "pay the server bills"
+msgstr "pay the server bills"
+
+#: derp/handlers/donations.py:43
+msgid "speed up image magic"
+msgstr "speed up image magic"
+
+#: derp/handlers/donations.py:44
+msgid "train the tiny gremlins"
+msgstr "train the tiny gremlins"
+
+#: derp/handlers/donations.py:45
+msgid "fuel new features"
+msgstr "fuel new features"
+
+#: derp/handlers/donations.py:46
+msgid "keep logs tidy and shiny"
+msgstr "keep logs tidy and shiny"
+
+#: derp/handlers/donations.py:47
+msgid "bribe the RNG for better rolls"
+msgstr "bribe the RNG for better rolls"
+
+#: derp/handlers/donations.py:48
+msgid "teach Derp a new trick"
+msgstr "teach Derp a new trick"
+
+#: derp/handlers/donations.py:49
+msgid "banish heisenbugs into the void"
+msgstr "banish heisenbugs into the void"
+
+#: derp/handlers/donations.py:50
+msgid "keep the hamster wheel spinning"
+msgstr "keep the hamster wheel spinning"
+
+#: derp/handlers/donations.py:54
+msgid "Support Derp"
+msgstr "Support Derp"
+
+#: derp/handlers/donations.py:55
+msgid "Power Up Derp"
+msgstr "Power Up Derp"
+
+#: derp/handlers/donations.py:56
+#, fuzzy
+msgid "Boost Derp"
+msgstr "🤖 Ask Derp"
+
+#: derp/handlers/donations.py:57
+msgid "Derp Fuel"
+msgstr "Derp Fuel"
+
+#: derp/handlers/donations.py:58
+msgid "Derp Snacks"
+msgstr "Derp Snacks"
+
+#: derp/handlers/donations.py:59
+msgid "Shiny Upgrades"
+msgstr "Shiny Upgrades"
+
+#: derp/handlers/donations.py:63
+msgid "Coffee Run"
+msgstr "Coffee Run"
+
+#: derp/handlers/donations.py:64
+msgid "Server Snacks"
+msgstr "Server Snacks"
+
+#: derp/handlers/donations.py:65
+msgid "Feature Juice"
+msgstr "Feature Juice"
+
+#: derp/handlers/donations.py:66
+msgid "Good Vibes"
+msgstr "Good Vibes"
+
+#: derp/handlers/donations.py:67
+msgid "Bug Zapper"
+msgstr "Bug Zapper"
+
+#: derp/handlers/donations.py:68
+msgid "Gremlin School"
+msgstr "Gremlin School"
+
+#: derp/handlers/donations.py:72
+#, python-brace-format
+msgid "Every star helps {purpose}."
+msgstr "Every star helps {purpose}."
+
+#: derp/handlers/donations.py:73
+#, python-brace-format
+msgid "Your stars directly help us {purpose}."
+msgstr "Your stars directly help us {purpose}."
+
+#: derp/handlers/donations.py:74
+#, python-brace-format
+msgid "Tiny bit of stardust to {purpose}."
+msgstr "Tiny bit of stardust to {purpose}."
+
+#: derp/handlers/donations.py:75
+#, python-brace-format
+msgid "Stars today, fewer bugs tomorrow — {purpose}."
+msgstr "Stars today, fewer bugs tomorrow — {purpose}."
+
+#: derp/handlers/donations.py:76
+#, python-brace-format
+msgid "A sprinkle of ✨ to {purpose}."
+msgstr "A sprinkle of ✨ to {purpose}."
+
+#: derp/handlers/donations.py:80
+msgid "You rock."
+msgstr "You rock."
+
+#: derp/handlers/donations.py:81
+msgid "Thank you for being awesome!"
+msgstr "Thank you for being awesome!"
+
+#: derp/handlers/donations.py:82
+msgid "High‑five from the team ✋"
+msgstr "High‑five from the team ✋"
+
+#: derp/handlers/donations.py:83
+msgid "We'll spend it wisely."
+msgstr "We'll spend it wisely."
+
+#: derp/handlers/donations.py:84
+msgid "Much love from Derp HQ 💙"
+msgstr "Much love from Derp HQ 💙"
+
+#: derp/handlers/donations.py:85
+msgid "Deploying instant good karma…"
+msgstr "Deploying instant good karma…"
+
+#: derp/handlers/donations.py:145 derp/handlers/donations.py:171
+msgid "Donation"
+msgstr "Donation"
+
+#: derp/handlers/donations.py:181
+#, python-brace-format
+msgid "Use /donate {n} to donate {n}⭐️."
+msgstr "Use /donate {n} to donate {n}⭐️."
+
+#: derp/handlers/donations.py:223
+msgid "friend"
+msgstr "friend"
+
+#: derp/handlers/donations.py:225
+#, python-brace-format
+msgid "🙏 Thank you, {name}, for donating {stars}⭐️! Here's a {kind} for you."
+msgstr "🙏 Thank you, {name}, for donating {stars}⭐️! Here's a {kind} for you."
+
+#: derp/handlers/donations.py:226
+#, python-brace-format
+msgid "You absolute legend, {name}! {stars}⭐️ delivered. {kind} unlocked."
+msgstr "You absolute legend, {name}! {stars}⭐️ delivered. {kind} unlocked."
+
+#: derp/handlers/donations.py:227
+#, python-brace-format
+msgid "{name}, you fed the Derp! +{stars}⭐️ {kind} time."
+msgstr "{name}, you fed the Derp! +{stars}⭐️ {kind} time."
+
+#: derp/handlers/donations.py:228
+#, python-brace-format
+msgid "{stars}⭐️ received — karma++ for {name}! Enjoy a {kind}."
+msgstr "{stars}⭐️ received — karma++ for {name}! Enjoy a {kind}."
+
+#: derp/handlers/donations.py:229
+#, python-brace-format
+msgid "{name}, your {stars}⭐️ keeps the servers toasty. {kind} incoming!"
+msgstr "{name}, your {stars}⭐️ keeps the servers toasty. {kind} incoming!"
+
+#: derp/handlers/donations.py:259
+#, python-brace-format
+msgid "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
+msgstr "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
+
+#: derp/handlers/gemini.py:299
 msgid "😅 Something went wrong with Gemini. I couldn't process that message."
 msgstr "😅 Something went wrong with Gemini. I couldn't process that message."
 
-#: derp/handlers/gemini_image.py:89
+#: derp/handlers/gemini_image.py:88
 msgid "🤷 No image generated."
 msgstr "🤷 No image generated."
 
-#: derp/handlers/gemini_image.py:128
+#: derp/handlers/gemini_image.py:127
 msgid "Usage: /imagine <prompt>"
 msgstr "Usage: /imagine <prompt>"
 
-#: derp/handlers/gemini_image.py:143
+#: derp/handlers/gemini_image.py:145
 msgid "😅 Something went wrong while generating the image. Try again later."
 msgstr "😅 Something went wrong while generating the image. Try again later."
 
-#: derp/handlers/gemini_image.py:156
+#: derp/handlers/gemini_image.py:158
 msgid "Reply to an image and use: /edit <prompt>"
 msgstr "Reply to an image and use: /edit <prompt>"
 
-#: derp/handlers/gemini_image.py:161
+#: derp/handlers/gemini_image.py:163
 msgid "Please reply to an image (photo/document sticker) to edit it."
 msgstr "Please reply to an image (photo/document sticker) to edit it."
 
-#: derp/handlers/gemini_image.py:180
+#: derp/handlers/gemini_image.py:185
 msgid "😅 Something went wrong while editing the image. Try again later."
 msgstr "😅 Something went wrong while editing the image. Try again later."
 
-#: derp/handlers/gemini_image.py:188
+#: derp/handlers/gemini_image.py:193
 msgid "🔒 This feature is only available for premium users and chats."
 msgstr "🔒 This feature is only available for premium users and chats."
 

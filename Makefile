@@ -37,7 +37,7 @@ i18n:
 
 ## Extract i18n messages -> derp/locales/messages.pot
 i18n-extract:
-	uv run pybabel extract -k _:1,1t -k _:1,2 --input-dirs=derp -o derp/locales/messages.pot --project=derp --version=0.1
+	uv run pybabel extract -k _:1,1t -k _:1,2 -k __:1,1t -k __:1,2 --input-dirs=derp -o derp/locales/messages.pot --project=derp --version=0.1
 
 ## Update .po files from messages.pot
 i18n-update:
@@ -80,4 +80,3 @@ help:
 	@echo "  docker-down    Stop Docker services"
 
 .PHONY: venv install activate run lint format f test test-verbose i18n i18n-extract i18n-update i18n-compile i18n-init gel-codegen docker-up docker-down help
-
