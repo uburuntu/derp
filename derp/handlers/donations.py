@@ -267,30 +267,35 @@ async def handle_successful_payment(message: Message, bot: Bot) -> None:
         except Exception:
             logfire.exception("donation_ack_text_failed")
 
-    # Notify admin with full details to keep updated
+    # Notify admin with full details using plain HTML helpers
     try:
         chat = message.chat
         user = message.from_user
         payload = sp.invoice_payload
-        report_lines = [
-            "⭐️ Donation received",
-            f"amount: {stars} XTR",
-            f"payload: {payload}",
-            f"chat: id={chat.id} type={chat.type} title={chat.title or ''}",
-            f"origin_chat_id={message.chat.id}",
-            f"target_chat_id={target_chat_id}",
-            f"message_id: {message.message_id}",
-            f"from: id={(user and user.id)} username={(user and ('@' + user.username) or '')} name={(user and user.full_name or '')}",
+        from_name = user and html.quote(user.full_name) or "—"
+        from_username = user and user.username and ("@" + user.username) or ""
+        from_id = user and user.id or None
+        chat_title = chat.title and html.quote(chat.title) or ""
+
+        lines: list[str] = [
+            html.bold("⭐️ Donation received"),
+            f"{html.bold('Amount:')} {stars} XTR",
+            f"{html.bold('From:')} {from_name} {from_username} {('#u' + str(from_id)) if from_id else ''}",
+            f"{html.bold('Origin:')} {chat.type} id={chat.id}{(' ' + chat_title) if chat_title else ''}",
+            f"{html.bold('Target:')} {target_chat_id}{(' topic ' + str(target_thread_id)) if target_thread_id else ''}",
+            f"{html.bold('Message ID:')} {message.message_id}",
+            f"{html.bold('Payload:')} {html.code(payload)}",
         ]
         if sp.telegram_payment_charge_id:
-            report_lines.append(
-                f"telegram_payment_charge_id: {sp.telegram_payment_charge_id}"
+            lines.append(
+                f"{html.bold('Telegram charge:')} {html.code(sp.telegram_payment_charge_id)}"
             )
         if sp.provider_payment_charge_id:
-            report_lines.append(
-                f"provider_payment_charge_id: {sp.provider_payment_charge_id}"
+            lines.append(
+                f"{html.bold('Provider charge:')} {html.code(sp.provider_payment_charge_id)}"
             )
-        await bot.send_message(settings.rmbk_id, "\n".join(report_lines))
+
+        await bot.send_message(settings.rmbk_id, "\n".join(lines))
         logfire.info(
             "donation_admin_notified",
             stars=stars,
