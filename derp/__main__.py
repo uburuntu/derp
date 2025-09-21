@@ -16,10 +16,10 @@ from .config import settings
 from .handlers import (
     basic,
     chat_settings,
+    donations,
     gemini,
     gemini_image,
     gemini_inline,
-    donations,
 )
 from .middlewares.api_persist import PersistBotActionsMiddleware
 from .middlewares.chat_settings import ChatSettingsMiddleware
