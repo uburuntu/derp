@@ -22,7 +22,7 @@ lint format f:
 	uv run ruff check . --fix
 
 ## Run tests (quiet)
-test:
+t test tests:
 	uv run pytest -q
 
 ## Run tests (verbose)

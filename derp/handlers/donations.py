@@ -158,16 +158,12 @@ async def donate(message: Message, meta: MetaInfo) -> None:
     low = random.choice(low_options)
     tiers = [low, 200, 500]
 
-    # Randomize copy once so all three are a themed set
-    title = make_title()
-    description = make_description()
-
     # Send three invoices sequentially for user to pick
     for amount in tiers:
         try:
             await message.answer_invoice(
-                title=title,
-                description=description,
+                title=make_title(),
+                description=make_description(),
                 prices=[LabeledPrice(label=_("Donation"), amount=amount)],
                 payload=DonationPayload(
                     amount=amount,
