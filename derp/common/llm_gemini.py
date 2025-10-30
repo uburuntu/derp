@@ -11,6 +11,7 @@ from google.genai import types
 from google.genai.types import GenerateContentResponse
 
 from ..config import settings
+from .cache_manager import PromptCacheManager
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,15 +199,32 @@ class _FunctionCallHandler:
 class Gemini:
     """A wrapper for the Gemini API providing a builder pattern for requests."""
 
+    # Shared cache manager instance (class-level)
+    _cache_manager: PromptCacheManager | None = None
+
     def __init__(self, api_key: str | None = None) -> None:
         api_key = api_key or next(settings.google_api_key_iter)
         if not api_key:
             raise ValueError("Google API key is required for Gemini API")
         self.client = genai.Client(api_key=api_key)
+        self._api_key = api_key
+
+        # Initialize cache manager if not already created
+        if Gemini._cache_manager is None and settings.enable_prompt_caching:
+            Gemini._cache_manager = PromptCacheManager(
+                cache_ttl=settings.prompt_cache_ttl,
+                enable_caching=settings.enable_prompt_caching,
+            )
 
     def create_request(self) -> GeminiRequestBuilder:
         """Create a new Gemini request builder."""
-        return GeminiRequestBuilder(self.client)
+        return GeminiRequestBuilder(self.client, self._cache_manager)
+
+    def rotate_api_key(self) -> None:
+        """Rotate to the next API key and recreate the client."""
+        self._api_key = next(settings.google_api_key_iter)
+        self.client = genai.Client(api_key=self._api_key)
+        logfire.info("api_key_rotated", key_prefix=self._api_key[:8] + "...")
 
 
 class GeminiRequestBuilder:
@@ -267,8 +285,11 @@ class GeminiRequestBuilder:
         "7. Match the conversational style - structured for complex topics, natural for casual chat\n\n"
     )
 
-    def __init__(self, client: genai.Client) -> None:
+    def __init__(
+        self, client: genai.Client, cache_manager: PromptCacheManager | None = None
+    ) -> None:
         self.client = client
+        self.cache_manager = cache_manager
         self.user_prompt_parts: list[types.Part] = []
         self._model_name = settings.default_llm_model.lower()
         self._tool_registry = _ToolRegistry()
@@ -335,7 +356,87 @@ class GeminiRequestBuilder:
         return f"{self._BASE_SYSTEM_PROMPT}\n\n{capabilities_prompt}"
 
     async def execute(self) -> GeminiResult:
-        """Execute the Gemini API request and return the result."""
+        """Execute the Gemini API request with retry logic and key rotation."""
+        import asyncio
+
+        from .retry import is_rate_limit_error, is_retryable_error
+
+        last_exception = None
+        attempt = 0
+
+        while attempt < settings.max_retry_attempts:
+            try:
+                # Execute the request
+                result = await self._execute_internal()
+
+                # Log success if this was a retry
+                if attempt > 0:
+                    logfire.info(
+                        "retry_succeeded",
+                        attempt=attempt + 1,
+                        total_attempts=settings.max_retry_attempts,
+                    )
+
+                return result
+
+            except Exception as e:
+                last_exception = e
+                attempt += 1
+
+                # Check if we should retry
+                if not is_retryable_error(e):
+                    logfire.warning(
+                        "non_retryable_error",
+                        error_type=type(e).__name__,
+                        error=str(e),
+                    )
+                    raise
+
+                # Check if we've exhausted attempts
+                if attempt >= settings.max_retry_attempts:
+                    logfire.error(
+                        "retry_exhausted",
+                        attempts=attempt,
+                        error_type=type(e).__name__,
+                        error=str(e),
+                    )
+                    raise
+
+                # Handle rate limit with key rotation
+                if is_rate_limit_error(e) and settings.rotate_key_on_rate_limit:
+                    new_key = next(settings.google_api_key_iter)
+                    self.client = genai.Client(api_key=new_key)
+                    logfire.warning(
+                        "rate_limit_rotating_key",
+                        attempt=attempt,
+                        new_key_prefix=new_key[:8] + "...",
+                    )
+
+                # Calculate delay with exponential backoff
+                delay = min(
+                    settings.retry_initial_delay
+                    * (settings.retry_exponential_base ** (attempt - 1)),
+                    settings.retry_max_delay,
+                )
+
+                logfire.info(
+                    "retrying_after_delay",
+                    attempt=attempt,
+                    max_attempts=settings.max_retry_attempts,
+                    delay_seconds=delay,
+                    error_type=type(e).__name__,
+                    is_rate_limit=is_rate_limit_error(e),
+                )
+
+                await asyncio.sleep(delay)
+
+        # Should never reach here, but just in case
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("Retry logic failed unexpectedly")
+
+    async def _execute_internal(self) -> GeminiResult:
+        """Internal execution logic with caching support."""
         contents = [types.Content(role="user", parts=self.user_prompt_parts)]
 
         system_instruction = self._get_system_prompt()
@@ -350,14 +451,34 @@ class GeminiRequestBuilder:
         if "URL Context" in "".join(self._enabled_tools):
             gemini_tools.append(types.Tool(url_context=types.UrlContext()))
 
-        config = types.GenerateContentConfig(
-            tools=gemini_tools, system_instruction=system_instruction
-        )
+        # Try to get cached content
+        cached_content_name = None
+        if self.cache_manager:
+            try:
+                cached_content_name = await self.cache_manager.get_or_create_cached_content(
+                    self.client, system_instruction, self._model_name
+                )
+            except Exception:
+                logfire.exception("cache_manager_error")
+
+        # Build config with or without cache
+        config_kwargs = {"tools": gemini_tools}
+
+        if cached_content_name:
+            # Use cached content instead of system_instruction
+            config_kwargs["cached_content"] = cached_content_name
+            logfire.debug("using_cached_content", cached_name=cached_content_name)
+        else:
+            # Use system instruction directly
+            config_kwargs["system_instruction"] = system_instruction
+
+        config = types.GenerateContentConfig(**config_kwargs)
 
         # Primary model call (minimal span)
         with logfire.span("genai.generate") as span:
             span.set_attribute("gen_ai.system", "google")
             span.set_attribute("gen_ai.request.model", self._model_name)
+            span.set_attribute("gen_ai.cache_used", cached_content_name is not None)
             response = self.client.models.generate_content(
                 model=self._model_name,
                 contents=contents,

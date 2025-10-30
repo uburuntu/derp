@@ -45,6 +45,19 @@ class Settings(BaseSettings):
     # Logfire token
     logfire_token: str
 
+    # --- Gemini optimization settings ---
+
+    # Prompt caching configuration
+    enable_prompt_caching: bool = True
+    prompt_cache_ttl: int = 300  # 5 minutes
+
+    # Retry configuration
+    max_retry_attempts: int = 3
+    retry_initial_delay: float = 1.0
+    retry_max_delay: float = 16.0
+    retry_exponential_base: float = 2.0
+    rotate_key_on_rate_limit: bool = True
+
     # --- Non essentials ---
 
     admin_ids: set[int] = Field(
