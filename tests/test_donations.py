@@ -15,15 +15,6 @@ from derp.handlers.donations import (
 )
 
 
-@pytest.fixture(autouse=True)
-def setup_i18n():
-    """Set up i18n context for all tests."""
-    i18n = I18n(path="derp/locales", default_locale="en", domain="messages")
-    token = i18n.set_current(i18n)
-    yield
-    i18n.reset_current(token)
-
-
 def test_donation_payload_compact_json_under_limit():
     cases = [
         DonationPayload(a=500, c=-1001234567890, t=123456),
