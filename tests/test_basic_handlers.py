@@ -1,7 +1,6 @@
 """Tests for basic command handlers (/start, /help)."""
 
 import pytest
-from aiogram.utils.i18n import gettext as _
 
 from derp.handlers.basic import cmd_help, cmd_start
 
@@ -139,9 +138,9 @@ class TestCmdHelp:
         common_commands = ["/help", "/start", "/donate", "/settings"]
         found_commands = [cmd for cmd in common_commands if cmd in help_text]
 
-        assert (
-            len(found_commands) >= 2
-        ), f"Help should mention common commands. Found: {found_commands}"
+        assert len(found_commands) >= 2, (
+            f"Help should mention common commands. Found: {found_commands}"
+        )
 
     @pytest.mark.asyncio
     async def test_help_works_in_private_chat(self, make_message):
@@ -206,9 +205,9 @@ class TestCmdHelp:
             keyword in help_text.lower() for keyword in instructional_keywords
         )
 
-        assert (
-            has_instructions
-        ), "Help text should provide usage instructions or examples"
+        assert has_instructions, (
+            "Help text should provide usage instructions or examples"
+        )
 
     @pytest.mark.asyncio
     async def test_help_is_not_empty(self, make_message):

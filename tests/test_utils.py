@@ -1,7 +1,8 @@
 """Tests for common utility functions."""
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from derp.common.utils import one_liner, percent_chance
 
@@ -96,12 +97,12 @@ class TestPercentChance:
         # Allow some variance, but should be close to 500
         assert 400 < true_count < 600
 
-    @patch('derp.common.utils.random.random')
+    @patch("derp.common.utils.random.random")
     def test_percent_conversion(self, mock_random):
         """Should correctly convert percent to decimal for comparison."""
         mock_random.return_value = 0.24  # 24%
 
-        assert percent_chance(25.0) is True   # 25% > 24%
+        assert percent_chance(25.0) is True  # 25% > 24%
         assert percent_chance(24.0) is False  # 24% not > 24%
         assert percent_chance(23.0) is False  # 23% < 24%
 
@@ -130,14 +131,14 @@ class TestPercentChance:
         percent_chance(0.1)
         percent_chance(99.9)
 
-    @patch('derp.common.utils.random.random')
+    @patch("derp.common.utils.random.random")
     def test_edge_case_random_equals_chance(self, mock_random):
         """When random equals the chance exactly, should return False."""
         mock_random.return_value = 0.5
         # percent_chance uses < not <=, so equal should be False
         assert percent_chance(50.0) is False
 
-    @patch('derp.common.utils.random.random')
+    @patch("derp.common.utils.random.random")
     def test_very_small_chance(self, mock_random):
         """Should handle very small percentages correctly."""
         mock_random.return_value = 0.001  # 0.1%

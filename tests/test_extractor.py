@@ -39,7 +39,9 @@ class TestExtractorPhoto:
     @pytest.mark.asyncio
     async def test_extract_photo_from_document(self, make_message, make_document):
         """Should extract image documents as photos."""
-        doc = make_document(file_id="doc_id", mime_type="image/jpeg", width=800, height=600)
+        doc = make_document(
+            file_id="doc_id", mime_type="image/jpeg", width=800, height=600
+        )
 
         message = make_message()
         message.document = doc
@@ -84,7 +86,9 @@ class TestExtractorPhoto:
 
         message = make_message(text="/edit", reply_to_message=reply_msg)
 
-        result = await Extractor.photo(message, reply_policy=Extractor.ReplyPolicy.prefer_reply)
+        result = await Extractor.photo(
+            message, reply_policy=Extractor.ReplyPolicy.prefer_reply
+        )
 
         assert result is not None
         assert result.file_id == "reply_photo_id"
@@ -231,7 +235,9 @@ class TestExtractorReplyPolicies:
         reply_msg = make_message(text="Reply text")
         message = make_message(text=None, reply_to_message=reply_msg)
 
-        result = await Extractor.text(message, reply_policy=Extractor.ReplyPolicy.only_origin)
+        result = await Extractor.text(
+            message, reply_policy=Extractor.ReplyPolicy.only_origin
+        )
 
         assert result is None
 
@@ -241,7 +247,9 @@ class TestExtractorReplyPolicies:
         reply_msg = make_message(text="Reply text")
         message = make_message(text=None, reply_to_message=reply_msg)
 
-        result = await Extractor.text(message, reply_policy=Extractor.ReplyPolicy.prefer_origin)
+        result = await Extractor.text(
+            message, reply_policy=Extractor.ReplyPolicy.prefer_origin
+        )
 
         assert result is not None
         assert result.text == "Reply text"
@@ -252,7 +260,9 @@ class TestExtractorReplyPolicies:
         reply_msg = make_message(text="Reply text")
         message = make_message(text="Origin text", reply_to_message=reply_msg)
 
-        result = await Extractor.text(message, reply_policy=Extractor.ReplyPolicy.prefer_origin)
+        result = await Extractor.text(
+            message, reply_policy=Extractor.ReplyPolicy.prefer_origin
+        )
 
         assert result is not None
         assert result.text == "Origin text"
@@ -263,7 +273,9 @@ class TestExtractorReplyPolicies:
         reply_msg = make_message(text="Reply text")
         message = make_message(text="Origin text", reply_to_message=reply_msg)
 
-        result = await Extractor.text(message, reply_policy=Extractor.ReplyPolicy.prefer_reply)
+        result = await Extractor.text(
+            message, reply_policy=Extractor.ReplyPolicy.prefer_reply
+        )
 
         assert result is not None
         assert result.text == "Reply text"
@@ -274,7 +286,9 @@ class TestExtractorReplyPolicies:
         message = make_message(text="Origin text")
         message.reply_to_message = None
 
-        result = await Extractor.text(message, reply_policy=Extractor.ReplyPolicy.only_reply)
+        result = await Extractor.text(
+            message, reply_policy=Extractor.ReplyPolicy.only_reply
+        )
 
         assert result is None
 
@@ -284,7 +298,9 @@ class TestExtractorReplyPolicies:
         reply_msg = make_message(text="Reply text")
         message = make_message(text="Origin text", reply_to_message=reply_msg)
 
-        result = await Extractor.text(message, reply_policy=Extractor.ReplyPolicy.only_reply)
+        result = await Extractor.text(
+            message, reply_policy=Extractor.ReplyPolicy.only_reply
+        )
 
         assert result is not None
         assert result.text == "Reply text"
@@ -308,7 +324,9 @@ class TestExtractorAllMedia:
         assert text.text == "Hello world"
 
     @pytest.mark.asyncio
-    async def test_extract_all_media_with_photo_and_caption(self, make_message, make_photo):
+    async def test_extract_all_media_with_photo_and_caption(
+        self, make_message, make_photo
+    ):
         """Should extract both photo and caption text."""
         photo_obj = make_photo(file_id="photo_id")
 

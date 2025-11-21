@@ -409,9 +409,7 @@ class TestMetaCommandIntegration:
     @pytest.mark.asyncio
     async def test_complex_hashtag_scenario(self, make_message):
         """Complex scenario with hashtag, arguments, and text."""
-        message = make_message(
-            text="Please apply #filter_sepia_80 to make it vintage"
-        )
+        message = make_message(text="Please apply #filter_sepia_80 to make it vintage")
         filter_instance = MetaCommand("filter", args=2)
 
         result = await filter_instance(message)
