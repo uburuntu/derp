@@ -229,6 +229,8 @@ def make_message(make_user, make_chat):
         message.edit_date = None
         message.html_text = text
         message.forward_from = None
+        message.is_topic_message = False  # For middleware context resolution
+        message.sender_chat = None
 
         # Mock common async methods
         message.reply = AsyncMock(return_value=message)
