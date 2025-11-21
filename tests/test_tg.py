@@ -1,16 +1,16 @@
 """Tests for Telegram utility functions."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
+
 from aiogram.types import Update
 
 from derp.common.tg import (
-    user_info,
     chat_info,
-    message_info,
     decompose_update,
-    extract_attachment_info,
     extract_attachment_file_id,
+    extract_attachment_info,
+    message_info,
+    user_info,
 )
 
 
@@ -209,6 +209,7 @@ class TestExtractAttachmentInfo:
     def test_extract_voice(self, make_message):
         """Should extract voice message information."""
         from aiogram.types import Voice
+
         voice = MagicMock(spec=Voice)
         voice.file_id = "voice123"
 
@@ -249,6 +250,7 @@ class TestExtractAttachmentInfo:
     def test_extract_video_note(self, make_message):
         """Should extract video note information."""
         from aiogram.types import VideoNote
+
         video_note = MagicMock(spec=VideoNote)
         video_note.file_id = "videonote123"
 
@@ -264,6 +266,7 @@ class TestExtractAttachmentInfo:
     def test_extract_animation(self, make_message):
         """Should extract animation (GIF) information."""
         from aiogram.types import Animation
+
         animation = MagicMock(spec=Animation)
         animation.file_id = "anim123"
         animation.file_name = "funny.gif"

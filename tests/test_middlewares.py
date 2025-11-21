@@ -1,11 +1,12 @@
 """Tests for middleware components."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from aiogram.types import Update
 
-from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.chat_settings import ChatSettingsMiddleware
+from derp.middlewares.event_context import EventContextMiddleware
 
 
 class TestEventContextMiddleware:
@@ -261,7 +262,9 @@ class TestChatSettingsMiddleware:
             "derp.middlewares.chat_settings.chat_settings",
             new=AsyncMock(side_effect=Exception("Database error")),
         ):
-            with patch("derp.middlewares.chat_settings.logfire.exception") as mock_logfire:
+            with patch(
+                "derp.middlewares.chat_settings.logfire.exception"
+            ) as mock_logfire:
                 handler = AsyncMock()
                 event = MagicMock()
                 data = {EVENT_CHAT_KEY: chat}
@@ -282,9 +285,7 @@ class TestChatSettingsMiddleware:
                 handler.assert_awaited_once_with(event, data)
 
     @pytest.mark.asyncio
-    async def test_returns_handler_result(
-        self, middleware, mock_gel_db, make_chat
-    ):
+    async def test_returns_handler_result(self, middleware, mock_gel_db, make_chat):
         """Should return handler's return value."""
         from aiogram.dispatcher.middlewares.user_context import EVENT_CHAT_KEY
 
@@ -330,9 +331,7 @@ class TestChatSettingsMiddleware:
             assert data["chat_settings"] == mock_settings
 
     @pytest.mark.asyncio
-    async def test_multiple_calls_independent(
-        self, middleware, mock_gel_db, make_chat
-    ):
+    async def test_multiple_calls_independent(self, middleware, mock_gel_db, make_chat):
         """Each middleware call should be independent."""
         from aiogram.dispatcher.middlewares.user_context import EVENT_CHAT_KEY
 

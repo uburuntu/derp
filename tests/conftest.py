@@ -111,6 +111,7 @@ def make_user():
             user = make_user(id=123, username="testuser")
             assert user.id == 123
     """
+
     def _make_user(
         id: int = 12345,
         is_bot: bool = False,
@@ -149,6 +150,7 @@ def make_chat():
             chat = make_chat(id=-100123, type="supergroup")
             assert chat.type == "supergroup"
     """
+
     def _make_chat(
         id: int = -1001234567890,
         type: str = "supergroup",
@@ -183,6 +185,7 @@ def make_message(make_user, make_chat):
             msg = make_message(text="/start", user_id=999)
             # msg has .reply(), .answer(), etc. as AsyncMock
     """
+
     def _make_message(
         message_id: int = 1,
         text: str | None = None,
@@ -246,12 +249,14 @@ def make_message(make_user, make_chat):
 
         # Bot property
         message.bot = MagicMock()
-        message.bot.me = AsyncMock(return_value=make_user(
-            id=123456,
-            is_bot=True,
-            first_name="Derp",
-            username="DerpTestBot",
-        ))
+        message.bot.me = AsyncMock(
+            return_value=make_user(
+                id=123456,
+                is_bot=True,
+                first_name="Derp",
+                username="DerpTestBot",
+            )
+        )
         message.bot.send_message = AsyncMock()
         message.bot.send_photo = AsyncMock()
 
@@ -273,6 +278,7 @@ def make_bot(make_user):
             bot = make_bot(id=111, username="TestBot")
             await bot.send_message(chat_id=123, text="Hi")
     """
+
     def _make_bot(
         id: int = 123456,
         username: str = "DerpTestBot",
@@ -473,7 +479,7 @@ def make_sticker():
         sticker.file_size = file_size
 
         if is_video:
-            sticker.duration = kwargs.get('duration', 3)
+            sticker.duration = kwargs.get("duration", 3)
 
         for key, value in kwargs.items():
             setattr(sticker, key, value)
@@ -559,6 +565,7 @@ def simple_namespace_message():
         def test_legacy(simple_namespace_message):
             msg = simple_namespace_message(text="test")
     """
+
     def _make(
         message_id: int = 1,
         text: str | None = None,
@@ -606,6 +613,7 @@ def freeze_random(monkeypatch):
             # random.choice() will always return "first"
             # random.random() will always return 0.5
     """
+
     def _freeze(choice_result: Any = None, random_result: float = 0.5):
         """Freeze random functions to return deterministic values."""
         if choice_result is not None:
