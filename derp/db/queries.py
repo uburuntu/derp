@@ -1,19 +1,34 @@
-"""Database queries replacing EdgeQL operations.
+"""Database queries for PostgreSQL.
 
-This module provides async query functions for all database operations,
-replacing the generated EdgeQL query helpers.
+This module provides typed async query functions for all database operations.
+Queries are optimized for parallel execution with minimal round-trips.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import ScalarSelect, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from derp.models import Chat, Message, User
+
+# -----------------------------------------------------------------------------
+# Subquery Helpers (for single-query upserts)
+# -----------------------------------------------------------------------------
+
+
+def _chat_id_subquery(telegram_id: int) -> ScalarSelect[int]:
+    """Subquery to get chat.id from telegram_id (avoids extra round-trip)."""
+    return select(Chat.id).where(Chat.telegram_id == telegram_id).scalar_subquery()
+
+
+def _user_id_subquery(telegram_id: int) -> ScalarSelect[int]:
+    """Subquery to get user.id from telegram_id (avoids extra round-trip)."""
+    return select(User.id).where(User.telegram_id == telegram_id).scalar_subquery()
+
 
 # -----------------------------------------------------------------------------
 # User Queries
@@ -171,22 +186,17 @@ async def upsert_message(
 ) -> Message | None:
     """Upsert a message into the messages table.
 
-    Uses chat_id + telegram_message_id as the natural key (message_ids are unique per chat).
-    Returns the Message model instance or None if chat doesn't exist.
+    Uses chat_id + telegram_message_id as the natural key. Optimized to use
+    subqueries for chat/user lookup, reducing 3 queries to 1.
+    Returns the Message model instance or None if insert failed.
     """
-    # First, get the chat (must exist)
-    chat = await get_chat_by_telegram_id(session, chat_telegram_id)
-    if not chat:
-        return None
-
-    # Get user if provided
-    user = None
-    if user_telegram_id:
-        user = await get_user_by_telegram_id(session, user_telegram_id)
+    # Use subqueries to resolve IDs inline (single round-trip)
+    chat_id = _chat_id_subquery(chat_telegram_id)
+    user_id = _user_id_subquery(user_telegram_id) if user_telegram_id else None
 
     stmt = insert(Message).values(
-        chat_id=chat.id,
-        user_id=user.id if user else None,
+        chat_id=chat_id,
+        user_id=user_id,
         telegram_message_id=telegram_message_id,
         thread_id=thread_id,
         direction=direction,
@@ -216,7 +226,7 @@ async def upsert_message(
     ).returning(Message)
 
     result = await session.execute(stmt)
-    return result.scalar_one()
+    return result.scalar_one_or_none()
 
 
 async def mark_message_deleted(
