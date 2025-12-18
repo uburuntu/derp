@@ -345,12 +345,13 @@ class TestMessageModel:
         assert message2.message_key == f"{chat.id}:789:456"
 
     @pytest.mark.asyncio
-    async def test_message_unique_constraint(
-        self, db_session_committed, chat_factory, user_factory
-    ):
+    async def test_message_unique_constraint(self, db_session_committed):
         """Should enforce unique (chat_id, telegram_message_id)."""
-        chat = await chat_factory(telegram_id=-1001010101010)
-        user = await user_factory(telegram_id=10101010)
+        # Create entities directly in the committed session
+        chat = Chat(telegram_id=-1001010101010, type="supergroup", title="Test")
+        user = User(telegram_id=10101010, is_bot=False, first_name="Test")
+        db_session_committed.add(chat)
+        db_session_committed.add(user)
         await db_session_committed.commit()
 
         message1 = Message(
@@ -388,6 +389,8 @@ class TestModelRelationships:
         self, db_session, chat_factory, user_factory
     ):
         """Chat should have access to its messages."""
+        from sqlalchemy.orm import selectinload
+
         chat = await chat_factory(telegram_id=-1001111111111)
         user = await user_factory(telegram_id=11111111)
 
@@ -405,8 +408,8 @@ class TestModelRelationships:
 
         await db_session.flush()
 
-        # Reload chat with messages
-        stmt = select(Chat).where(Chat.id == chat.id)
+        # Reload chat with messages using eager load
+        stmt = select(Chat).where(Chat.id == chat.id).options(selectinload(Chat.messages))
         result = await db_session.execute(stmt)
         loaded_chat = result.scalar_one()
 
@@ -417,6 +420,8 @@ class TestModelRelationships:
         self, db_session, chat_factory, user_factory
     ):
         """User should have access to their messages."""
+        from sqlalchemy.orm import selectinload
+
         chat = await chat_factory(telegram_id=-1001212121212)
         user = await user_factory(telegram_id=12121212)
 
@@ -434,8 +439,8 @@ class TestModelRelationships:
 
         await db_session.flush()
 
-        # Reload user with messages
-        stmt = select(User).where(User.id == user.id)
+        # Reload user with messages using eager load
+        stmt = select(User).where(User.id == user.id).options(selectinload(User.messages))
         result = await db_session.execute(stmt)
         loaded_user = result.scalar_one()
 
