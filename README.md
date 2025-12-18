@@ -4,7 +4,7 @@ AI-powered Telegram bot built with [aiogram](https://github.com/aiogram/aiogram)
 
 ## Requirements
 
-- Python 3.14+
+- Python 3.13+
 - [uv](https://github.com/astral-sh/uv)
 - Docker (for PostgreSQL)
 - Telegram bot token ([@BotFather](https://t.me/BotFather))

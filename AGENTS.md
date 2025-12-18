@@ -37,7 +37,7 @@ Always run commands instead of creating generated files manually. If Docker/data
 
 ## Coding Style & Naming Conventions
 
-- Python 3.14+, 4‑space indentation, type hints required.
+- Python 3.13+, 4‑space indentation, type hints required.
 - Naming: modules/functions `snake_case`, classes `CamelCase`, constants `UPPER_SNAKE`.
 - Imports: prefer absolute within `derp.*`.
 - Keep handlers small; place cross‑cutting logic in `middlewares/` or `common/`.
