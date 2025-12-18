@@ -1,0 +1,9 @@
+# This directory contains Alembic migrations.
+#
+# To generate the initial migration after setting up PostgreSQL:
+#   make db-up
+#   make db-revision MSG="initial schema"
+#   make db-migrate
+#
+# NEVER create migration files manually - always use `make db-revision`.
+

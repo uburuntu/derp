@@ -1,25 +1,54 @@
-version: '3.8'
+version: "3.8"
 
 services:
+  db:
+    image: postgres:17-alpine
+    container_name: derp-postgres
+    environment:
+      POSTGRES_USER: derp
+      POSTGRES_PASSWORD: derp
+      POSTGRES_DB: derp
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U derp -d derp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  db-test:
+    image: postgres:17-alpine
+    container_name: derp-postgres-test
+    environment:
+      POSTGRES_USER: derp_test
+      POSTGRES_PASSWORD: derp_test
+      POSTGRES_DB: derp_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U derp_test -d derp_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   bot:
-    # Build the Docker image from the Dockerfile in the current directory
     build:
       context: .
       dockerfile: Dockerfile
-      # Use BuildKit for better caching and features
-      cache_from:
-        - ghcr.io/astral-sh/uv:python3.13-bookworm
-    container_name: derp_bot
-    # Mount the .env file into the container for secret management
-    # Make sure a .env file exists in the project root
+    container_name: derp-bot
+    depends_on:
+      db:
+        condition: service_healthy
     env_file:
       - .env
-    # Security: run as non-root, read-only filesystem where possible
-    user: "1000:1000"
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    # Automatically restart the container if it crashes or the system reboots
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://derp:derp@db:5432/derp
+      - IS_DOCKER=true
     restart: unless-stopped
+
+volumes:
+  postgres_data:

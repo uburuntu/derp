@@ -1,18 +1,22 @@
+"""Middleware for extracting event context entities."""
+
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram.dispatcher.middlewares.user_context import UserContextMiddleware
 from aiogram.types import TelegramObject, Update
 
-from derp.common.database import DatabaseClient
+from derp.db import DatabaseManager
 
 
 class EventContextMiddleware(UserContextMiddleware):
-    """
-    Extracts event's main entities to the handler's parameters
+    """Extracts event's main entities to the handler's parameters.
+
+    Injects bot, db, user, chat, thread_id, and business_connection_id
+    into handler data for convenient access.
     """
 
-    def __init__(self, db: DatabaseClient):
+    def __init__(self, db: DatabaseManager):
         self.db = db
 
     async def __call__(
