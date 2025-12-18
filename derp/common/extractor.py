@@ -2,6 +2,7 @@ import asyncio
 from enum import IntEnum, auto
 
 import httpx
+import logfire
 from aiogram.types import (
     Animation,
     Audio,
@@ -69,16 +70,25 @@ class ExtractedMedia(BaseModel):
 
     async def download(self) -> bytes:
         """Download the media and return raw bytes."""
-        try:
-            download_url = await create_sensitive_url_from_file_id(
-                self.message.bot, self.file_id
-            )
-            async with httpx.AsyncClient() as client:
-                response = await client.get(download_url)
-                response.raise_for_status()
-                return response.content
-        except Exception as e:
-            raise RuntimeError("Failed to download media") from e
+        with logfire.span(
+            "media_download",
+            **{
+                "media.type": self.media_type,
+                "media.file_size": self.file_size,
+            },
+        ) as span:
+            try:
+                download_url = await create_sensitive_url_from_file_id(
+                    self.message.bot, self.file_id
+                )
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(download_url)
+                    response.raise_for_status()
+                    content = response.content
+                    span.set_attribute("media.downloaded_bytes", len(content))
+                    return content
+            except Exception as e:
+                raise RuntimeError("Failed to download media") from e
 
 
 class ExtractedPhoto(ExtractedMedia):

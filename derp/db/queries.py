@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import logfire
 from sqlalchemy import ScalarSelect, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -263,18 +264,28 @@ async def get_recent_messages(
     Returns messages in chronological order (oldest first) for building
     LLM context. Joins directly on telegram_id to avoid N+1 queries.
     """
-    # Single query joining Chat and Message to avoid extra round-trip
-    stmt = (
-        select(Message)
-        .join(Chat, Message.chat_id == Chat.id)
-        .where(Chat.telegram_id == chat_telegram_id, Message.deleted_at.is_(None))
-        .order_by(Message.created_at.desc(), Message.telegram_message_id.desc())
-        .limit(limit)
-        .options(selectinload(Message.user))
-    )
+    with logfire.span(
+        "db.get_recent_messages",
+        **{
+            "db.operation": "select",
+            "telegram.chat_id": chat_telegram_id,
+            "db.limit": limit,
+        },
+    ) as span:
+        # Single query joining Chat and Message to avoid extra round-trip
+        stmt = (
+            select(Message)
+            .join(Chat, Message.chat_id == Chat.id)
+            .where(Chat.telegram_id == chat_telegram_id, Message.deleted_at.is_(None))
+            .order_by(Message.created_at.desc(), Message.telegram_message_id.desc())
+            .limit(limit)
+            .options(selectinload(Message.user))
+        )
 
-    result = await session.execute(stmt)
-    messages = list(result.scalars().all())
+        result = await session.execute(stmt)
+        messages = list(result.scalars().all())
 
-    # Reverse to get chronological order (oldest first)
-    return list(reversed(messages))
+        # Reverse to get chronological order (oldest first)
+        messages = list(reversed(messages))
+        span.set_attribute("db.rows_returned", len(messages))
+        return messages
