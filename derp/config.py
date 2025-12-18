@@ -24,10 +24,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     bot_username: str = "DerpRobot"
 
-    # Gel (ex EdgeDB) database connection string
-    gel_instance: str
-
-    gel_secret_key: str
+    # PostgreSQL database connection string
+    database_url: str = "postgresql+asyncpg://localhost:5432/derp"
 
     default_llm_model: str
 

@@ -1,31 +1,272 @@
 """Test configuration and reusable fixtures for the Derp bot test suite.
 
 This module provides comprehensive fixtures for testing aiogram handlers,
-filters, middlewares, and other components of the Telegram bot.
+filters, middlewares, and database operations with real PostgreSQL.
 """
 
+from __future__ import annotations
+
 import os
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 from aiogram.types import Chat, Message, User
 from aiogram.utils.i18n import I18n
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Set up test environment variables before any imports
 os.environ.setdefault("LOGFIRE_IGNORE_NO_CONFIG", "1")
 os.environ.setdefault("ENVIRONMENT", "dev")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN_FOR_TESTING")
-os.environ.setdefault("GEL_INSTANCE", "test_instance")
-os.environ.setdefault("GEL_SECRET_KEY", "test_secret")
-os.environ.setdefault("DEFAULT_LLM_MODEL", "gemini-2.0-flash-exp")
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql+asyncpg://derp_test:derp_test@localhost:5433/derp_test"
+)
+os.environ.setdefault("DEFAULT_LLM_MODEL", "gemini-2.0-flash")
 os.environ.setdefault("OPENAI_API_KEY", "test_openai_key")
 os.environ.setdefault("GOOGLE_API_KEY", "test_google_key")
 os.environ.setdefault("GOOGLE_API_EXTRA_KEYS", "test_key2,test_key3")
 os.environ.setdefault("GOOGLE_API_PAID_KEY", "test_paid_key")
 os.environ.setdefault("OPENROUTER_API_KEY", "test_openrouter_key")
 os.environ.setdefault("LOGFIRE_TOKEN", "test_logfire_token")
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from derp.models import Chat as ChatModel
+    from derp.models import Message as MessageModel
+    from derp.models import User as UserModel
+
+# =============================================================================
+# DATABASE FIXTURES - Real PostgreSQL Integration
+# =============================================================================
+
+
+@pytest.fixture(scope="session")
+def database_url() -> str:
+    """Get the database URL from environment."""
+    return os.environ.get(
+        "DATABASE_URL",
+        "postgresql+asyncpg://derp_test:derp_test@localhost:5433/derp_test",
+    )
+
+
+@pytest_asyncio.fixture(scope="session")
+async def db_engine(database_url: str):
+    """Create a database engine for the test session.
+
+    This engine is shared across all tests in the session for efficiency.
+    """
+    engine = create_async_engine(
+        database_url,
+        echo=False,
+        pool_pre_ping=True,
+    )
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def setup_database(db_engine):
+    """Set up the database schema once per test session.
+
+    Runs migrations to ensure the schema is up to date.
+    """
+    from derp.models import Base
+
+    async with db_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    yield
+
+    # Optional: Drop all tables after tests (comment out to keep data for debugging)
+    async with db_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest_asyncio.fixture
+async def db_session(db_engine, setup_database) -> AsyncGenerator[AsyncSession]:
+    """Provide a database session with automatic rollback after each test.
+
+    Each test runs in its own transaction that is rolled back at the end,
+    ensuring test isolation without needing to clean up data manually.
+    """
+    async_session = async_sessionmaker(
+        db_engine,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
+
+    async with async_session() as session:
+        # Start a nested transaction (savepoint)
+        async with session.begin():
+            yield session
+            # Rollback happens automatically when exiting the context
+
+
+@pytest_asyncio.fixture
+async def db_session_committed(
+    db_engine, setup_database
+) -> AsyncGenerator[AsyncSession]:
+    """Provide a database session that commits changes.
+
+    Use this when you need to test behavior that requires committed data,
+    such as testing unique constraints or triggers.
+    """
+    async_session = async_sessionmaker(
+        db_engine,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
+
+    async with async_session() as session:
+        yield session
+
+    # Clean up after committed tests
+    async with async_session() as cleanup_session:
+        await cleanup_session.execute(
+            text("TRUNCATE users, chats, messages RESTART IDENTITY CASCADE")
+        )
+        await cleanup_session.commit()
+
+
+# =============================================================================
+# MODEL FACTORIES - Create real database objects
+# =============================================================================
+
+
+@pytest.fixture
+def user_factory(db_session: AsyncSession):
+    """Factory for creating User model instances in the database.
+
+    Usage:
+        async def test_user(user_factory):
+            user = await user_factory(telegram_id=12345, first_name="Alice")
+            assert user.id is not None
+    """
+    from derp.models import User as UserModel
+
+    async def _create(
+        telegram_id: int = 12345,
+        is_bot: bool = False,
+        first_name: str = "Test",
+        last_name: str | None = "User",
+        username: str | None = "testuser",
+        language_code: str | None = "en",
+        is_premium: bool = False,
+    ) -> UserModel:
+        user = UserModel(
+            telegram_id=telegram_id,
+            is_bot=is_bot,
+            first_name=first_name,
+            last_name=last_name,
+            username=username,
+            language_code=language_code,
+            is_premium=is_premium,
+        )
+        db_session.add(user)
+        await db_session.flush()
+        return user
+
+    return _create
+
+
+@pytest.fixture
+def chat_factory(db_session: AsyncSession):
+    """Factory for creating Chat model instances in the database.
+
+    Usage:
+        async def test_chat(chat_factory):
+            chat = await chat_factory(telegram_id=-100123, title="My Group")
+            assert chat.id is not None
+    """
+    from derp.models import Chat as ChatModel
+
+    async def _create(
+        telegram_id: int = -1001234567890,
+        chat_type: str = "supergroup",
+        title: str | None = "Test Chat",
+        username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        is_forum: bool = False,
+        llm_memory: str | None = None,
+    ) -> ChatModel:
+        chat = ChatModel(
+            telegram_id=telegram_id,
+            type=chat_type,
+            title=title,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            is_forum=is_forum,
+            llm_memory=llm_memory,
+        )
+        db_session.add(chat)
+        await db_session.flush()
+        return chat
+
+    return _create
+
+
+@pytest.fixture
+def message_factory(db_session: AsyncSession, chat_factory, user_factory):
+    """Factory for creating Message model instances in the database.
+
+    Usage:
+        async def test_message(message_factory):
+            msg = await message_factory(text="Hello world")
+            assert msg.id is not None
+    """
+    from derp.models import Message as MessageModel
+
+    async def _create(
+        telegram_message_id: int = 1,
+        text: str | None = "Test message",
+        direction: str = "in",
+        content_type: str | None = "text",
+        chat: ChatModel | None = None,
+        user: UserModel | None = None,
+        thread_id: int | None = None,
+        media_group_id: str | None = None,
+        attachment_type: str | None = None,
+        attachment_file_id: str | None = None,
+        reply_to_message_id: int | None = None,
+        telegram_date: datetime | None = None,
+        edited_at: datetime | None = None,
+        deleted_at: datetime | None = None,
+    ) -> MessageModel:
+        # Create chat and user if not provided
+        if chat is None:
+            chat = await chat_factory()
+        if user is None:
+            user = await user_factory()
+
+        message = MessageModel(
+            chat_id=chat.id,
+            user_id=user.id,
+            telegram_message_id=telegram_message_id,
+            thread_id=thread_id,
+            direction=direction,
+            content_type=content_type,
+            text=text,
+            media_group_id=media_group_id,
+            attachment_type=attachment_type,
+            attachment_file_id=attachment_file_id,
+            reply_to_message_id=reply_to_message_id,
+            telegram_date=telegram_date or datetime.now(UTC),
+            edited_at=edited_at,
+            deleted_at=deleted_at,
+        )
+        db_session.add(message)
+        await db_session.flush()
+        return message
+
+    return _create
 
 
 # =============================================================================
@@ -35,11 +276,7 @@ os.environ.setdefault("LOGFIRE_TOKEN", "test_logfire_token")
 
 @pytest.fixture(autouse=True)
 def setup_i18n():
-    """Set up i18n context for all tests automatically.
-
-    This fixture ensures that internationalization is properly configured
-    for all tests, allowing translation functions to work correctly.
-    """
+    """Set up i18n context for all tests automatically."""
     i18n = I18n(path="derp/locales", default_locale="en", domain="messages")
     token = i18n.set_current(i18n)
     yield i18n
@@ -48,13 +285,7 @@ def setup_i18n():
 
 @pytest.fixture
 def i18n_ru(setup_i18n):
-    """Provide Russian i18n context for testing translations.
-
-    Usage:
-        def test_russian_text(i18n_ru):
-            with i18n_ru:
-                text = _("Hello")  # Will use Russian translation
-    """
+    """Provide Russian i18n context for testing translations."""
     return setup_i18n.use_locale("ru")
 
 
@@ -65,15 +296,7 @@ def i18n_ru(setup_i18n):
 
 @pytest.fixture
 def mock_settings():
-    """Provide a mock Settings object with sensible test defaults.
-
-    Returns a MagicMock configured with all necessary settings attributes
-    that handlers and other components expect.
-
-    Usage:
-        def test_handler(mock_settings):
-            assert mock_settings.app_name == "derp-test"
-    """
+    """Provide a mock Settings object with sensible test defaults."""
     settings = MagicMock()
     settings.app_name = "derp-test"
     settings.environment = "dev"
@@ -81,9 +304,8 @@ def mock_settings():
     settings.telegram_bot_token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
     settings.bot_username = "DerpTestBot"
     settings.bot_id = 123456
-    settings.gel_instance = "test_instance"
-    settings.gel_secret_key = "test_secret"
-    settings.default_llm_model = "gemini-2.0-flash-exp"
+    settings.database_url = os.environ.get("DATABASE_URL")
+    settings.default_llm_model = "gemini-2.0-flash"
     settings.openai_api_key = "test_openai_key"
     settings.google_api_key = "test_google_key"
     settings.google_api_extra_keys = "test_key2,test_key3"
@@ -98,19 +320,13 @@ def mock_settings():
 
 
 # =============================================================================
-# TELEGRAM OBJECT FACTORIES
+# TELEGRAM OBJECT FACTORIES (Mocks for aiogram types)
 # =============================================================================
 
 
 @pytest.fixture
 def make_user():
-    """Factory fixture for creating mock Telegram User objects.
-
-    Usage:
-        def test_with_user(make_user):
-            user = make_user(id=123, username="testuser")
-            assert user.id == 123
-    """
+    """Factory fixture for creating mock Telegram User objects."""
 
     def _make_user(
         id: int = 12345,
@@ -119,10 +335,10 @@ def make_user():
         last_name: str | None = "User",
         username: str | None = "testuser",
         language_code: str | None = "en",
+        is_premium: bool | None = False,
         full_name: str | None = None,
         **kwargs,
     ) -> User:
-        """Create a mock User object with the given parameters."""
         user = MagicMock(spec=User)
         user.id = id
         user.is_bot = is_bot
@@ -130,9 +346,9 @@ def make_user():
         user.last_name = last_name
         user.username = username
         user.language_code = language_code
+        user.is_premium = is_premium
         user.full_name = full_name or f"{first_name} {last_name or ''}".strip()
 
-        # Add any additional kwargs as attributes
         for key, value in kwargs.items():
             setattr(user, key, value)
 
@@ -143,29 +359,27 @@ def make_user():
 
 @pytest.fixture
 def make_chat():
-    """Factory fixture for creating mock Telegram Chat objects.
-
-    Usage:
-        def test_with_chat(make_chat):
-            chat = make_chat(id=-100123, type="supergroup")
-            assert chat.type == "supergroup"
-    """
+    """Factory fixture for creating mock Telegram Chat objects."""
 
     def _make_chat(
         id: int = -1001234567890,
         type: str = "supergroup",
         title: str | None = "Test Chat",
         username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        is_forum: bool | None = False,
         **kwargs,
     ) -> Chat:
-        """Create a mock Chat object with the given parameters."""
         chat = MagicMock(spec=Chat)
         chat.id = id
         chat.type = type
         chat.title = title
         chat.username = username
+        chat.first_name = first_name
+        chat.last_name = last_name
+        chat.is_forum = is_forum
 
-        # Add any additional kwargs as attributes
         for key, value in kwargs.items():
             setattr(chat, key, value)
 
@@ -176,15 +390,7 @@ def make_chat():
 
 @pytest.fixture
 def make_message(make_user, make_chat):
-    """Factory fixture for creating mock Telegram Message objects.
-
-    This is the most commonly used fixture for testing handlers.
-
-    Usage:
-        def test_handler(make_message):
-            msg = make_message(text="/start", user_id=999)
-            # msg has .reply(), .answer(), etc. as AsyncMock
-    """
+    """Factory fixture for creating mock Telegram Message objects."""
 
     def _make_message(
         message_id: int = 1,
@@ -198,16 +404,9 @@ def make_message(make_user, make_chat):
         content_type: str = "text",
         **kwargs,
     ) -> Message:
-        """Create a mock Message with common async methods pre-mocked.
-
-        All message response methods (reply, answer, edit, delete, etc.)
-        are created as AsyncMock instances for easy testing.
-        """
-        # Create user and chat
         user = make_user(id=user_id)
         chat = make_chat(id=chat_id, type=chat_type)
 
-        # Create message mock
         message = MagicMock(spec=Message)
         message.message_id = message_id
         message.text = text
@@ -218,7 +417,7 @@ def make_message(make_user, make_chat):
         message.message_thread_id = message_thread_id
         message.content_type = content_type
 
-        # Initialize media attributes (needed for extractor)
+        # Initialize media attributes
         message.photo = None
         message.video = None
         message.audio = None
@@ -228,11 +427,11 @@ def make_message(make_user, make_chat):
         message.animation = None
         message.video_note = None
         message.media_group_id = None
-        message.date = None
+        message.date = datetime.now(UTC)
         message.edit_date = None
         message.html_text = text
         message.forward_from = None
-        message.is_topic_message = False  # For middleware context resolution
+        message.is_topic_message = False
         message.sender_chat = None
 
         # Mock common async methods
@@ -246,6 +445,7 @@ def make_message(make_user, make_chat):
         message.answer_invoice = AsyncMock(return_value=message)
         message.answer_photo = AsyncMock(return_value=message)
         message.answer_document = AsyncMock(return_value=message)
+        message.react = AsyncMock(return_value=True)
 
         # Bot property
         message.bot = MagicMock()
@@ -260,7 +460,6 @@ def make_message(make_user, make_chat):
         message.bot.send_message = AsyncMock()
         message.bot.send_photo = AsyncMock()
 
-        # Add any additional kwargs as attributes
         for key, value in kwargs.items():
             setattr(message, key, value)
 
@@ -271,13 +470,7 @@ def make_message(make_user, make_chat):
 
 @pytest.fixture
 def make_bot(make_user):
-    """Factory fixture for creating mock Bot objects.
-
-    Usage:
-        def test_with_bot(make_bot):
-            bot = make_bot(id=111, username="TestBot")
-            await bot.send_message(chat_id=123, text="Hi")
-    """
+    """Factory fixture for creating mock Bot objects."""
 
     def _make_bot(
         id: int = 123456,
@@ -285,10 +478,8 @@ def make_bot(make_user):
         first_name: str = "Derp",
         **kwargs,
     ) -> MagicMock:
-        """Create a mock Bot with common async methods."""
         bot = MagicMock()
 
-        # Bot info
         bot_user = make_user(
             id=id,
             is_bot=True,
@@ -298,7 +489,6 @@ def make_bot(make_user):
         bot.me = AsyncMock(return_value=bot_user)
         bot.id = id
 
-        # Common async methods
         bot.send_message = AsyncMock()
         bot.send_photo = AsyncMock()
         bot.send_document = AsyncMock()
@@ -310,7 +500,6 @@ def make_bot(make_user):
         bot.get_chat = AsyncMock()
         bot.get_chat_member = AsyncMock()
 
-        # Add any additional kwargs as attributes
         for key, value in kwargs.items():
             setattr(bot, key, value)
 
@@ -326,12 +515,7 @@ def make_bot(make_user):
 
 @pytest.fixture
 def make_photo():
-    """Factory for creating mock PhotoSize objects.
-
-    Usage:
-        def test_with_photo(make_photo):
-            photo = make_photo(file_id="abc", width=800, height=600)
-    """
+    """Factory for creating mock PhotoSize objects."""
     from aiogram.types import PhotoSize
 
     def _make_photo(
@@ -342,7 +526,6 @@ def make_photo():
         file_size: int | None = 50000,
         **kwargs,
     ):
-        """Create a mock PhotoSize object."""
         photo = MagicMock(spec=PhotoSize)
         photo.file_id = file_id
         photo.file_unique_id = file_unique_id
@@ -371,7 +554,6 @@ def make_document():
         file_size: int | None = 100000,
         **kwargs,
     ):
-        """Create a mock Document object."""
         doc = MagicMock(spec=Document)
         doc.file_id = file_id
         doc.file_unique_id = file_unique_id
@@ -402,7 +584,6 @@ def make_video():
         file_size: int | None = 5000000,
         **kwargs,
     ):
-        """Create a mock Video object."""
         video = MagicMock(spec=Video)
         video.file_id = file_id
         video.file_unique_id = file_unique_id
@@ -435,7 +616,6 @@ def make_audio():
         file_size: int | None = 3000000,
         **kwargs,
     ):
-        """Create a mock Audio object."""
         audio = MagicMock(spec=Audio)
         audio.file_id = file_id
         audio.file_unique_id = file_unique_id
@@ -468,7 +648,6 @@ def make_sticker():
         file_size: int | None = 20000,
         **kwargs,
     ):
-        """Create a mock Sticker object."""
         sticker = MagicMock(spec=Sticker)
         sticker.file_id = file_id
         sticker.file_unique_id = file_unique_id
@@ -490,27 +669,20 @@ def make_sticker():
 
 
 # =============================================================================
-# DATABASE FIXTURES
+# LEGACY DATABASE FIXTURES (for backward compatibility with existing tests)
 # =============================================================================
 
 
 @pytest.fixture
 def mock_db_client():
-    """Provide a mock DatabaseClient for testing.
+    """Provide a mock DatabaseManager for testing middleware/handlers.
 
-    The mock includes common query methods that return AsyncMock instances.
-
-    Usage:
-        def test_db_operation(mock_db_client):
-            mock_db_client.execute.return_value = {"id": 1}
-            result = await some_handler(db=mock_db_client)
+    Use db_session for tests that need real database operations.
     """
     db = MagicMock()
-    db.execute = AsyncMock()
-    db.query = AsyncMock()
-    db.query_single = AsyncMock()
-    db.query_required_single = AsyncMock()
-    db.query_json = AsyncMock()
+    session = AsyncMock()
+    db.session.return_value.__aenter__.return_value = session
+    db.session.return_value.__aexit__.return_value = None
     return db
 
 
@@ -521,12 +693,7 @@ def mock_db_client():
 
 @pytest.fixture
 def sample_private_chat(make_message):
-    """Provide a sample private chat message for testing.
-
-    Usage:
-        def test_private_handler(sample_private_chat):
-            assert sample_private_chat.chat.type == "private"
-    """
+    """Provide a sample private chat message for testing."""
     return make_message(
         chat_id=12345,
         chat_type="private",
@@ -536,12 +703,7 @@ def sample_private_chat(make_message):
 
 @pytest.fixture
 def sample_group_chat(make_message):
-    """Provide a sample group chat message for testing.
-
-    Usage:
-        def test_group_handler(sample_group_chat):
-            assert sample_group_chat.chat.type == "supergroup"
-    """
+    """Provide a sample group chat message for testing."""
     return make_message(
         chat_id=-1001234567890,
         chat_type="supergroup",
@@ -556,15 +718,7 @@ def sample_group_chat(make_message):
 
 @pytest.fixture
 def simple_namespace_message():
-    """Factory for creating SimpleNamespace messages (legacy pattern).
-
-    Some existing tests use SimpleNamespace instead of proper mocks.
-    This fixture helps maintain compatibility while we migrate tests.
-
-    Usage:
-        def test_legacy(simple_namespace_message):
-            msg = simple_namespace_message(text="test")
-    """
+    """Factory for creating SimpleNamespace messages (legacy pattern)."""
 
     def _make(
         message_id: int = 1,
@@ -573,7 +727,6 @@ def simple_namespace_message():
         chat_id: int = -100123,
         **kwargs,
     ) -> SimpleNamespace:
-        """Create a SimpleNamespace message object."""
         user = SimpleNamespace(
             id=user_id,
             first_name="Test",
@@ -593,7 +746,6 @@ def simple_namespace_message():
             **kwargs,
         )
 
-        # Add common async mocks
         ns.reply = AsyncMock()
         ns.answer = AsyncMock()
         ns.delete = AsyncMock()
@@ -605,17 +757,9 @@ def simple_namespace_message():
 
 @pytest.fixture
 def freeze_random(monkeypatch):
-    """Helper to make random functions deterministic in tests.
-
-    Usage:
-        def test_randomness(freeze_random):
-            freeze_random(choice_result="first", random_result=0.5)
-            # random.choice() will always return "first"
-            # random.random() will always return 0.5
-    """
+    """Helper to make random functions deterministic in tests."""
 
     def _freeze(choice_result: Any = None, random_result: float = 0.5):
-        """Freeze random functions to return deterministic values."""
         if choice_result is not None:
             monkeypatch.setattr(
                 "random.choice",

@@ -17,13 +17,12 @@ from aiogram.types import (
 )
 from aiogram.utils.i18n import gettext as _
 
-from ..common.database import get_database_client
-from ..common.extractor import Extractor
-from ..common.llm_gemini import Gemini, GeminiResult
-from ..config import settings
-from ..filters import DerpMentionFilter
-from ..queries.chat_settings_async_edgeql import ChatSettingsResult
-from ..queries.select_recent_messages_async_edgeql import select_recent_messages
+from derp.common.extractor import Extractor
+from derp.common.llm_gemini import Gemini, GeminiResult
+from derp.config import settings
+from derp.db import get_db_manager, get_recent_messages
+from derp.filters import DerpMentionFilter
+from derp.models import Chat as ChatModel
 
 router = Router(name="gemini")
 
@@ -87,9 +86,7 @@ async def extract_media_for_gemini(message: Message) -> list[dict[str, Any]]:
     return media_parts
 
 
-async def _build_context(
-    message: Message, chat_settings: ChatSettingsResult | None
-) -> str:
+async def _build_context(message: Message, chat_settings: ChatModel | None) -> str:
     """Build the exact context Derp uses for Gemini.
 
     This function is reused by both /context and the Gemini handler.
@@ -110,11 +107,11 @@ async def _build_context(
     if chat_settings and chat_settings.llm_memory:
         context_parts.extend(["# CHAT MEMORY", chat_settings.llm_memory])
 
-    # Recent chat history from cleaned MessageLog
-    db_client = get_database_client()
-    async with db_client.get_executor() as executor:
-        recent_msgs = await select_recent_messages(
-            executor, chat_id=message.chat.id, limit=100
+    # Recent chat history from messages table
+    db = get_db_manager()
+    async with db.read_session() as session:
+        recent_msgs = await get_recent_messages(
+            session, chat_telegram_id=message.chat.id, limit=100
         )
 
     if recent_msgs:
@@ -122,14 +119,14 @@ async def _build_context(
         context_parts.extend(
             json.dumps(
                 {
-                    "message_id": m.message_id,
-                    "sender": m.from_user
+                    "message_id": m.telegram_message_id,
+                    "sender": m.user
                     and {
-                        "user_id": m.from_user.user_id,
-                        "name": m.from_user.display_name,
-                        "username": m.from_user.username,
+                        "user_id": m.user.telegram_id,
+                        "name": m.user.display_name,
+                        "username": m.user.username,
                     },
-                    "date": m.tg_date and m.tg_date.isoformat(),
+                    "date": m.telegram_date and m.telegram_date.isoformat(),
                     "content": m.content_type,
                     "text": m.text,
                     "reply_to": m.reply_to_message_id,
@@ -154,9 +151,7 @@ async def _build_context(
 
 
 @router.message(Command("context"), F.from_user.id.in_(settings.admin_ids))
-async def show_context(
-    message: Message, chat_settings: ChatSettingsResult | None
-) -> None:
+async def show_context(message: Message, chat_settings: ChatModel | None) -> None:
     ctx = await _build_context(message, chat_settings)
     stats = f"Context length: {len(ctx)} characters, included {ctx.count('message_id')} messages"
     await message.reply(stats)
@@ -175,7 +170,7 @@ class GeminiResponseHandler(MessageHandler):
         return Gemini()
 
     async def _generate_context(self, message: Message) -> str:
-        chat_settings: ChatSettingsResult | None = self.data.get("chat_settings")
+        chat_settings: ChatModel | None = self.data.get("chat_settings")
         return await _build_context(message, chat_settings)
 
     def _format_response_text(self, result: GeminiResult) -> str:
