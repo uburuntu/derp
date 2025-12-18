@@ -1,0 +1,196 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment even if no changes'
+        required: false
+        default: 'false'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Run CI checks first
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # Build and push Docker image
+  build:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    needs: ci
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+      image_digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  # Deploy to production server
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          GITHUB_TOKEN: ${{ secrets.DEPLOY_GHCR_TOKEN }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          envs: IMAGE,GITHUB_TOKEN
+          command_timeout: 10m
+          script: |
+            set -e
+            echo "=== Deployment starting ==="
+            
+            # Authenticate with GitHub Container Registry
+            echo "$GITHUB_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            # Pull new image FIRST (before stopping anything)
+            echo "Pulling: $IMAGE"
+            docker pull "$IMAGE"
+            
+            # Check if current container exists
+            CURRENT_EXISTS=$(docker ps -a -q --filter "name=^derp-bot$" 2>/dev/null || echo "")
+            
+            if [ -n "$CURRENT_EXISTS" ]; then
+              echo "=== Stopping current container (prevents dual polling) ==="
+              
+              # Remove any leftover previous container
+              docker rm -f derp-bot-previous 2>/dev/null || true
+              
+              # Rename current to previous (for rollback)
+              docker rename derp-bot derp-bot-previous 2>/dev/null || true
+              
+              # Stop and WAIT for complete stop (critical for Telegram polling)
+              docker stop derp-bot-previous --time 10 2>/dev/null || true
+              
+              # Verify it's stopped
+              for i in 1 2 3; do
+                if docker ps -q --filter "name=derp-bot-previous" | grep -q .; then
+                  echo "  Waiting for stop... ($i)"
+                  sleep 2
+                else
+                  echo "  Previous container stopped ✓"
+                  break
+                fi
+              done
+            fi
+            
+            # Start new container (old one is FULLY stopped now)
+            echo "=== Starting new container ==="
+            docker run -d \
+              --name derp-bot \
+              --restart unless-stopped \
+              --env-file /opt/derp/.env.prod \
+              -e IS_DOCKER=true \
+              "$IMAGE"
+            
+            # Health check - wait for container to stabilize
+            echo "=== Health check ==="
+            sleep 5
+            
+            for i in 1 2 3 4 5 6; do
+              if docker ps --filter "name=^derp-bot$" --filter "status=running" | grep -q derp-bot; then
+                echo "  Check $i/6: Running ✓"
+              else
+                echo "  Check $i/6: Not running ✗"
+                echo "=== ROLLBACK ==="
+                docker stop derp-bot 2>/dev/null || true
+                docker rm derp-bot 2>/dev/null || true
+                
+                # Restore previous container
+                if docker ps -a -q --filter "name=derp-bot-previous" | grep -q .; then
+                  docker rename derp-bot-previous derp-bot
+                  docker start derp-bot
+                  echo "Rolled back to previous version"
+                fi
+                exit 1
+              fi
+              sleep 5
+            done
+            
+            echo "=== SUCCESS ==="
+            # Cleanup old container and images
+            docker rm derp-bot-previous 2>/dev/null || true
+            docker image prune -f
+            
+            # Show status
+            docker ps --filter "name=derp-bot" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "=== Container Status ==="
+            docker ps --filter "name=derp-bot" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+            echo ""
+            echo "=== Recent Logs ==="
+            docker logs derp-bot --tail 15 2>&1 || echo "No logs available"
+
+      - name: Deployment summary
+        run: |
+          echo "### ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ needs.build.outputs.image_digest }}\`" >> $GITHUB_STEP_SUMMARY
