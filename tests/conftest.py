@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def database_url() -> str:
     """Get the database URL from environment."""
     return os.environ.get(
@@ -55,11 +55,11 @@ def database_url() -> str:
     )
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture
 async def db_engine(database_url: str):
-    """Create a database engine for the test session.
+    """Create a database engine for tests.
 
-    This engine is shared across all tests in the session for efficiency.
+    Creates a fresh engine for each test to avoid event loop conflicts.
     """
     engine = create_async_engine(
         database_url,
@@ -70,31 +70,19 @@ async def db_engine(database_url: str):
     await engine.dispose()
 
 
-@pytest_asyncio.fixture(scope="session")
-async def setup_database(db_engine):
-    """Set up the database schema once per test session.
-
-    Runs migrations to ensure the schema is up to date.
-    """
-    from derp.models import Base
-
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    yield
-
-    # Optional: Drop all tables after tests (comment out to keep data for debugging)
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-
-
 @pytest_asyncio.fixture
-async def db_session(db_engine, setup_database) -> AsyncGenerator[AsyncSession]:
+async def db_session(db_engine) -> AsyncGenerator[AsyncSession]:
     """Provide a database session with automatic rollback after each test.
 
     Each test runs in its own transaction that is rolled back at the end,
     ensuring test isolation without needing to clean up data manually.
     """
+    from derp.models import Base
+
+    # Ensure schema exists
+    async with db_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
     async_session = async_sessionmaker(
         db_engine,
         expire_on_commit=False,
@@ -102,21 +90,24 @@ async def db_session(db_engine, setup_database) -> AsyncGenerator[AsyncSession]:
     )
 
     async with async_session() as session:
-        # Start a nested transaction (savepoint)
-        async with session.begin():
-            yield session
-            # Rollback happens automatically when exiting the context
+        yield session
+        # Rollback any uncommitted changes
+        await session.rollback()
 
 
 @pytest_asyncio.fixture
-async def db_session_committed(
-    db_engine, setup_database
-) -> AsyncGenerator[AsyncSession]:
+async def db_session_committed(db_engine) -> AsyncGenerator[AsyncSession]:
     """Provide a database session that commits changes.
 
     Use this when you need to test behavior that requires committed data,
     such as testing unique constraints or triggers.
     """
+    from derp.models import Base
+
+    # Ensure schema exists
+    async with db_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
     async_session = async_sessionmaker(
         db_engine,
         expire_on_commit=False,
