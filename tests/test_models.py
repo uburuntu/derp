@@ -409,7 +409,9 @@ class TestModelRelationships:
         await db_session.flush()
 
         # Reload chat with messages using eager load
-        stmt = select(Chat).where(Chat.id == chat.id).options(selectinload(Chat.messages))
+        stmt = (
+            select(Chat).where(Chat.id == chat.id).options(selectinload(Chat.messages))
+        )
         result = await db_session.execute(stmt)
         loaded_chat = result.scalar_one()
 
@@ -440,7 +442,9 @@ class TestModelRelationships:
         await db_session.flush()
 
         # Reload user with messages using eager load
-        stmt = select(User).where(User.id == user.id).options(selectinload(User.messages))
+        stmt = (
+            select(User).where(User.id == user.id).options(selectinload(User.messages))
+        )
         result = await db_session.execute(stmt)
         loaded_user = result.scalar_one()
 
