@@ -109,7 +109,7 @@ async def _build_context(message: Message, chat_settings: ChatModel | None) -> s
 
     # Recent chat history from messages table
     db = get_db_manager()
-    async with db.session() as session:
+    async with db.read_session() as session:
         recent_msgs = await get_recent_messages(
             session, chat_telegram_id=message.chat.id, limit=100
         )

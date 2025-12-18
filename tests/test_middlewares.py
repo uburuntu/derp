@@ -188,11 +188,14 @@ class TestChatSettingsMiddleware:
 
     @pytest.fixture
     def mock_db_manager(self):
-        """Create a mock DatabaseManager."""
+        """Create a mock DatabaseManager with both session types."""
         db = MagicMock()
         session = AsyncMock()
+        # Mock both session() and read_session() to return the same session
         db.session.return_value.__aenter__.return_value = session
         db.session.return_value.__aexit__.return_value = None
+        db.read_session.return_value.__aenter__.return_value = session
+        db.read_session.return_value.__aexit__.return_value = None
         return db, session
 
     @pytest.fixture

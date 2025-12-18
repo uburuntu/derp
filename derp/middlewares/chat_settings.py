@@ -37,7 +37,7 @@ class ChatSettingsMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         try:
-            async with self.db.session() as session:
+            async with self.db.read_session() as session:
                 chat_model: ChatModel | None = await get_chat_settings(
                     session, telegram_id=chat.id
                 )
