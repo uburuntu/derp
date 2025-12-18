@@ -74,9 +74,7 @@ async def upsert_user(
         },
     ).returning(User)
 
-    result = await session.execute(
-        stmt, execution_options={"populate_existing": True}
-    )
+    result = await session.execute(stmt, execution_options={"populate_existing": True})
     return result.scalar_one()
 
 
@@ -132,9 +130,7 @@ async def upsert_chat(
         },
     ).returning(Chat)
 
-    result = await session.execute(
-        stmt, execution_options={"populate_existing": True}
-    )
+    result = await session.execute(stmt, execution_options={"populate_existing": True})
     return result.scalar_one()
 
 
@@ -230,9 +226,7 @@ async def upsert_message(
         },
     ).returning(Message)
 
-    result = await session.execute(
-        stmt, execution_options={"populate_existing": True}
-    )
+    result = await session.execute(stmt, execution_options={"populate_existing": True})
     return result.scalar_one_or_none()
 
 
