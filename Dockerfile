@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Use the official uv image based on Python bookworm slim
-FROM ghcr.io/astral-sh/uv:python3.14-bookworm AS builder
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm AS builder
 
 # Set environment variables for uv
 ENV UV_CACHE_DIR=/opt/uv-cache/
@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/opt/uv-cache/ \
     uv sync --locked --no-editable
 
 # Production stage - smaller final image
-FROM python:3.14-slim AS runtime
+FROM python:3.13-slim AS runtime
 
 # Copy the virtual environment from builder stage
 COPY --from=builder --chown=app:app /app/.venv /app/.venv

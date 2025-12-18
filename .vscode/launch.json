@@ -6,14 +6,22 @@
             "type": "debugpy",
             "request": "launch",
             "module": "derp",
-            "envFile": "${workspaceFolder}/.env"
+            "envFile": "${workspaceFolder}/.env",
+            "justMyCode": true,
+            "env": {
+                "PYDEVD_USE_SYS_MONITORING": "0"
+            }
         },
         {
             "name": "Run Derp Bot (prod)",
             "type": "debugpy",
             "request": "launch",
             "module": "derp",
-            "envFile": "${workspaceFolder}/.env.prod"
-        },
+            "envFile": "${workspaceFolder}/.env.prod",
+            "justMyCode": true,
+            "env": {
+                "PYDEVD_USE_SYS_MONITORING": "0"
+            }
+        }
     ]
 }

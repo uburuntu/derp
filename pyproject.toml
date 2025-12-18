@@ -3,29 +3,29 @@ name = "derp"
 version = "0.1.0"
 description = "AI-powered friendly Telegram bot"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
-    "aiocache==0.12.3",
-    "aiogram[fast,i18n,redis]==3.22.0",
-    "aiojobs==1.4.0",
+    "aiocache>=0.12.3",
+    "aiogram[fast,i18n,redis]>=3.22.0",
+    "aiojobs>=1.4.0",
     "alembic>=1.14.0",
     "asyncpg>=0.30.0",
-    "babel==2.17.0",
-    "google-genai==1.38.0",
+    "babel>=2.17.0",
+    "google-genai>=1.38.0",
     "logfire[aiohttp,google-genai,httpx,system-metrics]>=4.7.0",
-    "pydantic==2.11.9",
-    "pydantic-settings==2.10.1",
+    "pydantic>=2.11.9",
+    "pydantic-settings>=2.10.1",
     "sqlalchemy[asyncio]>=2.0.40",
-    "throttler==1.2.2",
+    "throttler>=1.2.2",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3.5",
-    "pytest-asyncio>=0.26.0",
-    "pytest-cov>=7.0.0",
-    "ruff>=0.13.1",
-    "uv>=0.8.19",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "ruff",
+    "uv",
 ]
 
 [tool.pytest.ini_options]
