@@ -136,6 +136,13 @@ jobs:
               done
             fi
             
+            # Run database migrations
+            echo "=== Running database migrations ==="
+            docker run --rm \
+              --env-file /opt/derp/.env.prod \
+              "$IMAGE" \
+              uv run alembic upgrade head
+            
             # Start new container (old one is FULLY stopped now)
             echo "=== Starting new container ==="
             docker run -d \
