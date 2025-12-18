@@ -4,26 +4,35 @@
 
 - `derp/`: Main package (entrypoint `__main__.py`).
 - `derp/handlers/`, `derp/middlewares/`, `derp/filters/`: Telegram logic split by concern. Add new handlers under `derp/handlers/` and include their router in `derp/__main__.py`.
-- `derp/common/`: Shared services (DB, utils, LLM integration).
-- `derp/queries/`: Generated EdgeQL/Gel query helpers. Update via codegen when schema changes.
+- `derp/common/`: Shared services (utils, LLM integration, Telegram helpers).
+- `derp/db/`: Database module (session management, queries).
+- `derp/models/`: SQLAlchemy models (User, Chat, Message).
 - `derp/locales/`: i18n sources (`.po/.pot`) and compiled `.mo` files.
-- `tests/`: Pytest suite (async-friendly).
-- `scripts/`: Utilities for i18n and Gel codegen.
-- `dbschema/`: Gel database schema and migrations.
+- `tests/`: Pytest suite (async-friendly, real database integration).
+- `migrations/`: Alembic migrations (generated via `make db-revision`).
 
 ## Build, Test, and Development Commands
+
+Always run commands instead of creating generated files manually. If Docker/database is unavailable, leave a TODO or ask the user to run the command.
 
 - Bootstrap env: `make venv` (creates `.venv` and syncs deps quietly)
 - Install deps: `make install` (runs `uv sync`)
 - Run bot locally: `make run`
 - Lint: `make lint` (Ruff)
 - Format: `make format` (Ruff format)
-- Tests: `make test` (quiet) or `make test-verbose`
+- Tests: `make test` (quick, no DB) or `make test-all` (with PostgreSQL)
+- Database tests: `make test-db` (requires Docker)
+- Coverage: `make test-cov` (generates HTML report)
 - i18n: `make i18n` (extract → update → compile)
   - Subcommands: `make i18n-extract`, `make i18n-update`, `make i18n-compile`
   - Init new locale: `make i18n-init LOCALE=fr`
-- Gel codegen: `make gel-codegen`
+- Database migrations:
+  - Generate: `make db-revision MSG="add new table"` (**never create manually**)
+  - Apply: `make db-migrate`
+  - Status: `make db-status`
+  - Rollback: `make db-downgrade`
 - Docker: `make docker-up` (build/start) and `make docker-down` (stop)
+- Development setup: `make dev-setup` (venv + db + migrations)
 - Help: `make help` (lists available targets)
 
 ## Coding Style & Naming Conventions
@@ -36,220 +45,65 @@
 
 ## Code Quality Principles
 
-- Implement the smallest coherent slice and optimize for safe change.
-- Optimize for reader time: make intent obvious, minimize accidental complexity, and enable local reasoning.
-- Use the team’s domain language for names; keep consistent conventions so style never competes with substance.
-- Make illegal states unrepresentable via types and invariants in data models.
-- Keep side effects at the edges; keep core logic pure and testable.
-- Prefer small, cohesive, loosely coupled functions/modules with sharp interfaces and clear pre/post-conditions.
-- Isolate boilerplate and hidden complexity behind sharp interfaces; document assumptions and invariants briefly in docstrings or comments.
-- Errors: be explicit; fail fast on programmer mistakes, degrade gracefully on environmental failures.
-- Observability is built-in: add appropriate logs/metrics/traces where behavior may surprise.
-- Abstractions are earned (after real repetition), not speculative; prefer duplication over premature abstraction.
-- Tests read like executable examples of behavior (not implementation details); measure performance instead of guessing.
-- Code should be easy to change or delete tomorrow without fear.
-- Avoid broad refactors without a concrete migration plan.
+- **Reader-first:** Make intent obvious; enable local reasoning; minimize accidental complexity.
+- **Illegal states unrepresentable:** Use types and invariants in data models.
+- **Effects at edges:** Keep core logic pure; side effects in handlers/middlewares.
+- **Sharp interfaces:** Small, cohesive modules with clear pre/post-conditions.
+- **Fail fast:** Explicit errors for programmer mistakes; degrade gracefully for environmental failures.
+- **Observability built-in:** Log decision points with structured key-value pairs.
+- **Abstractions earned:** Prefer duplication over premature abstraction; extract after 3+ repetitions.
 
-## Python Examples
-
-Each maps to optimizing reader time, safe change, and hiding complexity at the edges.
-
-1. Guard clauses (early returns) over pyramids — keep the happy path flat
+### Key Patterns
 
 ```python
+# Guard clauses over pyramids
 def load_user(uid: str) -> User:
-    if not uid:
-        raise ValueError("uid required")
+    if not uid: raise ValueError("uid required")
     user = repo.get(uid)
-    if user is None:
-        raise NotFound(uid)
+    if user is None: raise NotFound(uid)
     return user
-```
 
-2. Functional core, imperative shell — pure logic inside, effects at boundaries
-
-```python
+# Functional core, imperative shell
 def price_after_discounts(items: list[Item]) -> Money:  # pure
     return sum(apply_discounts(i) for i in items)
 
-def checkout(cart_id: str, clock: Clock, payments: Payments):  # effects
-    items = repo.load(cart_id)
-    total = price_after_discounts(items)
-    payments.charge(total, at=clock.now())
-```
-
-3. Make illegal states unrepresentable — types + invariants
-
-```python
-from dataclasses import dataclass
-from typing import NewType, Literal
-Currency = Literal["GBP","EUR","USD"]
-UserId = NewType("UserId", str)
-
-@dataclass(frozen=True)
-class Money:
-    amount: int  # cents
-    currency: Currency
-    def __post_init__(self):
-        if self.amount < 0: raise ValueError("amount >= 0")
-```
-
-4. Protocol-based dependency inversion — depend on Protocols, not concrete classes
-
-```python
-from typing import Protocol
-
-class Payments(Protocol):
-    def charge(self, amount: Money, at: datetime) -> None: ...
-
-def checkout(total: Money, payments: Payments):  # depends on protocol
-    payments.charge(total, at=datetime.now(tz=UTC))
-```
-
-5. Command–Query separation — functions either do or calculate
-
-```python
+# Command-Query separation
 def calculate_quote(cart: Cart) -> Money  # query
 def submit_order(cart_id: str) -> OrderId  # command
+
+# Structured logging
+logfire.info("checkout", cart_id=cart_id, total=total.amount)
 ```
 
-6. Tell, don’t ask — push logic into the type that owns the data
+### Smells to Avoid
 
-```python
-@dataclass
-class Subscription:
-    expires_at: datetime
-    def is_active(self, now: datetime) -> bool: return now < self.expires_at
-```
-
-7. Narrow, explicit errors; fail fast vs. degrade gracefully
-
-```python
-class NotFound(RuntimeError): pass
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential())
-def fetch_profile(uid: UserId, http: Http) -> Profile: ...
-```
-
-8. Context managers for resource lifetimes — make setup/teardown obvious
-
-```python
-from contextlib import contextmanager
-@contextmanager
-def txn(db):
-    try:
-        db.begin(); yield
-        db.commit()
-    except:
-        db.rollback(); raise
-```
-
-9. Structured logging at decision points — key-value over prose
-
-```python
-log.info("checkout", cart_id=cart_id, total=total.amount, currency=total.currency)
-```
-
-10. Prefer duplication over premature abstraction — extract after repetition
-
-```python
-# after 3 near-identical validators, extract:
-def require(condition: bool, *, msg: str) -> None:
-    if not condition: raise ValueError(msg)
-```
-
-11. Small modules, stable interfaces — hide helpers, export the surface
-
-```python
-__all__ = ["calculate_quote", "submit_order"]
-```
-
-12. Data pipelines as iterators/generators — stream, keep state local
-
-```python
-def read_csv(path: Path) -> Iterable[Row]:
-    with path.open() as f:
-        yield from csv.DictReader(f)
-
-def transform(rows: Iterable[Row]) -> Iterable[Record]:
-    for r in rows:
-        if is_valid(r):
-            yield normalize(r)
-```
-
-13. Type hints everywhere, but pragmatic — annotate boundaries meticulously
-
-```python
-def parse_iso(dt: str) -> datetime: ...
-```
-
-14. Idempotent, timeout-bounded I/O — safer retries and operability
-
-```python
-def put_event(evt: Event, *, timeout: float = 2.0, idempotency_key: str | None = None) -> None: ...
-```
-
-15. Caching with explicit invalidation — localize performance tweaks
-
-```python
-@lru_cache(maxsize=1024)
-def country_by_ip(ip: str) -> str: ...
-```
-
-16. Pattern matching for discriminated unions — clearer branching
-
-```python
-match payment:
-    case Card(number=_, cvv=_):
-        ...
-    case BankTransfer(iban=_):
-        ...
-```
-
-17. Testing as executable spec — assert behavior, not calls
-
-```python
-def test_checkout_declines_on_expired_card(...): ...
-```
-
-## Smells To Stamp Out
-
-- Deep nesting / long boolean expressions → prefer guard clauses, extract functions.
-- “Util” god-modules / helpers catch-alls → define per-domain modules.
-- Dictionaries as ad-hoc objects → use `dataclass`/`NamedTuple`/`TypedDict` with invariants.
-- Boolean arguments (e.g., `send_email=True`) → prefer explicit functions or `Enum`.
-- Implicit global state/singletons → inject dependencies; consider `contextvars` for request scope.
-- Inheritance for reuse → prefer composition; reserve subclassing for real polymorphism.
-- Silent exception swallowing → log with context; re-raise domain errors.
-
-## Summary
-
-- Use guard clauses; keep the happy path flat.
-- Keep pure logic separate from side-effects; effects live at edges.
-- Encode invariants with types; depend on Protocols; apply CQS and Tell/Don’t Ask.
-- Handle errors with domain exceptions, timeouts, bounded retries; log decisions with structured logs.
-- Extract abstractions only after repetition; keep interfaces sharp and small.
-- Prefer iterators/generators for data flow; keep modules tiny with explicit exports.
-- Write tests that read like examples; avoid mocking pure functions.
+- Deep nesting → guard clauses
+- "Util" god-modules → per-domain modules
+- Dicts as objects → `dataclass`/`TypedDict`
+- Boolean args → explicit functions or `Enum`
+- Silent exception swallowing → log + re-raise
 
 ## Testing Guidelines
 
 - Frameworks: `pytest`, `pytest-asyncio`.
 - Name tests `tests/test_*.py`; use async tests for coroutine code.
-- Aim to cover filters, handlers’ pure logic, and utilities; stub Telegram objects with `MagicMock`.
-- Run locally with `uv run pytest -v`.
+- Database tests use real PostgreSQL via Docker (`make test-db`).
+- Use `db_session` fixture for tests with automatic transaction rollback.
+- Use factory fixtures (`user_factory`, `chat_factory`, `message_factory`) to create test data.
+- Aim to cover filters, handlers' pure logic, database queries, and utilities.
+- Run locally with `uv run pytest -v` or `make test`.
 
 ## Commit & Pull Request Guidelines
 
 - Use Conventional Commits where possible: `feat:`, `fix:`, `chore:`, `refactor:`, etc. Example: `fix: streamline reply handling`.
 - PRs: include what/why, linked issues, and screenshots/log snippets if behavior changes.
-- Requirements: passing CI (Ruff + tests), updated docs/i18n/queries when applicable.
+- Requirements: passing CI (Ruff + tests), updated docs/i18n/migrations when applicable.
 - PR description should briefly justify key design trade-offs, list known limitations, and explain how to delete or extend the change later.
 
 ## Security & Configuration
 
 - Do not commit secrets. Use `env.example` to populate `.env`/`.env.prod`.
-- Required env: Telegram token, Gel DSN/secret, OpenAI/Google/OpenRouter keys, `LOGFIRE_TOKEN`, `ENVIRONMENT`.
+- Required env: Telegram token, `DATABASE_URL`, OpenAI/Google/OpenRouter keys, `LOGFIRE_TOKEN`, `ENVIRONMENT`.
 - Production containers run non‑root; prefer read‑only FS and minimal privileges.
 
 ## Architecture Overview
@@ -262,8 +116,9 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
   - `derp/handlers/*`: message/inline/media logic.
   - `derp/middlewares/*`: cross‑cutting concerns (logging, DB persistence, event context, chat settings, throttling helper).
   - `derp/filters/*`: input shaping (mentions, meta command/hashtag parser).
-  - `derp/common/*`: shared services (DB, LLM, extraction, executors, Telegram helpers).
-  - `derp/queries/*`: Gel (EdgeDB) async query helpers (generated).
+  - `derp/common/*`: shared services (LLM, extraction, executors, Telegram helpers).
+  - `derp/db/*`: database session and query functions.
+  - `derp/models/*`: SQLAlchemy models (User, Chat, Message).
   - `derp/locales/*`: i18n resources and compiled catalogs.
 
 ## Event Handling & Middlewares
@@ -271,11 +126,11 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 - **Routers:** Registered in `derp/__main__.py` via `dp.include_routers(...)` in this order: `basic`, `chat_settings`, `gemini_image`, `gemini_inline`, then catch‑all `gemini` last.
 - **Outer middlewares:**
   - `LogUpdatesMiddleware`: formats and logs each `Update` with elapsed ms.
-  - `DatabaseLoggerMiddleware`: asynchronously upserts user/chat + inserts BotUpdate in Gel on every update; marks `handled=True` if a handler processed it. Exposes `db_task` in `data` to avoid races when handlers also persist.
+  - `DatabaseLoggerMiddleware`: upserts user/chat and projects messages to the messages table.
 - **Inner middlewares:**
   - `EventContextMiddleware`: injects `bot`, `db`, and derived `user`, `chat`, `thread_id`, `business_connection_id` into handler `data`.
   - `ChatActionMiddleware`: shows typing/upload actions for long‑running handlers.
-  - `ChatSettingsMiddleware`: loads per‑chat settings from Gel and adds `chat_settings` to `data`.
+  - `ChatSettingsMiddleware`: loads per‑chat settings (including `llm_memory`) and adds `chat_settings` to `data`.
   - `ThrottleUsersMiddleware` (available): prevents concurrent handling per user; not enabled by default.
 
 ## LLM Integration (Gemini)
@@ -288,18 +143,25 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 - **Function Calling:** Responses with `function_calls` are iteratively executed by `_FunctionCallHandler` (max 3 hops), feeding results back into `generate_content`.
 - **Result Shape:** `GeminiResult` extracts `text_parts`, `code_blocks`, `execution_results`, and inline `images` to simplify Telegram replies.
 - **Handlers:**
-  - `derp/handlers/gemini.py`: main chat handler. Triggers on `/derp`, private chats, replies to the bot, or `DerpMentionFilter`. Builds context from recent updates (`queries/select_active_updates_async_edgeql.py`) and optional chat memory, attaches media extracted by `derp/common/extractor.py`, executes Gemini, and replies with text/images. Stores bot responses back to DB.
-  - `derp/handlers/gemini_image.py`: premium image generation/editing using `gemini-2.5-flash-image-preview`; supports media groups and caption fallback.
+  - `derp/handlers/gemini.py`: main chat handler. Triggers on `/derp`, private chats, replies to the bot, or `DerpMentionFilter`. Builds context from recent messages and optional chat memory, attaches media, executes Gemini, and replies.
+  - `derp/handlers/gemini_image.py`: premium image generation/editing using `gemini-2.5-flash-image-preview`.
   - `derp/handlers/gemini_inline.py`: inline mode, returns placeholder first, then edits with model output.
 - **Tools & Memory:**
   - Lightweight tool system in `derp/common/llm_gemini.py` for native Gemini function calling.
-  - Chat memory update tools in `derp/tools/memory.py` (native wrapper) and `derp/tools/chat_memory.py` (PydanticAI style). The memory is stored in Gel via `update_chat_settings_async_edgeql.py` and capped at 1024 chars.
+  - Chat memory update tools in `derp/tools/memory.py` and `derp/tools/chat_memory.py`. Memory is stored in the `chats.llm_memory` column, capped at 1024 chars.
 
-## Data & Persistence (Gel)
+## Data & Persistence (PostgreSQL + SQLAlchemy)
 
-- **Client:** `derp/common/database.py` encapsulates a singleton `AsyncIOClient` with transaction and retry options. Use `get_executor()` to run queries.
-- **Write Path:** `DatabaseLoggerMiddleware` calls `create_bot_update_with_upserts(... )` to upsert `telegram::User/Chat` and insert `BotUpdate` per update. After handler completion, `update_bot_update_handled_status` marks processed updates.
-- **Queries:** Code‑generated async helpers live in `derp/queries/*_async_edgeql.py`. Regenerate with `make gel-codegen` when schemas in `dbschema/` change.
+- **Session Management:** `derp/db/session.py` provides `DatabaseManager` with async session context managers.
+- **Models:** `derp/models/` contains SQLAlchemy 2.0 models:
+  - `User`: Telegram users with computed `full_name`, `display_name` properties.
+  - `Chat`: Chats with `llm_memory` for LLM context, computed `display_name`.
+  - `Message`: Conversation history for LLM context building, with `is_deleted` property.
+- **Queries:** `derp/db/queries.py` contains typed async query functions:
+  - `upsert_user`, `upsert_chat`, `upsert_message`: idempotent creates/updates.
+  - `get_recent_messages`: returns messages in chronological order for LLM context.
+  - `update_chat_memory`: sets/clears chat memory.
+- **Migrations:** Alembic migrations in `migrations/versions/`. Generate with `make db-revision MSG="..."`.
 
 ## Media & Extraction
 
@@ -314,7 +176,7 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 ## Configuration & i18n
 
 - **Settings:** `derp/config.py` uses `pydantic-settings` to load `.env` and `.env.prod`, with helpers for rotating Google API keys and deriving `bot_id`.
-- **i18n:** `aiogram.utils.i18n` with catalogs under `derp/locales`. Use `make i18n` to extract/update/compile; `SimpleI18nMiddleware` installs runtime translation.
+- **i18n:** `aiogram.utils.i18n` with catalogs under `derp/locales`. Use `make i18n` to extract/update/compile; `SimpleI18nMiddleware` installs runtime translation. Never manually edit `.mo` files—always generate them via `make i18n-compile`.
 
 ## Observability & Resilience
 
@@ -327,14 +189,17 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 - Direct fields: aiogram types are Pydantic models; access fields directly (they exist and may be `None`), avoid `getattr(..., "field", None)` for defined attributes.
 - Short-circuit idioms: prefer concise patterns for optionals like `user and user.id` and `user and user.username or ""`.
 - Logging: instrument decision points with `logfire` and include identifiers (chat_id, user_id, payload) for traceability.
-- Resilience: wrap network sends in try/except, degrade gracefully (e.g., fall back from media to text), and ensure auxiliary failures don’t impact the core user flow.
+- Resilience: wrap network sends in try/except, degrade gracefully (e.g., fall back from media to text), and ensure auxiliary failures don't impact the core user flow.
 - Comments: keep comments purposeful (document intent/invariants); avoid restating obvious behavior that the code already conveys.
 
 ## Major Libraries
 
+When generating code, setting up configuration, or needing API documentation for any of these libraries, use the Context7 MCP tools (`resolve-library-id` and `get-library-docs`) automatically to get up-to-date references.
+
 - **aiogram 3.x:** Telegram bot framework (routers, middleware, filters, FSM, i18n).
 - **google-genai:** Native Gemini client (generate content, tools, search, URL context).
-- **gel 3.x:** EdgeDB/Gel async client with codegen helpers.
+- **SQLAlchemy 2.x + asyncpg:** Async PostgreSQL ORM with typed models.
+- **Alembic:** Database migrations.
 - **logfire 4.x:** Structured logging, metrics, instrumentation.
 - **pydantic 2.x + pydantic-settings:** Config and validation.
 - **throttler:** Concurrency control for executors.
@@ -349,5 +214,17 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
   - Import and add the router in `derp/__main__.py` via `dp.include_routers(...)` in the right order.
 - **Add a middleware:** Implement `BaseMiddleware` (or `UserContextMiddleware`) in `derp/middlewares/` and register as outer or inner depending on concern.
 - **Add a filter:** Place in `derp/filters/` and use in router decorators.
-- **Add a Gel query:** Create/modify EdgeQL in `derp/queries/*.edgeql` or `dbschema/`, then run `make gel-codegen`.
+- **Add a database migration:** Run `make db-revision MSG="description"` (**never create migration files manually**).
+- **Add a model:** Create in `derp/models/`, add to `derp/models/__init__.py`, generate migration.
+- **Add a query:** Add function to `derp/db/queries.py`, add tests in `tests/test_db_queries.py`.
 - **Add a tool for Gemini:** Write a function with docstring and type hints; register via `GeminiRequestBuilder.with_tool(func, deps)` to expose it for function calls.
+
+---
+
+## Maintaining This Document
+
+When updating AGENTS.md:
+- **Integrate, don't prepend.** New information should be added to the appropriate existing section, not stacked at the top.
+- **Critical Rules** are reserved for hard constraints (things that break the build or corrupt state if violated).
+- **Keep sections cohesive.** If a new topic doesn't fit anywhere, consider whether it's substantial enough to warrant its own section or can be folded into an existing one.
+- **Prefer brevity.** One-liners in the right place beat a new paragraph at the top.

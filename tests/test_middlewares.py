@@ -187,35 +187,39 @@ class TestChatSettingsMiddleware:
     """Tests for ChatSettingsMiddleware."""
 
     @pytest.fixture
-    def mock_gel_db(self):
-        """Create a mock Gel database executor."""
+    def mock_db_manager(self):
+        """Create a mock DatabaseManager with both session types."""
         db = MagicMock()
-        executor = AsyncMock()
-        db.get_executor.return_value.__aenter__.return_value = executor
-        db.get_executor.return_value.__aexit__.return_value = None
-        return db, executor
+        session = AsyncMock()
+        # Mock both session() and read_session() to return the same session
+        db.session.return_value.__aenter__.return_value = session
+        db.session.return_value.__aexit__.return_value = None
+        db.read_session.return_value.__aenter__.return_value = session
+        db.read_session.return_value.__aexit__.return_value = None
+        return db, session
 
     @pytest.fixture
-    def middleware(self, mock_gel_db):
+    def middleware(self, mock_db_manager):
         """Create middleware instance with mock database."""
-        db, _ = mock_gel_db
+        db, _ = mock_db_manager
         return ChatSettingsMiddleware(db=db)
 
     @pytest.mark.asyncio
     async def test_injects_chat_settings_when_chat_present(
-        self, middleware, mock_gel_db, make_chat
+        self, middleware, mock_db_manager, make_chat
     ):
         """Should load and inject chat settings when chat is present."""
         from aiogram.dispatcher.middlewares.user_context import EVENT_CHAT_KEY
 
-        _, executor = mock_gel_db
+        _, session = mock_db_manager
         chat = make_chat(id=-100123)
 
-        # Mock the chat_settings query
-        mock_settings = {"chat_id": -100123, "some_setting": "value"}
+        # Mock the get_chat_settings query
+        mock_settings = MagicMock()
+        mock_settings.llm_memory = "test memory"
 
         with patch(
-            "derp.middlewares.chat_settings.chat_settings",
+            "derp.middlewares.chat_settings.get_chat_settings",
             new=AsyncMock(return_value=mock_settings),
         ) as mock_query:
             handler = AsyncMock()
@@ -224,8 +228,8 @@ class TestChatSettingsMiddleware:
 
             await middleware(handler, event, data)
 
-            # Should call chat_settings query
-            mock_query.assert_awaited_once_with(executor, chat_id=chat.id)
+            # Should call get_chat_settings query
+            mock_query.assert_awaited_once_with(session, telegram_id=chat.id)
 
             # Should inject chat_settings into data
             assert "chat_settings" in data
@@ -251,15 +255,15 @@ class TestChatSettingsMiddleware:
 
     @pytest.mark.asyncio
     async def test_handles_query_exception_gracefully(
-        self, middleware, mock_gel_db, make_chat
+        self, middleware, mock_db_manager, make_chat
     ):
-        """Should handle exceptions during chat_settings query."""
+        """Should handle exceptions during get_chat_settings query."""
         from aiogram.dispatcher.middlewares.user_context import EVENT_CHAT_KEY
 
         chat = make_chat(id=-100123)
 
         with patch(
-            "derp.middlewares.chat_settings.chat_settings",
+            "derp.middlewares.chat_settings.get_chat_settings",
             new=AsyncMock(side_effect=Exception("Database error")),
         ):
             with patch(
@@ -285,16 +289,15 @@ class TestChatSettingsMiddleware:
                 handler.assert_awaited_once_with(event, data)
 
     @pytest.mark.asyncio
-    async def test_returns_handler_result(self, middleware, mock_gel_db, make_chat):
+    async def test_returns_handler_result(self, middleware, mock_db_manager, make_chat):
         """Should return handler's return value."""
         from aiogram.dispatcher.middlewares.user_context import EVENT_CHAT_KEY
 
-        _, executor = mock_gel_db
         chat = make_chat(id=-100123)
 
         with patch(
-            "derp.middlewares.chat_settings.chat_settings",
-            new=AsyncMock(return_value={}),
+            "derp.middlewares.chat_settings.get_chat_settings",
+            new=AsyncMock(return_value=None),
         ):
             handler = AsyncMock(return_value="handler_return")
             event = MagicMock()
@@ -306,18 +309,19 @@ class TestChatSettingsMiddleware:
 
     @pytest.mark.asyncio
     async def test_private_chat_loads_settings(
-        self, middleware, mock_gel_db, make_chat
+        self, middleware, mock_db_manager, make_chat
     ):
         """Should load settings for private chats too."""
         from aiogram.dispatcher.middlewares.user_context import EVENT_CHAT_KEY
 
-        _, executor = mock_gel_db
+        _, session = mock_db_manager
         chat = make_chat(id=12345, type="private")
 
-        mock_settings = {"chat_id": 12345, "private": True}
+        mock_settings = MagicMock()
+        mock_settings.llm_memory = "private memory"
 
         with patch(
-            "derp.middlewares.chat_settings.chat_settings",
+            "derp.middlewares.chat_settings.get_chat_settings",
             new=AsyncMock(return_value=mock_settings),
         ) as mock_query:
             handler = AsyncMock()
@@ -327,23 +331,26 @@ class TestChatSettingsMiddleware:
             await middleware(handler, event, data)
 
             # Should load settings even for private chats
-            mock_query.assert_awaited_once_with(executor, chat_id=12345)
+            mock_query.assert_awaited_once_with(session, telegram_id=12345)
             assert data["chat_settings"] == mock_settings
 
     @pytest.mark.asyncio
-    async def test_multiple_calls_independent(self, middleware, mock_gel_db, make_chat):
+    async def test_multiple_calls_independent(
+        self, middleware, mock_db_manager, make_chat
+    ):
         """Each middleware call should be independent."""
         from aiogram.dispatcher.middlewares.user_context import EVENT_CHAT_KEY
 
-        _, executor = mock_gel_db
         chat1 = make_chat(id=-100111)
         chat2 = make_chat(id=-100222)
 
-        settings1 = {"chat_id": -100111, "setting": "value1"}
-        settings2 = {"chat_id": -100222, "setting": "value2"}
+        settings1 = MagicMock()
+        settings1.llm_memory = "memory1"
+        settings2 = MagicMock()
+        settings2.llm_memory = "memory2"
 
         with patch(
-            "derp.middlewares.chat_settings.chat_settings",
+            "derp.middlewares.chat_settings.get_chat_settings",
             new=AsyncMock(side_effect=[settings1, settings2]),
         ) as mock_query:
             handler = AsyncMock()

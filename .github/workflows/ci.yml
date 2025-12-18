@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  PYTHON_VERSION: "3.13"
+  DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/derp_test"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: derp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run database migrations
+        run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+
+      - name: Run tests with coverage
+        run: uv run pytest -v --cov=derp --cov-report=term-missing
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          ENVIRONMENT: dev
+          TELEGRAM_BOT_TOKEN: "123456:TEST_TOKEN_FOR_TESTING"
+          DEFAULT_LLM_MODEL: "gemini-2.0-flash"
+          OPENAI_API_KEY: "test_key"
+          GOOGLE_API_KEY: "test_key"
+          GOOGLE_API_EXTRA_KEYS: "test_key2"
+          GOOGLE_API_PAID_KEY: "test_key"
+          OPENROUTER_API_KEY: "test_key"
+          LOGFIRE_TOKEN: "test_token"
+          LOGFIRE_IGNORE_NO_CONFIG: "1"
+

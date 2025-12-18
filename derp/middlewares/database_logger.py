@@ -1,22 +1,26 @@
-"""Aiogram middleware for logging updates to Gel database."""
+"""Aiogram middleware for logging updates to PostgreSQL database."""
 
 from collections.abc import Awaitable, Callable
 from typing import Any
-from uuid import UUID
 
 import logfire
 from aiogram import BaseMiddleware
-from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.types import TelegramObject, Update
 
-from ..common.database import DatabaseClient
-from ..common.message_log import upsert_message_from_update
-from ..common.tg import decompose_update
-from ..common.update_context import UpdateContext, update_ctx
+from derp.common.message_log import upsert_message_from_update
+from derp.common.tg import decompose_update
+from derp.common.update_context import UpdateContext, update_ctx
+from derp.db import DatabaseManager, upsert_chat, upsert_user
 
 
 class DatabaseLoggerMiddleware(BaseMiddleware):
-    def __init__(self, db: DatabaseClient):
+    """Middleware that logs incoming Telegram updates to the database.
+
+    Upserts user and chat records, then projects the message to the
+    messages table for LLM context building.
+    """
+
+    def __init__(self, db: DatabaseManager):
         self.db = db
 
     async def __call__(
@@ -30,26 +34,52 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
 
         update_type = event.event_type
 
+        # Skip inline queries (no message context)
         if update_type == "inline_query":
             return await handler(event, data)
 
-        raw_data = event.model_dump(
-            exclude_unset=True, exclude_defaults=True, exclude_none=True
-        )
         _, user, sender_chat, chat, _ = decompose_update(event)
 
-        # Insert BotUpdate immediately so Chat/User exist for projections
-        bot_update_id: UUID = await self.db.create_bot_update_with_upserts(
-            update_id=event.update_id,
-            update_type=update_type,
-            raw_data=raw_data,
-            user=user,
-            chat=chat,
-            sender_chat=sender_chat,
-            handled=False,
-        )
+        # Upsert user and chat records
+        async with self.db.session() as session:
+            if user:
+                await upsert_user(
+                    session,
+                    telegram_id=user.id,
+                    is_bot=user.is_bot,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                    username=user.username,
+                    language_code=user.language_code,
+                    is_premium=user.is_premium or False,
+                )
 
-        # Expose correlation context to downstream (e.g., API session middleware)
+            if chat:
+                await upsert_chat(
+                    session,
+                    telegram_id=chat.id,
+                    chat_type=chat.type,
+                    title=chat.title,
+                    username=chat.username,
+                    first_name=chat.first_name,
+                    last_name=chat.last_name,
+                    is_forum=chat.is_forum or False,
+                )
+
+            # Also upsert sender_chat if different from chat (e.g., channel posts)
+            if sender_chat and (not chat or sender_chat.id != chat.id):
+                await upsert_chat(
+                    session,
+                    telegram_id=sender_chat.id,
+                    chat_type=sender_chat.type,
+                    title=sender_chat.title,
+                    username=sender_chat.username,
+                    first_name=sender_chat.first_name,
+                    last_name=sender_chat.last_name,
+                    is_forum=sender_chat.is_forum or False,
+                )
+
+        # Expose correlation context for downstream (e.g., API session middleware)
         token = update_ctx.set(
             UpdateContext(
                 update_id=event.update_id,
@@ -59,14 +89,13 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
             )
         )
 
-        # Project inbound message to MessageLog BEFORE handler to allow context reads
+        # Project inbound message to messages table BEFORE handler for context reads
         try:
-            async with self.db.get_executor() as executor:
-                await upsert_message_from_update(executor, update=event, direction="in")
+            await upsert_message_from_update(self.db, update=event, direction="in")
         except Exception as exc:
             logfire.warning("persist_inbound_failed", _exc_info=exc)
 
-        # Execute the handler with Logfire baggage for correlation across spans/logs
+        # Execute the handler with Logfire baggage for correlation
         try:
             baggage: dict[str, str] = {"update_id": str(event.update_id)}
             if chat and chat.id is not None:
@@ -77,14 +106,7 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
             with logfire.set_baggage(**baggage):
                 response = await handler(event, data)
         finally:
-            # Clear context to avoid leaks to unrelated tasks
+            # Clear context to avoid leaks
             update_ctx.reset(token)
-
-        # Update the handled status based on whether the response was handled
-        if response is not UNHANDLED:
-            await self.db.update_bot_update_handled_status(
-                bot_update_id=bot_update_id,
-                handled=True,
-            )
 
         return response

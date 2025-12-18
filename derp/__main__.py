@@ -11,9 +11,9 @@ from aiogram.utils.chat_action import ChatActionMiddleware
 from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
-from .common.database import get_database_client
-from .config import settings
-from .handlers import (
+from derp.config import settings
+from derp.db import init_db_manager
+from derp.handlers import (
     basic,
     chat_settings,
     donations,
@@ -21,11 +21,11 @@ from .handlers import (
     gemini_image,
     gemini_inline,
 )
-from .middlewares.api_persist import PersistBotActionsMiddleware
-from .middlewares.chat_settings import ChatSettingsMiddleware
-from .middlewares.database_logger import DatabaseLoggerMiddleware
-from .middlewares.event_context import EventContextMiddleware
-from .middlewares.log_updates import LogUpdatesMiddleware
+from derp.middlewares.api_persist import PersistBotActionsMiddleware
+from derp.middlewares.chat_settings import ChatSettingsMiddleware
+from derp.middlewares.database_logger import DatabaseLoggerMiddleware
+from derp.middlewares.event_context import EventContextMiddleware
+from derp.middlewares.log_updates import LogUpdatesMiddleware
 
 # Configure logfire with basic settings
 logfire.configure(
@@ -77,10 +77,14 @@ async def main():
     i18n = I18n(path="derp/locales", default_locale="en", domain="messages")
     SimpleI18nMiddleware(i18n).setup(dp)
 
-    # Initialize middlewares
-    db = get_database_client()
+    # Initialize database
+    db = init_db_manager(
+        settings.database_url,
+        echo=settings.environment == "dev",
+    )
+    await db.connect()
 
-    # Persist all outbound API calls to cleaned MessageLog table
+    # Persist all outbound API calls to messages table
     bot.session.middleware(PersistBotActionsMiddleware(db=db))
 
     # Outer middlewares (run before filters)

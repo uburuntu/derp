@@ -9,8 +9,8 @@ import logfire
 from aiogram import html
 from aiogram.types import Message
 
-from ..queries.chat_settings_async_edgeql import ChatSettingsResult
-from ..queries.update_chat_settings_async_edgeql import update_chat_settings
+from derp.db import update_chat_memory
+from derp.models import Chat as ChatModel
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,11 +18,11 @@ class ToolDeps:
     """Dependencies passed to tool functions."""
 
     message: Message
-    chat_settings: ChatSettingsResult | None = None
+    chat_settings: ChatModel | None = None
     db_client: Any | None = None
 
 
-async def update_chat_memory(full_memory: str, deps: ToolDeps) -> str:
+async def update_memory(full_memory: str, deps: ToolDeps) -> str:
     """Save the entire memory state after combining existing memory with new facts.
 
     The memory has a 1024 character limit. Keep it concise and remove less important
@@ -42,10 +42,10 @@ async def update_chat_memory(full_memory: str, deps: ToolDeps) -> str:
             logfire.warning("memory_update_no_db", chat_id=deps.message.chat.id)
             return "Database not available for memory storage"
 
-        async with deps.db_client.get_executor() as executor:
-            await update_chat_settings(
-                executor,
-                chat_id=deps.message.chat.id,
+        async with deps.db_client.session() as session:
+            await update_chat_memory(
+                session,
+                telegram_id=deps.message.chat.id,
                 llm_memory=full_memory.strip(),
             )
 
