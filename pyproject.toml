@@ -29,7 +29,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-asyncio_default_fixture_loop_scope = "session"
+asyncio_mode = "auto"
 
 [tool.ruff]
 extend-exclude = [
