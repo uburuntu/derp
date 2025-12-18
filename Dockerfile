@@ -33,6 +33,10 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 # Copy application code
 COPY --from=builder --chown=app:app /app/derp /app/derp
 
+# Copy alembic config and migrations for database upgrades
+COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini
+COPY --from=builder --chown=app:app /app/migrations /app/migrations
+
 # Create non-root user for security
 RUN groupadd --gid=1000 app && \
     useradd --uid=1000 --gid=app --shell=/bin/bash --create-home app

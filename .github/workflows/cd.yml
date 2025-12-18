@@ -141,7 +141,7 @@ jobs:
             docker run --rm \
               --env-file /opt/derp/.env.prod \
               "$IMAGE" \
-              uv run alembic upgrade head
+              alembic upgrade head
             
             # Start new container (old one is FULLY stopped now)
             echo "=== Starting new container ==="
