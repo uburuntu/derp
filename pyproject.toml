@@ -3,7 +3,7 @@ name = "derp"
 version = "0.1.0"
 description = "AI-powered friendly Telegram bot"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "aiocache==0.12.3",
     "aiogram[fast,i18n,redis]==3.22.0",
@@ -12,7 +12,7 @@ dependencies = [
     "asyncpg>=0.30.0",
     "babel==2.17.0",
     "google-genai==1.38.0",
-    "logfire[aiohttp,httpx,system-metrics]==4.7.0",
+    "logfire[aiohttp,google-genai,httpx,system-metrics]>=4.7.0",
     "pydantic==2.11.9",
     "pydantic-settings==2.10.1",
     "sqlalchemy[asyncio]>=2.0.40",
