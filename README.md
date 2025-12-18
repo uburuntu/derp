@@ -1,76 +1,37 @@
-# Derp Telegram Bot
+# Derp
 
-AI-powered friendly Telegram bot built with aiogram.
-
-## Quick Start
-
-### Development
-
-```bash
-# Create venv and sync deps (silent)
-make venv
-
-# Activate virtual environment
-source .venv/bin/activate
-
-# Copy environment file and configure
-cp env.example .env
-# Edit .env with your actual values
-
-# Run the bot
-make run
-
-# Lint and format (all three are synonyms)
-make lint
-make format
-make f
-
-# Run tests
-make test
-```
-
-### Production Deployment
-
-```bash
-# Copy and configure environment
-cp env.example .env
-# Edit .env with production values
-
-# Build and run with Docker
-make docker-up
-# Stop containers
-make docker-down
-```
-
-## Environment Variables
-
-Copy `env.example` to `.env` and configure:
-
-- `TELEGRAM_BOT_TOKEN`: Your Telegram bot token from @BotFather
-- `GEL_INSTANCE`: Your Gel (EdgeDB) database instance URL
-- `GEL_SECRET_KEY`: Your Gel database secret key
-- `OPENAI_API_KEY`: Your OpenAI API key for AI responses
-- `LOGFIRE_TOKEN`: Your Logfire token for logging
-- `ENVIRONMENT`: Set to "dev" or "prod"
-- `IS_DOCKER`: Set to "true" when running in Docker
+AI-powered Telegram bot built with [aiogram](https://github.com/aiogram/aiogram) and [Gemini](https://ai.google.dev/).
 
 ## Requirements
 
-- Python 3.13+
-- uv for dependency management
-- Docker (for production deployment)
-- Gel (EdgeDB) database
-- OpenAI API access
-- Logfire account (for logging)
+- Python 3.14+
+- [uv](https://github.com/astral-sh/uv)
+- Docker (for PostgreSQL)
+- Telegram bot token ([@BotFather](https://t.me/BotFather))
+- Google API key
 
-## Common Make Targets
+## Setup
 
-- install: `uv sync`
-- venv: create/reuse `.venv` and sync deps (quiet)
-- run: `uv run -m derp`
-- lint/format/f: `uv run ruff format .` + `uv run ruff check . --fix`
-- test: `uv run pytest -q`
-- i18n: `make i18n` (extract + update + compile)
-- i18n init: `make i18n-init LOCALE=fr`
-- gel codegen: `make gel-codegen`
-- docker: `make docker-up`, `make docker-down`
+```bash
+cp env.example .env   # Configure your credentials
+make dev-setup        # Creates venv, starts DB, runs migrations
+make run              # Start the bot
+```
+
+## Configuration
+
+Key environment variables in `.env`:
+
+| Variable | Description |
+|----------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `GOOGLE_API_KEY` | Google AI API key |
+| `LOGFIRE_TOKEN` | Logfire observability token |
+| `ENVIRONMENT` | `dev` or `prod` |
+
+See `env.example` for the complete list.
+
+## Commands
+
+Run `make help` to see all available targets.
