@@ -71,6 +71,16 @@ jobs:
         run: uv run alembic upgrade head
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
+          ENVIRONMENT: dev
+          TELEGRAM_BOT_TOKEN: "123456:TEST_TOKEN_FOR_TESTING"
+          DEFAULT_LLM_MODEL: "gemini-flash-latest"
+          OPENAI_API_KEY: "test_key"
+          GOOGLE_API_KEY: "test_key"
+          GOOGLE_API_EXTRA_KEYS: "test_key2"
+          GOOGLE_API_PAID_KEY: "test_key"
+          OPENROUTER_API_KEY: "test_key"
+          LOGFIRE_TOKEN: "test_token"
+          LOGFIRE_IGNORE_NO_CONFIG: "1"
 
       - name: Run tests with coverage
         run: uv run pytest -v --cov=derp --cov-report=term-missing
