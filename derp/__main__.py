@@ -2,9 +2,13 @@
 
 import asyncio
 import logging
+import os
 
 import logfire
 from aiogram import Bot, Dispatcher
+
+# Enable capturing LLM message content in spans
+os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.chat_action import ChatActionMiddleware
@@ -32,8 +36,11 @@ logfire.configure(
     token=settings.logfire_token,
     service_name=settings.app_name,
     environment=settings.environment,
+    metrics=logfire.MetricsOptions(collect_in_spans=True),
 )
 
+# Auto-instrument integrations
+logfire.instrument_google_genai()
 if settings.environment == "dev":
     logfire.instrument_httpx(capture_all=True)
 logfire.instrument_system_metrics()

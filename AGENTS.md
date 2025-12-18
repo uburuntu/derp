@@ -180,9 +180,41 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 
 ## Observability & Resilience
 
-- **Logging/Tracing:** `logfire` is configured with service name and environment. In `dev`, instruments `httpx`. Also instruments system metrics and Pydantic failures. A `LogfireLoggingHandler` bridges stdlib logging.
+- **Logging/Tracing:** `logfire` is configured with service name and environment. In `dev`, instruments `httpx`. Also instruments system metrics, Pydantic failures, and Google GenAI calls. A `LogfireLoggingHandler` bridges stdlib logging.
 - **Backpressure/Throttling:** `ThrottleUsersMiddleware` available to drop concurrent messages per user. For CPU/IO offload with timeouts, see `derp/common/executor.py` (thread/process pools with `ThrottlerSimultaneous` and per‑task timeouts).
 - **Error Handling:** Handlers catch and log exceptions, replying with friendly fallbacks; image pipelines degrade to text if no images are returned.
+
+### Instrumentation Guidelines
+
+**Span placement:**
+- Create spans at semantic boundaries: handler entry, LLM calls, DB queries, external I/O (media downloads).
+- Do NOT span every function. If an operation is fast (<10ms) or has no decision points, skip it.
+- Use `@logfire.instrument()` for standalone functions that warrant tracing; prefer explicit `with logfire.span(...)` in async contexts.
+
+**Auto-instrumentation:**
+- Gemini calls are auto-instrumented via `logfire.instrument_google_genai()`. Do not create manual `genai.generate` spans.
+- Token usage (`gen_ai.usage.*`) and model details are captured automatically; avoid manual tracking.
+- Metrics are aggregated within spans via `MetricsOptions(collect_in_spans=True)`.
+
+**Structured attributes:**
+- Use OpenTelemetry semantic conventions: `gen_ai.*`, `http.*`, `db.*`.
+- Telegram context: `telegram.chat_id`, `telegram.user_id`, `telegram.message_id`.
+- Business metrics: `derp.context_chars`, `derp.context_messages`, `derp.has_media`.
+- Media operations: `media.type`, `media.file_size`, `media.downloaded_bytes`.
+- Database operations: `db.operation`, `db.limit`, `db.rows_returned`.
+
+**Log levels:**
+- `debug`: Dev-only details (context sizes, cache hits). Filtered in production.
+- `info`: Key events and successful operations. Default for spans.
+- `warn`: Recoverable failures (media download failed, fallback used).
+- `error`/`exception`: Failures requiring investigation.
+
+**Anti-patterns:**
+- Avoid logging inside tight loops.
+- Don't log full message content at info level (use debug or omit).
+- Don't create spans for synchronous, fast operations.
+- Never log secrets, tokens, or API keys.
+- Don't duplicate what auto-instrumentation already captures.
 
 ## Telegram/Aiogram Guidelines
 

@@ -131,16 +131,14 @@ async def handle_imagine(message: Message, meta: MetaInfo) -> Message:
         contents = [
             types.Part.from_text(text=prompt),
         ]
-        with logfire.span("genai.generate") as span:
-            span.set_attribute("gen_ai.system", "google")
-            span.set_attribute("gen_ai.request.model", "gemini-2.5-flash-image-preview")
-            response = client.models.generate_content(
-                model="gemini-2.5-flash-image-preview",
-                contents=contents,
-            )
+        # Auto-instrumented via logfire.instrument_google_genai()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-image-preview",
+            contents=contents,
+        )
         return await _send_images(meta.target_message, response)
     except Exception:
-        logfire.exception("Error generating image with Gemini")
+        logfire.exception("imagine_failed")
         return await message.reply(
             _("😅 Something went wrong while generating the image. Try again later.")
         )
@@ -171,16 +169,14 @@ async def handle_edit(message: Message, meta: MetaInfo) -> Message:
             types.Part.from_text(text=prompt),
             types.Part.from_bytes(data=data, mime_type=photo.media_type),
         ]
-        with logfire.span("genai.generate") as span:
-            span.set_attribute("gen_ai.system", "google")
-            span.set_attribute("gen_ai.request.model", "gemini-2.5-flash-image-preview")
-            response = client.models.generate_content(
-                model="gemini-2.5-flash-image-preview",
-                contents=contents,
-            )
+        # Auto-instrumented via logfire.instrument_google_genai()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-image-preview",
+            contents=contents,
+        )
         return await _send_images(meta.target_message, response)
     except Exception:
-        logfire.exception("Error editing image with Gemini")
+        logfire.exception("edit_failed")
         return await message.reply(
             _("😅 Something went wrong while editing the image. Try again later.")
         )

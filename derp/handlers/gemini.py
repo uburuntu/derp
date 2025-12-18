@@ -220,8 +220,8 @@ class GeminiResponseHandler(MessageHandler):
                 return await self.event.reply_photo(
                     photo=input_file, caption="Generated visualization"
                 )
-        except Exception as e:
-            logfire.warning(f"Failed to send generated image: {e}")
+        except Exception:
+            logfire.warning("send_generated_image_failed", _exc_info=True)
             if not reply_to:
                 return await self.event.reply(
                     "📊 Generated a visualization, but couldn't display it."
@@ -232,12 +232,15 @@ class GeminiResponseHandler(MessageHandler):
     async def handle(self) -> Any:
         """Handle messages using Gemini API."""
         try:
-            with logfire.span(
-                "gemini_generate",
-                model=settings.default_llm_model.lower(),
-                chat_id=self.event.chat.id,
-                user_id=self.event.from_user and self.event.from_user.id,
-            ):
+            with logfire.span("gemini_generate") as span:
+                # Set Telegram context using semantic conventions
+                span.set_attribute("telegram.chat_id", self.event.chat.id)
+                span.set_attribute(
+                    "telegram.user_id", self.event.from_user and self.event.from_user.id
+                )
+                span.set_attribute("telegram.message_id", self.event.message_id)
+                span.set_attribute("gen_ai.request.model", settings.default_llm_model)
+
                 # Build request
                 request = (
                     self.gemini.create_request().with_google_search().with_url_context()
@@ -245,27 +248,30 @@ class GeminiResponseHandler(MessageHandler):
 
                 context = await self._generate_context(self.event)
                 request.with_text(context)
-                logfire.debug(
-                    "gemini_context_built",
-                    context_chars=len(context),
-                    recent_messages=context.count('"message_id"'),
-                )
+
+                # Enrich span with context stats
+                context_messages = context.count('"message_id"')
+                span.set_attribute("derp.context_chars", len(context))
+                span.set_attribute("derp.context_messages", context_messages)
 
                 media_parts = await extract_media_for_gemini(self.event)
                 for media in media_parts:
                     request.with_media(media["data"], media["mime_type"])
 
-                logfire.debug("gemini_request_started")
+                span.set_attribute("derp.has_media", len(media_parts) > 0)
+                span.set_attribute("derp.media_count", len(media_parts))
 
-                # Execute request
+                # Execute request (LLM call is auto-instrumented)
                 final_response = await request.execute()
-                logfire.info(
-                    "gemini_response_received",
-                    has_text=bool(final_response.text_parts),
-                    code_blocks=len(final_response.code_blocks),
-                    images=len(final_response.images),
-                    exec_results=len(final_response.execution_results),
+
+                # Enrich span with response stats
+                span.set_attribute(
+                    "derp.response_has_text", bool(final_response.text_parts)
                 )
+                span.set_attribute(
+                    "derp.response_code_blocks", len(final_response.code_blocks)
+                )
+                span.set_attribute("derp.response_images", len(final_response.images))
 
                 # Check if we have any content to send
                 if not final_response.has_content:
@@ -288,7 +294,7 @@ class GeminiResponseHandler(MessageHandler):
                 return sent_message
 
         except Exception:
-            logfire.exception("Error in Gemini response handler")
+            logfire.exception("gemini_handler_failed")
             return await self.event.reply(
                 _(
                     "😅 Something went wrong with Gemini. I couldn't process that message."

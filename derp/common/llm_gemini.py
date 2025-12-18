@@ -123,9 +123,9 @@ class _ToolRegistry:
 
             return str(result)
 
-        except Exception as e:
-            logfire.warning(f"Error executing tool {name}: {e}")
-            return f"Error executing {name}: {str(e)}"
+        except Exception:
+            logfire.warning("tool_execution_failed", tool_name=name, _exc_info=True)
+            return f"Error executing {name}"
 
 
 class _FunctionCallHandler:
@@ -183,13 +183,10 @@ class _FunctionCallHandler:
                 ]
             )
 
-            # Follow-up model call after tool execution (minimal span)
-            with logfire.span("genai.generate") as span:
-                span.set_attribute("gen_ai.system", "google")
-                span.set_attribute("gen_ai.request.model", self.model_name)
-                response = self.client.models.generate_content(
-                    model=self.model_name, contents=contents, config=config
-                )
+            # Follow-up model call after tool execution (auto-instrumented)
+            response = self.client.models.generate_content(
+                model=self.model_name, contents=contents, config=config
+            )
             final_response = response
 
         return final_response
@@ -354,15 +351,12 @@ class GeminiRequestBuilder:
             tools=gemini_tools, system_instruction=system_instruction
         )
 
-        # Primary model call (minimal span)
-        with logfire.span("genai.generate") as span:
-            span.set_attribute("gen_ai.system", "google")
-            span.set_attribute("gen_ai.request.model", self._model_name)
-            response = self.client.models.generate_content(
-                model=self._model_name,
-                contents=contents,
-                config=config,
-            )
+        # Primary model call (auto-instrumented via logfire.instrument_google_genai)
+        response = self.client.models.generate_content(
+            model=self._model_name,
+            contents=contents,
+            config=config,
+        )
 
         if (
             self._tool_registry.declarations

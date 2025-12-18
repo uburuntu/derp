@@ -133,7 +133,7 @@ async def gemini_chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bo
                 inline_message_id=chosen_result.inline_message_id,
             )
     except Exception:
-        logfire.exception("Error in Gemini inline handler")
+        logfire.exception("gemini_inline_handler_failed")
         await bot.edit_message_text(
             _("😅 Something went wrong with Gemini. I couldn't process that."),
             inline_message_id=chosen_result.inline_message_id,

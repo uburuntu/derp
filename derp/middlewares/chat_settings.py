@@ -1,6 +1,5 @@
 """Middleware for loading and injecting chat settings."""
 
-import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -23,7 +22,6 @@ class ChatSettingsMiddleware(BaseMiddleware):
 
     def __init__(self, db: DatabaseManager):
         self.db = db
-        self.logger = logging.getLogger(__name__)
 
     async def __call__(
         self,
