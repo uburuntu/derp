@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-12-19 20:00+0300\n"
+"POT-Creation-Date: 2025-12-19 20:41+0300\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -60,6 +60,8 @@ msgid ""
 "• /buy_chat - Purchase chat pool credits (groups)\n"
 "• /imagine <prompt> - Generate images with AI (premium)\n"
 "• /edit <prompt> - Edit images with AI (premium)\n"
+"• /video [fast|standard] <prompt> - Generate a video with Veo (premium)\n"
+"• /tts <text> - Generate a voice message (premium)\n"
 "• /settings - Show current chat settings\n"
 "• /set_memory <text> - Set LLM memory for this chat\n"
 "• /clear_memory - Clear LLM memory for this chat\n"
@@ -88,7 +90,7 @@ msgstr ""
 "• Use me in private chats\n"
 "• Use inline mode: @DerpRobot <query>"
 
-#: derp/handlers/basic.py:53
+#: derp/handlers/basic.py:55
 msgid ""
 "\n"
 "\n"
@@ -228,7 +230,7 @@ msgid ""
 msgstr ""
 
 #: derp/handlers/credit_cmds.py:232 derp/handlers/image.py:113
-#: derp/handlers/image.py:228
+#: derp/handlers/image.py:228 derp/handlers/tts.py:40 derp/handlers/video.py:51
 msgid "😅 Could not verify your access. Please try again."
 msgstr ""
 
@@ -613,6 +615,47 @@ msgid ""
 "Payment received but an error occurred. Contact support with charge ID: "
 "{charge_id}"
 msgstr ""
+
+#: derp/handlers/tts.py:37
+msgid "Usage: /tts <text>"
+msgstr ""
+
+#: derp/handlers/tts.py:55
+#, python-brace-format
+msgid ""
+"🔊 Voice generation requires credits.\n"
+"\n"
+"✨ {reason}\n"
+"\n"
+"💡 Use /buy to get credits!"
+msgstr ""
+
+#: derp/handlers/tts.py:90
+#, fuzzy
+msgid ""
+"😅 Something went wrong while generating the voice message. Try again "
+"later."
+msgstr "😅 Something went wrong while generating the image. Try again later."
+
+#: derp/handlers/video.py:47
+#, fuzzy
+msgid "Usage: /video [fast|standard] <prompt>"
+msgstr "Usage: /imagine <prompt>"
+
+#: derp/handlers/video.py:69
+#, python-brace-format
+msgid ""
+"🎬 Video generation requires credits.\n"
+"\n"
+"✨ {reason}\n"
+"\n"
+"💡 Use /buy to get credits!"
+msgstr ""
+
+#: derp/handlers/video.py:116
+#, fuzzy
+msgid "😅 Something went wrong while generating the video. Try again later."
+msgstr "😅 Something went wrong while generating the image. Try again later."
 
 #: derp/llm/result.py:54
 msgid "Generated Code:"

@@ -26,6 +26,8 @@ from derp.handlers import (
     image,
     inline,
     payments,
+    tts,
+    video,
 )
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
 from derp.middlewares.chat_settings import ChatSettingsMiddleware
@@ -117,6 +119,8 @@ async def main() -> None:
         credit_cmds.router,  # Credit management commands (/credits, /buy, /think)
         payments.router,  # Telegram Stars payment handling
         image.router,
+        video.router,
+        tts.router,
         inline.router,
         # Must be the last one to handle all unhandled messages
         chat.router,

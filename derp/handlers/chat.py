@@ -319,7 +319,7 @@ class ChatAgentHandler(MessageHandler):
                 )
 
                 # Convert to AgentResult and send response
-                agent_result = AgentResult(text=result.output)
+                agent_result = AgentResult.from_run_result(result)
 
                 span.set_attribute("derp.response_has_text", bool(agent_result.text))
                 span.set_attribute("derp.response_images", len(agent_result.images))

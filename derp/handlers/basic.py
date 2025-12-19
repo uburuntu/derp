@@ -36,6 +36,8 @@ async def cmd_help(message: Message):
         "• /buy_chat - Purchase chat pool credits (groups)\n"
         "• /imagine <prompt> - Generate images with AI (premium)\n"
         "• /edit <prompt> - Edit images with AI (premium)\n"
+        "• /video [fast|standard] <prompt> - Generate a video with Veo (premium)\n"
+        "• /tts <text> - Generate a voice message (premium)\n"
         "• /settings - Show current chat settings\n"
         "• /set_memory <text> - Set LLM memory for this chat\n"
         "• /clear_memory - Clear LLM memory for this chat\n"
