@@ -144,7 +144,7 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 - **Result Shape:** `GeminiResult` extracts `text_parts`, `code_blocks`, `execution_results`, and inline `images` to simplify Telegram replies.
 - **Handlers:**
   - `derp/handlers/gemini.py`: main chat handler. Triggers on `/derp`, private chats, replies to the bot, or `DerpMentionFilter`. Builds context from recent messages and optional chat memory, attaches media, executes Gemini, and replies.
-  - `derp/handlers/gemini_image.py`: premium image generation/editing using `gemini-2.5-flash-image-preview`.
+  - `derp/handlers/gemini_image.py`: premium image generation/editing using `gemini-2.5-flash-image`.
   - `derp/handlers/gemini_inline.py`: inline mode, returns placeholder first, then edits with model output.
 - **Tools & Memory:**
   - Lightweight tool system in `derp/common/llm_gemini.py` for native Gemini function calling.
@@ -260,3 +260,4 @@ When updating AGENTS.md:
 - **Critical Rules** are reserved for hard constraints (things that break the build or corrupt state if violated).
 - **Keep sections cohesive.** If a new topic doesn't fit anywhere, consider whether it's substantial enough to warrant its own section or can be folded into an existing one.
 - **Prefer brevity.** One-liners in the right place beat a new paragraph at the top.
+- **"Remember" = AGENTS.md.** When the user says "remember this" or similar, always add the information to AGENTS.md in the appropriate section.

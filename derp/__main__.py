@@ -100,8 +100,8 @@ async def main():
 
     # Inner middlewares (run after filters, before resolved handlers)
     dp.update.middleware(EventContextMiddleware(db=db))
-    dp.update.middleware(ChatActionMiddleware())
     dp.update.middleware(ChatSettingsMiddleware(db=db))
+    dp.message.middleware(ChatActionMiddleware())
 
     dp.include_routers(
         basic.router,

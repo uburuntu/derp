@@ -133,7 +133,7 @@ async def handle_imagine(message: Message, meta: MetaInfo) -> Message:
         ]
         # Auto-instrumented via logfire.instrument_google_genai()
         response = client.models.generate_content(
-            model="gemini-2.5-flash-image-preview",
+            model="gemini-2.5-flash-image",
             contents=contents,
         )
         return await _send_images(meta.target_message, response)
@@ -171,7 +171,7 @@ async def handle_edit(message: Message, meta: MetaInfo) -> Message:
         ]
         # Auto-instrumented via logfire.instrument_google_genai()
         response = client.models.generate_content(
-            model="gemini-2.5-flash-image-preview",
+            model="gemini-2.5-flash-image",
             contents=contents,
         )
         return await _send_images(meta.target_message, response)
