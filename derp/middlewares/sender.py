@@ -49,4 +49,3 @@ class MessageSenderMiddleware(BaseMiddleware):
             data["sender"] = MessageSender.from_message(message)
 
         return await handler(event, data)
-
