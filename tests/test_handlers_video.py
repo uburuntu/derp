@@ -8,9 +8,19 @@ from derp.credits.models import ModelTier
 from derp.handlers.video import handle_video
 
 
+def _get_text_from_call_args(call_args):
+    """Extract text from mock call_args (handles both positional and keyword)."""
+    if call_args.args:
+        return call_args.args[0]
+    if call_args.kwargs and "text" in call_args.kwargs:
+        return call_args.kwargs["text"]
+    return ""
+
+
 @pytest.mark.asyncio
 async def test_handle_video_success(
     make_message,
+    mock_sender,
     mock_user_model,
     mock_chat_model,
     mock_meta,
@@ -20,6 +30,7 @@ async def test_handle_video_success(
 ):
     """Test successful video generation flow."""
     message = make_message(text="/video a cat")
+    sender = mock_sender(message=message)
     user = mock_user_model()
     chat = mock_chat_model()
     meta = mock_meta(target_text="a cat")
@@ -39,7 +50,9 @@ async def test_handle_video_success(
         ) as mock_gen,
         patch("derp.handlers.video.get_db_manager", return_value=mock_db_client),
     ):
-        await handle_video(message, meta, service, user_model=user, chat_model=chat)
+        await handle_video(
+            message, sender, meta, service, user_model=user, chat_model=chat
+        )
 
         mock_gen.assert_awaited_once()
         service.deduct.assert_awaited_once()
@@ -48,6 +61,7 @@ async def test_handle_video_success(
 @pytest.mark.asyncio
 async def test_handle_video_no_credits(
     make_message,
+    mock_sender,
     mock_user_model,
     mock_chat_model,
     mock_meta,
@@ -56,6 +70,7 @@ async def test_handle_video_no_credits(
 ):
     """Test video generation rejection due to lack of credits."""
     message = make_message(text="/video a cat")
+    sender = mock_sender(message=message)
     user = mock_user_model()
     chat = mock_chat_model()
     meta = mock_meta(target_text="a cat")
@@ -71,25 +86,30 @@ async def test_handle_video_no_credits(
     with patch(
         "derp.handlers.video.generate_and_send_video", new_callable=AsyncMock
     ) as mock_gen:
-        await handle_video(message, meta, service, user_model=user, chat_model=chat)
+        await handle_video(
+            message, sender, meta, service, user_model=user, chat_model=chat
+        )
 
         mock_gen.assert_not_awaited()
-        message.reply.assert_awaited_once()
-        assert "Not enough credits" in message.reply.call_args[0][0]
+        sender.reply.assert_awaited_once()
+        text = _get_text_from_call_args(sender.reply.call_args)
+        assert "Not enough credits" in text
 
 
 @pytest.mark.asyncio
 async def test_handle_video_missing_prompt(
-    make_message, mock_meta, mock_credit_service_factory
+    make_message, mock_sender, mock_meta, mock_credit_service_factory
 ):
     """Test video generation with missing prompt."""
     message = make_message(text="/video")
+    sender = mock_sender(message=message)
     meta = mock_meta(target_text="")
     service = mock_credit_service_factory()
 
     await handle_video(
-        message, meta, service, user_model=MagicMock(), chat_model=MagicMock()
+        message, sender, meta, service, user_model=MagicMock(), chat_model=MagicMock()
     )
 
     message.reply.assert_awaited_once()
-    assert "Usage: /video" in message.reply.call_args[0][0]
+    text = _get_text_from_call_args(message.reply.call_args)
+    assert "Usage: /video" in text

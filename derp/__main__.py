@@ -36,6 +36,7 @@ from derp.middlewares.database_logger import DatabaseLoggerMiddleware
 from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
+from derp.middlewares.sender import MessageSenderMiddleware
 
 # Enable capturing LLM message content in spans
 os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
@@ -112,6 +113,8 @@ async def main() -> None:
     dp.update.middleware(EventContextMiddleware(db=db))
     dp.update.middleware(DatabaseModelMiddleware(db=db))
     dp.update.middleware(CreditServiceMiddleware(db=db))
+    dp.message.middleware(MessageSenderMiddleware())
+    dp.callback_query.middleware(MessageSenderMiddleware())
     dp.message.middleware(ChatActionMiddleware())
 
     dp.include_routers(

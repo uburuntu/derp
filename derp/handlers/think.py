@@ -12,6 +12,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
 
+from derp.common.sender import MessageSender
 from derp.credits import CreditService
 from derp.db import get_db_manager
 from derp.llm import AgentDeps, create_chat_agent
@@ -26,6 +27,7 @@ router = Router(name="think")
 @flags.chat_action(initial_sleep=1, action="typing")
 async def handle_think(
     message: Message,
+    sender: MessageSender,
     credit_service: CreditService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
@@ -42,14 +44,13 @@ async def handle_think(
         prompt = prompt.removeprefix("/think").strip()
 
     if not prompt:
-        return await message.reply(
+        return await sender.reply(
             _(
                 "🧠 **Deep Thinking Mode**\n\n"
                 "Use Gemini 3 Pro for complex math, logic puzzles, "
                 "or problems that need careful analysis.\n\n"
                 "Usage: /think <your problem or question>"
             ),
-            parse_mode="Markdown",
         )
 
     if not user_model or not chat_model:
@@ -62,13 +63,12 @@ async def handle_think(
     )
 
     if not result.allowed:
-        return await message.reply(
+        return await sender.reply(
             _(
                 "🧠 Deep thinking requires credits.\n\n"
                 "✨ {reason}\n\n"
                 "💡 Use /buy to get credits!"
             ).format(reason=result.reject_reason),
-            parse_mode="Markdown",
         )
 
     logfire.info(
@@ -112,16 +112,9 @@ async def handle_think(
             response_length=len(agent_result.output),
         )
 
-        try:
-            return await message.reply(
-                f"🧠 **Deep Thinking Result:**\n\n{agent_result.output}",
-                parse_mode="Markdown",
-            )
-        except Exception:
-            return await message.reply(
-                f"🧠 Deep Thinking Result:\n\n{agent_result.output}",
-                parse_mode=None,
-            )
+        return await sender.reply(
+            f"🧠 **Deep Thinking Result:**\n\n{agent_result.output}",
+        )
 
     except Exception:
         logfire.exception(

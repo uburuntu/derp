@@ -13,6 +13,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
 
+from derp.common.sender import MessageSender
 from derp.credits import CreditService
 from derp.credits.packs import CREDIT_PACKS
 from derp.credits.ui import build_buy_keyboard
@@ -26,6 +27,7 @@ router = Router(name="credit_cmds")
 @router.message(Command("credits", "balance", "bal"))
 async def show_credits(
     message: Message,
+    sender: MessageSender,
     credit_service: CreditService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
@@ -77,12 +79,13 @@ async def show_credits(
         else:
             parts.append(_("💡 No credits! Use /buy to get some."))
 
-    return await message.reply("\n".join(parts), parse_mode="Markdown")
+    return await sender.reply("\n".join(parts))
 
 
 @router.message(Command("buy", "purchase", "shop"))
 async def show_buy_options(
     message: Message,
+    sender: MessageSender,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
 ) -> Message:
@@ -141,9 +144,8 @@ async def show_buy_options(
     # In group chats, also offer chat credits option
     keyboard = build_buy_keyboard(chat_id=None)  # Personal credits
 
-    return await message.reply(
+    return await sender.reply(
         "\n".join(parts),
-        parse_mode="Markdown",
         reply_markup=keyboard,
     )
 
@@ -151,6 +153,7 @@ async def show_buy_options(
 @router.message(Command("buy_chat", "buychat"))
 async def show_buy_chat_options(
     message: Message,
+    sender: MessageSender,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
 ) -> Message:
@@ -184,8 +187,7 @@ async def show_buy_chat_options(
 
     keyboard = build_buy_keyboard(chat_id=chat_model.telegram_id)
 
-    return await message.reply(
+    return await sender.reply(
         "\n".join(parts),
-        parse_mode="Markdown",
         reply_markup=keyboard,
     )

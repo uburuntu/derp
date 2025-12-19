@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import logfire
 from aiogram import Router, flags
-from aiogram.types import BufferedInputFile, Message
+from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
-from aiogram.utils.media_group import MediaGroupBuilder
 from pydantic_ai import BinaryContent, BinaryImage
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from derp.common.extractor import Extractor
+from derp.common.sender import MessageSender
 from derp.credits import CreditService
 from derp.filters.meta import MetaCommand, MetaInfo
 from derp.llm import create_image_agent
@@ -45,12 +45,13 @@ async def _send_image_result(
         # Text response (refusal or error message from model)
         return await message.reply(output or _("🤷 No image generated."))
 
-    # Single image
-    input_file = BufferedInputFile(
-        file=output.data,
+    sender = MessageSender.from_message(message)
+    result = await sender.reply_photo(
+        output.data,
+        caption=caption,
         filename=_to_filename(output.media_type, 1),
     )
-    return await message.reply_photo(photo=input_file, caption=caption)
+    return result if isinstance(result, Message) else result[-1]
 
 
 async def _send_multiple_images(
@@ -66,28 +67,25 @@ async def _send_multiple_images(
     if len(images) == 1:
         return await _send_image_result(message, images[0], caption=caption)
 
-    # Multiple images: send as media group(s)
-    sent_messages: list[Message] = []
-    start = 0
-    idx = 1
+    # Convert BinaryImages to MediaItems
+    from derp.common.sender import MediaItem, MediaType
 
-    while start < len(images):
-        chunk = images[start : start + 10]
-        builder = MediaGroupBuilder(caption=caption if start == 0 else None)
+    media = [
+        MediaItem(
+            type=MediaType.PHOTO,
+            data=image.data,
+            filename=_to_filename(image.media_type, idx + 1),
+        )
+        for idx, image in enumerate(images)
+    ]
 
-        for image in chunk:
-            input_file = BufferedInputFile(
-                file=image.data,
-                filename=_to_filename(image.media_type, idx),
-            )
-            builder.add_photo(media=input_file)
-            idx += 1
-
-        msgs = await message.reply_media_group(media=builder.build())
-        sent_messages.extend(msgs)
-        start += 10
-
-    return sent_messages[-1]
+    sender = MessageSender.from_message(message)
+    sent_messages = await sender.send_media_group(
+        media=media,
+        caption=caption,
+        reply_to=message,
+    )
+    return sent_messages[-1] if sent_messages else message
 
 
 @router.message(MetaCommand("imagine", "image", "img", "и"))

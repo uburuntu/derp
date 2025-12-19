@@ -62,7 +62,8 @@ class TestSendImageResult:
 
         await _send_image_result(message, image)
 
-        message.reply_photo.assert_awaited_once()
+        # Uses bot.send_photo via MessageSender
+        message.bot.send_photo.assert_awaited_once()
 
 
 class TestSendMultipleImages:
@@ -86,7 +87,8 @@ class TestSendMultipleImages:
 
         await _send_multiple_images(message, [image])
 
-        message.reply_photo.assert_awaited_once()
+        # Uses bot.send_photo via MessageSender
+        message.bot.send_photo.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_sends_multiple_images_as_group(self, make_message):
@@ -100,7 +102,8 @@ class TestSendMultipleImages:
 
         await _send_multiple_images(message, images)
 
-        message.reply_media_group.assert_awaited_once()
+        # Uses bot.send_media_group via MessageSender
+        message.bot.send_media_group.assert_awaited_once()
 
 
 class TestHandleImagine:

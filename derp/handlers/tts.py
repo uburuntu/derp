@@ -13,6 +13,7 @@ from aiogram import Router, flags
 from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
 
+from derp.common.sender import MessageSender
 from derp.credits import CreditService
 from derp.db import get_db_manager
 from derp.filters.meta import MetaCommand, MetaInfo
@@ -28,6 +29,7 @@ router = Router(name="tts")
 @flags.chat_action(initial_sleep=1, action="record_voice")
 async def handle_tts(
     message: Message,
+    sender: MessageSender,
     meta: MetaInfo,
     credit_service: CreditService,
     user_model: UserModel | None = None,
@@ -46,11 +48,10 @@ async def handle_tts(
         user_model, chat_model, "voice_tts", TTS_MODEL
     )
     if not access.allowed:
-        return await message.reply(
+        return await sender.reply(
             _(
                 "🔊 Voice generation requires credits.\n\n✨ {reason}\n\n💡 Use /buy to get credits!"
             ).format(reason=access.reject_reason or ""),
-            parse_mode="Markdown",
         )
 
     try:

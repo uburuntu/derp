@@ -19,6 +19,7 @@ from aiogram.types import (
 )
 from aiogram.utils.i18n import gettext as _
 
+from derp.common.sender import MessageSender
 from derp.credits import CreditService
 from derp.credits.packs import CREDIT_PACKS
 from derp.credits.ui import build_buy_keyboard
@@ -132,6 +133,7 @@ async def handle_pre_checkout(pre_checkout: PreCheckoutQuery) -> None:
 @router.message(F.successful_payment)
 async def handle_successful_payment(
     message: Message,
+    sender: MessageSender,
     credit_service: CreditService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
@@ -178,13 +180,12 @@ async def handle_successful_payment(
                 payment.telegram_payment_charge_id,
                 pack_name=pack.name,
             )
-            await message.answer(
+            await sender.send(
                 _(
                     "✅ **Payment successful!**\n\n"
                     "Added **{credits}** credits to this chat.\n"
                     "New balance: **{balance}** credits"
                 ).format(credits=pack.credits, balance=new_balance),
-                parse_mode="Markdown",
             )
         else:
             new_balance = await credit_service.purchase_credits(
@@ -194,13 +195,12 @@ async def handle_successful_payment(
                 payment.telegram_payment_charge_id,
                 pack_name=pack.name,
             )
-            await message.answer(
+            await sender.send(
                 _(
                     "✅ **Payment successful!**\n\n"
                     "Added **{credits}** credits to your account.\n"
                     "New balance: **{balance}** credits"
                 ).format(credits=pack.credits, balance=new_balance),
-                parse_mode="Markdown",
             )
 
         logfire.info(

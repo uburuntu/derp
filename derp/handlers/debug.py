@@ -26,6 +26,7 @@ from aiogram.types import (
 from aiogram.utils.i18n import gettext as _
 from pydantic import BaseModel, ConfigDict, Field
 
+from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.credits import CreditService, ModelTier
 from derp.db.credits import get_balances
@@ -103,6 +104,7 @@ def _build_debug_buy_keyboard(chat_id: int | None = None) -> InlineKeyboardMarku
 @router.message(Command("debug_buy", "dbuy"))
 async def debug_buy_command(
     message: Message,
+    sender: MessageSender,
     chat_model: ChatModel | None = None,
 ) -> Message:
     """Show debug credit purchase options (1 star each).
@@ -118,9 +120,8 @@ async def debug_buy_command(
         "Choose user or chat credits:"
     )
 
-    return await message.reply(
+    return await sender.reply(
         text,
-        parse_mode="Markdown",
         reply_markup=_build_debug_buy_keyboard(chat_id),
     )
 
@@ -206,6 +207,7 @@ async def handle_debug_pre_checkout(pre_checkout: PreCheckoutQuery) -> None:
 )
 async def handle_debug_successful_payment(
     message: Message,
+    sender: MessageSender,
     credit_service: CreditService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
@@ -245,12 +247,11 @@ async def handle_debug_successful_payment(
                 payment.telegram_payment_charge_id,
                 pack_name=f"DEBUG:{pack.name}",
             )
-            await message.answer(
+            await sender.send(
                 f"✅ **DEBUG Payment OK**\n\n"
                 f"Added **{pack.credits}** credits to chat.\n"
                 f"New chat balance: **{new_balance}** credits\n"
                 f"Charge ID: `{payment.telegram_payment_charge_id}`",
-                parse_mode="Markdown",
             )
         else:
             new_balance = await credit_service.purchase_credits(
@@ -260,12 +261,11 @@ async def handle_debug_successful_payment(
                 payment.telegram_payment_charge_id,
                 pack_name=f"DEBUG:{pack.name}",
             )
-            await message.answer(
+            await sender.send(
                 f"✅ **DEBUG Payment OK**\n\n"
                 f"Added **{pack.credits}** credits to your account.\n"
                 f"New balance: **{new_balance}** credits\n"
                 f"Charge ID: `{payment.telegram_payment_charge_id}`",
-                parse_mode="Markdown",
             )
 
         logfire.info(
@@ -279,16 +279,16 @@ async def handle_debug_successful_payment(
 
     except Exception:
         logfire.exception("debug_payment_processing_failed")
-        await message.answer(
+        await sender.send(
             f"❌ Payment processing failed.\n"
             f"Charge ID: `{payment.telegram_payment_charge_id}`",
-            parse_mode="Markdown",
         )
 
 
 @router.message(Command("debug_credits", "dcredits"))
 async def debug_add_credits(
     message: Message,
+    sender: MessageSender,
     credit_service: CreditService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
@@ -338,11 +338,10 @@ async def debug_add_credits(
                 chat_id=chat_model.telegram_id,
                 charge_id=fake_charge_id,
             )
-            return await message.reply(
+            return await sender.reply(
                 f"✅ Added **{amount}** credits to chat.\n"
                 f"New balance: **{new_balance}**\n"
                 f"Charge ID: `{fake_charge_id}`",
-                parse_mode="Markdown",
             )
         else:
             new_balance = await credit_service.purchase_credits(
@@ -359,11 +358,10 @@ async def debug_add_credits(
                 user_id=user_model.telegram_id,
                 charge_id=fake_charge_id,
             )
-            return await message.reply(
+            return await sender.reply(
                 f"✅ Added **{amount}** credits to your account.\n"
                 f"New balance: **{new_balance}**\n"
                 f"Charge ID: `{fake_charge_id}`",
-                parse_mode="Markdown",
             )
     except Exception:
         logfire.exception("debug_credits_failed")
@@ -373,6 +371,7 @@ async def debug_add_credits(
 @router.message(Command("debug_reset", "dreset"))
 async def debug_reset_credits(
     message: Message,
+    sender: MessageSender,
     credit_service: CreditService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
@@ -415,9 +414,8 @@ async def debug_reset_credits(
             chat_id=chat_model.telegram_id,
             previous_balance=chat_credits,
         )
-        return await message.reply(
+        return await sender.reply(
             f"✅ Chat credits reset.\nPrevious: **{chat_credits}** → Now: **0**",
-            parse_mode="Markdown",
         )
     else:
         _, user_credits = await get_balances(
@@ -438,15 +436,15 @@ async def debug_reset_credits(
             user_id=user_model.telegram_id,
             previous_balance=user_credits,
         )
-        return await message.reply(
+        return await sender.reply(
             f"✅ Your credits reset.\nPrevious: **{user_credits}** → Now: **0**",
-            parse_mode="Markdown",
         )
 
 
 @router.message(Command("debug_status", "dstatus"))
 async def debug_status(
     message: Message,
+    sender: MessageSender,
     credit_service: CreditService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
@@ -517,12 +515,13 @@ async def debug_status(
         chat_credits=chat_credits,
     )
 
-    return await message.reply("\n".join(lines), parse_mode="Markdown")
+    return await sender.reply("\n".join(lines))
 
 
 @router.message(Command("debug_refund", "drefund"))
 async def debug_refund(
     message: Message,
+    sender: MessageSender,
     credit_service: CreditService,
 ) -> Message:
     """Test refund flow with a charge ID.
@@ -543,21 +542,22 @@ async def debug_refund(
 
     if success:
         logfire.info("debug_refund_success", charge_id=charge_id)
-        return await message.reply(
+        return await sender.reply(
             f"✅ Refund processed for `{charge_id}`",
-            parse_mode="Markdown",
         )
     else:
         logfire.warn("debug_refund_failed", charge_id=charge_id)
-        return await message.reply(
+        return await sender.reply(
             f"❌ Refund failed for `{charge_id}`\n"
             f"Transaction not found or already refunded.",
-            parse_mode="Markdown",
         )
 
 
 @router.message(Command("debug_tools", "dtools"))
-async def debug_tools(message: Message) -> Message:
+async def debug_tools(
+    message: Message,
+    sender: MessageSender,
+) -> Message:
     """List available tools with their credit costs.
 
     Usage:
@@ -576,11 +576,14 @@ async def debug_tools(message: Message) -> Message:
             f"   {tool.description}"
         )
 
-    return await message.reply("\n".join(lines), parse_mode="Markdown")
+    return await sender.reply("\n".join(lines))
 
 
 @router.message(Command("debug_help", "dhelp"))
-async def debug_help(message: Message) -> Message:
+async def debug_help(
+    message: Message,
+    sender: MessageSender,
+) -> Message:
     """Show all debug commands.
 
     Usage:
@@ -599,4 +602,4 @@ async def debug_help(message: Message) -> Message:
         "• /debug_help - This help message"
     )
 
-    return await message.reply(help_text, parse_mode="Markdown")
+    return await sender.reply(help_text)

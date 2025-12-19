@@ -479,6 +479,9 @@ def make_message(make_user, make_chat):
         )
         message.bot.send_message = AsyncMock()
         message.bot.send_photo = AsyncMock()
+        message.bot.send_video = AsyncMock()
+        message.bot.send_audio = AsyncMock()
+        message.bot.send_media_group = AsyncMock(return_value=[message])
 
         for key, value in kwargs.items():
             setattr(message, key, value)
@@ -904,6 +907,54 @@ def mock_credit_service(mock_credit_service_factory, make_credit_check_result):
         patcher = patch(f"{module_path}.CreditService", return_value=service)
 
         return service, patcher
+
+    return _make
+
+
+# =============================================================================
+# MESSAGE SENDER FIXTURES
+# =============================================================================
+
+
+@pytest.fixture
+def mock_sender(make_message):
+    """Create a mock MessageSender for handler tests.
+
+    Usage:
+        async def test_handler(mock_sender):
+            sender = mock_sender()
+            await handle_think(message, sender, credit_service, ...)
+            sender.reply.assert_awaited_once()
+    """
+    from derp.common.sender import MessageSender
+
+    def _make(message=None, **kwargs):
+        # Create the sender from a message if provided
+        if message:
+            sender = MagicMock(spec=MessageSender)
+            sender.bot = message.bot
+            sender.chat_id = message.chat.id
+            sender._source_message = message
+        else:
+            sender = MagicMock(spec=MessageSender)
+            sender.bot = MagicMock()
+            sender.chat_id = 123456
+            sender._source_message = None
+
+        # Mock async methods
+        sender.send = AsyncMock(return_value=MagicMock())
+        sender.reply = AsyncMock(return_value=MagicMock())
+        sender.edit = AsyncMock(return_value=MagicMock())
+        sender.edit_inline = AsyncMock(return_value=True)
+        sender.send_photo = AsyncMock(return_value=MagicMock())
+        sender.reply_photo = AsyncMock(return_value=MagicMock())
+        sender.send_media_group = AsyncMock(return_value=[MagicMock()])
+        sender.send_with_media = AsyncMock(return_value=MagicMock())
+
+        for key, value in kwargs.items():
+            setattr(sender, key, value)
+
+        return sender
 
     return _make
 

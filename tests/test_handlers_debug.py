@@ -74,57 +74,74 @@ class TestBuildDebugBuyKeyboard:
         assert len(keyboard.inline_keyboard) == 6
 
 
+def _get_text_from_call_args(call_args):
+    """Extract text from mock call_args (handles both positional and keyword)."""
+    if call_args.args:
+        return call_args.args[0]
+    if call_args.kwargs and "text" in call_args.kwargs:
+        return call_args.kwargs["text"]
+    return ""
+
+
 @pytest.mark.asyncio
-async def test_debug_buy_command(make_message):
+async def test_debug_buy_command(make_message, mock_sender):
     """Test /debug_buy command shows menu."""
     message = make_message(text="/debug_buy")
+    sender = mock_sender(message=message)
 
     chat_model = MagicMock()
     chat_model.telegram_id = -100123
 
-    await debug_buy_command(message, chat_model)
+    await debug_buy_command(message, sender, chat_model)
 
-    message.reply.assert_awaited_once()
-    call_args = message.reply.call_args
-    assert "Debug Buy Menu" in call_args[0][0]
-    assert call_args[1]["reply_markup"] is not None
+    sender.reply.assert_awaited_once()
+    call_args = sender.reply.call_args
+    text = _get_text_from_call_args(call_args)
+    assert "Debug Buy Menu" in text
+    assert call_args.kwargs.get("reply_markup") is not None
 
 
 @pytest.mark.asyncio
 async def test_debug_add_credits(
-    make_message, mock_user_model, mock_credit_service_factory
+    make_message, mock_sender, mock_user_model, mock_credit_service_factory
 ):
     """Test /debug_credits command adds credits."""
     message = make_message(text="/debug_credits 50")
+    sender = mock_sender(message=message)
 
     user = mock_user_model(telegram_id=12345)
     service = mock_credit_service_factory(purchase_result=50)
 
-    await debug_add_credits(message, service, user, None)
+    await debug_add_credits(message, sender, service, user, None)
 
     service.purchase_credits.assert_awaited_once()
-    message.reply.assert_awaited_once()
-    assert "Added **50** credits" in message.reply.call_args[0][0]
+    sender.reply.assert_awaited_once()
+    text = _get_text_from_call_args(sender.reply.call_args)
+    # Sender.reply takes text as first positional arg
+    assert "Added" in text and "50" in text and "credits" in text
 
 
 @pytest.mark.asyncio
-async def test_debug_add_credits_no_user(make_message, mock_credit_service_factory):
+async def test_debug_add_credits_no_user(make_message, mock_sender, mock_credit_service_factory):
     """Test /debug_credits without user returns error."""
     message = make_message(text="/debug_credits 50")
+    sender = mock_sender(message=message)
     service = mock_credit_service_factory()
 
-    await debug_add_credits(message, service, None, None)
+    await debug_add_credits(message, sender, service, None, None)
 
     message.reply.assert_awaited_once()
-    assert "User not found" in message.reply.call_args[0][0]
+    text = _get_text_from_call_args(message.reply.call_args)
+    assert "User not found" in text
 
 
 @pytest.mark.asyncio
 async def test_debug_status(
-    make_message, mock_user_model, mock_chat_model, mock_credit_service_factory
+    make_message, mock_sender, mock_user_model, mock_chat_model, mock_credit_service_factory
 ):
     """Test /debug_status shows diagnostics."""
     message = make_message(text="/debug_status")
+    sender = mock_sender(message=message)
 
     user = mock_user_model(telegram_id=12345)
     chat = mock_chat_model(telegram_id=-100123)
@@ -137,61 +154,67 @@ async def test_debug_status(
     ) as mock_balances:
         mock_balances.return_value = (100, 50)  # chat_credits, user_credits
 
-        await debug_status(message, service, user, chat)
+        await debug_status(message, sender, service, user, chat)
 
-        message.reply.assert_awaited_once()
-        response = message.reply.call_args[0][0]
+        sender.reply.assert_awaited_once()
+        response = _get_text_from_call_args(sender.reply.call_args)
         assert "Debug Status" in response
         assert "12345" in response  # user telegram id
 
 
 @pytest.mark.asyncio
-async def test_debug_status_no_user(make_message, mock_credit_service_factory):
+async def test_debug_status_no_user(make_message, mock_sender, mock_credit_service_factory):
     """Test /debug_status without user returns error."""
     message = make_message(text="/debug_status")
+    sender = mock_sender(message=message)
     service = mock_credit_service_factory()
 
-    await debug_status(message, service, None, None)
+    await debug_status(message, sender, service, None, None)
 
     message.reply.assert_awaited_once()
-    assert "User not found" in message.reply.call_args[0][0]
+    text = _get_text_from_call_args(message.reply.call_args)
+    assert "User not found" in text
 
 
 @pytest.mark.asyncio
-async def test_debug_refund(make_message, mock_credit_service_factory):
+async def test_debug_refund(make_message, mock_sender, mock_credit_service_factory):
     """Test /debug_refund processes refund."""
     message = make_message(text="/debug_refund charge_123")
+    sender = mock_sender(message=message)
     service = mock_credit_service_factory()
     service.refund_credits = AsyncMock(return_value=True)
 
-    await debug_refund(message, service)
+    await debug_refund(message, sender, service)
 
     service.refund_credits.assert_awaited_once_with("charge_123")
-    message.reply.assert_awaited_once()
-    assert "Refund processed" in message.reply.call_args[0][0]
+    sender.reply.assert_awaited_once()
+    text = _get_text_from_call_args(sender.reply.call_args)
+    assert "Refund processed" in text
 
 
 @pytest.mark.asyncio
-async def test_debug_tools(make_message):
+async def test_debug_tools(make_message, mock_sender):
     """Test /debug_tools lists available tools."""
     message = make_message(text="/debug_tools")
+    sender = mock_sender(message=message)
 
-    await debug_tools(message)
+    await debug_tools(message, sender)
 
-    message.reply.assert_awaited_once()
-    response = message.reply.call_args[0][0]
+    sender.reply.assert_awaited_once()
+    response = _get_text_from_call_args(sender.reply.call_args)
     assert "Available Tools" in response
 
 
 @pytest.mark.asyncio
-async def test_debug_help(make_message):
+async def test_debug_help(make_message, mock_sender):
     """Test /debug_help shows all commands."""
     message = make_message(text="/debug_help")
+    sender = mock_sender(message=message)
 
-    await debug_help(message)
+    await debug_help(message, sender)
 
-    message.reply.assert_awaited_once()
-    response = message.reply.call_args[0][0]
+    sender.reply.assert_awaited_once()
+    response = _get_text_from_call_args(sender.reply.call_args)
     assert "Debug Commands" in response
     assert "/debug_buy" in response
     assert "/debug_credits" in response

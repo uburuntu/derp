@@ -15,12 +15,12 @@ import asyncio
 import tempfile
 
 import logfire
-from aiogram.types import BufferedInputFile
 from google import genai
 from google.genai import types
 from pydantic_ai import RunContext
 
 from derp.common.extractor import Extractor
+from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.llm.deps import AgentDeps
 from derp.tools.wrapper import credit_aware_tool
@@ -122,10 +122,8 @@ async def generate_and_send_video(
     video_obj = generated[0].video
     video_bytes = await _download_video_to_bytes(client, video_obj)
 
-    await deps.message.reply_video(
-        video=BufferedInputFile(video_bytes, filename="video.mp4"),
-        caption=prompt[:900],
-    )
+    sender = MessageSender.from_message(deps.message)
+    await sender.reply_video(video_bytes, caption=prompt)
 
     logfire.info(
         "veo_generate_done",
