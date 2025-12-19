@@ -114,7 +114,7 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 - **Update Flow:** Telegram Update → outer middlewares (logging + DB) → filters → inner middlewares (context + chat settings + chat actions) → matched handler router.
 - **Concerns Split:**
   - `derp/handlers/*`: message/inline/media logic.
-  - `derp/middlewares/*`: cross‑cutting concerns (logging, DB persistence, event context, chat settings, throttling helper).
+  - `derp/middlewares/*`: cross‑cutting concerns (logging, DB persistence, event context, DB model injection, credit service, throttling helper).
   - `derp/filters/*`: input shaping (mentions, meta command/hashtag parser).
   - `derp/common/*`: shared services (LLM, extraction, executors, Telegram helpers).
   - `derp/credits/*`: credit economy (pricing, tiers, service, registries).
@@ -131,9 +131,10 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
   - `LogUpdatesMiddleware`: formats and logs each `Update` with elapsed ms.
   - `DatabaseLoggerMiddleware`: upserts user/chat and projects messages to the messages table.
 - **Inner middlewares:**
-  - `EventContextMiddleware`: injects `bot`, `db`, and derived `user`, `chat`, `thread_id`, `business_connection_id` into handler `data`.
+  - `EventContextMiddleware`: injects `bot`, `db`, and derived `user`, `chat`, `thread_id`, `business_connection_id` into handler `data`. Note: `user` and `chat` here are aiogram types (with `.id` for Telegram ID).
+  - `DatabaseModelMiddleware`: loads SQLAlchemy models from DB and injects `user_model` (`UserModel`) and `chat_model` (`ChatModel`) into handler `data`. These have `.telegram_id` for the Telegram ID and `.id` for the database UUID.
+  - `CreditServiceMiddleware`: creates a `CreditService` instance with a fresh DB session and injects it as `credit_service` into handler `data`.
   - `ChatActionMiddleware`: shows typing/upload actions for long‑running handlers.
-  - `ChatSettingsMiddleware`: loads per‑chat settings (including `llm_memory`) and adds `chat_settings` to `data`.
   - `ThrottleUsersMiddleware` (available): prevents concurrent handling per user; not enabled by default.
 
 ## LLM Integration (Pydantic-AI)
@@ -185,7 +186,7 @@ derp/credits/
 └── service.py    # CreditService: check access, deduct, purchase, refund
 ```
 
-- **CreditService:** Central service for all credit operations. Performs atomic balance updates, records transactions with idempotency keys, and checks tool/model access.
+- **CreditService:** Central service for all credit operations. Accepts SQLAlchemy `UserModel`/`ChatModel` directly (not Telegram IDs). Performs atomic balance updates, records transactions with idempotency keys, and checks tool/model access. Injected via `CreditServiceMiddleware`.
 - **Registries:** `MODEL_REGISTRY` and `TOOL_REGISTRY` define available models/tools with their costs. Pricing is derived from provider costs with a margin.
 - **CreditCheckResult:** Returned by access checks; contains `allowed`, `reject_reason`, source (chat/user), and cost information.
 
@@ -264,6 +265,7 @@ derp/credits/
 
 ## Telegram/Aiogram Guidelines
 
+- **Aiogram vs SQLAlchemy types:** aiogram `User`/`Chat` objects have `.id` for Telegram ID. SQLAlchemy `UserModel`/`ChatModel` have `.telegram_id` for Telegram ID and `.id` for database UUID. Middlewares inject both: `user`/`chat` (aiogram) and `user_model`/`chat_model` (SQLAlchemy). Pass SQLAlchemy models to `CreditService` and DB queries.
 - Direct fields: aiogram types are Pydantic models; access fields directly (they exist and may be `None`), avoid `getattr(..., "field", None)` for defined attributes.
 - Short-circuit idioms: prefer concise patterns for optionals like `user and user.id` and `user and user.username or ""`.
 - Logging: instrument decision points with `logfire` and include identifiers (chat_id, user_id, payload) for traceability.
