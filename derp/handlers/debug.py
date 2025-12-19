@@ -557,7 +557,7 @@ async def debug_refund(
     async with db.session() as session:
         service = CreditService(session)
 
-        success = await service.refund_purchase(charge_id)
+        success = await service.refund_credits(charge_id)
 
         if success:
             logfire.info("debug_refund_success", charge_id=charge_id)
