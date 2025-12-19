@@ -87,22 +87,22 @@ TOOL_REGISTRY: dict[str, ToolConfig] = {
         free_daily_limit=0,  # Paid only
         is_premium=True,
     ),
-    # Future: Voice generation
-    "voice_generate": ToolConfig(
-        name="voice_generate",
+    # Voice / TTS
+    "voice_tts": ToolConfig(
+        name="voice_tts",
         description="Generate speech audio from text",
         model_type=ModelType.VOICE,
-        default_model_id=None,
+        default_model_id="gemini-2.5-pro-preview-tts",
         base_credit_cost=3,
         free_daily_limit=0,
         is_premium=True,
     ),
-    # Future: Video generation
+    # Video generation (Veo 3.1)
     "video_generate": ToolConfig(
         name="video_generate",
         description="Generate a short video from a prompt",
         model_type=ModelType.VIDEO,
-        default_model_id=None,
+        default_model_id="veo-3.1-fast-generate-preview",  # default: fast
         base_credit_cost=20,  # Very expensive
         free_daily_limit=0,
         is_premium=True,

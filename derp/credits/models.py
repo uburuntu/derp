@@ -134,11 +134,14 @@ def _register_models() -> None:
     models = [
         # Text models - Cheap tier (free orchestration)
         ModelConfig(
-            id="gemini-2.0-flash-lite",
+            # Free-tier orchestration model
+            # Model details: https://ai.google.dev/gemini-api/docs/models.md.txt
+            id="gemini-2.5-flash-lite",
             provider="google",
             display_name="Gemini Flash Lite",
             model_type=ModelType.TEXT,
             tier=ModelTier.CHEAP,
+            # TODO: Replace with exact pricing from https://ai.google.dev/gemini-api/docs/pricing.md.txt
             input_cost_per_1m=Decimal("0.01"),
             output_cost_per_1m=Decimal("0.02"),
             is_default=True,
@@ -150,22 +153,22 @@ def _register_models() -> None:
             display_name="Gemini Flash",
             model_type=ModelType.TEXT,
             tier=ModelTier.STANDARD,
+            # TODO: Replace with exact pricing from https://ai.google.dev/gemini-api/docs/pricing.md.txt
             input_cost_per_1m=Decimal("0.15"),
             output_cost_per_1m=Decimal("0.60"),
             is_default=True,
         ),
         # Text models - Premium tier (/think)
-        # Gemini 3 Pro: https://ai.google.dev/gemini-api/docs/models#gemini-3
+        # Gemini 3 Pro: https://ai.google.dev/gemini-api/docs/models.md.txt
+        # Pricing: https://ai.google.dev/gemini-api/docs/pricing.md.txt
         ModelConfig(
             id="gemini-3-pro-preview",
             provider="google",
             display_name="Gemini 3 Pro",
             model_type=ModelType.TEXT,
             tier=ModelTier.PREMIUM,
-            input_cost_per_1m=Decimal(
-                "1.25"
-            ),  # Estimate, update when pricing available
-            output_cost_per_1m=Decimal("10.00"),
+            input_cost_per_1m=Decimal("2.00"),
+            output_cost_per_1m=Decimal("12.00"),
             is_default=True,
         ),
         # Legacy premium model (kept for reference)
@@ -186,7 +189,12 @@ def _register_models() -> None:
             display_name="Gemini Flash Image (Nano Banana)",
             model_type=ModelType.IMAGE,
             tier=ModelTier.STANDARD,
-            per_request_cost=Decimal("0.02"),  # Optimized for speed/cost
+            # Pricing note:
+            # Gemini native image output is token-priced; docs note $30 / 1M image output tokens
+            # with a flat 1290 output tokens for up to 1024x1024 images.
+            # Source: https://ai.google.dev/gemini-api/docs/image-generation
+            # Cost per 1024px image ≈ 30 * 1290 / 1_000_000 = 0.0387 USD
+            per_request_cost=Decimal("0.0387"),
             supports_tools=False,
             is_default=True,
         ),
@@ -197,18 +205,52 @@ def _register_models() -> None:
             display_name="Gemini 3 Pro Image (Nano Banana Pro)",
             model_type=ModelType.IMAGE,
             tier=ModelTier.PREMIUM,
-            per_request_cost=Decimal("0.06"),  # More expensive with thinking
+            # Pricing: https://ai.google.dev/gemini-api/docs/pricing.md.txt
+            # Output images billed ~ $0.134 per 1K/2K image (see pricing doc)
+            per_request_cost=Decimal("0.134"),
             supports_tools=False,
         ),
-        # Legacy image models
+        # Video generation models (Veo 3.1)
+        # Model details: https://ai.google.dev/gemini-api/docs/video.md.txt
+        # Pricing: https://ai.google.dev/gemini-api/docs/pricing.md.txt
         ModelConfig(
-            id="imagen-3",
+            id="veo-3.1-fast-generate-preview",
             provider="google",
-            display_name="Imagen 3",
-            model_type=ModelType.IMAGE,
+            display_name="Veo 3.1 Fast",
+            model_type=ModelType.VIDEO,
             tier=ModelTier.STANDARD,
-            per_request_cost=Decimal("0.03"),
+            # $0.50 per generated second; default 6s => $3.00
+            per_request_cost=Decimal("3.00"),
             supports_tools=False,
+            supports_vision=True,
+            is_default=True,
+        ),
+        ModelConfig(
+            id="veo-3.1-generate-preview",
+            provider="google",
+            display_name="Veo 3.1 Standard",
+            model_type=ModelType.VIDEO,
+            tier=ModelTier.PREMIUM,
+            # $1.00 per generated second; default 6s => $6.00
+            per_request_cost=Decimal("6.00"),
+            supports_tools=False,
+            supports_vision=True,
+        ),
+        # Voice / TTS
+        # Model details: https://ai.google.dev/gemini-api/docs/models.md.txt
+        # Pricing: https://ai.google.dev/gemini-api/docs/pricing.md.txt
+        ModelConfig(
+            id="gemini-2.5-pro-preview-tts",
+            provider="google",
+            display_name="Gemini 2.5 Pro Preview TTS",
+            model_type=ModelType.VOICE,
+            tier=ModelTier.STANDARD,
+            # TODO: Replace with exact pricing from pricing.md.txt (audio token pricing differs)
+            input_cost_per_1m=Decimal("0.15"),
+            output_cost_per_1m=Decimal("6.00"),
+            supports_tools=False,
+            supports_vision=False,
+            is_default=True,
         ),
         ModelConfig(
             id="dall-e-3",

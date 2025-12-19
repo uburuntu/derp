@@ -36,7 +36,9 @@ class ModelTier(StrEnum):
 # Tier-to-model mapping. Update when models change or new ones launch.
 # https://ai.google.dev/gemini-api/docs/models
 TIER_MODELS: dict[ModelTier, str] = {
-    ModelTier.CHEAP: "gemini-2.0-flash-lite",
+    # Free tier orchestration
+    ModelTier.CHEAP: "gemini-2.5-flash-lite",
+    # Paid tier orchestration
     ModelTier.STANDARD: "gemini-2.5-flash",
     # Gemini 3 Pro for premium/thinking: https://ai.google.dev/gemini-api/docs/models#gemini-3
     ModelTier.PREMIUM: "gemini-3-pro-preview",
@@ -67,7 +69,13 @@ def create_model(tier: ModelTier = ModelTier.STANDARD) -> Model:
 
     # For now, we use Google as the primary provider
     # Future: Add FallbackModel with OpenRouter/OpenAI as backup
-    provider = GoogleProvider(api_key=_get_google_api_key())
+    # Use free/rotating keys for CHEAP tier; paid key for everything else.
+    api_key = (
+        _get_google_api_key()
+        if tier == ModelTier.CHEAP
+        else settings.google_api_paid_key
+    )
+    provider = GoogleProvider(api_key=api_key)
 
     return GoogleModel(model_name, provider=provider)
 

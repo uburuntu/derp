@@ -16,6 +16,8 @@ from derp.llm.deps import AgentDeps
 from derp.tools.chat_memory import update_chat_memory
 from derp.tools.image_gen import edit_image, generate_image
 from derp.tools.think import think_deep
+from derp.tools.tts import voice_tts
+from derp.tools.video_gen import video_generate
 from derp.tools.web_search import web_search
 
 
@@ -44,6 +46,8 @@ def create_chat_toolset() -> FunctionToolset[AgentDeps]:
     # Premium tools (require credits or use daily free limit)
     toolset.tool(generate_image)
     toolset.tool(edit_image)
+    toolset.tool(video_generate)
+    toolset.tool(voice_tts)
     toolset.tool(think_deep)
 
     logfire.debug(
@@ -53,6 +57,8 @@ def create_chat_toolset() -> FunctionToolset[AgentDeps]:
             "web_search",
             "generate_image",
             "edit_image",
+            "video_generate",
+            "voice_tts",
             "think_deep",
         ],
     )
