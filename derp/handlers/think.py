@@ -140,4 +140,3 @@ async def handle_think(
             return await message.reply(
                 _("😅 Something went wrong during deep thinking. Please try again.")
             )
-

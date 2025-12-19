@@ -125,4 +125,3 @@ class TestLogUpdatesMiddleware:
         result = await middleware(slow_handler, update, {})
 
         assert result is not UNHANDLED
-

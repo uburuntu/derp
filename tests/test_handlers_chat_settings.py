@@ -139,4 +139,3 @@ async def test_clear_memory_error(make_message, mock_db_client):
 
         message.answer.assert_awaited_once()
         assert "Failed" in message.answer.call_args[0][0]
-

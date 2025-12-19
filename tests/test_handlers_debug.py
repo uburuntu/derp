@@ -24,7 +24,9 @@ class TestDebugPayload:
 
     def test_payload_creation(self):
         """Test creating a debug payload."""
-        payload = DebugPayload(pack_id="test_small", target_type="user", target_id=12345)
+        payload = DebugPayload(
+            pack_id="test_small", target_type="user", target_id=12345
+        )
         assert payload.kind == "debug_credits"
         assert payload.pack_id == "test_small"
         assert payload.target_type == "user"
@@ -32,7 +34,9 @@ class TestDebugPayload:
 
     def test_payload_serialization(self):
         """Test payload serializes with aliases."""
-        payload = DebugPayload(pack_id="test_small", target_type="user", target_id=12345)
+        payload = DebugPayload(
+            pack_id="test_small", target_type="user", target_id=12345
+        )
         json_str = payload.model_dump_json(by_alias=True)
         assert '"k":"debug_credits"' in json_str
         assert '"p":"test_small"' in json_str
@@ -136,7 +140,9 @@ async def test_debug_status(make_message, mock_db_client):
 
     with (
         patch("derp.handlers.debug.get_db_manager", return_value=mock_db_client),
-        patch("derp.handlers.debug.get_balances", new_callable=AsyncMock) as mock_balances,
+        patch(
+            "derp.handlers.debug.get_balances", new_callable=AsyncMock
+        ) as mock_balances,
         patch("derp.handlers.debug.CreditService") as mock_credit_service,
     ):
         mock_balances.return_value = (100, 50)  # chat_credits, user_credits
@@ -219,7 +225,9 @@ async def test_handle_debug_buy_callback_invalid_pack():
 async def test_handle_debug_pre_checkout():
     """Test pre-checkout approval."""
     pre_checkout = MagicMock()
-    pre_checkout.invoice_payload = '{"k":"debug_credits","p":"test_small","tt":"user","ti":12345}'
+    pre_checkout.invoice_payload = (
+        '{"k":"debug_credits","p":"test_small","tt":"user","ti":12345}'
+    )
     pre_checkout.total_amount = 1
     pre_checkout.from_user.id = 12345
     pre_checkout.answer = AsyncMock()
@@ -227,4 +235,3 @@ async def test_handle_debug_pre_checkout():
     await handle_debug_pre_checkout(pre_checkout)
 
     pre_checkout.answer.assert_awaited_with(ok=True)
-
