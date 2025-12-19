@@ -26,6 +26,7 @@ from derp.handlers import (
     image,
     inline,
     payments,
+    think,
     tts,
     video,
 )
@@ -116,7 +117,8 @@ async def main() -> None:
         basic.router,
         donations.router,
         chat_settings.router,
-        credit_cmds.router,  # Credit management commands (/credits, /buy, /think)
+        credit_cmds.router,  # Credit management commands (/credits, /buy)
+        think.router,  # Deep thinking handler
         payments.router,  # Telegram Stars payment handling
         image.router,
         video.router,
