@@ -54,11 +54,11 @@ class CreditTransaction(Base):
     model_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # For purchases: links to Telegram payment
-    telegram_charge_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    telegram_charge_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # For idempotency: prevent double-charging
     idempotency_key: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, unique=True, index=True
+        String(255), nullable=True, unique=True, index=True
     )
 
     # Additional context (message_id, pack_name, error details, etc.)
