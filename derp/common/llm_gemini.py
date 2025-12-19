@@ -7,10 +7,17 @@ from typing import Any, get_type_hints
 
 import logfire
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from google.genai.types import GenerateContentResponse
 
 from ..config import settings
+
+
+class QuotaExceededError(Exception):
+    """Raised when the Gemini API quota is exceeded (429 RESOURCE_EXHAUSTED)."""
+
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,9 +191,14 @@ class _FunctionCallHandler:
             )
 
             # Follow-up model call after tool execution (auto-instrumented)
-            response = self.client.models.generate_content(
-                model=self.model_name, contents=contents, config=config
-            )
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model_name, contents=contents, config=config
+                )
+            except genai_errors.ClientError as exc:
+                if exc.code == 429:
+                    raise QuotaExceededError(str(exc)) from exc
+                raise
             final_response = response
 
         return final_response
@@ -352,11 +364,16 @@ class GeminiRequestBuilder:
         )
 
         # Primary model call (auto-instrumented via logfire.instrument_google_genai)
-        response = self.client.models.generate_content(
-            model=self._model_name,
-            contents=contents,
-            config=config,
-        )
+        try:
+            response = self.client.models.generate_content(
+                model=self._model_name,
+                contents=contents,
+                config=config,
+            )
+        except genai_errors.ClientError as exc:
+            if exc.code == 429:
+                raise QuotaExceededError(str(exc)) from exc
+            raise
 
         if (
             self._tool_registry.declarations

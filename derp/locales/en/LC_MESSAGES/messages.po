@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-09-21 22:12+0200\n"
+"POT-Creation-Date: 2025-12-19 13:52+0300\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -223,78 +223,87 @@ msgstr "Much love from Derp HQ 💙"
 msgid "Deploying instant good karma…"
 msgstr "Deploying instant good karma…"
 
-#: derp/handlers/donations.py:145 derp/handlers/donations.py:171
+#: derp/handlers/donations.py:145 derp/handlers/donations.py:167
 msgid "Donation"
 msgstr "Donation"
 
-#: derp/handlers/donations.py:181
+#: derp/handlers/donations.py:177
 #, python-brace-format
 msgid "Use /donate {n} to donate {n}⭐️."
 msgstr "Use /donate {n} to donate {n}⭐️."
 
-#: derp/handlers/donations.py:223
+#: derp/handlers/donations.py:219
 msgid "friend"
 msgstr "friend"
 
-#: derp/handlers/donations.py:225
+#: derp/handlers/donations.py:221
 #, python-brace-format
 msgid "🙏 Thank you, {name}, for donating {stars}⭐️! Here's a {kind} for you."
 msgstr "🙏 Thank you, {name}, for donating {stars}⭐️! Here's a {kind} for you."
 
-#: derp/handlers/donations.py:226
+#: derp/handlers/donations.py:222
 #, python-brace-format
 msgid "You absolute legend, {name}! {stars}⭐️ delivered. {kind} unlocked."
 msgstr "You absolute legend, {name}! {stars}⭐️ delivered. {kind} unlocked."
 
-#: derp/handlers/donations.py:227
+#: derp/handlers/donations.py:223
 #, python-brace-format
 msgid "{name}, you fed the Derp! +{stars}⭐️ {kind} time."
 msgstr "{name}, you fed the Derp! +{stars}⭐️ {kind} time."
 
-#: derp/handlers/donations.py:228
+#: derp/handlers/donations.py:224
 #, python-brace-format
 msgid "{stars}⭐️ received — karma++ for {name}! Enjoy a {kind}."
 msgstr "{stars}⭐️ received — karma++ for {name}! Enjoy a {kind}."
 
-#: derp/handlers/donations.py:229
+#: derp/handlers/donations.py:225
 #, python-brace-format
 msgid "{name}, your {stars}⭐️ keeps the servers toasty. {kind} incoming!"
 msgstr "{name}, your {stars}⭐️ keeps the servers toasty. {kind} incoming!"
 
-#: derp/handlers/donations.py:259
+#: derp/handlers/donations.py:255
 #, python-brace-format
 msgid "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
 msgstr "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
 
-#: derp/handlers/gemini.py:299
+#: derp/handlers/gemini.py:300 derp/handlers/gemini_image.py:146
+#: derp/handlers/gemini_image.py:196 derp/handlers/gemini_inline.py:139
+msgid ""
+"⏳ I'm getting too many requests right now. Please try again in about 30 "
+"seconds."
+msgstr ""
+"⏳ I'm getting too many requests right now. Please try again in about 30 "
+"seconds."
+
+#: derp/handlers/gemini.py:307
 msgid "😅 Something went wrong with Gemini. I couldn't process that message."
 msgstr "😅 Something went wrong with Gemini. I couldn't process that message."
 
-#: derp/handlers/gemini_image.py:88
+#: derp/handlers/gemini_image.py:89
 msgid "🤷 No image generated."
 msgstr "🤷 No image generated."
 
-#: derp/handlers/gemini_image.py:127
+#: derp/handlers/gemini_image.py:128
 msgid "Usage: /imagine <prompt>"
 msgstr "Usage: /imagine <prompt>"
 
-#: derp/handlers/gemini_image.py:145
+#: derp/handlers/gemini_image.py:151 derp/handlers/gemini_image.py:156
 msgid "😅 Something went wrong while generating the image. Try again later."
 msgstr "😅 Something went wrong while generating the image. Try again later."
 
-#: derp/handlers/gemini_image.py:158
+#: derp/handlers/gemini_image.py:169
 msgid "Reply to an image and use: /edit <prompt>"
 msgstr "Reply to an image and use: /edit <prompt>"
 
-#: derp/handlers/gemini_image.py:163
+#: derp/handlers/gemini_image.py:174
 msgid "Please reply to an image (photo/document sticker) to edit it."
 msgstr "Please reply to an image (photo/document sticker) to edit it."
 
-#: derp/handlers/gemini_image.py:185
+#: derp/handlers/gemini_image.py:201 derp/handlers/gemini_image.py:206
 msgid "😅 Something went wrong while editing the image. Try again later."
 msgstr "😅 Something went wrong while editing the image. Try again later."
 
-#: derp/handlers/gemini_image.py:193
+#: derp/handlers/gemini_image.py:214
 msgid "🔒 This feature is only available for premium users and chats."
 msgstr "🔒 This feature is only available for premium users and chats."
 
@@ -333,7 +342,7 @@ msgstr "Start personal chat"
 msgid "🤯 My circuits are a bit tangled. I couldn't generate a response."
 msgstr "🤯 My circuits are a bit tangled. I couldn't generate a response."
 
-#: derp/handlers/gemini_inline.py:138
+#: derp/handlers/gemini_inline.py:146
 msgid "😅 Something went wrong with Gemini. I couldn't process that."
 msgstr "😅 Something went wrong with Gemini. I couldn't process that."
 

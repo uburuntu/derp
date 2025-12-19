@@ -18,7 +18,7 @@ from aiogram.types import (
 from aiogram.utils.i18n import gettext as _
 
 from derp.common.extractor import Extractor
-from derp.common.llm_gemini import Gemini, GeminiResult
+from derp.common.llm_gemini import Gemini, GeminiResult, QuotaExceededError
 from derp.config import settings
 from derp.db import get_db_manager, get_recent_messages
 from derp.filters import DerpMentionFilter
@@ -293,6 +293,13 @@ class GeminiResponseHandler(MessageHandler):
 
                 return sent_message
 
+        except QuotaExceededError:
+            logfire.warning("gemini_quota_exceeded")
+            return await self.event.reply(
+                _(
+                    "⏳ I'm getting too many requests right now. Please try again in about 30 seconds."
+                )
+            )
         except Exception:
             logfire.exception("gemini_handler_failed")
             return await self.event.reply(

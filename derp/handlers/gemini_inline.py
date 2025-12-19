@@ -18,7 +18,7 @@ from aiogram.types import (
 )
 from aiogram.utils.i18n import gettext as _
 
-from ..common.llm_gemini import Gemini
+from ..common.llm_gemini import Gemini, QuotaExceededError
 from ..config import settings
 
 router = Router(name="gemini_inline")
@@ -132,6 +132,14 @@ async def gemini_chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bo
                 _("🤯 My circuits are a bit tangled. I couldn't generate a response."),
                 inline_message_id=chosen_result.inline_message_id,
             )
+    except QuotaExceededError:
+        logfire.warning("gemini_inline_quota_exceeded")
+        await bot.edit_message_text(
+            _(
+                "⏳ I'm getting too many requests right now. Please try again in about 30 seconds."
+            ),
+            inline_message_id=chosen_result.inline_message_id,
+        )
     except Exception:
         logfire.exception("gemini_inline_handler_failed")
         await bot.edit_message_text(

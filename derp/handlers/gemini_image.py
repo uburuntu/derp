@@ -8,6 +8,7 @@ from aiogram.types import BufferedInputFile, Message
 from aiogram.utils.i18n import gettext as _
 from aiogram.utils.media_group import MediaGroupBuilder
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from google.genai.types import GenerateContentResponse
 
@@ -137,6 +138,18 @@ async def handle_imagine(message: Message, meta: MetaInfo) -> Message:
             contents=contents,
         )
         return await _send_images(meta.target_message, response)
+    except genai_errors.ClientError as exc:
+        if exc.code == 429:
+            logfire.warning("imagine_quota_exceeded")
+            return await message.reply(
+                _(
+                    "⏳ I'm getting too many requests right now. Please try again in about 30 seconds."
+                )
+            )
+        logfire.exception("imagine_failed")
+        return await message.reply(
+            _("😅 Something went wrong while generating the image. Try again later.")
+        )
     except Exception:
         logfire.exception("imagine_failed")
         return await message.reply(
@@ -175,6 +188,18 @@ async def handle_edit(message: Message, meta: MetaInfo) -> Message:
             contents=contents,
         )
         return await _send_images(meta.target_message, response)
+    except genai_errors.ClientError as exc:
+        if exc.code == 429:
+            logfire.warning("edit_quota_exceeded")
+            return await message.reply(
+                _(
+                    "⏳ I'm getting too many requests right now. Please try again in about 30 seconds."
+                )
+            )
+        logfire.exception("edit_failed")
+        return await message.reply(
+            _("😅 Something went wrong while editing the image. Try again later.")
+        )
     except Exception:
         logfire.exception("edit_failed")
         return await message.reply(
