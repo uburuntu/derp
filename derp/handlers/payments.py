@@ -9,14 +9,10 @@ Flow:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import logfire
 from aiogram import Bot, F, Router
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     LabeledPrice,
     Message,
     PreCheckoutQuery,
@@ -24,58 +20,16 @@ from aiogram.types import (
 from aiogram.utils.i18n import gettext as _
 
 from derp.credits import CreditService
+from derp.credits.packs import CREDIT_PACKS
+from derp.credits.ui import build_buy_keyboard
 from derp.db import get_db_manager
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 
 router = Router(name="payments")
 
-
-# Credit pack definitions
-@dataclass(frozen=True, slots=True)
-class CreditPack:
-    """A purchasable credit pack."""
-
-    id: str
-    name: str
-    stars: int  # Telegram Stars cost
-    credits: int  # Credits received
-    bonus_pct: int  # Bonus percentage for display
-
-
-CREDIT_PACKS: dict[str, CreditPack] = {
-    "starter": CreditPack("starter", "Starter", 50, 50, 0),
-    "basic": CreditPack("basic", "Basic", 150, 165, 10),
-    "standard": CreditPack("standard", "Standard", 500, 600, 20),
-    "bulk": CreditPack("bulk", "Bulk", 1500, 2000, 33),
-}
-
-
-def build_buy_keyboard(chat_id: int | None = None) -> InlineKeyboardMarkup:
-    """Build inline keyboard with buy buttons.
-
-    Args:
-        chat_id: If provided, credits go to chat pool. Otherwise personal.
-    """
-    target = f"chat:{chat_id}" if chat_id else "user"
-
-    buttons = []
-    for pack in CREDIT_PACKS.values():
-        if pack.bonus_pct > 0:
-            label = f"⭐ {pack.stars} → {pack.credits} credits (+{pack.bonus_pct}%)"
-        else:
-            label = f"⭐ {pack.stars} → {pack.credits} credits"
-
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text=label,
-                    callback_data=f"buy:{pack.id}:{target}",
-                )
-            ]
-        )
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+# Export for use in other modules if needed, though importing from derp.credits.* is preferred
+__all__ = ["build_buy_keyboard", "router"]
 
 
 @router.callback_query(F.data.startswith("buy:"))

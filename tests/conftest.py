@@ -10,7 +10,7 @@ import os
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -339,6 +339,16 @@ def make_user():
         user.language_code = language_code
         user.is_premium = is_premium
         user.full_name = full_name or f"{first_name} {last_name or ''}".strip()
+        # Add model_dump for Pydantic compatibility
+        user.model_dump.return_value = {
+            "id": id,
+            "is_bot": is_bot,
+            "first_name": first_name,
+            "last_name": last_name,
+            "username": username,
+            "language_code": language_code,
+            "is_premium": is_premium,
+        }
 
         for key, value in kwargs.items():
             setattr(user, key, value)
@@ -370,6 +380,16 @@ def make_chat():
         chat.first_name = first_name
         chat.last_name = last_name
         chat.is_forum = is_forum
+        # Add model_dump for Pydantic compatibility
+        chat.model_dump.return_value = {
+            "id": id,
+            "type": type,
+            "title": title,
+            "username": username,
+            "first_name": first_name,
+            "last_name": last_name,
+            "is_forum": is_forum,
+        }
 
         for key, value in kwargs.items():
             setattr(chat, key, value)
@@ -407,6 +427,11 @@ def make_message(make_user, make_chat):
         message.reply_to_message = reply_to_message
         message.message_thread_id = message_thread_id
         message.content_type = content_type
+        # Add pydantic fields for logfire compatibility
+        message.__fields__ = {}
+        message.__fields_set__ = set()
+        # Add model_dump_json for Pydantic compatibility
+        message.model_dump_json.return_value = f'{{"message_id": {message_id}, "text": "{text or ""}", "chat_id": {chat_id}}}'
 
         # Initialize media attributes
         message.photo = None
@@ -437,6 +462,10 @@ def make_message(make_user, make_chat):
         message.answer_photo = AsyncMock(return_value=message)
         message.answer_document = AsyncMock(return_value=message)
         message.react = AsyncMock(return_value=True)
+        message.reply_photo = AsyncMock(return_value=message)
+        message.reply_audio = AsyncMock(return_value=message)
+        message.reply_video = AsyncMock(return_value=message)
+        message.reply_media_group = AsyncMock(return_value=[message])
 
         # Bot property
         message.bot = MagicMock()
@@ -674,7 +703,187 @@ def mock_db_client():
     session = AsyncMock()
     db.session.return_value.__aenter__.return_value = session
     db.session.return_value.__aexit__.return_value = None
+    db.read_session.return_value.__aenter__.return_value = session
+    db.read_session.return_value.__aexit__.return_value = None
     return db
+
+
+# =============================================================================
+# MOCK DB MODEL FIXTURES (for handler tests)
+# =============================================================================
+
+
+@pytest.fixture
+def mock_user_model():
+    """Create a mock UserModel (database model, not Telegram type).
+
+    Usage:
+        async def test_handler(mock_user_model):
+            await handler(message, user=mock_user_model)
+    """
+
+    def _make(
+        user_id: str = "user-uuid-123",
+        telegram_id: int = 12345,
+        credits: int = 100,
+        **kwargs,
+    ) -> MagicMock:
+        user = MagicMock()
+        user.id = user_id
+        user.telegram_id = telegram_id
+        user.credits = credits
+        for key, value in kwargs.items():
+            setattr(user, key, value)
+        return user
+
+    return _make
+
+
+@pytest.fixture
+def mock_chat_model():
+    """Create a mock ChatModel (database model, not Telegram type).
+
+    Usage:
+        async def test_handler(mock_chat_model):
+            chat = mock_chat_model(telegram_id=-100123)
+            await handler(message, chat_settings=chat)
+    """
+
+    def _make(
+        chat_id: str = "chat-uuid-123",
+        telegram_id: int = -100123456,
+        chat_type: str = "supergroup",
+        credits: int = 0,
+        llm_memory: str | None = None,
+        **kwargs,
+    ) -> MagicMock:
+        chat = MagicMock()
+        chat.id = chat_id
+        chat.telegram_id = telegram_id
+        chat.type = chat_type
+        chat.credits = credits
+        chat.llm_memory = llm_memory
+        for key, value in kwargs.items():
+            setattr(chat, key, value)
+        return chat
+
+    return _make
+
+
+@pytest.fixture
+def mock_meta():
+    """Create a mock MetaInfo for command handlers.
+
+    Usage:
+        async def test_imagine(mock_meta):
+            meta = mock_meta(target_text="a cat")
+            await handle_imagine(message, meta, chat, user)
+    """
+
+    def _make(
+        target_text: str = "",
+        arguments: list[str] | None = None,
+        target_message: Any = None,
+        keyword: str = "",
+        **kwargs,
+    ) -> MagicMock:
+        meta = MagicMock()
+        meta.target_text = target_text
+        meta.arguments = arguments or []
+        meta.target_message = target_message
+        meta.keyword = keyword
+        for key, value in kwargs.items():
+            setattr(meta, key, value)
+        return meta
+
+    return _make
+
+
+# =============================================================================
+# CREDIT SYSTEM FIXTURES
+# =============================================================================
+
+
+@pytest.fixture
+def make_credit_check_result():
+    """Factory for creating CreditCheckResult objects.
+
+    Usage:
+        def test_with_credits(make_credit_check_result):
+            result = make_credit_check_result(allowed=True, credits_to_deduct=5)
+
+        def test_no_credits(make_credit_check_result):
+            result = make_credit_check_result(
+                allowed=False,
+                reject_reason="Not enough credits"
+            )
+    """
+    from derp.credits.models import ModelTier
+    from derp.credits.types import CreditCheckResult
+
+    def _make(
+        allowed: bool = True,
+        tier: ModelTier = ModelTier.STANDARD,
+        model_id: str = "gemini-2.5-flash",
+        source: str = "user",
+        credits_to_deduct: int = 1,
+        credits_remaining: int | None = 99,
+        free_remaining: int = 0,
+        reject_reason: str | None = None,
+    ) -> CreditCheckResult:
+        return CreditCheckResult(
+            allowed=allowed,
+            tier=tier,
+            model_id=model_id,
+            source=source if allowed else "rejected",
+            credits_to_deduct=credits_to_deduct if allowed else 0,
+            credits_remaining=credits_remaining,
+            free_remaining=free_remaining,
+            reject_reason=reject_reason,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def mock_credit_service(mock_db_client, make_credit_check_result):
+    """Create a pre-configured mock CreditService.
+
+    Returns a tuple of (service_mock, patcher) for use with context manager.
+
+    Usage:
+        async def test_with_credits(mock_credit_service, make_credit_check_result):
+            service, patch_credit_service = mock_credit_service(
+                "derp.handlers.video",
+                check_result=make_credit_check_result(allowed=True)
+            )
+            with patch_credit_service:
+                await handle_video(...)
+                service.deduct.assert_awaited_once()
+    """
+
+    def _make(
+        module_path: str,
+        check_result=None,
+        purchase_result: int = 100,
+    ):
+        check_result = check_result or make_credit_check_result()
+
+        service = MagicMock()
+        service.check_tool_access = AsyncMock(return_value=check_result)
+        service.check_model_access = AsyncMock(return_value=check_result)
+        service.deduct = AsyncMock()
+        service.purchase_credits = AsyncMock(return_value=purchase_result)
+        service.get_orchestrator_config = AsyncMock(
+            return_value=(check_result.tier, check_result.model_id, 100)
+        )
+
+        # Create the patcher
+        patcher = patch(f"{module_path}.CreditService", return_value=service)
+
+        return service, patcher
+
+    return _make
 
 
 # =============================================================================

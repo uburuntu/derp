@@ -15,7 +15,7 @@ from aiogram import md
 from aiogram.types import BufferedInputFile, Message, ReactionTypeEmoji
 from aiogram.utils.i18n import gettext as _
 from aiogram.utils.media_group import MediaGroupBuilder
-from pydantic_ai import BinaryImage, RunResult
+from pydantic_ai import AgentRunResult, BinaryImage
 
 if TYPE_CHECKING:
     pass
@@ -163,8 +163,8 @@ class AgentResult:
         return f"generated_{idx}.{ext}"
 
     @classmethod
-    def from_run_result(cls, result: RunResult) -> AgentResult:
-        """Create an AgentResult from a Pydantic-AI RunResult.
+    def from_run_result(cls, result: AgentRunResult) -> AgentResult:
+        """Create an AgentResult from a Pydantic-AI AgentRunResult.
 
         Handles both text and BinaryImage outputs.
         """

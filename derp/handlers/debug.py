@@ -35,12 +35,13 @@ from derp.models import User as UserModel
 
 router = Router(name="debug")
 
-
 # Only process messages from admins
-@router.message.filter(
+router.message.filter(
     lambda msg: msg.from_user and msg.from_user.id in settings.admin_ids
 )
-@router.callback_query.filter(lambda cb: cb.from_user.id in settings.admin_ids)
+router.callback_query.filter(lambda cb: cb.from_user.id in settings.admin_ids)
+
+
 # --- Debug Credit Packs (1 star each for testing) ---
 @dataclass(frozen=True, slots=True)
 class DebugCreditPack:
