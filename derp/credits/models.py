@@ -22,7 +22,7 @@ from enum import StrEnum
 
 # Credit base: 1 credit = $0.001 USD
 CREDIT_BASE_USD = Decimal("0.001")
-DEFAULT_MARGIN = Decimal("0.80")  # 80% profit margin
+DEFAULT_MARGIN = Decimal("0.30")  # 30% profit margin
 
 
 class ModelType(StrEnum):
