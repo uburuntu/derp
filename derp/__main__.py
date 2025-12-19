@@ -16,7 +16,17 @@ from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
 from derp.config import settings
 from derp.db import init_db_manager
-from derp.handlers import basic, chat, chat_settings, donations, image, inline
+from derp.handlers import (
+    basic,
+    chat,
+    chat_settings,
+    credit_cmds,
+    debug,
+    donations,
+    image,
+    inline,
+    payments,
+)
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
 from derp.middlewares.chat_settings import ChatSettingsMiddleware
 from derp.middlewares.database_logger import DatabaseLoggerMiddleware
@@ -100,9 +110,12 @@ async def main() -> None:
     dp.message.middleware(ChatActionMiddleware())
 
     dp.include_routers(
+        debug.router,  # Admin debug commands (must be early to handle debug payments)
         basic.router,
         donations.router,
         chat_settings.router,
+        credit_cmds.router,  # Credit management commands (/credits, /buy, /think)
+        payments.router,  # Telegram Stars payment handling
         image.router,
         inline.router,
         # Must be the last one to handle all unhandled messages

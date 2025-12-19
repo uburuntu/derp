@@ -5,12 +5,14 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, String
+from sqlalchemy import BigInteger, CheckConstraint, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from derp.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from derp.models.credit_transaction import CreditTransaction
+    from derp.models.daily_usage import DailyUsage
     from derp.models.message import Message
 
 
@@ -22,6 +24,9 @@ class User(TimestampMixin, Base):
     """
 
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("credits >= 0", name="user_credits_non_negative"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
@@ -32,8 +37,15 @@ class User(TimestampMixin, Base):
     language_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
     is_premium: Mapped[bool] = mapped_column(default=False)
 
+    # Credit balance for paid features
+    credits: Mapped[int] = mapped_column(default=0)
+
     # Relationships
     messages: Mapped[list[Message]] = relationship(back_populates="user")
+    credit_transactions: Mapped[list[CreditTransaction]] = relationship(
+        back_populates="user"
+    )
+    daily_usages: Mapped[list[DailyUsage]] = relationship(back_populates="user")
 
     @property
     def full_name(self) -> str:

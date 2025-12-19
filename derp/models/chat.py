@@ -11,6 +11,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from derp.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from derp.models.credit_transaction import CreditTransaction
+    from derp.models.daily_usage import DailyUsage
     from derp.models.message import Message
 
 
@@ -24,6 +26,7 @@ class Chat(TimestampMixin, Base):
     __tablename__ = "chats"
     __table_args__ = (
         CheckConstraint("length(llm_memory) <= 1024", name="llm_memory_max_length"),
+        CheckConstraint("credits >= 0", name="chat_credits_non_negative"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -38,10 +41,17 @@ class Chat(TimestampMixin, Base):
     # Chat settings (merged from ChatSettings)
     llm_memory: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Credit balance for group pool (sponsors can fund the group)
+    credits: Mapped[int] = mapped_column(default=0)
+
     # Relationships
     messages: Mapped[list[Message]] = relationship(
         back_populates="chat", cascade="all, delete-orphan"
     )
+    credit_transactions: Mapped[list[CreditTransaction]] = relationship(
+        back_populates="chat"
+    )
+    daily_usages: Mapped[list[DailyUsage]] = relationship(back_populates="chat")
 
     @property
     def display_name(self) -> str:

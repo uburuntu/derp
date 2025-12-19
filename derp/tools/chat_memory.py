@@ -12,8 +12,10 @@ from pydantic_ai import RunContext
 
 from derp.db import update_chat_memory as db_update_chat_memory
 from derp.llm.deps import AgentDeps
+from derp.tools.wrapper import credit_aware_tool
 
 
+@credit_aware_tool("update_memory")
 async def update_chat_memory(ctx: RunContext[AgentDeps], full_memory: str) -> str:
     """Save the entire memory state after combining existing memory with new facts.
 

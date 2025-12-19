@@ -3,6 +3,8 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
 
+from derp.config import settings
+
 router = Router()
 
 
@@ -29,6 +31,9 @@ async def cmd_help(message: Message):
         "Available commands:\n"
         "• /derp - Trigger AI response\n"
         "• /donate [stars] - Support the bot with Telegram Stars (default 20)\n"
+        "• /credits - Check your credit balance\n"
+        "• /buy - Purchase personal credits with Stars\n"
+        "• /buy_chat - Purchase chat pool credits (groups)\n"
         "• /imagine <prompt> - Generate images with AI (premium)\n"
         "• /edit <prompt> - Edit images with AI (premium)\n"
         "• /settings - Show current chat settings\n"
@@ -41,4 +46,19 @@ async def cmd_help(message: Message):
         "• Use me in private chats\n"
         "• Use inline mode: @DerpRobot <query>"
     )
+
+    # Add debug commands for admins
+    if message.from_user and message.from_user.id in settings.admin_ids:
+        debug_text = _(
+            "\n\n🛠 Debug (admin only):\n"
+            "• /debug_buy - 1⭐ test packs (user/chat)\n"
+            "• /debug_credits <n> [chat] - Add credits\n"
+            "• /debug_reset [chat] - Reset to 0\n"
+            "• /debug_status - Full diagnostic\n"
+            "• /debug_refund <id> - Test refund\n"
+            "• /debug_tools - List tool pricing\n"
+            "• /debug_help - All debug commands"
+        )
+        help_text += debug_text
+
     return await message.reply(html.quote(help_text))
