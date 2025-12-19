@@ -240,7 +240,9 @@ class TestBuildContextPrompt:
         ) as mock_get:
             mock_get.return_value = []
 
-            result = await build_context_prompt(message, mock_db_client, context_limit=10)
+            result = await build_context_prompt(
+                message, mock_db_client, context_limit=10
+            )
 
             assert "Test Chat" in result or "supergroup" in result
 
@@ -265,7 +267,9 @@ class TestBuildContextPrompt:
         ) as mock_get:
             mock_get.return_value = []
 
-            result = await build_context_prompt(message, mock_db_client, context_limit=10)
+            result = await build_context_prompt(
+                message, mock_db_client, context_limit=10
+            )
 
             assert "What is Python?" in result
 

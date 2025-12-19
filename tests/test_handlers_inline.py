@@ -162,4 +162,3 @@ async def test_chosen_inline_result_exception():
 
         bot.edit_message_text.assert_awaited_once()
         assert "Something went wrong" in bot.edit_message_text.call_args[0][0]
-

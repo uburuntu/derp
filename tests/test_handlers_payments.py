@@ -203,4 +203,3 @@ class TestSuccessfulPayment:
 
         message.answer.assert_awaited_once()
         assert "could not be added" in message.answer.call_args[0][0]
-

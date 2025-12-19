@@ -166,4 +166,3 @@ class TestPersistBotActionsMiddleware:
             result = await middleware(make_request, mock_bot, method)
 
             assert result is message_result
-

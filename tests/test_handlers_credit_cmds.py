@@ -156,4 +156,3 @@ async def test_show_buy_chat_options_no_user(make_message):
 
     message.reply.assert_awaited_once()
     assert "Could not find" in message.reply.call_args[0][0]
-
