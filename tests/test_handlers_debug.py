@@ -122,7 +122,9 @@ async def test_debug_add_credits(
 
 
 @pytest.mark.asyncio
-async def test_debug_add_credits_no_user(make_message, mock_sender, mock_credit_service_factory):
+async def test_debug_add_credits_no_user(
+    make_message, mock_sender, mock_credit_service_factory
+):
     """Test /debug_credits without user returns error."""
     message = make_message(text="/debug_credits 50")
     sender = mock_sender(message=message)
@@ -137,7 +139,11 @@ async def test_debug_add_credits_no_user(make_message, mock_sender, mock_credit_
 
 @pytest.mark.asyncio
 async def test_debug_status(
-    make_message, mock_sender, mock_user_model, mock_chat_model, mock_credit_service_factory
+    make_message,
+    mock_sender,
+    mock_user_model,
+    mock_chat_model,
+    mock_credit_service_factory,
 ):
     """Test /debug_status shows diagnostics."""
     message = make_message(text="/debug_status")
@@ -163,7 +169,9 @@ async def test_debug_status(
 
 
 @pytest.mark.asyncio
-async def test_debug_status_no_user(make_message, mock_sender, mock_credit_service_factory):
+async def test_debug_status_no_user(
+    make_message, mock_sender, mock_credit_service_factory
+):
     """Test /debug_status without user returns error."""
     message = make_message(text="/debug_status")
     sender = mock_sender(message=message)
