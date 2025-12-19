@@ -67,15 +67,9 @@ def create_model(tier: ModelTier = ModelTier.STANDARD) -> Model:
     """
     model_name = TIER_MODELS[tier]
 
-    # For now, we use Google as the primary provider
-    # Future: Add FallbackModel with OpenRouter/OpenAI as backup
-    # Use free/rotating keys for CHEAP tier; paid key for everything else.
-    api_key = (
-        _get_google_api_key()
-        if tier == ModelTier.CHEAP
-        else settings.google_api_paid_key
-    )
-    provider = GoogleProvider(api_key=api_key)
+    # Use paid API key for all tiers to avoid free tier rate limits.
+    # The CHEAP tier still uses a cheaper model for cost efficiency.
+    provider = GoogleProvider(api_key=settings.google_api_paid_key)
 
     return GoogleModel(model_name, provider=provider)
 

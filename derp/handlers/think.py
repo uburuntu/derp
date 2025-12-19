@@ -11,6 +11,7 @@ from aiogram import Router, flags
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
+from pydantic_ai.exceptions import ModelHTTPError
 
 from derp.common.sender import MessageSender
 from derp.credits import CreditService
@@ -116,6 +117,29 @@ async def handle_think(
             f"🧠 **Deep Thinking Result:**\n\n{agent_result.output}",
         )
 
+    except ModelHTTPError as exc:
+        if exc.status_code == 429:
+            logfire.warning(
+                "think_rate_limited",
+                status_code=exc.status_code,
+                model=exc.model_name,
+                user_id=user_model.telegram_id if user_model else None,
+            )
+            return await message.reply(
+                _(
+                    "⏳ The AI service is overloaded right now.\n\n"
+                    "This happens during peak usage. Please wait 30-60 seconds "
+                    "and try again."
+                )
+            )
+        logfire.exception(
+            "think_model_http_error",
+            status_code=exc.status_code,
+            user_id=user_model.telegram_id if user_model else None,
+        )
+        return await message.reply(
+            _("😅 Something went wrong during deep thinking. Please try again.")
+        )
     except Exception:
         logfire.exception(
             "think_command_failed",

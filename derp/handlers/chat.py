@@ -21,7 +21,7 @@ from aiogram.handlers import MessageHandler
 from aiogram.types import Message, ReactionTypeEmoji
 from aiogram.utils.i18n import gettext as _
 from pydantic_ai import BinaryContent
-from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
 from derp.common.extractor import Extractor
 from derp.config import settings
@@ -331,6 +331,24 @@ class ChatAgentHandler(MessageHandler):
 
                 return await agent_result.reply_to(self.event)
 
+        except ModelHTTPError as exc:
+            if exc.status_code == 429:
+                logfire.warning(
+                    "chat_rate_limited",
+                    status_code=exc.status_code,
+                    model=exc.model_name,
+                )
+                return await self.event.reply(
+                    _(
+                        "⏳ The AI service is overloaded right now.\n\n"
+                        "This happens during peak usage. Please wait 30-60 seconds "
+                        "and try again."
+                    )
+                )
+            logfire.exception("chat_model_http_error", status_code=exc.status_code)
+            return await self.event.reply(
+                _("😅 Something went wrong. I couldn't process that message.")
+            )
         except UnexpectedModelBehavior as exc:
             logfire.warning("agent_unexpected_behavior", error=str(exc))
             return await self.event.reply(

@@ -21,7 +21,7 @@ from aiogram.types import (
     InputTextMessageContent,
 )
 from aiogram.utils.i18n import gettext as _
-from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
 from derp.common.sender import MessageSender
 from derp.config import settings
@@ -152,8 +152,28 @@ async def chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bot) -> N
                 )
                 logfire.warning("inline_empty_response")
 
+    except ModelHTTPError as exc:
+        if exc.status_code == 429:
+            logfire.warning(
+                "inline_rate_limited",
+                status_code=exc.status_code,
+                model=exc.model_name,
+            )
+            await sender.edit_inline(
+                chosen_result.inline_message_id,
+                _(
+                    "⏳ The AI service is overloaded right now.\n\n"
+                    "Please wait 30-60 seconds and try again."
+                ),
+            )
+        else:
+            logfire.exception("inline_model_http_error", status_code=exc.status_code)
+            await sender.edit_inline(
+                chosen_result.inline_message_id,
+                _("😅 Something went wrong. I couldn't process that."),
+            )
     except UnexpectedModelBehavior:
-        logfire.warning("inline_rate_limited")
+        logfire.warning("inline_unexpected_behavior")
         await sender.edit_inline(
             chosen_result.inline_message_id,
             _(

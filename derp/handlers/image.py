@@ -15,7 +15,7 @@ from aiogram import Router, flags
 from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
 from pydantic_ai import BinaryContent, BinaryImage
-from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
 from derp.common.extractor import Extractor
 from derp.common.sender import MessageSender
@@ -167,8 +167,26 @@ async def handle_imagine(
 
             return await _send_image_result(meta.target_message, output)
 
+    except ModelHTTPError as exc:
+        if exc.status_code == 429:
+            logfire.warning(
+                "imagine_rate_limited",
+                status_code=exc.status_code,
+                model=exc.model_name,
+            )
+            return await message.reply(
+                _(
+                    "⏳ The AI service is overloaded right now.\n\n"
+                    "This happens during peak usage. Please wait 30-60 seconds "
+                    "and try again."
+                )
+            )
+        logfire.exception("imagine_model_http_error", status_code=exc.status_code)
+        return await message.reply(
+            _("😅 Something went wrong while generating the image. Try again later.")
+        )
     except UnexpectedModelBehavior:
-        logfire.warning("imagine_rate_limited")
+        logfire.warning("imagine_unexpected_behavior")
         return await message.reply(
             _(
                 "⏳ I'm getting too many requests right now. "
@@ -272,8 +290,26 @@ async def handle_edit(
 
             return await _send_image_result(meta.target_message, output)
 
+    except ModelHTTPError as exc:
+        if exc.status_code == 429:
+            logfire.warning(
+                "edit_rate_limited",
+                status_code=exc.status_code,
+                model=exc.model_name,
+            )
+            return await message.reply(
+                _(
+                    "⏳ The AI service is overloaded right now.\n\n"
+                    "This happens during peak usage. Please wait 30-60 seconds "
+                    "and try again."
+                )
+            )
+        logfire.exception("edit_model_http_error", status_code=exc.status_code)
+        return await message.reply(
+            _("😅 Something went wrong while editing the image. Try again later.")
+        )
     except UnexpectedModelBehavior:
-        logfire.warning("edit_rate_limited")
+        logfire.warning("edit_unexpected_behavior")
         return await message.reply(
             _(
                 "⏳ I'm getting too many requests right now. "

@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-12-19 20:41+0300\n"
+"POT-Creation-Date: 2025-12-20 02:30+0300\n"
 "PO-Revision-Date: 2025-04-28 20:27+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ru\n"
@@ -126,8 +126,20 @@ msgstr ""
 msgid "Context: {chars} chars, {msgs} messages"
 msgstr "Контекст: {chars} символов, {msgs} сообщений"
 
-#: derp/handlers/chat.py:342 derp/handlers/image.py:190
-#: derp/handlers/image.py:314 derp/handlers/inline.py:154
+#: derp/handlers/chat.py:343 derp/handlers/image.py:179
+#: derp/handlers/image.py:302 derp/handlers/think.py:130
+msgid ""
+"⏳ The AI service is overloaded right now.\n"
+"\n"
+"This happens during peak usage. Please wait 30-60 seconds and try again."
+msgstr ""
+
+#: derp/handlers/chat.py:350 derp/handlers/chat.py:363
+msgid "😅 Something went wrong. I couldn't process that message."
+msgstr "😅 Что-то пошло не так. Я не смог обработать это сообщение."
+
+#: derp/handlers/chat.py:356 derp/handlers/image.py:192
+#: derp/handlers/image.py:315 derp/handlers/inline.py:180
 msgid ""
 "⏳ I'm getting too many requests right now. Please try again in about 30 "
 "seconds."
@@ -135,89 +147,85 @@ msgstr ""
 "⏳ Сейчас слишком много запросов. Пожалуйста, попробуйте снова примерно "
 "через 30 секунд."
 
-#: derp/handlers/chat.py:349
-msgid "😅 Something went wrong. I couldn't process that message."
-msgstr "😅 Что-то пошло не так. Я не смог обработать это сообщение."
-
-#: derp/handlers/credit_cmds.py:32 derp/handlers/credit_cmds.py:92
-#: derp/handlers/credit_cmds.py:162
+#: derp/handlers/credit_cmds.py:37 derp/handlers/credit_cmds.py:98
+#: derp/handlers/credit_cmds.py:165
 msgid "😅 Could not find your user info."
 msgstr "😅 Не удалось найти информацию о вашем пользователе."
 
-#: derp/handlers/credit_cmds.py:53
+#: derp/handlers/credit_cmds.py:58
 msgid "💰 **Your Credits**\n"
 msgstr "💰 **Ваши кредиты**\n"
 
-#: derp/handlers/credit_cmds.py:57
+#: derp/handlers/credit_cmds.py:62
 #, python-brace-format
 msgid "🏠 Chat pool: **{credits}** credits"
 msgstr "🏠 Общий пул чата: **{credits}** кредитов"
 
-#: derp/handlers/credit_cmds.py:60
+#: derp/handlers/credit_cmds.py:65
 #, python-brace-format
 msgid "👤 Personal: **{credits}** credits\n"
 msgstr "👤 Личные: **{credits}** кредитов\n"
 
-#: derp/handlers/credit_cmds.py:63
+#: derp/handlers/credit_cmds.py:68
 msgid "✅ Chat credits will be used first."
 msgstr "✅ Сначала будут использованы кредиты чата."
 
-#: derp/handlers/credit_cmds.py:65
+#: derp/handlers/credit_cmds.py:70
 msgid "✅ Your personal credits will be used."
 msgstr "✅ Будут использованы ваши личные кредиты."
 
-#: derp/handlers/credit_cmds.py:67 derp/handlers/credit_cmds.py:75
+#: derp/handlers/credit_cmds.py:72 derp/handlers/credit_cmds.py:80
 msgid "💡 No credits! Use /buy to get some."
 msgstr "💡 Нет кредитов! Используйте /buy, чтобы купить."
 
-#: derp/handlers/credit_cmds.py:70
+#: derp/handlers/credit_cmds.py:75
 #, python-brace-format
 msgid "👤 Balance: **{credits}** credits\n"
 msgstr "👤 Баланс: **{credits}** кредитов\n"
 
-#: derp/handlers/credit_cmds.py:73
+#: derp/handlers/credit_cmds.py:78
 msgid "✅ You have credits for premium features!"
 msgstr "✅ У вас есть кредиты для премиум-функций!"
 
-#: derp/handlers/credit_cmds.py:105
+#: derp/handlers/credit_cmds.py:108
 msgid "🛒 **Credit Packs**\n"
 msgstr "🛒 **Пакеты кредитов**\n"
 
-#: derp/handlers/credit_cmds.py:106
+#: derp/handlers/credit_cmds.py:109
 msgid "Buy credits with Telegram Stars ⭐\n"
 msgstr "Купить кредиты за Telegram Stars ⭐\n"
 
-#: derp/handlers/credit_cmds.py:113
+#: derp/handlers/credit_cmds.py:116
 #, python-brace-format
 msgid "• **{name}**: {stars} ⭐ → {credits} credits (+{bonus}% bonus)"
 msgstr "• **{name}**: {stars} ⭐ → {credits} кредитов (+{bonus}% бонус)"
 
-#: derp/handlers/credit_cmds.py:123
+#: derp/handlers/credit_cmds.py:126
 #, python-brace-format
 msgid "• **{name}**: {stars} ⭐ → {credits} credits"
 msgstr "• **{name}**: {stars} ⭐ → {credits} кредитов"
 
-#: derp/handlers/credit_cmds.py:131
+#: derp/handlers/credit_cmds.py:134
 msgid "**What can you do with credits?**"
 msgstr "**На что можно потратить кредиты?**"
 
-#: derp/handlers/credit_cmds.py:132
+#: derp/handlers/credit_cmds.py:135
 msgid "• 1 credit = 1 AI message (better quality model)"
 msgstr "• 1 кредит = 1 сообщение ИИ (модель получше)"
 
-#: derp/handlers/credit_cmds.py:133
+#: derp/handlers/credit_cmds.py:136
 msgid "• 5 credits = 1 image generation"
 msgstr "• 5 кредитов = 1 генерация изображения"
 
-#: derp/handlers/credit_cmds.py:134
+#: derp/handlers/credit_cmds.py:137
 msgid "• 10 credits = 1 deep thinking (/think)"
 msgstr "• 10 кредитов = 1 глубокое размышление (/think)"
 
-#: derp/handlers/credit_cmds.py:136 derp/handlers/credit_cmds.py:184
+#: derp/handlers/credit_cmds.py:139 derp/handlers/credit_cmds.py:185
 msgid "👇 **Tap a button to buy:**"
 msgstr "👇 **Нажмите кнопку, чтобы купить:**"
 
-#: derp/handlers/credit_cmds.py:167
+#: derp/handlers/credit_cmds.py:170
 msgid ""
 "💡 This command is for group chats only.\n"
 "Use /buy for personal credits."
@@ -225,59 +233,19 @@ msgstr ""
 "💡 Эта команда работает только в групповых чатах.\n"
 "Используйте /buy для личных кредитов."
 
-#: derp/handlers/credit_cmds.py:180
+#: derp/handlers/credit_cmds.py:181
 msgid "🏠 **Buy Chat Credits**\n"
 msgstr "🏠 **Купить кредиты для чата**\n"
 
-#: derp/handlers/credit_cmds.py:181
+#: derp/handlers/credit_cmds.py:182
 msgid "Credits for this chat's shared pool.\n"
 msgstr "Кредиты для общего пула этого чата.\n"
 
-#: derp/handlers/credit_cmds.py:182
+#: derp/handlers/credit_cmds.py:183
 msgid "Everyone in the chat can use them!\n"
 msgstr "Их смогут использовать все участники!\n"
 
-#: derp/handlers/credit_cmds.py:221
-msgid ""
-"🧠 **Deep Thinking Mode**\n"
-"\n"
-"Use Gemini 3 Pro for complex math, logic puzzles, or problems that need "
-"careful analysis.\n"
-"\n"
-"Usage: /think <your problem or question>"
-msgstr ""
-"🧠 **Режим глубокого размышления**\n"
-"\n"
-"Используйте Gemini 3 Pro для сложной математики, логических задач или "
-"вопросов, требующих внимательного анализа.\n"
-"\n"
-"Использование: /think <ваша задача или вопрос>"
-
-#: derp/handlers/credit_cmds.py:232 derp/handlers/image.py:113
-#: derp/handlers/image.py:228 derp/handlers/tts.py:40 derp/handlers/video.py:51
-msgid "😅 Could not verify your access. Please try again."
-msgstr "😅 Не удалось проверить доступ. Попробуйте ещё раз."
-
-#: derp/handlers/credit_cmds.py:249
-#, python-brace-format
-msgid ""
-"🧠 Deep thinking requires credits.\n"
-"\n"
-"✨ {reason}\n"
-"\n"
-"💡 Use /buy to get credits!"
-msgstr ""
-"🧠 Для глубокого размышления нужны кредиты.\n"
-"\n"
-"✨ {reason}\n"
-"\n"
-"💡 Используйте /buy, чтобы купить кредиты!"
-
-#: derp/handlers/credit_cmds.py:318
-msgid "😅 Something went wrong during deep thinking. Please try again."
-msgstr "😅 Что-то пошло не так во время глубокого размышления. Попробуйте ещё раз."
-
-#: derp/handlers/debug.py:116
+#: derp/handlers/debug.py:118
 msgid ""
 "🛠 **Debug Buy Menu**\n"
 "\n"
@@ -289,7 +257,7 @@ msgstr ""
 "Все пакеты стоят 1⭐ для тестирования.\n"
 "Выберите личные или чат-кредиты:"
 
-#: derp/handlers/debug.py:607
+#: derp/handlers/debug.py:593
 msgid ""
 "🛠 **Debug Commands** (admin only)\n"
 "\n"
@@ -497,7 +465,7 @@ msgstr "{name}, твои {stars}⭐️ держат серверы в тепле
 msgid "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
 msgstr "🙏 Спасибо, {name}, за донат {stars}⭐️ в поддержку Derp!"
 
-#: derp/handlers/image.py:47
+#: derp/handlers/image.py:46
 msgid "🤷 No image generated."
 msgstr "🤷 Изображение не сгенерировано."
 
@@ -505,11 +473,16 @@ msgstr "🤷 Изображение не сгенерировано."
 msgid "🤷 No images generated."
 msgstr "🤷 Изображения не сгенерированы."
 
-#: derp/handlers/image.py:108
+#: derp/handlers/image.py:106
 msgid "Usage: /imagine <prompt>"
 msgstr "Использование: /imagine <запрос>"
 
-#: derp/handlers/image.py:131
+#: derp/handlers/image.py:110 derp/handlers/image.py:228
+#: derp/handlers/think.py:59 derp/handlers/tts.py:44 derp/handlers/video.py:55
+msgid "😅 Could not verify your access. Please try again."
+msgstr "😅 Не удалось проверить доступ. Попробуйте ещё раз."
+
+#: derp/handlers/image.py:120
 #, python-brace-format
 msgid ""
 "✨ {reason}\n"
@@ -518,23 +491,24 @@ msgid ""
 msgstr ""
 "✨ {reason}\n"
 "\n"
-"💡 Используйте /buy, чтобы купить кредиты и генерировать изображения без ограничений!"
+"💡 Используйте /buy, чтобы купить кредиты и генерировать изображения без "
+"ограничений!"
 
-#: derp/handlers/image.py:198
+#: derp/handlers/image.py:186 derp/handlers/image.py:199
 msgid "😅 Something went wrong while generating the image. Try again later."
 msgstr "😅 Что-то пошло не так при генерации изображения. Попробуйте позже."
 
-#: derp/handlers/image.py:217
+#: derp/handlers/image.py:218
 msgid "Reply to an image and use: /edit <prompt>"
 msgstr "Ответьте на изображение и используйте: /edit <запрос>"
 
-#: derp/handlers/image.py:222
+#: derp/handlers/image.py:223
 msgid "Please reply to an image (photo/document/sticker) to edit it."
 msgstr ""
 "Пожалуйста, ответьте на изображение (фото/документ/стикер), чтобы его "
 "отредактировать."
 
-#: derp/handlers/image.py:245
+#: derp/handlers/image.py:238
 #, python-brace-format
 msgid ""
 "✨ {reason}\n"
@@ -543,79 +517,87 @@ msgid ""
 msgstr ""
 "✨ {reason}\n"
 "\n"
-"💡 Используйте /buy, чтобы купить кредиты и редактировать изображения без ограничений!"
+"💡 Используйте /buy, чтобы купить кредиты и редактировать изображения без "
+"ограничений!"
 
-#: derp/handlers/image.py:321
+#: derp/handlers/image.py:309 derp/handlers/image.py:322
 msgid "😅 Something went wrong while editing the image. Try again later."
 msgstr "😅 Что-то пошло не так при редактировании изображения. Попробуйте позже."
 
-#: derp/handlers/inline.py:38 derp/handlers/inline.py:65
+#: derp/handlers/inline.py:39 derp/handlers/inline.py:66
 msgid "🤖 Ask Derp"
 msgstr "🤖 Спросить Derp"
 
-#: derp/handlers/inline.py:39
+#: derp/handlers/inline.py:40
 msgid "Start typing to get an AI-powered response."
 msgstr "Начните печатать, чтобы получить ответ от ИИ."
 
-#: derp/handlers/inline.py:41
+#: derp/handlers/inline.py:42
 msgid "🤖 Please enter a prompt for Derp AI."
 msgstr "🤖 Пожалуйста, введите запрос для Derp AI."
 
-#: derp/handlers/inline.py:47 derp/handlers/inline.py:78
-#: derp/handlers/inline.py:132
+#: derp/handlers/inline.py:48 derp/handlers/inline.py:79
+#: derp/handlers/inline.py:137
 msgid "Add Derp to your chat"
 msgstr "Добавить Derp в ваш чат"
 
-#: derp/handlers/inline.py:66
+#: derp/handlers/inline.py:67
 #, python-brace-format
 msgid "Get an AI-powered response for: {user_input}"
 msgstr "Получить ответ от ИИ на: {user_input}"
 
-#: derp/handlers/inline.py:71
+#: derp/handlers/inline.py:72
 #, python-brace-format
 msgid "🧠 Thinking about: {user_input}"
 msgstr "🧠 Думаю над: {user_input}"
 
-#: derp/handlers/inline.py:88
+#: derp/handlers/inline.py:89
 msgid "Start personal chat"
 msgstr "Начать личный чат"
 
-#: derp/handlers/inline.py:143
+#: derp/handlers/inline.py:149
 msgid "🤯 My circuits are a bit tangled. I couldn't generate a response."
 msgstr "🤯 Мои схемы немного запутались. Не могу сгенерировать ответ."
 
-#: derp/handlers/inline.py:162
+#: derp/handlers/inline.py:165
+msgid ""
+"⏳ The AI service is overloaded right now.\n"
+"\n"
+"Please wait 30-60 seconds and try again."
+msgstr ""
+
+#: derp/handlers/inline.py:173 derp/handlers/inline.py:188
 msgid "😅 Something went wrong. I couldn't process that."
 msgstr "😅 Что-то пошло не так. Не удалось это обработать."
 
-#: derp/handlers/payments.py:94
+#: derp/handlers/payments.py:46
 msgid "Invalid purchase request"
 msgstr "Неверный запрос на покупку"
 
-#: derp/handlers/payments.py:102 derp/handlers/payments.py:167
+#: derp/handlers/payments.py:54 derp/handlers/payments.py:119
 msgid "Unknown credit pack"
 msgstr "Неизвестный пакет кредитов"
 
-#: derp/handlers/payments.py:110
+#: derp/handlers/payments.py:62
 #, python-brace-format
 msgid "{credits} credits for this chat"
 msgstr "{credits} кредитов для этого чата"
 
-#: derp/handlers/payments.py:113
+#: derp/handlers/payments.py:65
 #, python-brace-format
 msgid "{credits} credits for your account"
 msgstr "{credits} кредитов для вашего аккаунта"
 
-#: derp/handlers/payments.py:129
+#: derp/handlers/payments.py:81
 #, python-brace-format
 msgid "{name} Credit Pack"
 msgstr "Пакет кредитов «{name}»"
 
-#: derp/handlers/payments.py:133
+#: derp/handlers/payments.py:85
 msgid "Credits"
 msgstr "Кредиты"
 
-#: derp/handlers/payments.py:138
+#: derp/handlers/payments.py:90
 #, python-brace-format
 msgid ""
 "💫 Click below to complete your purchase:\n"
@@ -626,23 +608,23 @@ msgstr ""
 "\n"
 "{link}"
 
-#: derp/handlers/payments.py:147
+#: derp/handlers/payments.py:99
 msgid "Failed to create invoice. Try again."
 msgstr "Не удалось создать счёт. Попробуйте ещё раз."
 
-#: derp/handlers/payments.py:162
+#: derp/handlers/payments.py:114
 msgid "Invalid payment data"
 msgstr "Некорректные данные платежа"
 
-#: derp/handlers/payments.py:198 derp/handlers/payments.py:210
+#: derp/handlers/payments.py:152 derp/handlers/payments.py:163
 msgid "Payment received but credits could not be added. Contact support."
 msgstr "Платёж получен, но кредиты не удалось начислить. Свяжитесь с поддержкой."
 
-#: derp/handlers/payments.py:217
+#: derp/handlers/payments.py:170
 msgid "Payment received but your account was not found. Contact support."
 msgstr "Платёж получен, но ваш аккаунт не найден. Свяжитесь с поддержкой."
 
-#: derp/handlers/payments.py:236
+#: derp/handlers/payments.py:185
 #, python-brace-format
 msgid ""
 "✅ **Payment successful!**\n"
@@ -655,7 +637,7 @@ msgstr ""
 "Начислено **{credits}** кредитов этому чату.\n"
 "Новый баланс: **{balance}** кредитов"
 
-#: derp/handlers/payments.py:252
+#: derp/handlers/payments.py:200
 #, python-brace-format
 msgid ""
 "✅ **Payment successful!**\n"
@@ -668,20 +650,55 @@ msgstr ""
 "Начислено **{credits}** кредитов на ваш аккаунт.\n"
 "Новый баланс: **{balance}** кредитов"
 
-#: derp/handlers/payments.py:276
+#: derp/handlers/payments.py:223
 #, python-brace-format
 msgid ""
 "Payment received but an error occurred. Contact support with charge ID: "
 "{charge_id}"
 msgstr ""
-"Платёж получен, но произошла ошибка. Свяжитесь с поддержкой и укажите ID платежа: "
-"{charge_id}"
+"Платёж получен, но произошла ошибка. Свяжитесь с поддержкой и укажите ID "
+"платежа: {charge_id}"
 
-#: derp/handlers/tts.py:37
+#: derp/handlers/think.py:50
+msgid ""
+"🧠 **Deep Thinking Mode**\n"
+"\n"
+"Use Gemini 3 Pro for complex math, logic puzzles, or problems that need "
+"careful analysis.\n"
+"\n"
+"Usage: /think <your problem or question>"
+msgstr ""
+"🧠 **Режим глубокого размышления**\n"
+"\n"
+"Используйте Gemini 3 Pro для сложной математики, логических задач или "
+"вопросов, требующих внимательного анализа.\n"
+"\n"
+"Использование: /think <ваша задача или вопрос>"
+
+#: derp/handlers/think.py:69
+#, python-brace-format
+msgid ""
+"🧠 Deep thinking requires credits.\n"
+"\n"
+"✨ {reason}\n"
+"\n"
+"💡 Use /buy to get credits!"
+msgstr ""
+"🧠 Для глубокого размышления нужны кредиты.\n"
+"\n"
+"✨ {reason}\n"
+"\n"
+"💡 Используйте /buy, чтобы купить кредиты!"
+
+#: derp/handlers/think.py:141 derp/handlers/think.py:149
+msgid "😅 Something went wrong during deep thinking. Please try again."
+msgstr "😅 Что-то пошло не так во время глубокого размышления. Попробуйте ещё раз."
+
+#: derp/handlers/tts.py:40
 msgid "Usage: /tts <text>"
 msgstr "Использование: /tts <текст>"
 
-#: derp/handlers/tts.py:55
+#: derp/handlers/tts.py:53
 #, python-brace-format
 msgid ""
 "🔊 Voice generation requires credits.\n"
@@ -696,18 +713,19 @@ msgstr ""
 "\n"
 "💡 Используйте /buy, чтобы купить кредиты!"
 
-#: derp/handlers/tts.py:90
+#: derp/handlers/tts.py:87
 msgid ""
 "😅 Something went wrong while generating the voice message. Try again "
 "later."
 msgstr ""
-"😅 Что-то пошло не так при генерации голосового сообщения. Попробуйте позже."
+"😅 Что-то пошло не так при генерации голосового сообщения. Попробуйте "
+"позже."
 
-#: derp/handlers/video.py:47
+#: derp/handlers/video.py:50
 msgid "Usage: /video [fast|standard] <prompt>"
 msgstr "Использование: /video [fast|standard] <запрос>"
 
-#: derp/handlers/video.py:69
+#: derp/handlers/video.py:67
 #, python-brace-format
 msgid ""
 "🎬 Video generation requires credits.\n"
@@ -722,15 +740,15 @@ msgstr ""
 "\n"
 "💡 Используйте /buy, чтобы купить кредиты!"
 
-#: derp/handlers/video.py:116
+#: derp/handlers/video.py:112
 msgid "😅 Something went wrong while generating the video. Try again later."
 msgstr "😅 Что-то пошло не так при генерации видео. Попробуйте позже."
 
-#: derp/llm/result.py:54
+#: derp/llm/result.py:59
 msgid "Generated Code:"
 msgstr "Сгенерированный код:"
 
-#: derp/llm/result.py:58
+#: derp/llm/result.py:63
 msgid "Execution Result:"
 msgstr "Результат выполнения:"
 
