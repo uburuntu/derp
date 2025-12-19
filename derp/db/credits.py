@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 import logfire
-from sqlalchemy import Integer, func, select, update
+from sqlalchemy import Integer, func, literal, select, update
+from sqlalchemy.dialects.postgresql import array as pg_array
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -396,7 +397,7 @@ async def increment_daily_usage(
             set_={
                 "usage": func.jsonb_set(
                     DailyUsage.usage,
-                    func.array([tool_name]),
+                    pg_array([literal(tool_name)]),
                     func.to_jsonb(increment_value),
                 ),
                 "updated_at": datetime.now(UTC),
