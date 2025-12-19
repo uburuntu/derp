@@ -11,11 +11,11 @@ from derp.handlers.tts import handle_tts
 @pytest.mark.asyncio
 async def test_handle_tts_success(
     make_message,
-    mock_db_client,
     mock_user_model,
     mock_chat_model,
     mock_meta,
-    mock_credit_service,
+    mock_db_client,
+    mock_credit_service_factory,
     make_credit_check_result,
 ):
     """Test successful TTS generation flow."""
@@ -31,18 +31,15 @@ async def test_handle_tts_success(
         source="free",
         free_remaining=1,
     )
-    service, patch_service = mock_credit_service(
-        "derp.handlers.tts", check_result=check_result
-    )
+    service = mock_credit_service_factory(check_result=check_result)
 
     with (
-        patch_service,
         patch(
             "derp.handlers.tts.generate_and_send_tts", new_callable=AsyncMock
         ) as mock_gen,
         patch("derp.handlers.tts.get_db_manager", return_value=mock_db_client),
     ):
-        await handle_tts(message, meta, chat, user)
+        await handle_tts(message, meta, service, user_model=user, chat_model=chat)
 
         mock_gen.assert_awaited_once()
         service.deduct.assert_awaited_once()
@@ -51,11 +48,10 @@ async def test_handle_tts_success(
 @pytest.mark.asyncio
 async def test_handle_tts_no_credits(
     make_message,
-    mock_db_client,
     mock_user_model,
     mock_chat_model,
     mock_meta,
-    mock_credit_service,
+    mock_credit_service_factory,
     make_credit_check_result,
 ):
     """Test TTS generation rejection due to lack of credits."""
@@ -70,18 +66,12 @@ async def test_handle_tts_no_credits(
         model_id="gemini-2.5-pro-preview-tts",
         reject_reason="Not enough credits",
     )
-    service, patch_service = mock_credit_service(
-        "derp.handlers.tts", check_result=check_result
-    )
+    service = mock_credit_service_factory(check_result=check_result)
 
-    with (
-        patch_service,
-        patch(
-            "derp.handlers.tts.generate_and_send_tts", new_callable=AsyncMock
-        ) as mock_gen,
-        patch("derp.handlers.tts.get_db_manager", return_value=mock_db_client),
-    ):
-        await handle_tts(message, meta, chat, user)
+    with patch(
+        "derp.handlers.tts.generate_and_send_tts", new_callable=AsyncMock
+    ) as mock_gen:
+        await handle_tts(message, meta, service, user_model=user, chat_model=chat)
 
         mock_gen.assert_not_awaited()
         message.reply.assert_awaited_once()

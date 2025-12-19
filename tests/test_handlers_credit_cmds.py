@@ -11,27 +11,32 @@ from derp.handlers.credit_cmds import (
 )
 
 
+@pytest.fixture
+def mock_credit_service():
+    """Create a mock CreditService."""
+    service = MagicMock()
+    service.session = MagicMock()
+    return service
+
+
 @pytest.mark.asyncio
-async def test_show_credits_with_chat(make_message, mock_db_client):
+async def test_show_credits_with_chat(make_message, mock_credit_service):
     """Test /credits shows user and chat credits."""
     message = make_message(text="/credits")
 
-    user = MagicMock()
-    user.telegram_id = 12345
+    user_model = MagicMock()
+    user_model.telegram_id = 12345
 
-    chat = MagicMock()
-    chat.telegram_id = -100123
-    chat.type = "supergroup"
+    chat_model = MagicMock()
+    chat_model.telegram_id = -100123
+    chat_model.type = "supergroup"
 
-    with (
-        patch("derp.handlers.credit_cmds.get_db_manager", return_value=mock_db_client),
-        patch(
-            "derp.handlers.credit_cmds.get_balances", new_callable=AsyncMock
-        ) as mock_balances,
-    ):
+    with patch(
+        "derp.handlers.credit_cmds.get_balances", new_callable=AsyncMock
+    ) as mock_balances:
         mock_balances.return_value = (50, 25)  # chat_credits, user_credits
 
-        await show_credits(message, chat, user)
+        await show_credits(message, mock_credit_service, user_model, chat_model)
 
         message.reply.assert_awaited_once()
         response = message.reply.call_args[0][0]
@@ -41,26 +46,21 @@ async def test_show_credits_with_chat(make_message, mock_db_client):
 
 
 @pytest.mark.asyncio
-async def test_show_credits_private_chat(make_message, mock_db_client):
+async def test_show_credits_private_chat(make_message, mock_credit_service):
     """Test /credits in private chat shows only user credits."""
     message = make_message(text="/credits")
 
-    user = MagicMock()
-    user.telegram_id = 12345
+    user_model = MagicMock()
+    user_model.telegram_id = 12345
 
-    chat = MagicMock()
-    chat.telegram_id = 12345
-    chat.type = "private"
+    chat_model = None  # No chat in private
 
-    with (
-        patch("derp.handlers.credit_cmds.get_db_manager", return_value=mock_db_client),
-        patch(
-            "derp.handlers.credit_cmds.get_balances", new_callable=AsyncMock
-        ) as mock_balances,
-    ):
+    with patch(
+        "derp.handlers.credit_cmds.get_balances", new_callable=AsyncMock
+    ) as mock_balances:
         mock_balances.return_value = (0, 100)
 
-        await show_credits(message, chat, user)
+        await show_credits(message, mock_credit_service, user_model, chat_model)
 
         response = message.reply.call_args[0][0]
         assert "Balance" in response
@@ -68,11 +68,11 @@ async def test_show_credits_private_chat(make_message, mock_db_client):
 
 
 @pytest.mark.asyncio
-async def test_show_credits_no_user(make_message):
+async def test_show_credits_no_user(make_message, mock_credit_service):
     """Test /credits without user returns error."""
     message = make_message(text="/credits")
 
-    await show_credits(message, None, None)
+    await show_credits(message, mock_credit_service, None, None)
 
     message.reply.assert_awaited_once()
     assert "Could not find" in message.reply.call_args[0][0]
@@ -83,10 +83,10 @@ async def test_show_buy_options(make_message):
     """Test /buy shows credit packs with keyboard."""
     message = make_message(text="/buy")
 
-    user = MagicMock()
-    user.telegram_id = 12345
+    user_model = MagicMock()
+    user_model.telegram_id = 12345
 
-    await show_buy_options(message, None, user)
+    await show_buy_options(message, user_model, None)
 
     message.reply.assert_awaited_once()
     call_args = message.reply.call_args
@@ -113,14 +113,14 @@ async def test_show_buy_chat_options_in_group(make_message):
     """Test /buy_chat in group chat shows chat credit options."""
     message = make_message(text="/buy_chat")
 
-    user = MagicMock()
-    user.telegram_id = 12345
+    user_model = MagicMock()
+    user_model.telegram_id = 12345
 
-    chat = MagicMock()
-    chat.telegram_id = -100123
-    chat.type = "supergroup"
+    chat_model = MagicMock()
+    chat_model.telegram_id = -100123
+    chat_model.type = "supergroup"
 
-    await show_buy_chat_options(message, chat, user)
+    await show_buy_chat_options(message, user_model, chat_model)
 
     message.reply.assert_awaited_once()
     call_args = message.reply.call_args
@@ -135,13 +135,13 @@ async def test_show_buy_chat_options_private(make_message):
     """Test /buy_chat in private chat returns error."""
     message = make_message(text="/buy_chat")
 
-    user = MagicMock()
-    user.telegram_id = 12345
+    user_model = MagicMock()
+    user_model.telegram_id = 12345
 
-    chat = MagicMock()
-    chat.type = "private"
+    chat_model = MagicMock()
+    chat_model.type = "private"
 
-    await show_buy_chat_options(message, chat, user)
+    await show_buy_chat_options(message, user_model, chat_model)
 
     message.reply.assert_awaited_once()
     assert "group chats only" in message.reply.call_args[0][0]

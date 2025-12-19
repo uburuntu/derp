@@ -31,8 +31,9 @@ from derp.handlers import (
     video,
 )
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
-from derp.middlewares.chat_settings import ChatSettingsMiddleware
+from derp.middlewares.credit_service import CreditServiceMiddleware
 from derp.middlewares.database_logger import DatabaseLoggerMiddleware
+from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
 
@@ -109,7 +110,8 @@ async def main() -> None:
 
     # Inner middlewares (run after filters, before resolved handlers)
     dp.update.middleware(EventContextMiddleware(db=db))
-    dp.update.middleware(ChatSettingsMiddleware(db=db))
+    dp.update.middleware(DatabaseModelMiddleware(db=db))
+    dp.update.middleware(CreditServiceMiddleware(db=db))
     dp.message.middleware(ChatActionMiddleware())
 
     dp.include_routers(

@@ -52,13 +52,13 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
         ) -> T | str:
             deps = ctx.deps
 
-            # Check if user and chat are available
-            if not deps.user or not deps.chat:
+            # Check if database models are available
+            if not deps.user_model or not deps.chat_model:
                 logfire.warn(
                     "tool_missing_context",
                     tool=tool_name,
-                    has_user=deps.user is not None,
-                    has_chat=deps.chat is not None,
+                    has_user_model=deps.user_model is not None,
+                    has_chat_model=deps.chat_model is not None,
                 )
                 return f"[TOOL_ERROR: Missing user or chat context for {tool_name}]"
 
@@ -68,12 +68,12 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
 
                 # Check access
                 result = await service.check_tool_access(
-                    user_id=deps.user.id,
-                    chat_id=deps.chat.id,
-                    user_telegram_id=deps.user.telegram_id,
-                    chat_telegram_id=deps.chat.telegram_id,
+                    user_telegram_id=deps.user_model.telegram_id,
+                    chat_telegram_id=deps.chat_model.telegram_id,
                     tool_name=tool_name,
                     model_id=kwargs.get("model"),
+                    user_uuid=deps.user_model.id,
+                    chat_uuid=deps.chat_model.id,
                 )
 
                 if not result.allowed:
@@ -113,8 +113,8 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
                     )
                     await service.deduct(
                         result,
-                        deps.user.id,
-                        deps.chat.id,
+                        deps.user_id,
+                        deps.chat_id,
                         tool_name,
                         idempotency_key=idempotency_key,
                         metadata={

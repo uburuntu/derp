@@ -16,10 +16,10 @@ async def test_show_settings_with_memory(make_message):
     """Test /settings shows LLM memory when set."""
     message = make_message(text="/settings")
 
-    chat_settings = MagicMock()
-    chat_settings.llm_memory = "Remember: user prefers Python"
+    chat_model = MagicMock()
+    chat_model.llm_memory = "Remember: user prefers Python"
 
-    await cmd_show_settings(message, chat_settings)
+    await cmd_show_settings(message, chat_model)
 
     message.reply.assert_awaited_once()
     response = message.reply.call_args[0][0]
@@ -32,10 +32,10 @@ async def test_show_settings_without_memory(make_message):
     """Test /settings shows 'Not set' when no memory."""
     message = make_message(text="/settings")
 
-    chat_settings = MagicMock()
-    chat_settings.llm_memory = None
+    chat_model = MagicMock()
+    chat_model.llm_memory = None
 
-    await cmd_show_settings(message, chat_settings)
+    await cmd_show_settings(message, chat_model)
 
     message.reply.assert_awaited_once()
     response = message.reply.call_args[0][0]

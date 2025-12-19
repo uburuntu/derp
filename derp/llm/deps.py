@@ -18,7 +18,8 @@ if TYPE_CHECKING:
     from aiogram.types import Message
 
     from derp.db import DatabaseManager
-    from derp.models import Chat, User
+    from derp.models import Chat as ChatModel
+    from derp.models import User as UserModel
 
 
 @dataclass
@@ -27,8 +28,8 @@ class AgentDeps:
 
     This dataclass carries all context needed by tools:
     - message: The Telegram message being processed
-    - chat: Chat model (for settings, memory, future credits)
-    - user: User model (for preferences, future credits)
+    - user_model: User database model (for credits, UUID)
+    - chat_model: Chat database model (for settings, memory, credits)
     - db: Database manager for persistence
     - bot: Bot instance for sending messages
     - tier: The model tier being used (for cost-aware tools)
@@ -37,8 +38,8 @@ class AgentDeps:
     message: Message
     db: DatabaseManager
     bot: Bot
-    chat: Chat | None = None
-    user: User | None = None
+    user_model: UserModel | None = None
+    chat_model: ChatModel | None = None
     tier: ModelTier = field(default=ModelTier.STANDARD)
 
     @property
@@ -54,4 +55,4 @@ class AgentDeps:
     @property
     def chat_memory(self) -> str | None:
         """Get the chat's LLM memory if available."""
-        return self.chat.llm_memory if self.chat else None
+        return self.chat_model.llm_memory if self.chat_model else None

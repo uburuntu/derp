@@ -7,20 +7,20 @@ from aiogram.types import Message
 from derp.db import DatabaseManager, update_chat_memory
 from derp.models import Chat as ChatModel
 
-router = Router(name="chat_settings")
+router = Router(name="chat_model")
 
 
 @router.message(Command("settings"))
 async def cmd_show_settings(
     message: Message,
-    chat_settings: ChatModel | None,
+    chat_model: ChatModel | None,
 ) -> None:
     """Show current chat settings."""
     settings_text = "📋 Chat Settings:\n\n"
 
-    if chat_settings and chat_settings.llm_memory:
+    if chat_model and chat_model.llm_memory:
         settings_text += (
-            f"🧠 LLM Memory: {html.blockquote(html.quote(chat_settings.llm_memory))}\n"
+            f"🧠 LLM Memory: {html.blockquote(html.quote(chat_model.llm_memory))}\n"
         )
     else:
         settings_text += "🧠 LLM Memory: Not set\n"

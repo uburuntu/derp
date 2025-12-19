@@ -26,8 +26,9 @@ router = Router(name="think")
 @flags.chat_action(initial_sleep=1, action="typing")
 async def handle_think(
     message: Message,
-    chat_settings: ChatModel | None = None,
-    user: UserModel | None = None,
+    credit_service: CreditService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     """Handle /think command for deep reasoning using Gemini 3 Pro.
 
@@ -51,92 +52,82 @@ async def handle_think(
             parse_mode="Markdown",
         )
 
-    # Check credits
-    if not user or not chat_settings:
+    if not user_model or not chat_model:
         return await message.reply(
             _("😅 Could not verify your access. Please try again.")
         )
 
-    db = get_db_manager()
-    async with db.session() as session:
-        service = CreditService(session)
-        result = await service.check_tool_access(
-            user_id=user.id,
-            chat_id=chat_settings.id,
-            user_telegram_id=user.telegram_id,
-            chat_telegram_id=chat_settings.telegram_id,
-            tool_name="think_deep",
+    result = await credit_service.check_tool_access(
+        user_model, chat_model, "think_deep"
+    )
+
+    if not result.allowed:
+        return await message.reply(
+            _(
+                "🧠 Deep thinking requires credits.\n\n"
+                "✨ {reason}\n\n"
+                "💡 Use /buy to get credits!"
+            ).format(reason=result.reject_reason),
+            parse_mode="Markdown",
         )
 
-        if not result.allowed:
-            return await message.reply(
-                _(
-                    "🧠 Deep thinking requires credits.\n\n"
-                    "✨ {reason}\n\n"
-                    "💡 Use /buy to get credits!"
-                ).format(reason=result.reject_reason),
-                parse_mode="Markdown",
-            )
+    logfire.info(
+        "think_command_started",
+        user_id=user_model.telegram_id,
+        prompt_length=len(prompt),
+    )
+
+    try:
+        agent = create_chat_agent(ModelTier.PREMIUM)
+
+        deps = AgentDeps(
+            message=message,
+            db=get_db_manager(),
+            bot=message.bot,
+            user_model=user_model,
+            chat_model=chat_model,
+            tier=ModelTier.PREMIUM,
+        )
+
+        thinking_prompt = (
+            "You are in deep thinking mode. Take your time to carefully analyze "
+            "the problem step by step. Show your reasoning process clearly.\n\n"
+            f"**Problem:**\n{prompt}"
+        )
+
+        agent_result = await agent.run(thinking_prompt, deps=deps)
+
+        idempotency_key = f"think:{chat_model.telegram_id}:{message.message_id}"
+        await credit_service.deduct(
+            result,
+            user_model,
+            chat_model,
+            "think_deep",
+            idempotency_key=idempotency_key,
+        )
 
         logfire.info(
-            "think_command_started",
-            user_id=user.telegram_id,
-            prompt_length=len(prompt),
+            "think_command_completed",
+            user_id=user_model.telegram_id,
+            response_length=len(agent_result.output),
         )
 
         try:
-            # Create PREMIUM agent (Gemini 3 Pro)
-            agent = create_chat_agent(ModelTier.PREMIUM)
-
-            # Build deps for the agent
-            deps = AgentDeps(
-                message=message,
-                db=db,
-                bot=message.bot,
-                chat=chat_settings,
-                user=user,
-                tier=ModelTier.PREMIUM,
-            )
-
-            # Run with thinking-optimized prompt
-            thinking_prompt = (
-                "You are in deep thinking mode. Take your time to carefully analyze "
-                "the problem step by step. Show your reasoning process clearly.\n\n"
-                f"**Problem:**\n{prompt}"
-            )
-
-            agent_result = await agent.run(thinking_prompt, deps=deps)
-
-            # Deduct credits after successful generation
-            idempotency_key = f"think:{chat_settings.telegram_id}:{message.message_id}"
-            await service.deduct(
-                result,
-                user_id=user.id,
-                chat_id=chat_settings.id,
-                tool_name="think_deep",
-                idempotency_key=idempotency_key,
-            )
-
-            logfire.info(
-                "think_command_completed",
-                user_id=user.telegram_id,
-                response_length=len(agent_result.output),
-            )
-
-            # Send response with markdown, fallback to plain text
-            try:
-                return await message.reply(
-                    f"🧠 **Deep Thinking Result:**\n\n{agent_result.output}",
-                    parse_mode="Markdown",
-                )
-            except Exception:
-                return await message.reply(
-                    f"🧠 Deep Thinking Result:\n\n{agent_result.output}",
-                    parse_mode=None,
-                )
-
-        except Exception:
-            logfire.exception("think_command_failed", user_id=user.telegram_id)
             return await message.reply(
-                _("😅 Something went wrong during deep thinking. Please try again.")
+                f"🧠 **Deep Thinking Result:**\n\n{agent_result.output}",
+                parse_mode="Markdown",
             )
+        except Exception:
+            return await message.reply(
+                f"🧠 Deep Thinking Result:\n\n{agent_result.output}",
+                parse_mode=None,
+            )
+
+    except Exception:
+        logfire.exception(
+            "think_command_failed",
+            user_id=user_model.telegram_id if user_model else None,
+        )
+        return await message.reply(
+            _("😅 Something went wrong during deep thinking. Please try again.")
+        )

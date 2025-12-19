@@ -1,12 +1,11 @@
 """Tests for image generation handler."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic_ai import BinaryImage
 
 from derp.credits.models import ModelTier
-from derp.credits.types import CreditCheckResult
 from derp.handlers.image import (
     _send_image_result,
     _send_multiple_images,
@@ -108,66 +107,61 @@ class TestHandleImagine:
     """Tests for /imagine command handler."""
 
     @pytest.mark.asyncio
-    async def test_missing_prompt(self, make_message):
+    async def test_missing_prompt(self, make_message, mock_credit_service_factory):
         """Test /imagine without prompt shows usage."""
         message = make_message(text="/imagine")
 
         meta = MagicMock()
         meta.target_text = ""
+        service = mock_credit_service_factory()
 
-        await handle_imagine(message, meta, None, None)
+        await handle_imagine(message, meta, service, None, None)
 
         message.reply.assert_awaited_once()
         assert "Usage" in message.reply.call_args[0][0]
 
     @pytest.mark.asyncio
-    async def test_no_user(self, make_message):
+    async def test_no_user(self, make_message, mock_credit_service_factory):
         """Test /imagine without user shows error."""
         message = make_message(text="/imagine a cat")
 
         meta = MagicMock()
         meta.target_text = "a cat"
+        service = mock_credit_service_factory()
 
-        await handle_imagine(message, meta, MagicMock(), None)
+        # user_model=None, chat_model provided
+        await handle_imagine(message, meta, service, None, MagicMock())
 
         message.reply.assert_awaited_once()
         assert "Could not verify" in message.reply.call_args[0][0]
 
     @pytest.mark.asyncio
-    async def test_no_credits(self, make_message, mock_db_client):
+    async def test_no_credits(
+        self,
+        make_message,
+        mock_user_model,
+        mock_chat_model,
+        mock_credit_service_factory,
+        make_credit_check_result,
+    ):
         """Test /imagine rejected when no credits."""
         message = make_message(text="/imagine a cat")
 
         meta = MagicMock()
         meta.target_text = "a cat"
 
-        user = MagicMock()
-        user.id = "user-uuid"
-        user.telegram_id = 12345
+        user = mock_user_model()
+        chat = mock_chat_model()
 
-        chat = MagicMock()
-        chat.id = "chat-uuid"
-        chat.telegram_id = -100123
+        check_result = make_credit_check_result(
+            allowed=False,
+            tier=ModelTier.STANDARD,
+            model_id="gemini-2.5-flash-image",
+            reject_reason="Not enough credits",
+        )
+        service = mock_credit_service_factory(check_result=check_result)
 
-        with (
-            patch("derp.handlers.image.get_db_manager", return_value=mock_db_client),
-            patch("derp.handlers.image.CreditService") as mock_credit_service,
-        ):
-            service = mock_credit_service.return_value
-            service.check_tool_access = AsyncMock(
-                return_value=CreditCheckResult(
-                    allowed=False,
-                    tier=ModelTier.STANDARD,
-                    model_id="gemini-2.5-flash-image",
-                    source="rejected",
-                    credits_to_deduct=0,
-                    credits_remaining=0,
-                    free_remaining=0,
-                    reject_reason="Not enough credits",
-                )
-            )
+        await handle_imagine(message, meta, service, user_model=user, chat_model=chat)
 
-            await handle_imagine(message, meta, chat, user)
-
-            message.reply.assert_awaited_once()
-            assert "Not enough credits" in message.reply.call_args[0][0]
+        message.reply.assert_awaited_once()
+        assert "Not enough credits" in message.reply.call_args[0][0]

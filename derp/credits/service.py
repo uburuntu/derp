@@ -10,7 +10,6 @@ This is the main entry point for credit operations. It handles:
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from uuid import UUID
 
 import logfire
 
@@ -36,6 +35,8 @@ from derp.db.credits import (
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from derp.models import Chat, User
+
 
 # Context limits by tier
 CONTEXT_LIMITS: dict[ModelTier, int] = {
@@ -48,23 +49,21 @@ CONTEXT_LIMITS: dict[ModelTier, int] = {
 class CreditService:
     """Service for managing credits and access control.
 
+    Methods accept database models (User, Chat) directly for cleaner API.
+
     Usage:
         service = CreditService(session)
 
         # Get orchestrator config (which model/tier to use)
-        tier, model_id, context_limit = await service.get_orchestrator_config(
-            user_telegram_id, chat_telegram_id
-        )
+        tier, model_id, context_limit = await service.get_orchestrator_config(user, chat)
 
         # Check tool access
-        result = await service.check_tool_access(
-            user_id, chat_id, "image_generate"
-        )
+        result = await service.check_tool_access(user, chat, "image_generate")
         if result.allowed:
             # Execute tool
             ...
             # Deduct credits after success
-            await service.deduct(result, user_id, chat_id, "image_generate")
+            await service.deduct(result, user, chat, "image_generate")
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -72,10 +71,14 @@ class CreditService:
 
     async def get_orchestrator_config(
         self,
-        user_telegram_id: int,
-        chat_telegram_id: int,
+        user: User,
+        chat: Chat,
     ) -> tuple[ModelTier, str, int]:
         """Get orchestrator configuration based on credit balance.
+
+        Args:
+            user: Database User model.
+            chat: Database Chat model.
 
         Returns:
             Tuple of (tier, model_id, context_limit).
@@ -83,7 +86,7 @@ class CreditService:
             - Paid tier (has credits): STANDARD model, 100 message context
         """
         chat_credits, user_credits = await get_balances(
-            self.session, user_telegram_id, chat_telegram_id
+            self.session, user.telegram_id, chat.telegram_id
         )
 
         if chat_credits > 0 or user_credits > 0:
@@ -108,10 +111,8 @@ class CreditService:
 
     async def check_tool_access(
         self,
-        user_id: UUID,
-        chat_id: UUID,
-        user_telegram_id: int,
-        chat_telegram_id: int,
+        user: User,
+        chat: Chat,
         tool_name: str,
         model_id: str | None = None,
     ) -> CreditCheckResult:
@@ -124,10 +125,8 @@ class CreditService:
         4. Reject
 
         Args:
-            user_id: User's database UUID.
-            chat_id: Chat's database UUID.
-            user_telegram_id: User's Telegram ID (for balance lookup).
-            chat_telegram_id: Chat's Telegram ID (for balance lookup).
+            user: Database User model.
+            chat: Database Chat model.
             tool_name: Name of the tool to check.
             model_id: Optional specific model to use (defaults to tool's default).
 
@@ -149,12 +148,12 @@ class CreditService:
 
         # Get balances
         chat_credits, user_credits = await get_balances(
-            self.session, user_telegram_id, chat_telegram_id
+            self.session, user.telegram_id, chat.telegram_id
         )
 
         # Check free daily limit first
         if tool.free_daily_limit > 0:
-            used = await get_daily_usage(self.session, user_id, chat_id, tool_name)
+            used = await get_daily_usage(self.session, user.id, chat.id, tool_name)
             if used < tool.free_daily_limit:
                 return CreditCheckResult(
                     allowed=True,
@@ -205,8 +204,8 @@ class CreditService:
     async def deduct(
         self,
         result: CreditCheckResult,
-        user_id: UUID,
-        chat_id: UUID,
+        user: User,
+        chat: Chat,
         tool_name: str,
         *,
         idempotency_key: str | None = None,
@@ -219,8 +218,8 @@ class CreditService:
 
         Args:
             result: The CreditCheckResult from check_tool_access.
-            user_id: User's database UUID.
-            chat_id: Chat's database UUID.
+            user: Database User model.
+            chat: Database Chat model.
             tool_name: Name of the tool used.
             idempotency_key: Optional key to prevent duplicate charges.
             metadata: Optional additional context.
@@ -239,18 +238,18 @@ class CreditService:
                 return
 
         if result.source == "free":
-            await increment_daily_usage(self.session, user_id, chat_id, tool_name)
+            await increment_daily_usage(self.session, user.id, chat.id, tool_name)
             logfire.info(
                 "free_usage_incremented",
                 tool=tool_name,
-                user_id=str(user_id),
-                chat_id=str(chat_id),
+                user_id=str(user.id),
+                chat_id=str(chat.id),
             )
         elif result.source == "chat":
             await deduct_chat_credits(
                 self.session,
-                chat_id,
-                user_id,
+                chat.id,
+                user.id,
                 result.credits_to_deduct,
                 tool_name,
                 result.model_id,
@@ -261,12 +260,12 @@ class CreditService:
                 "chat_credits_deducted",
                 amount=result.credits_to_deduct,
                 tool=tool_name,
-                chat_id=str(chat_id),
+                chat_id=str(chat.id),
             )
         elif result.source == "user":
             await deduct_user_credits(
                 self.session,
-                user_id,
+                user.id,
                 result.credits_to_deduct,
                 tool_name,
                 result.model_id,
@@ -277,13 +276,13 @@ class CreditService:
                 "user_credits_deducted",
                 amount=result.credits_to_deduct,
                 tool=tool_name,
-                user_id=str(user_id),
+                user_id=str(user.id),
             )
 
     async def purchase_credits(
         self,
-        user_id: UUID,
-        chat_id: UUID | None,
+        user: User,
+        chat: Chat | None,
         amount: int,
         telegram_charge_id: str,
         *,
@@ -292,10 +291,11 @@ class CreditService:
         """Process a credit purchase from Telegram Stars.
 
         Args:
-            user_id: User's database UUID.
-            chat_id: Chat's database UUID (None for personal credits).
+            user: Database User model.
+            chat: Database Chat model (None for personal credits).
             amount: Number of credits to add.
             telegram_charge_id: Telegram payment charge ID (for idempotency).
+            pack_name: Optional pack name for metadata.
 
         Returns:
             New balance after purchase.
@@ -314,11 +314,11 @@ class CreditService:
 
         metadata = {"pack_name": pack_name} if pack_name else {}
 
-        if chat_id:
+        if chat:
             new_balance = await add_chat_credits(
                 self.session,
-                chat_id,
-                user_id,
+                chat.id,
+                user.id,
                 amount,
                 "purchase",
                 telegram_charge_id=telegram_charge_id,
@@ -328,14 +328,14 @@ class CreditService:
             logfire.info(
                 "chat_credits_purchased",
                 amount=amount,
-                chat_id=str(chat_id),
-                user_id=str(user_id),
+                chat_id=str(chat.id),
+                user_id=str(user.id),
                 new_balance=new_balance,
             )
         else:
             new_balance = await add_user_credits(
                 self.session,
-                user_id,
+                user.id,
                 amount,
                 "purchase",
                 telegram_charge_id=telegram_charge_id,
@@ -345,7 +345,7 @@ class CreditService:
             logfire.info(
                 "user_credits_purchased",
                 amount=amount,
-                user_id=str(user_id),
+                user_id=str(user.id),
                 new_balance=new_balance,
             )
 

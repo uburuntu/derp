@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from derp.credits.models import ModelTier
 from derp.handlers.debug import (
     DEBUG_PACKS,
     DebugPayload,
@@ -12,6 +11,7 @@ from derp.handlers.debug import (
     debug_add_credits,
     debug_buy_command,
     debug_help,
+    debug_refund,
     debug_status,
     debug_tools,
     handle_debug_buy_callback,
@@ -79,10 +79,10 @@ async def test_debug_buy_command(make_message):
     """Test /debug_buy command shows menu."""
     message = make_message(text="/debug_buy")
 
-    chat_settings = MagicMock()
-    chat_settings.telegram_id = -100123
+    chat_model = MagicMock()
+    chat_model.telegram_id = -100123
 
-    await debug_buy_command(message, chat_settings)
+    await debug_buy_command(message, chat_model)
 
     message.reply.assert_awaited_once()
     call_args = message.reply.call_args
@@ -91,72 +91,84 @@ async def test_debug_buy_command(make_message):
 
 
 @pytest.mark.asyncio
-async def test_debug_add_credits(make_message, mock_db_client):
+async def test_debug_add_credits(
+    make_message, mock_user_model, mock_credit_service_factory
+):
     """Test /debug_credits command adds credits."""
     message = make_message(text="/debug_credits 50")
 
-    user = MagicMock()
-    user.id = "user-uuid"
-    user.telegram_id = 12345
+    user = mock_user_model(telegram_id=12345)
+    service = mock_credit_service_factory(purchase_result=50)
 
-    with (
-        patch("derp.handlers.debug.get_db_manager", return_value=mock_db_client),
-        patch("derp.handlers.debug.CreditService") as mock_credit_service,
-    ):
-        service = mock_credit_service.return_value
-        service.purchase_credits = AsyncMock(return_value=50)
+    await debug_add_credits(message, service, user, None)
 
-        await debug_add_credits(message, user, None)
-
-        service.purchase_credits.assert_awaited_once()
-        message.reply.assert_awaited_once()
-        assert "Added **50** credits" in message.reply.call_args[0][0]
+    service.purchase_credits.assert_awaited_once()
+    message.reply.assert_awaited_once()
+    assert "Added **50** credits" in message.reply.call_args[0][0]
 
 
 @pytest.mark.asyncio
-async def test_debug_add_credits_no_user(make_message):
+async def test_debug_add_credits_no_user(make_message, mock_credit_service_factory):
     """Test /debug_credits without user returns error."""
     message = make_message(text="/debug_credits 50")
+    service = mock_credit_service_factory()
 
-    await debug_add_credits(message, None, None)
+    await debug_add_credits(message, service, None, None)
 
     message.reply.assert_awaited_once()
     assert "User not found" in message.reply.call_args[0][0]
 
 
 @pytest.mark.asyncio
-async def test_debug_status(make_message, mock_db_client):
+async def test_debug_status(
+    make_message, mock_user_model, mock_chat_model, mock_credit_service_factory
+):
     """Test /debug_status shows diagnostics."""
     message = make_message(text="/debug_status")
 
-    user = MagicMock()
-    user.id = "user-uuid"
-    user.telegram_id = 12345
+    user = mock_user_model(telegram_id=12345)
+    chat = mock_chat_model(telegram_id=-100123)
+    chat.llm_memory = "Test memory"
 
-    chat_settings = MagicMock()
-    chat_settings.telegram_id = -100123
-    chat_settings.id = "chat-uuid"
-    chat_settings.llm_memory = "Test memory"
+    service = mock_credit_service_factory()
 
-    with (
-        patch("derp.handlers.debug.get_db_manager", return_value=mock_db_client),
-        patch(
-            "derp.handlers.debug.get_balances", new_callable=AsyncMock
-        ) as mock_balances,
-        patch("derp.handlers.debug.CreditService") as mock_credit_service,
-    ):
+    with patch(
+        "derp.handlers.debug.get_balances", new_callable=AsyncMock
+    ) as mock_balances:
         mock_balances.return_value = (100, 50)  # chat_credits, user_credits
-        service = mock_credit_service.return_value
-        service.get_orchestrator_config = AsyncMock(
-            return_value=(ModelTier.STANDARD, "gemini-2.5-flash", 100)
-        )
 
-        await debug_status(message, user, chat_settings)
+        await debug_status(message, service, user, chat)
 
         message.reply.assert_awaited_once()
         response = message.reply.call_args[0][0]
         assert "Debug Status" in response
         assert "12345" in response  # user telegram id
+
+
+@pytest.mark.asyncio
+async def test_debug_status_no_user(make_message, mock_credit_service_factory):
+    """Test /debug_status without user returns error."""
+    message = make_message(text="/debug_status")
+    service = mock_credit_service_factory()
+
+    await debug_status(message, service, None, None)
+
+    message.reply.assert_awaited_once()
+    assert "User not found" in message.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_debug_refund(make_message, mock_credit_service_factory):
+    """Test /debug_refund processes refund."""
+    message = make_message(text="/debug_refund charge_123")
+    service = mock_credit_service_factory()
+    service.refund_credits = AsyncMock(return_value=True)
+
+    await debug_refund(message, service)
+
+    service.refund_credits.assert_awaited_once_with("charge_123")
+    message.reply.assert_awaited_once()
+    assert "Refund processed" in message.reply.call_args[0][0]
 
 
 @pytest.mark.asyncio
@@ -186,7 +198,7 @@ async def test_debug_help(make_message):
 
 
 @pytest.mark.asyncio
-async def test_handle_debug_buy_callback(mock_db_client):
+async def test_handle_debug_buy_callback():
     """Test debug buy callback creates invoice."""
     callback = MagicMock()
     callback.data = "dbuy:test_small:user"
@@ -197,7 +209,7 @@ async def test_handle_debug_buy_callback(mock_db_client):
 
     bot = MagicMock()
 
-    await handle_debug_buy_callback(callback, bot, None, None)
+    await handle_debug_buy_callback(callback, bot)
 
     callback.message.answer_invoice.assert_awaited_once()
     call_args = callback.message.answer_invoice.call_args
@@ -216,7 +228,7 @@ async def test_handle_debug_buy_callback_invalid_pack():
 
     bot = MagicMock()
 
-    await handle_debug_buy_callback(callback, bot, None, None)
+    await handle_debug_buy_callback(callback, bot)
 
     callback.answer.assert_awaited_with("Unknown debug pack", show_alert=True)
 

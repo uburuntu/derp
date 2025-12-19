@@ -29,69 +29,60 @@ router = Router(name="tts")
 async def handle_tts(
     message: Message,
     meta: MetaInfo,
-    chat_settings: ChatModel | None = None,
-    user: UserModel | None = None,
+    credit_service: CreditService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     text = meta.target_text
     if not text:
         return await message.reply(_("Usage: /tts <text>"))
 
-    if not user or not chat_settings:
+    if not user_model or not chat_model:
         return await message.reply(
             _("😅 Could not verify your access. Please try again.")
         )
 
-    db = get_db_manager()
-    async with db.session() as session:
-        service = CreditService(session)
-        access = await service.check_tool_access(
-            user_id=user.id,
-            chat_id=chat_settings.id,
-            user_telegram_id=user.telegram_id,
-            chat_telegram_id=chat_settings.telegram_id,
-            tool_name="voice_tts",
-            model_id=TTS_MODEL,
+    access = await credit_service.check_tool_access(
+        user_model, chat_model, "voice_tts", TTS_MODEL
+    )
+    if not access.allowed:
+        return await message.reply(
+            _(
+                "🔊 Voice generation requires credits.\n\n✨ {reason}\n\n💡 Use /buy to get credits!"
+            ).format(reason=access.reject_reason or ""),
+            parse_mode="Markdown",
         )
-        if not access.allowed:
-            return await message.reply(
-                _(
-                    "🔊 Voice generation requires credits.\n\n✨ {reason}\n\n💡 Use /buy to get credits!"
-                ).format(reason=access.reject_reason or ""),
-                parse_mode="Markdown",
-            )
 
-        try:
-            deps = AgentDeps(
-                message=message,
-                db=db,
-                bot=message.bot,
-                chat=chat_settings,
-                user=user,
-            )
-            await generate_and_send_tts(deps, text=text, model=TTS_MODEL)
+    try:
+        deps = AgentDeps(
+            message=message,
+            db=get_db_manager(),
+            bot=message.bot,
+            user_model=user_model,
+            chat_model=chat_model,
+        )
+        await generate_and_send_tts(deps, text=text, model=TTS_MODEL)
 
-            idempotency_key = (
-                f"voice_tts:{chat_settings.telegram_id}:{message.message_id}"
-            )
-            await service.deduct(
-                access,
-                user.id,
-                chat_settings.id,
-                "voice_tts",
-                idempotency_key=idempotency_key,
-                metadata={"model": TTS_MODEL},
-            )
+        idempotency_key = f"voice_tts:{chat_model.telegram_id}:{message.message_id}"
+        await credit_service.deduct(
+            access,
+            user_model,
+            chat_model,
+            "voice_tts",
+            idempotency_key=idempotency_key,
+            metadata={"model": TTS_MODEL},
+        )
 
-            logfire.info(
-                "tts_command_ok",
-                user_id=user.telegram_id,
-                chat_id=chat_settings.telegram_id,
+        logfire.info(
+            "tts_command_ok",
+            user_id=user_model.telegram_id,
+            chat_id=chat_model.telegram_id,
+        )
+        return message
+    except Exception:
+        logfire.exception("tts_command_failed")
+        return await message.reply(
+            _(
+                "😅 Something went wrong while generating the voice message. Try again later."
             )
-            return message
-        except Exception:
-            logfire.exception("tts_command_failed")
-            return await message.reply(
-                _(
-                    "😅 Something went wrong while generating the voice message. Try again later."
-                )
-            )
+        )

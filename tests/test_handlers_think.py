@@ -11,10 +11,10 @@ from derp.handlers.think import handle_think
 @pytest.mark.asyncio
 async def test_handle_think_success(
     make_message,
-    mock_db_client,
     mock_user_model,
     mock_chat_model,
-    mock_credit_service,
+    mock_db_client,
+    mock_credit_service_factory,
     make_credit_check_result,
 ):
     """Test successful deep thinking flow."""
@@ -29,21 +29,17 @@ async def test_handle_think_success(
         credits_to_deduct=10,
         credits_remaining=90,
     )
-    service, patch_service = mock_credit_service(
-        "derp.handlers.think", check_result=check_result
-    )
+    service = mock_credit_service_factory(check_result=check_result)
 
     with (
-        patch_service,
         patch("derp.handlers.think.create_chat_agent") as mock_create_agent,
         patch("derp.handlers.think.get_db_manager", return_value=mock_db_client),
     ):
-        # Mock agent
         mock_agent = mock_create_agent.return_value
         mock_agent.run = AsyncMock()
         mock_agent.run.return_value.output = "Deep thought result"
 
-        await handle_think(message, chat, user)
+        await handle_think(message, service, user_model=user, chat_model=chat)
 
         mock_create_agent.assert_called_with(ModelTier.PREMIUM)
         mock_agent.run.assert_awaited_once()
@@ -55,10 +51,9 @@ async def test_handle_think_success(
 @pytest.mark.asyncio
 async def test_handle_think_no_credits(
     make_message,
-    mock_db_client,
     mock_user_model,
     mock_chat_model,
-    mock_credit_service,
+    mock_credit_service_factory,
     make_credit_check_result,
 ):
     """Test deep thinking rejection due to lack of credits."""
@@ -72,16 +67,10 @@ async def test_handle_think_no_credits(
         model_id="gemini-3-pro-preview",
         reject_reason="Not enough credits",
     )
-    service, patch_service = mock_credit_service(
-        "derp.handlers.think", check_result=check_result
-    )
+    service = mock_credit_service_factory(check_result=check_result)
 
-    with (
-        patch_service,
-        patch("derp.handlers.think.create_chat_agent") as mock_create_agent,
-        patch("derp.handlers.think.get_db_manager", return_value=mock_db_client),
-    ):
-        await handle_think(message, chat, user)
+    with patch("derp.handlers.think.create_chat_agent") as mock_create_agent:
+        await handle_think(message, service, user_model=user, chat_model=chat)
 
         mock_create_agent.assert_not_called()
         message.reply.assert_awaited()
