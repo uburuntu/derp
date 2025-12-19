@@ -68,12 +68,10 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
 
                 # Check access
                 result = await service.check_tool_access(
-                    user_telegram_id=deps.user_model.telegram_id,
-                    chat_telegram_id=deps.chat_model.telegram_id,
-                    tool_name=tool_name,
-                    model_id=kwargs.get("model"),
-                    user_uuid=deps.user_model.id,
-                    chat_uuid=deps.chat_model.id,
+                    deps.user_model,
+                    deps.chat_model,
+                    tool_name,
+                    kwargs.get("model"),
                 )
 
                 if not result.allowed:
@@ -113,8 +111,8 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
                     )
                     await service.deduct(
                         result,
-                        deps.user_id,
-                        deps.chat_id,
+                        deps.user_model,
+                        deps.chat_model,
                         tool_name,
                         idempotency_key=idempotency_key,
                         metadata={

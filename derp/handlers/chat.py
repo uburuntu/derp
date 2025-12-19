@@ -173,7 +173,7 @@ async def build_context_prompt(
                     "message_id": m.telegram_message_id,
                     "sender": m.user
                     and {
-                        "user_id": m.user_telegram_id,
+                        "user_id": m.user.telegram_id,
                         "name": m.user.display_name,
                         "username": m.user.username,
                     },
