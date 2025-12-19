@@ -11,6 +11,7 @@ from derp.handlers.think import handle_think
 @pytest.mark.asyncio
 async def test_handle_think_success(
     make_message,
+    mock_sender,
     mock_user_model,
     mock_chat_model,
     mock_db_client,
@@ -19,6 +20,7 @@ async def test_handle_think_success(
 ):
     """Test successful deep thinking flow."""
     message = make_message(text="/think difficult problem")
+    sender = mock_sender(message=message)
     user = mock_user_model()
     chat = mock_chat_model()
 
@@ -39,18 +41,22 @@ async def test_handle_think_success(
         mock_agent.run = AsyncMock()
         mock_agent.run.return_value.output = "Deep thought result"
 
-        await handle_think(message, service, user_model=user, chat_model=chat)
+        await handle_think(message, sender, service, user_model=user, chat_model=chat)
 
         mock_create_agent.assert_called_with(ModelTier.PREMIUM)
         mock_agent.run.assert_awaited_once()
         service.deduct.assert_awaited_once()
-        message.reply.assert_awaited()
-        assert "Deep Thinking Result" in message.reply.call_args[0][0]
+        sender.reply.assert_awaited()
+        # Sender.reply takes text as first positional arg
+        call_args = sender.reply.call_args
+        text = call_args.args[0] if call_args.args else call_args.kwargs.get("text", "")
+        assert "Deep Thinking Result" in text
 
 
 @pytest.mark.asyncio
 async def test_handle_think_no_credits(
     make_message,
+    mock_sender,
     mock_user_model,
     mock_chat_model,
     mock_credit_service_factory,
@@ -58,6 +64,7 @@ async def test_handle_think_no_credits(
 ):
     """Test deep thinking rejection due to lack of credits."""
     message = make_message(text="/think difficult problem")
+    sender = mock_sender(message=message)
     user = mock_user_model()
     chat = mock_chat_model()
 
@@ -70,8 +77,11 @@ async def test_handle_think_no_credits(
     service = mock_credit_service_factory(check_result=check_result)
 
     with patch("derp.handlers.think.create_chat_agent") as mock_create_agent:
-        await handle_think(message, service, user_model=user, chat_model=chat)
+        await handle_think(message, sender, service, user_model=user, chat_model=chat)
 
         mock_create_agent.assert_not_called()
-        message.reply.assert_awaited()
-        assert "Not enough credits" in message.reply.call_args[0][0]
+        sender.reply.assert_awaited()
+        # Sender.reply takes text as first positional arg
+        call_args = sender.reply.call_args
+        text = call_args.args[0] if call_args.args else call_args.kwargs.get("text", "")
+        assert "Not enough credits" in text

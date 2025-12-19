@@ -12,6 +12,15 @@ from derp.handlers.inline import (
 )
 
 
+def _get_text_from_call_args(call_args):
+    """Extract text from mock call_args (handles both positional and keyword)."""
+    if call_args.args:
+        return call_args.args[0]
+    if call_args.kwargs and "text" in call_args.kwargs:
+        return call_args.kwargs["text"]
+    return ""
+
+
 @pytest.mark.asyncio
 async def test_inline_query_empty():
     """Test empty inline query shows help."""
@@ -70,7 +79,7 @@ async def test_chosen_inline_result_no_message_id():
 
 @pytest.mark.asyncio
 async def test_chosen_inline_result_success():
-    """Test chosen result generates and sends response."""
+    """Test chosen result generates and sends response via MessageSender."""
     result = MagicMock()
     result.inline_message_id = str(uuid.uuid4())
     result.from_user.id = 12345
@@ -89,10 +98,12 @@ async def test_chosen_inline_result_success():
 
         mock_create.assert_called_once()
         mock_agent.run.assert_awaited_once()
+        # MessageSender uses bot.edit_message_text internally
         bot.edit_message_text.assert_awaited_once()
 
         call_args = bot.edit_message_text.call_args
-        assert "Python" in call_args[0][0]
+        text = _get_text_from_call_args(call_args)
+        assert "Python" in text
 
 
 @pytest.mark.asyncio
@@ -115,7 +126,8 @@ async def test_chosen_inline_result_empty_response():
         await chosen_inline_result(result, bot)
 
         bot.edit_message_text.assert_awaited_once()
-        assert "tangled" in bot.edit_message_text.call_args[0][0]
+        text = _get_text_from_call_args(bot.edit_message_text.call_args)
+        assert "tangled" in text
 
 
 @pytest.mark.asyncio
@@ -139,7 +151,8 @@ async def test_chosen_inline_result_rate_limited():
         await chosen_inline_result(result, bot)
 
         bot.edit_message_text.assert_awaited_once()
-        assert "too many requests" in bot.edit_message_text.call_args[0][0]
+        text = _get_text_from_call_args(bot.edit_message_text.call_args)
+        assert "too many requests" in text
 
 
 @pytest.mark.asyncio
@@ -161,4 +174,5 @@ async def test_chosen_inline_result_exception():
         await chosen_inline_result(result, bot)
 
         bot.edit_message_text.assert_awaited_once()
-        assert "Something went wrong" in bot.edit_message_text.call_args[0][0]
+        text = _get_text_from_call_args(bot.edit_message_text.call_args)
+        assert "Something went wrong" in text

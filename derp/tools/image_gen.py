@@ -9,10 +9,10 @@ Reference: https://ai.google.dev/gemini-api/docs/nanobanana
 from __future__ import annotations
 
 import logfire
-from aiogram.types import BufferedInputFile
 from pydantic_ai import BinaryContent, BinaryImage, RunContext
 
 from derp.common.extractor import Extractor
+from derp.common.sender import MessageSender
 from derp.llm.agents import create_image_agent
 from derp.llm.deps import AgentDeps
 from derp.tools.wrapper import credit_aware_tool
@@ -66,14 +66,12 @@ async def generate_image(
 
         # Handle the output
         if isinstance(output, BinaryImage):
-            # Send the image to the chat
-            input_file = BufferedInputFile(
-                file=output.data,
+            caption = f"🎨 {prompt}"
+            sender = MessageSender.from_message(deps.message)
+            await sender.reply_photo(
+                output.data,
+                caption=caption,
                 filename=_to_filename(output.media_type),
-            )
-            await deps.message.reply_photo(
-                photo=input_file,
-                caption=f"🎨 {prompt[:200]}" if len(prompt) > 200 else f"🎨 {prompt}",
             )
 
             logfire.info(
@@ -161,16 +159,12 @@ async def edit_image(
 
         # Handle the output
         if isinstance(output, BinaryImage):
-            # Send the edited image
-            input_file = BufferedInputFile(
-                file=output.data,
+            caption = f"✏️ {edit_prompt}"
+            sender = MessageSender.from_message(message)
+            await sender.reply_photo(
+                output.data,
+                caption=caption,
                 filename=_to_filename(output.media_type),
-            )
-            await message.reply_photo(
-                photo=input_file,
-                caption=f"✏️ {edit_prompt[:200]}"
-                if len(edit_prompt) > 200
-                else f"✏️ {edit_prompt}",
             )
 
             logfire.info(

@@ -12,6 +12,15 @@ from derp.handlers.payments import (
 )
 
 
+def _get_text_from_call_args(call_args):
+    """Extract text from mock call_args (handles both positional and keyword)."""
+    if call_args.args:
+        return call_args.args[0]
+    if call_args.kwargs and "text" in call_args.kwargs:
+        return call_args.kwargs["text"]
+    return ""
+
+
 class TestBuyCallback:
     """Tests for buy button callback handler."""
 
@@ -113,13 +122,14 @@ class TestSuccessfulPayment:
 
     @pytest.mark.asyncio
     async def test_adds_user_credits(
-        self, make_message, mock_user_model, mock_credit_service_factory
+        self, make_message, mock_sender, mock_user_model, mock_credit_service_factory
     ):
         """Test successful payment adds credits to user."""
         pack_id = next(iter(CREDIT_PACKS.keys()))
         pack = CREDIT_PACKS[pack_id]
 
         message = make_message(text="")
+        sender = mock_sender(message=message)
         message.successful_payment = MagicMock()
         message.successful_payment.invoice_payload = f"{pack_id}:user:12345"
         message.successful_payment.telegram_payment_charge_id = "charge_123"
@@ -130,18 +140,19 @@ class TestSuccessfulPayment:
         service = mock_credit_service_factory(purchase_result=pack.credits)
 
         await handle_successful_payment(
-            message, service, user_model=user, chat_model=None
+            message, sender, service, user_model=user, chat_model=None
         )
 
         service.purchase_credits.assert_awaited_once()
-        message.answer.assert_awaited_once()
-        response = message.answer.call_args[0][0]
-        assert "Payment successful" in response
+        sender.send.assert_awaited_once()
+        text = _get_text_from_call_args(sender.send.call_args)
+        assert "Payment successful" in text
 
     @pytest.mark.asyncio
     async def test_adds_chat_credits(
         self,
         make_message,
+        mock_sender,
         mock_user_model,
         mock_chat_model,
         mock_credit_service_factory,
@@ -151,6 +162,7 @@ class TestSuccessfulPayment:
         pack = CREDIT_PACKS[pack_id]
 
         message = make_message(text="")
+        sender = mock_sender(message=message)
         message.successful_payment = MagicMock()
         message.successful_payment.invoice_payload = f"{pack_id}:chat:-100123"
         message.successful_payment.telegram_payment_charge_id = "charge_123"
@@ -162,28 +174,34 @@ class TestSuccessfulPayment:
         service = mock_credit_service_factory(purchase_result=pack.credits)
 
         await handle_successful_payment(
-            message, service, user_model=user, chat_model=chat
+            message, sender, service, user_model=user, chat_model=chat
         )
 
         service.purchase_credits.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_no_payment_object(self, make_message, mock_credit_service_factory):
+    async def test_no_payment_object(
+        self, make_message, mock_sender, mock_credit_service_factory
+    ):
         """Test handler returns early without payment object."""
         message = make_message(text="")
+        sender = mock_sender(message=message)
         message.successful_payment = None
         service = mock_credit_service_factory()
 
         await handle_successful_payment(
-            message, service, user_model=None, chat_model=None
+            message, sender, service, user_model=None, chat_model=None
         )
 
         message.answer.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_invalid_payload(self, make_message, mock_credit_service_factory):
+    async def test_invalid_payload(
+        self, make_message, mock_sender, mock_credit_service_factory
+    ):
         """Test invalid payload shows error."""
         message = make_message(text="")
+        sender = mock_sender(message=message)
         message.successful_payment = MagicMock()
         message.successful_payment.invoice_payload = "invalid"
         message.from_user = MagicMock()
@@ -191,8 +209,9 @@ class TestSuccessfulPayment:
         service = mock_credit_service_factory()
 
         await handle_successful_payment(
-            message, service, user_model=None, chat_model=None
+            message, sender, service, user_model=None, chat_model=None
         )
 
         message.answer.assert_awaited_once()
-        assert "could not be added" in message.answer.call_args[0][0]
+        text = _get_text_from_call_args(message.answer.call_args)
+        assert "could not be added" in text

@@ -9,6 +9,7 @@ from aiogram.types import (
     User,
 )
 
+from .sanitize import sanitize_for_telegram
 from .utils import one_liner
 
 
@@ -183,12 +184,26 @@ async def reply_with_attachment(
     attachment_file_id: str,
     attachment_url_fallback: str | None = None,
 ):
+    """Reply to a message with an attachment and caption.
+
+    Sanitizes the caption text before sending.
+    """
+    prepared_caption = sanitize_for_telegram(text) if text else None
+
     async def send(method):
         try:
-            return await method(attachment_file_id, caption=text)
+            return await method(
+                attachment_file_id,
+                caption=prepared_caption,
+                parse_mode="HTML" if prepared_caption else None,
+            )
         except TelegramBadRequest:
             if attachment_url_fallback:
-                return await method(attachment_url_fallback, caption=text)
+                return await method(
+                    attachment_url_fallback,
+                    caption=prepared_caption,
+                    parse_mode="HTML" if prepared_caption else None,
+                )
             raise
 
     match attachment_type:

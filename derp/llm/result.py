@@ -9,13 +9,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import aiogram.exceptions
 import logfire
-from aiogram import md
 from aiogram.types import BufferedInputFile, Message, ReactionTypeEmoji
 from aiogram.utils.i18n import gettext as _
 from aiogram.utils.media_group import MediaGroupBuilder
 from pydantic_ai import AgentRunResult, BinaryImage
+
+from derp.common.sender import MessageSender
 
 if TYPE_CHECKING:
     pass
@@ -43,19 +43,24 @@ class AgentResult:
 
     @property
     def formatted_text(self) -> str:
-        """Format all text content for Telegram."""
+        """Format all text content for Telegram.
+
+        Note: This returns raw text that will be sanitized by MessageSender.
+        Code blocks and execution results use markdown syntax that gets
+        converted to HTML.
+        """
         parts: list[str] = []
 
         if self.text:
             parts.append(self.text)
 
         for code in self.code_blocks:
-            parts.append(
-                f"{md.bold(_('Generated Code:'))}\n{md.expandable_blockquote(code)}"
-            )
+            # Use markdown code block syntax - MessageSender will convert to HTML
+            parts.append(f"**{_('Generated Code:')}**\n```\n{code}\n```")
 
         for result in self.execution_results:
-            parts.append(f"{md.bold(_('Execution Result:'))}\n{md.blockquote(result)}")
+            # Use markdown quote syntax - MessageSender will convert to HTML
+            parts.append(f"**{_('Execution Result:')}**\n```\n{result}\n```")
 
         return "\n\n".join(parts)
 
@@ -64,9 +69,13 @@ class AgentResult:
     ) -> Message | None:
         """Send the result as a reply to the given message.
 
+        Uses MessageSender for automatic markdown-to-HTML conversion,
+        chunking for long texts, and safe sending with fallback to plain text.
+
         Args:
             message: The message to reply to.
-            max_length: Maximum text length before truncation.
+            max_length: Maximum text length before truncation (deprecated,
+                        MessageSender handles chunking automatically).
 
         Returns:
             The sent message, or None if nothing was sent.
@@ -81,11 +90,12 @@ class AgentResult:
             return None
 
         sent_message: Message | None = None
+        sender = MessageSender.from_message(message)
 
-        # Send text if present
-        text_response = self.formatted_text[:max_length]
+        # Send text if present (MessageSender handles chunking automatically)
+        text_response = self.formatted_text
         if text_response:
-            sent_message = await self._send_text_safely(message, text_response)
+            sent_message = await sender.reply(text_response)
 
         # Send images if present
         if self.images:
@@ -94,16 +104,6 @@ class AgentResult:
             )
 
         return sent_message
-
-    async def _send_text_safely(self, message: Message, text: str) -> Message:
-        """Send text with markdown, falling back to plain text on parse errors."""
-        try:
-            return await message.reply(text, parse_mode="Markdown")
-        except aiogram.exceptions.TelegramBadRequest as exc:
-            if "can't parse entities" in exc.message:
-                logfire.debug("markdown_parse_failed_fallback")
-                return await message.reply(text, parse_mode=None)
-            raise
 
     async def _send_images(
         self, original_message: Message, reply_to: Message | None = None

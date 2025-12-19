@@ -9,11 +9,11 @@ Pricing: https://ai.google.dev/gemini-api/docs/pricing.md.txt
 from __future__ import annotations
 
 import logfire
-from aiogram.types import BufferedInputFile
 from google import genai
 from google.genai import types
 from pydantic_ai import RunContext
 
+from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.llm.deps import AgentDeps
 from derp.tools.wrapper import credit_aware_tool
@@ -60,9 +60,11 @@ async def generate_and_send_tts(
     if not audio_bytes or not audio_mime:
         raise RuntimeError("No audio returned from TTS model.")
 
-    await deps.message.reply_audio(
-        audio=BufferedInputFile(audio_bytes, filename=_filename_for_mime(audio_mime)),
-        caption=text[:900],
+    sender = MessageSender.from_message(deps.message)
+    await sender.reply_audio(
+        audio_bytes,
+        caption=text,
+        filename=_filename_for_mime(audio_mime),
     )
 
     logfire.info(

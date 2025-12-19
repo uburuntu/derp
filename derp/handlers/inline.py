@@ -23,6 +23,7 @@ from aiogram.types import (
 from aiogram.utils.i18n import gettext as _
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 
+from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.llm import ModelTier, create_inline_agent
 
@@ -94,7 +95,11 @@ async def inline_query_with_text(query: InlineQuery) -> Any:
 
 @router.chosen_inline_result()
 async def chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bot) -> None:
-    """Handle chosen inline results - generate and update with AI response."""
+    """Handle chosen inline results - generate and update with AI response.
+
+    Note: Inline results don't have a Message, so middleware can't inject sender.
+    We create MessageSender manually for inline message editing.
+    """
     if not chosen_result.inline_message_id:
         return
 
@@ -103,6 +108,9 @@ async def chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bot) -> N
         exclude_defaults=True, exclude_none=True, exclude_unset=True
     )
     prompt = f"User: {user_info}\nQuery: {chosen_result.query}"
+
+    # Create sender manually for inline editing (no Message available)
+    sender = MessageSender(bot=bot, chat_id=0)  # chat_id unused for inline
 
     try:
         with logfire.span(
@@ -117,14 +125,11 @@ async def chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bot) -> N
 
             if result.output:
                 response_text = (
-                    f"Prompt: {chosen_result.query}\n\nResponse:\n{result.output}"[
-                        :4096
-                    ]
+                    f"Prompt: {chosen_result.query}\n\nResponse:\n{result.output}"
                 )
-                await bot.edit_message_text(
+                await sender.edit_inline(
+                    chosen_result.inline_message_id,
                     response_text,
-                    inline_message_id=chosen_result.inline_message_id,
-                    parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup(
                         inline_keyboard=[
                             [
@@ -138,27 +143,27 @@ async def chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bot) -> N
                 )
                 logfire.info("inline_response_sent", length=len(result.output))
             else:
-                await bot.edit_message_text(
+                await sender.edit_inline(
+                    chosen_result.inline_message_id,
                     _(
                         "🤯 My circuits are a bit tangled. "
                         "I couldn't generate a response."
                     ),
-                    inline_message_id=chosen_result.inline_message_id,
                 )
                 logfire.warning("inline_empty_response")
 
     except UnexpectedModelBehavior:
         logfire.warning("inline_rate_limited")
-        await bot.edit_message_text(
+        await sender.edit_inline(
+            chosen_result.inline_message_id,
             _(
                 "⏳ I'm getting too many requests right now. "
                 "Please try again in about 30 seconds."
             ),
-            inline_message_id=chosen_result.inline_message_id,
         )
     except Exception:
         logfire.exception("inline_handler_failed")
-        await bot.edit_message_text(
+        await sender.edit_inline(
+            chosen_result.inline_message_id,
             _("😅 Something went wrong. I couldn't process that."),
-            inline_message_id=chosen_result.inline_message_id,
         )
