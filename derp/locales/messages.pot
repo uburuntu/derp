@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-12-19 17:14+0300\n"
+"POT-Creation-Date: 2025-12-19 20:00+0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,7 +17,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.17.0\n"
 
-#: derp/handlers/basic.py:12
+#: derp/handlers/basic.py:14
 #, python-brace-format
 msgid ""
 "👋 Hello, {name}!\n"
@@ -34,13 +34,16 @@ msgid ""
 "Type /help to see all available commands, or just start chatting with me!"
 msgstr ""
 
-#: derp/handlers/basic.py:28
+#: derp/handlers/basic.py:30
 msgid ""
 "I'm a friendly AI-powered Telegram bot\n"
 "\n"
 "Available commands:\n"
 "• /derp - Trigger AI response\n"
 "• /donate [stars] - Support the bot with Telegram Stars (default 20)\n"
+"• /credits - Check your credit balance\n"
+"• /buy - Purchase personal credits with Stars\n"
+"• /buy_chat - Purchase chat pool credits (groups)\n"
 "• /imagine <prompt> - Generate images with AI (premium)\n"
 "• /edit <prompt> - Edit images with AI (premium)\n"
 "• /settings - Show current chat settings\n"
@@ -55,20 +58,183 @@ msgid ""
 "• Use inline mode: @DerpRobot <query>"
 msgstr ""
 
-#: derp/handlers/chat.py:196
+#: derp/handlers/basic.py:53
+msgid ""
+"\n"
+"\n"
+"🛠 Debug (admin only):\n"
+"• /debug_buy - 1⭐ test packs (user/chat)\n"
+"• /debug_credits <n> [chat] - Add credits\n"
+"• /debug_reset [chat] - Reset to 0\n"
+"• /debug_status - Full diagnostic\n"
+"• /debug_refund <id> - Test refund\n"
+"• /debug_tools - List tool pricing\n"
+"• /debug_help - All debug commands"
+msgstr ""
+
+#: derp/handlers/chat.py:216
 #, python-brace-format
 msgid "Context: {chars} chars, {msgs} messages"
 msgstr ""
 
-#: derp/handlers/chat.py:291 derp/handlers/image.py:126
-#: derp/handlers/image.py:192 derp/handlers/inline.py:154
+#: derp/handlers/chat.py:342 derp/handlers/image.py:190
+#: derp/handlers/image.py:314 derp/handlers/inline.py:154
 msgid ""
 "⏳ I'm getting too many requests right now. Please try again in about 30 "
 "seconds."
 msgstr ""
 
-#: derp/handlers/chat.py:298
+#: derp/handlers/chat.py:349
 msgid "😅 Something went wrong. I couldn't process that message."
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:32 derp/handlers/credit_cmds.py:92
+#: derp/handlers/credit_cmds.py:162
+msgid "😅 Could not find your user info."
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:53
+msgid "💰 **Your Credits**\n"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:57
+#, python-brace-format
+msgid "🏠 Chat pool: **{credits}** credits"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:60
+#, python-brace-format
+msgid "👤 Personal: **{credits}** credits\n"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:63
+msgid "✅ Chat credits will be used first."
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:65
+msgid "✅ Your personal credits will be used."
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:67 derp/handlers/credit_cmds.py:75
+msgid "💡 No credits! Use /buy to get some."
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:70
+#, python-brace-format
+msgid "👤 Balance: **{credits}** credits\n"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:73
+msgid "✅ You have credits for premium features!"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:105
+msgid "🛒 **Credit Packs**\n"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:106
+msgid "Buy credits with Telegram Stars ⭐\n"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:113
+#, python-brace-format
+msgid "• **{name}**: {stars} ⭐ → {credits} credits (+{bonus}% bonus)"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:123
+#, python-brace-format
+msgid "• **{name}**: {stars} ⭐ → {credits} credits"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:131
+msgid "**What can you do with credits?**"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:132
+msgid "• 1 credit = 1 AI message (better quality model)"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:133
+msgid "• 5 credits = 1 image generation"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:134
+msgid "• 10 credits = 1 deep thinking (/think)"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:136 derp/handlers/credit_cmds.py:184
+msgid "👇 **Tap a button to buy:**"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:167
+msgid ""
+"💡 This command is for group chats only.\n"
+"Use /buy for personal credits."
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:180
+msgid "🏠 **Buy Chat Credits**\n"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:181
+msgid "Credits for this chat's shared pool.\n"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:182
+msgid "Everyone in the chat can use them!\n"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:221
+msgid ""
+"🧠 **Deep Thinking Mode**\n"
+"\n"
+"Use Gemini 3 Pro for complex math, logic puzzles, or problems that need "
+"careful analysis.\n"
+"\n"
+"Usage: /think <your problem or question>"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:232 derp/handlers/image.py:113
+#: derp/handlers/image.py:228
+msgid "😅 Could not verify your access. Please try again."
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:249
+#, python-brace-format
+msgid ""
+"🧠 Deep thinking requires credits.\n"
+"\n"
+"✨ {reason}\n"
+"\n"
+"💡 Use /buy to get credits!"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:318
+msgid "😅 Something went wrong during deep thinking. Please try again."
+msgstr ""
+
+#: derp/handlers/debug.py:116
+msgid ""
+"🛠 **Debug Buy Menu**\n"
+"\n"
+"All packs cost 1⭐ for testing.\n"
+"Choose user or chat credits:"
+msgstr ""
+
+#: derp/handlers/debug.py:607
+msgid ""
+"🛠 **Debug Commands** (admin only)\n"
+"\n"
+"**Payment Testing:**\n"
+"• /debug_buy - Buy credits with 1⭐ test packs\n"
+"• /debug_credits <n> [chat] - Add credits directly\n"
+"• /debug_reset [chat] - Reset credits to 0\n"
+"• /debug_refund <charge_id> - Test refund flow\n"
+"\n"
+"**Diagnostics:**\n"
+"• /debug_status - Show tier, balances, model config\n"
+"• /debug_tools - List tools with pricing\n"
+"• /debug_help - This help message"
 msgstr ""
 
 #: derp/handlers/donations.py:41
@@ -251,36 +417,48 @@ msgstr ""
 msgid "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
 msgstr ""
 
-#: derp/handlers/image.py:40
+#: derp/handlers/image.py:47
 msgid "🤷 No image generated."
 msgstr ""
 
-#: derp/handlers/image.py:58
+#: derp/handlers/image.py:65
 msgid "🤷 No images generated."
 msgstr ""
 
-#: derp/handlers/image.py:97
+#: derp/handlers/image.py:108
 msgid "Usage: /imagine <prompt>"
 msgstr ""
 
-#: derp/handlers/image.py:133
+#: derp/handlers/image.py:131
+#, python-brace-format
+msgid ""
+"✨ {reason}\n"
+"\n"
+"💡 Use /buy to get credits for unlimited image generation!"
+msgstr ""
+
+#: derp/handlers/image.py:198
 msgid "😅 Something went wrong while generating the image. Try again later."
 msgstr ""
 
-#: derp/handlers/image.py:147
+#: derp/handlers/image.py:217
 msgid "Reply to an image and use: /edit <prompt>"
 msgstr ""
 
-#: derp/handlers/image.py:152
+#: derp/handlers/image.py:222
 msgid "Please reply to an image (photo/document/sticker) to edit it."
 msgstr ""
 
-#: derp/handlers/image.py:199
-msgid "😅 Something went wrong while editing the image. Try again later."
+#: derp/handlers/image.py:245
+#, python-brace-format
+msgid ""
+"✨ {reason}\n"
+"\n"
+"💡 Use /buy to get credits for unlimited image editing!"
 msgstr ""
 
-#: derp/handlers/image.py:208
-msgid "🔒 This feature is only available for premium users and chats."
+#: derp/handlers/image.py:321
+msgid "😅 Something went wrong while editing the image. Try again later."
 msgstr ""
 
 #: derp/handlers/inline.py:38 derp/handlers/inline.py:65
@@ -320,6 +498,82 @@ msgstr ""
 
 #: derp/handlers/inline.py:162
 msgid "😅 Something went wrong. I couldn't process that."
+msgstr ""
+
+#: derp/handlers/payments.py:94
+msgid "Invalid purchase request"
+msgstr ""
+
+#: derp/handlers/payments.py:102 derp/handlers/payments.py:167
+msgid "Unknown credit pack"
+msgstr ""
+
+#: derp/handlers/payments.py:110
+#, python-brace-format
+msgid "{credits} credits for this chat"
+msgstr ""
+
+#: derp/handlers/payments.py:113
+#, python-brace-format
+msgid "{credits} credits for your account"
+msgstr ""
+
+#: derp/handlers/payments.py:129
+#, python-brace-format
+msgid "{name} Credit Pack"
+msgstr ""
+
+#: derp/handlers/payments.py:133
+msgid "Credits"
+msgstr ""
+
+#: derp/handlers/payments.py:138
+#, python-brace-format
+msgid ""
+"💫 Click below to complete your purchase:\n"
+"\n"
+"{link}"
+msgstr ""
+
+#: derp/handlers/payments.py:147
+msgid "Failed to create invoice. Try again."
+msgstr ""
+
+#: derp/handlers/payments.py:162
+msgid "Invalid payment data"
+msgstr ""
+
+#: derp/handlers/payments.py:198 derp/handlers/payments.py:210
+msgid "Payment received but credits could not be added. Contact support."
+msgstr ""
+
+#: derp/handlers/payments.py:217
+msgid "Payment received but your account was not found. Contact support."
+msgstr ""
+
+#: derp/handlers/payments.py:236
+#, python-brace-format
+msgid ""
+"✅ **Payment successful!**\n"
+"\n"
+"Added **{credits}** credits to this chat.\n"
+"New balance: **{balance}** credits"
+msgstr ""
+
+#: derp/handlers/payments.py:252
+#, python-brace-format
+msgid ""
+"✅ **Payment successful!**\n"
+"\n"
+"Added **{credits}** credits to your account.\n"
+"New balance: **{balance}** credits"
+msgstr ""
+
+#: derp/handlers/payments.py:276
+#, python-brace-format
+msgid ""
+"Payment received but an error occurred. Contact support with charge ID: "
+"{charge_id}"
 msgstr ""
 
 #: derp/llm/result.py:54

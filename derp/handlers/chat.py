@@ -3,6 +3,10 @@
 This handler processes chat messages and generates AI responses using
 the provider-agnostic Pydantic-AI infrastructure with tools like
 DuckDuckGo search and chat memory.
+
+The handler is credit-aware:
+- Free tier (no credits): Uses CHEAP model with 10 message context
+- Paid tier (has credits): Uses STANDARD model with 100 message context
 """
 
 from __future__ import annotations
@@ -21,9 +25,18 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from derp.common.extractor import Extractor
 from derp.config import settings
+from derp.credits import CONTEXT_LIMITS, CreditService
+from derp.credits import ModelTier as CreditModelTier
 from derp.db import DatabaseManager, get_db_manager, get_recent_messages
 from derp.filters import DerpMentionFilter
-from derp.llm import AgentDeps, AgentResult, ModelTier, create_chat_agent
+from derp.llm import (
+    AgentDeps,
+    AgentResult,
+    create_chat_agent,
+)
+from derp.llm import (
+    ModelTier as LLMModelTier,
+)
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.tools import create_chat_toolset
@@ -120,11 +133,17 @@ async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
 async def build_context_prompt(
     message: Message,
     db: DatabaseManager,
+    context_limit: int = 100,
 ) -> str:
     """Build the context prompt for the agent.
 
     Includes chat info, recent history, and current message.
     Note: Chat memory is injected via the agent's system prompt.
+
+    Args:
+        message: The Telegram message.
+        db: Database manager.
+        context_limit: Max number of recent messages to include.
     """
     context_parts: list[str] = []
 
@@ -140,10 +159,10 @@ async def build_context_prompt(
         ]
     )
 
-    # Recent chat history from messages table
+    # Recent chat history from messages table (limited by tier)
     async with db.read_session() as session:
         recent_msgs = await get_recent_messages(
-            session, chat_telegram_id=message.chat.id, limit=100
+            session, chat_telegram_id=message.chat.id, limit=context_limit
         )
 
     if recent_msgs:
@@ -183,6 +202,7 @@ async def build_context_prompt(
         "context_built",
         chars=len("\n".join(context_parts)),
         messages=len(recent_msgs) if recent_msgs else 0,
+        limit=context_limit,
     )
 
     return "\n".join(context_parts)
@@ -205,7 +225,13 @@ async def show_context(message: Message, chat_settings: ChatModel | None) -> Non
 @router.message(F.chat.type == "private")
 @router.message(F.reply_to_message.from_user.id == settings.bot_id)
 class ChatAgentHandler(MessageHandler):
-    """Message handler for AI responses using Pydantic-AI agents."""
+    """Message handler for AI responses using Pydantic-AI agents.
+
+    Credit-aware handler that selects model tier and context limit
+    based on user/chat credit balance:
+    - No credits: CHEAP model, 10 message context
+    - Has credits: STANDARD model, 100 message context
+    """
 
     @flags.chat_action
     async def handle(self) -> Any:
@@ -216,14 +242,37 @@ class ChatAgentHandler(MessageHandler):
         chat_settings: ChatModel | None = self.data.get("chat_settings")
         user: UserModel | None = self.data.get("user")
 
-        # Create agent dependencies
+        # Determine tier and context limit based on credits
+        tier = LLMModelTier.CHEAP  # Default for free tier
+        context_limit = CONTEXT_LIMITS[CreditModelTier.CHEAP]
+
+        tier_map = {
+            CreditModelTier.CHEAP: LLMModelTier.CHEAP,
+            CreditModelTier.STANDARD: LLMModelTier.STANDARD,
+            CreditModelTier.PREMIUM: LLMModelTier.PREMIUM,
+        }
+
+        if user and chat_settings:
+            async with db.session() as session:
+                credit_service = CreditService(session)
+                (
+                    credit_tier,
+                    _model_id,
+                    context_limit,
+                ) = await credit_service.get_orchestrator_config(
+                    user_telegram_id=user.telegram_id,
+                    chat_telegram_id=chat_settings.telegram_id,
+                )
+                tier = tier_map.get(credit_tier, LLMModelTier.CHEAP)
+
+        # Create agent dependencies with determined tier
         deps = AgentDeps(
             message=self.event,
             db=db,
             bot=bot,
             chat=chat_settings,
             user=user,
-            tier=ModelTier.STANDARD,
+            tier=tier,
         )
 
         try:
@@ -234,9 +283,10 @@ class ChatAgentHandler(MessageHandler):
                 telegram_user_id=self.event.from_user and self.event.from_user.id,
                 telegram_message_id=self.event.message_id,
                 model_tier=deps.tier.value,
+                context_limit=context_limit,
             ) as span:
-                # Build context prompt
-                context = await build_context_prompt(self.event, db)
+                # Build context prompt with tier-appropriate limit
+                context = await build_context_prompt(self.event, db, context_limit)
                 span.set_attribute("derp.context_chars", len(context))
                 span.set_attribute(
                     "derp.context_messages", context.count('"message_id"')
@@ -258,6 +308,7 @@ class ChatAgentHandler(MessageHandler):
                 logfire.info(
                     "running_agent",
                     tier=deps.tier.value,
+                    context_limit=context_limit,
                     tools=len(toolset._tools) if hasattr(toolset, "_tools") else 0,
                 )
 

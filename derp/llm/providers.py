@@ -34,12 +34,14 @@ class ModelTier(StrEnum):
 
 
 # Tier-to-model mapping. Update when models change or new ones launch.
-# Format: "provider:model" or just "model" for default provider
+# https://ai.google.dev/gemini-api/docs/models
 TIER_MODELS: dict[ModelTier, str] = {
     ModelTier.CHEAP: "gemini-2.0-flash-lite",
     ModelTier.STANDARD: "gemini-2.5-flash",
-    ModelTier.PREMIUM: "gemini-2.5-pro",
-    ModelTier.IMAGE: "gemini-2.5-flash-preview-05-20",
+    # Gemini 3 Pro for premium/thinking: https://ai.google.dev/gemini-api/docs/models#gemini-3
+    ModelTier.PREMIUM: "gemini-3-pro-preview",
+    # Nano Banana for image gen: https://ai.google.dev/gemini-api/docs/nanobanana
+    ModelTier.IMAGE: "gemini-2.5-flash-image",
 }
 
 

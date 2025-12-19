@@ -117,13 +117,16 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
   - `derp/middlewares/*`: cross‑cutting concerns (logging, DB persistence, event context, chat settings, throttling helper).
   - `derp/filters/*`: input shaping (mentions, meta command/hashtag parser).
   - `derp/common/*`: shared services (LLM, extraction, executors, Telegram helpers).
+  - `derp/credits/*`: credit economy (pricing, tiers, service, registries).
   - `derp/db/*`: database session and query functions.
-  - `derp/models/*`: SQLAlchemy models (User, Chat, Message).
+  - `derp/models/*`: SQLAlchemy models (User, Chat, Message, CreditTransaction, DailyUsage).
+  - `derp/tools/*`: LLM tool implementations (chat memory, web search, image gen, think).
+  - `derp/llm/*`: LLM provider abstraction and agent factories.
   - `derp/locales/*`: i18n resources and compiled catalogs.
 
 ## Event Handling & Middlewares
 
-- **Routers:** Registered in `derp/__main__.py` via `dp.include_routers(...)` in this order: `basic`, `chat_settings`, `gemini_image`, `gemini_inline`, then catch‑all `gemini` last.
+- **Routers:** Registered in `derp/__main__.py` via `dp.include_routers(...)` in this order: `debug` (admin only), `basic`, `donations`, `chat_settings`, `credit_cmds`, `payments`, `image`, `inline`, then catch‑all `chat` last.
 - **Outer middlewares:**
   - `LogUpdatesMiddleware`: formats and logs each `Update` with elapsed ms.
   - `DatabaseLoggerMiddleware`: upserts user/chat and projects messages to the messages table.
@@ -133,22 +136,20 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
   - `ChatSettingsMiddleware`: loads per‑chat settings (including `llm_memory`) and adds `chat_settings` to `data`.
   - `ThrottleUsersMiddleware` (available): prevents concurrent handling per user; not enabled by default.
 
-## LLM Integration (Gemini)
+## LLM Integration (Pydantic-AI)
 
-- **Client:** Native Google `genai` via `google-genai`. Wrapper in `derp/common/llm_gemini.py` provides a builder to compose:
-  - text and media parts (`with_text`, `with_media`),
-  - model selection (`with_model`),
-  - optional tools (`with_tool`) with auto‑generated function declarations,
-  - Google Search and URL Context (`with_google_search`, `with_url_context`).
-- **Function Calling:** Responses with `function_calls` are iteratively executed by `_FunctionCallHandler` (max 3 hops), feeding results back into `generate_content`.
-- **Result Shape:** `GeminiResult` extracts `text_parts`, `code_blocks`, `execution_results`, and inline `images` to simplify Telegram replies.
+- **Provider Abstraction:** `derp/llm/providers.py` defines `ModelTier` enum and `create_model()` factory. Models are selected by tier (CHEAP, STANDARD, PREMIUM, IMAGE), not by name, enabling easy provider switching.
+- **Agent Factories:** `derp/llm/agents.py` provides `create_chat_agent()`, `create_image_agent()`, `create_inline_agent()` pre-configured with system prompts and toolsets.
+- **Dependencies:** `AgentDeps` dataclass (`derp/llm/deps.py`) injects context (message, chat, user, db, bot, tier, credit_service) into tools and prompts.
+- **Result Wrapper:** `AgentResult` (`derp/llm/result.py`) standardizes agent output and provides `reply_to()` for sending Telegram messages with text, images, code blocks.
 - **Handlers:**
-  - `derp/handlers/gemini.py`: main chat handler. Triggers on `/derp`, private chats, replies to the bot, or `DerpMentionFilter`. Builds context from recent messages and optional chat memory, attaches media, executes Gemini, and replies.
-  - `derp/handlers/gemini_image.py`: premium image generation/editing using `gemini-2.5-flash-image`.
-  - `derp/handlers/gemini_inline.py`: inline mode, returns placeholder first, then edits with model output.
-- **Tools & Memory:**
-  - Lightweight tool system in `derp/common/llm_gemini.py` for native Gemini function calling.
-  - Chat memory update tools in `derp/tools/memory.py` and `derp/tools/chat_memory.py`. Memory is stored in the `chats.llm_memory` column, capped at 1024 chars.
+  - `derp/handlers/chat.py`: main chat handler. Determines tier from credits, builds context, runs agent, handles multi-modal output.
+  - `derp/handlers/image.py`: premium image generation/editing via `/imagine` and `/edit` commands.
+  - `derp/handlers/inline.py`: inline mode with placeholder-then-edit pattern.
+- **Tools & Toolsets:**
+  - `derp/tools/toolsets.py`: creates `FunctionToolset` instances with registered tools (chat memory, web search, image gen, think).
+  - Tools wrapped with `credit_aware_tool` for access control and credit deduction.
+  - Chat memory stored in `chats.llm_memory` column, capped at 1024 chars.
 
 ## Data & Persistence (PostgreSQL + SQLAlchemy)
 
@@ -162,6 +163,51 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
   - `get_recent_messages`: returns messages in chronological order for LLM context.
   - `update_chat_memory`: sets/clears chat memory.
 - **Migrations:** Alembic migrations in `migrations/versions/`. Generate with `make db-revision MSG="..."`.
+
+## Credit Economy
+
+The bot uses a credit-based monetization system with tiered access to features.
+
+### Core Concepts
+
+- **Two Credit Pools:** Users have personal credits; chats (groups) have shared pool credits. Chat credits are consumed first, then personal credits.
+- **Model Tiers:** LLM models are abstracted into quality tiers (CHEAP, STANDARD, PREMIUM, IMAGE) rather than specific model names. This allows swapping providers without changing business logic.
+- **Free Tier:** Users without credits use the CHEAP tier with reduced context length and no premium tools.
+- **Paid Tier:** Users/chats with credits > 0 unlock STANDARD tier, longer context, and premium tools.
+
+### Architecture
+
+```
+derp/credits/
+├── models.py     # ModelConfig, MODEL_REGISTRY, tier mappings
+├── tools.py      # ToolConfig, TOOL_REGISTRY, tool pricing
+├── types.py      # ModelTier, ModelType, TransactionType, CreditCheckResult
+└── service.py    # CreditService: check access, deduct, purchase, refund
+```
+
+- **CreditService:** Central service for all credit operations. Performs atomic balance updates, records transactions with idempotency keys, and checks tool/model access.
+- **Registries:** `MODEL_REGISTRY` and `TOOL_REGISTRY` define available models/tools with their costs. Pricing is derived from provider costs with a margin.
+- **CreditCheckResult:** Returned by access checks; contains `allowed`, `reject_reason`, source (chat/user), and cost information.
+
+### Payment Flow
+
+1. User runs `/buy` or `/buy_chat` → shows inline keyboard with credit packs
+2. User taps pack → `payments.py` creates Telegram Stars invoice via `bot.create_invoice_link()`
+3. Telegram sends `pre_checkout_query` → bot approves
+4. Telegram sends `successful_payment` → `CreditService.purchase_credits()` adds credits atomically
+5. Transaction recorded with `telegram_charge_id` for idempotency and refund support
+
+### Tool Credit Integration
+
+- Tools are wrapped with `credit_aware_tool` decorator that checks access before execution
+- Premium tools (image gen, deep thinking) are visible to the agent but return placeholder messages when credits are insufficient
+- Daily usage limits tracked in `daily_usage` table for free-tier rate limiting
+
+### Extending
+
+- **Add a model:** Add entry to `MODEL_REGISTRY` with provider, tier, and pricing. Tests will fail if tier hierarchy is violated.
+- **Add a tool:** Add entry to `TOOL_REGISTRY` with base cost and daily limits. Wrap function with `credit_aware_tool`.
+- **Change pricing:** Update registry entries; credit costs are derived automatically from provider costs.
 
 ## Media & Extraction
 
@@ -229,7 +275,7 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 When generating code, setting up configuration, or needing API documentation for any of these libraries, use the Context7 MCP tools (`resolve-library-id` and `get-library-docs`) automatically to get up-to-date references.
 
 - **aiogram 3.x:** Telegram bot framework (routers, middleware, filters, FSM, i18n).
-- **google-genai:** Native Gemini client (generate content, tools, search, URL context).
+- **pydantic-ai:** Provider-agnostic LLM framework (agents, tools, structured output, multi-provider support).
 - **SQLAlchemy 2.x + asyncpg:** Async PostgreSQL ORM with typed models.
 - **Alembic:** Database migrations.
 - **logfire 4.x:** Structured logging, metrics, instrumentation.
@@ -249,7 +295,9 @@ When generating code, setting up configuration, or needing API documentation for
 - **Add a database migration:** Run `make db-revision MSG="description"` (**never create migration files manually**).
 - **Add a model:** Create in `derp/models/`, add to `derp/models/__init__.py`, generate migration.
 - **Add a query:** Add function to `derp/db/queries.py`, add tests in `tests/test_db_queries.py`.
-- **Add a tool for Gemini:** Write a function with docstring and type hints; register via `GeminiRequestBuilder.with_tool(func, deps)` to expose it for function calls.
+- **Add a tool for LLM:** Write a function with `RunContext[AgentDeps]` as first param; add to `derp/tools/`, register in toolset, wrap with `credit_aware_tool` if it costs credits.
+- **Add a credit pack:** Add entry to `CREDIT_PACKS` in `payments.py`.
+- **Add a debug command:** Add to `derp/handlers/debug.py` (admin-only filter is already applied).
 
 ---
 
