@@ -1,14 +1,13 @@
 """Main entry point for the Telegram bot."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
 
 import logfire
 from aiogram import Bot, Dispatcher
-
-# Enable capturing LLM message content in spans
-os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.chat_action import ChatActionMiddleware
@@ -17,19 +16,15 @@ from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
 from derp.config import settings
 from derp.db import init_db_manager
-from derp.handlers import (
-    basic,
-    chat_settings,
-    donations,
-    gemini,
-    gemini_image,
-    gemini_inline,
-)
+from derp.handlers import basic, chat, chat_settings, donations, image, inline
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
 from derp.middlewares.chat_settings import ChatSettingsMiddleware
 from derp.middlewares.database_logger import DatabaseLoggerMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
+
+# Enable capturing LLM message content in spans
+os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
 
 # Configure logfire with basic settings
 logfire.configure(
@@ -40,7 +35,7 @@ logfire.configure(
 )
 
 # Auto-instrument integrations
-logfire.instrument_google_genai()
+logfire.instrument_pydantic_ai()  # Instruments Pydantic-AI agent runs and LLM calls
 if settings.environment == "dev":
     logfire.instrument_httpx(capture_all=True)
 logfire.instrument_system_metrics()
@@ -56,7 +51,7 @@ logging.basicConfig(
 )
 
 
-async def main():
+async def main() -> None:
     logger = logging.getLogger("Main")
 
     default = DefaultBotProperties(
@@ -77,6 +72,7 @@ async def main():
         f"Starting bot: {bot_info.full_name} (@{bot_info.username}) [ID: {bot_info.id}]"
     )
     logger.info(f"Environment: {settings.environment}")
+    logger.info(f"LLM Provider: {settings.default_llm_provider}")
     logger.info(f"Found {len(settings.google_api_keys)} Google API keys")
 
     dp = Dispatcher(storage=MemoryStorage())
@@ -107,10 +103,10 @@ async def main():
         basic.router,
         donations.router,
         chat_settings.router,
-        gemini_image.router,
-        gemini_inline.router,
+        image.router,
+        inline.router,
         # Must be the last one to handle all unhandled messages
-        gemini.router,
+        chat.router,
     )
 
     try:

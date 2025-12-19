@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-12-19 13:52+0300\n"
+"POT-Creation-Date: 2025-12-19 17:14+0300\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -84,6 +84,25 @@ msgstr ""
 "• Reply to my messages\n"
 "• Use me in private chats\n"
 "• Use inline mode: @DerpRobot <query>"
+
+#: derp/handlers/chat.py:196
+#, python-brace-format
+msgid "Context: {chars} chars, {msgs} messages"
+msgstr ""
+
+#: derp/handlers/chat.py:291 derp/handlers/image.py:126
+#: derp/handlers/image.py:192 derp/handlers/inline.py:154
+msgid ""
+"⏳ I'm getting too many requests right now. Please try again in about 30 "
+"seconds."
+msgstr ""
+"⏳ I'm getting too many requests right now. Please try again in about 30 "
+"seconds."
+
+#: derp/handlers/chat.py:298
+#, fuzzy
+msgid "😅 Something went wrong. I couldn't process that message."
+msgstr "😅 Something went wrong with Gemini. I couldn't process that message."
 
 #: derp/handlers/donations.py:41
 msgid "keep Derp caffeinated"
@@ -266,85 +285,91 @@ msgstr "{name}, your {stars}⭐️ keeps the servers toasty. {kind} incoming!"
 msgid "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
 msgstr "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
 
-#: derp/handlers/gemini.py:300 derp/handlers/gemini_image.py:146
-#: derp/handlers/gemini_image.py:196 derp/handlers/gemini_inline.py:139
-msgid ""
-"⏳ I'm getting too many requests right now. Please try again in about 30 "
-"seconds."
-msgstr ""
-"⏳ I'm getting too many requests right now. Please try again in about 30 "
-"seconds."
-
-#: derp/handlers/gemini.py:307
-msgid "😅 Something went wrong with Gemini. I couldn't process that message."
-msgstr "😅 Something went wrong with Gemini. I couldn't process that message."
-
-#: derp/handlers/gemini_image.py:89
+#: derp/handlers/image.py:40
 msgid "🤷 No image generated."
 msgstr "🤷 No image generated."
 
-#: derp/handlers/gemini_image.py:128
+#: derp/handlers/image.py:58
+#, fuzzy
+msgid "🤷 No images generated."
+msgstr "🤷 No image generated."
+
+#: derp/handlers/image.py:97
 msgid "Usage: /imagine <prompt>"
 msgstr "Usage: /imagine <prompt>"
 
-#: derp/handlers/gemini_image.py:151 derp/handlers/gemini_image.py:156
+#: derp/handlers/image.py:133
 msgid "😅 Something went wrong while generating the image. Try again later."
 msgstr "😅 Something went wrong while generating the image. Try again later."
 
-#: derp/handlers/gemini_image.py:169
+#: derp/handlers/image.py:147
 msgid "Reply to an image and use: /edit <prompt>"
 msgstr "Reply to an image and use: /edit <prompt>"
 
-#: derp/handlers/gemini_image.py:174
-msgid "Please reply to an image (photo/document sticker) to edit it."
+#: derp/handlers/image.py:152
+#, fuzzy
+msgid "Please reply to an image (photo/document/sticker) to edit it."
 msgstr "Please reply to an image (photo/document sticker) to edit it."
 
-#: derp/handlers/gemini_image.py:201 derp/handlers/gemini_image.py:206
+#: derp/handlers/image.py:199
 msgid "😅 Something went wrong while editing the image. Try again later."
 msgstr "😅 Something went wrong while editing the image. Try again later."
 
-#: derp/handlers/gemini_image.py:214
+#: derp/handlers/image.py:208
 msgid "🔒 This feature is only available for premium users and chats."
 msgstr "🔒 This feature is only available for premium users and chats."
 
-#: derp/handlers/gemini_inline.py:33 derp/handlers/gemini_inline.py:60
+#: derp/handlers/inline.py:38 derp/handlers/inline.py:65
 msgid "🤖 Ask Derp"
 msgstr "🤖 Ask Derp"
 
-#: derp/handlers/gemini_inline.py:34
+#: derp/handlers/inline.py:39
 msgid "Start typing to get an AI-powered response."
 msgstr "Start typing to get an AI-powered response."
 
-#: derp/handlers/gemini_inline.py:36
+#: derp/handlers/inline.py:41
 msgid "🤖 Please enter a prompt for Derp AI."
 msgstr "🤖 Please enter a prompt for Derp AI."
 
-#: derp/handlers/gemini_inline.py:42 derp/handlers/gemini_inline.py:73
-#: derp/handlers/gemini_inline.py:123
+#: derp/handlers/inline.py:47 derp/handlers/inline.py:78
+#: derp/handlers/inline.py:132
 msgid "Add Derp to your chat"
 msgstr "Add Derp to your chat"
 
-#: derp/handlers/gemini_inline.py:61
+#: derp/handlers/inline.py:66
 #, python-brace-format
 msgid "Get an AI-powered response for: {user_input}"
 msgstr "Get an AI-powered response for: {user_input}"
 
-#: derp/handlers/gemini_inline.py:66
+#: derp/handlers/inline.py:71
 #, python-brace-format
 msgid "🧠 Thinking about: {user_input}"
 msgstr "🧠 Thinking about: {user_input}"
 
-#: derp/handlers/gemini_inline.py:83
+#: derp/handlers/inline.py:88
 msgid "Start personal chat"
 msgstr "Start personal chat"
 
-#: derp/handlers/gemini_inline.py:132
+#: derp/handlers/inline.py:143
 msgid "🤯 My circuits are a bit tangled. I couldn't generate a response."
 msgstr "🤯 My circuits are a bit tangled. I couldn't generate a response."
 
-#: derp/handlers/gemini_inline.py:146
-msgid "😅 Something went wrong with Gemini. I couldn't process that."
+#: derp/handlers/inline.py:162
+#, fuzzy
+msgid "😅 Something went wrong. I couldn't process that."
 msgstr "😅 Something went wrong with Gemini. I couldn't process that."
+
+#: derp/llm/result.py:54
+msgid "Generated Code:"
+msgstr ""
+
+#: derp/llm/result.py:58
+msgid "Execution Result:"
+msgstr ""
+
+#: derp/llm/result.py:155
+msgid "📊 Generated images, but couldn't display them."
+msgstr ""
 
 #~ msgid "🤔 I'm having trouble thinking right now. Try again in a moment."
 #~ msgstr ""

@@ -27,18 +27,24 @@ class Settings(BaseSettings):
     # PostgreSQL database connection string
     database_url: str = "postgresql+asyncpg://localhost:5432/derp"
 
-    default_llm_model: str
+    # Default LLM model (legacy, kept for reference)
+    default_llm_model: str = ""
+
+    # Default LLM provider for Pydantic-AI: google, openai, anthropic, openrouter
+    default_llm_provider: Literal["google", "openai", "anthropic", "openrouter"] = (
+        "google"
+    )
 
     # OpenAI API key for Pydantic AI
-    openai_api_key: str
+    openai_api_key: str = ""
 
     # Google API key for Pydantic AI
     google_api_key: str
     google_api_extra_keys: str
     google_api_paid_key: str
 
-    # OpenRouter API key for Pydantic AI
-    openrouter_api_key: str
+    # OpenRouter API key for Pydantic AI (optional fallback provider)
+    openrouter_api_key: str = ""
 
     # Logfire token
     logfire_token: str
