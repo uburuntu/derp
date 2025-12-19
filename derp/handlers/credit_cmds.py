@@ -13,9 +13,9 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
 
+from derp.credits import CreditService
 from derp.credits.packs import CREDIT_PACKS
 from derp.credits.ui import build_buy_keyboard
-from derp.db import get_db_manager
 from derp.db.credits import get_balances
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
@@ -26,27 +26,28 @@ router = Router(name="credit_cmds")
 @router.message(Command("credits", "balance", "bal"))
 async def show_credits(
     message: Message,
-    chat_settings: ChatModel | None = None,
-    user: UserModel | None = None,
+    credit_service: CreditService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     """Show the user's credit balance."""
-    if not user:
+    if not user_model:
         return await message.reply(_("😅 Could not find your user info."))
 
-    db = get_db_manager()
-    async with db.read_session() as session:
-        if chat_settings:
-            chat_credits, user_credits = await get_balances(
-                session, user.telegram_id, chat_settings.telegram_id
-            )
-        else:
-            chat_credits = 0
-            user_credits = 0
+    if chat_model:
+        chat_credits, user_credits = await get_balances(
+            credit_service.session, user_model.telegram_id, chat_model.telegram_id
+        )
+    else:
+        chat_credits, user_credits = await get_balances(
+            credit_service.session, user_model.telegram_id, None
+        )
+        chat_credits = 0  # No chat context
 
     logfire.info(
         "credits_checked",
-        user_id=user.telegram_id,
-        chat_id=chat_settings and chat_settings.telegram_id,
+        user_id=user_model.telegram_id,
+        chat_id=chat_model and chat_model.telegram_id,
         user_credits=user_credits,
         chat_credits=chat_credits,
     )
@@ -54,7 +55,7 @@ async def show_credits(
     # Build response message
     parts = [_("💰 **Your Credits**\n")]
 
-    if chat_settings and chat_settings.type != "private":
+    if chat_model and chat_model.type != "private":
         parts.append(
             _("🏠 Chat pool: **{credits}** credits").format(credits=chat_credits)
         )
@@ -82,21 +83,21 @@ async def show_credits(
 @router.message(Command("buy", "purchase", "shop"))
 async def show_buy_options(
     message: Message,
-    chat_settings: ChatModel | None = None,
-    user: UserModel | None = None,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     """Show credit purchase options with inline payment buttons.
 
     Displays available credit packs and inline buttons to purchase.
     Users can buy credits for themselves or for the chat pool.
     """
-    if not user:
+    if not user_model:
         return await message.reply(_("😅 Could not find your user info."))
 
     logfire.info(
         "buy_menu_shown",
-        user_id=user.telegram_id,
-        chat_id=chat_settings and chat_settings.telegram_id,
+        user_id=user_model.telegram_id,
+        chat_id=chat_model and chat_model.telegram_id,
     )
 
     # Build message with pack info
@@ -150,17 +151,17 @@ async def show_buy_options(
 @router.message(Command("buy_chat", "buychat"))
 async def show_buy_chat_options(
     message: Message,
-    chat_settings: ChatModel | None = None,
-    user: UserModel | None = None,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     """Buy credits for the chat pool (group chats only).
 
     Chat credits are shared among all members and used first.
     """
-    if not user:
+    if not user_model:
         return await message.reply(_("😅 Could not find your user info."))
 
-    if not chat_settings or chat_settings.type == "private":
+    if not chat_model or chat_model.type == "private":
         return await message.reply(
             _(
                 "💡 This command is for group chats only.\nUse /buy for personal credits."
@@ -169,8 +170,8 @@ async def show_buy_chat_options(
 
     logfire.info(
         "buy_chat_menu_shown",
-        user_id=user.telegram_id,
-        chat_id=chat_settings.telegram_id,
+        user_id=user_model.telegram_id,
+        chat_id=chat_model.telegram_id,
     )
 
     parts = [
@@ -181,7 +182,7 @@ async def show_buy_chat_options(
         _("👇 **Tap a button to buy:**"),
     ]
 
-    keyboard = build_buy_keyboard(chat_id=chat_settings.telegram_id)
+    keyboard = build_buy_keyboard(chat_id=chat_model.telegram_id)
 
     return await message.reply(
         "\n".join(parts),

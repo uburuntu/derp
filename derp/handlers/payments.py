@@ -22,7 +22,6 @@ from aiogram.utils.i18n import gettext as _
 from derp.credits import CreditService
 from derp.credits.packs import CREDIT_PACKS
 from derp.credits.ui import build_buy_keyboard
-from derp.db import get_db_manager
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 
@@ -36,8 +35,6 @@ __all__ = ["build_buy_keyboard", "router"]
 async def handle_buy_callback(
     callback: CallbackQuery,
     bot: Bot,
-    user: UserModel | None = None,
-    chat_settings: ChatModel | None = None,
 ) -> None:
     """Handle buy button press - create and send invoice."""
     if not callback.data or not callback.message:
@@ -135,8 +132,9 @@ async def handle_pre_checkout(pre_checkout: PreCheckoutQuery) -> None:
 @router.message(F.successful_payment)
 async def handle_successful_payment(
     message: Message,
-    user: UserModel | None = None,
-    chat_settings: ChatModel | None = None,
+    credit_service: CreditService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> None:
     """Handle successful payment - add credits to user/chat."""
     if not message.successful_payment or not message.from_user:
@@ -155,7 +153,6 @@ async def handle_successful_payment(
 
     pack_id = parts[0]
     target_type = parts[1]
-    # target_id = parts[2]  # Available for future use if needed
 
     pack = CREDIT_PACKS.get(pack_id)
     if not pack:
@@ -165,68 +162,64 @@ async def handle_successful_payment(
         )
         return
 
-    if not user:
+    if not user_model:
         logfire.error("no_user_for_payment", user_id=message.from_user.id)
         await message.answer(
             _("Payment received but your account was not found. Contact support.")
         )
         return
 
-    db = get_db_manager()
-    async with db.session() as session:
-        service = CreditService(session)
-
-        try:
-            if target_type == "chat" and chat_settings:
-                new_balance = await service.purchase_credits(
-                    user_id=user.id,
-                    chat_id=chat_settings.id,
-                    amount=pack.credits,
-                    telegram_charge_id=payment.telegram_payment_charge_id,
-                    pack_name=pack.name,
-                )
-                await message.answer(
-                    _(
-                        "✅ **Payment successful!**\n\n"
-                        "Added **{credits}** credits to this chat.\n"
-                        "New balance: **{balance}** credits"
-                    ).format(credits=pack.credits, balance=new_balance),
-                    parse_mode="Markdown",
-                )
-            else:
-                new_balance = await service.purchase_credits(
-                    user_id=user.id,
-                    chat_id=None,
-                    amount=pack.credits,
-                    telegram_charge_id=payment.telegram_payment_charge_id,
-                    pack_name=pack.name,
-                )
-                await message.answer(
-                    _(
-                        "✅ **Payment successful!**\n\n"
-                        "Added **{credits}** credits to your account.\n"
-                        "New balance: **{balance}** credits"
-                    ).format(credits=pack.credits, balance=new_balance),
-                    parse_mode="Markdown",
-                )
-
-            logfire.info(
-                "payment_processed",
-                pack_id=pack_id,
-                credits=pack.credits,
-                stars=pack.stars,
-                user_id=user.telegram_id,
-                target_type=target_type,
-                charge_id=payment.telegram_payment_charge_id,
-            )
-
-        except Exception:
-            logfire.exception(
-                "payment_processing_failed",
-                charge_id=payment.telegram_payment_charge_id,
+    try:
+        if target_type == "chat" and chat_model:
+            new_balance = await credit_service.purchase_credits(
+                user_model,
+                chat_model,
+                pack.credits,
+                payment.telegram_payment_charge_id,
+                pack_name=pack.name,
             )
             await message.answer(
                 _(
-                    "Payment received but an error occurred. Contact support with charge ID: {charge_id}"
-                ).format(charge_id=payment.telegram_payment_charge_id)
+                    "✅ **Payment successful!**\n\n"
+                    "Added **{credits}** credits to this chat.\n"
+                    "New balance: **{balance}** credits"
+                ).format(credits=pack.credits, balance=new_balance),
+                parse_mode="Markdown",
             )
+        else:
+            new_balance = await credit_service.purchase_credits(
+                user_model,
+                None,
+                pack.credits,
+                payment.telegram_payment_charge_id,
+                pack_name=pack.name,
+            )
+            await message.answer(
+                _(
+                    "✅ **Payment successful!**\n\n"
+                    "Added **{credits}** credits to your account.\n"
+                    "New balance: **{balance}** credits"
+                ).format(credits=pack.credits, balance=new_balance),
+                parse_mode="Markdown",
+            )
+
+        logfire.info(
+            "payment_processed",
+            pack_id=pack_id,
+            credits=pack.credits,
+            stars=pack.stars,
+            user_id=user_model.telegram_id,
+            target_type=target_type,
+            charge_id=payment.telegram_payment_charge_id,
+        )
+
+    except Exception:
+        logfire.exception(
+            "payment_processing_failed",
+            charge_id=payment.telegram_payment_charge_id,
+        )
+        await message.answer(
+            _(
+                "Payment received but an error occurred. Contact support with charge ID: {charge_id}"
+            ).format(charge_id=payment.telegram_payment_charge_id)
+        )

@@ -20,7 +20,6 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from derp.common.extractor import Extractor
 from derp.credits import CreditService
-from derp.db import get_db_manager
 from derp.filters.meta import MetaCommand, MetaInfo
 from derp.llm import create_image_agent
 from derp.models import Chat as ChatModel
@@ -96,8 +95,9 @@ async def _send_multiple_images(
 async def handle_imagine(
     message: Message,
     meta: MetaInfo,
-    chat_settings: ChatModel | None = None,
-    user: UserModel | None = None,
+    credit_service: CreditService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     """Handle /imagine command for image generation.
 
@@ -107,97 +107,81 @@ async def handle_imagine(
     if not prompt:
         return await message.reply(_("Usage: /imagine <prompt>"))
 
-    # Check credits
-    if not user or not chat_settings:
+    if not user_model or not chat_model:
         return await message.reply(
             _("😅 Could not verify your access. Please try again.")
         )
 
-    db = get_db_manager()
-    async with db.session() as session:
-        service = CreditService(session)
-        result = await service.check_tool_access(
-            user_id=user.id,
-            chat_id=chat_settings.id,
-            user_telegram_id=user.telegram_id,
-            chat_telegram_id=chat_settings.telegram_id,
-            tool_name="image_generate",
+    result = await credit_service.check_tool_access(
+        user_model, chat_model, "image_generate"
+    )
+
+    if not result.allowed:
+        return await message.reply(
+            _(
+                "✨ {reason}\n\n"
+                "💡 Use /buy to get credits for unlimited image generation!"
+            ).format(reason=result.reject_reason)
         )
 
-        if not result.allowed:
-            # Soft paywall message
-            return await message.reply(
-                _(
-                    "✨ {reason}\n\n"
-                    "💡 Use /buy to get credits for unlimited image generation!"
-                ).format(reason=result.reject_reason)
-            )
+    try:
+        with logfire.span(
+            "image_generate",
+            _tags=["agent", "image"],
+            telegram_chat_id=message.chat.id,
+            telegram_user_id=message.from_user and message.from_user.id,
+            prompt_length=len(prompt),
+            credit_source=result.source,
+        ):
+            agent = create_image_agent()
+            run_result = await agent.run(prompt)
+            output = run_result.output
 
-        try:
-            with logfire.span(
-                "image_generate",
-                _tags=["agent", "image"],
-                telegram_chat_id=message.chat.id,
-                telegram_user_id=message.from_user and message.from_user.id,
-                prompt_length=len(prompt),
-                credit_source=result.source,
+            if hasattr(run_result, "response") and hasattr(
+                run_result.response, "images"
             ):
-                agent = create_image_agent()
-                run_result = await agent.run(prompt)
-
-                # Handle the output (BinaryImage or str)
-                output = run_result.output
-
-                # Check for images in response object as well
-                if hasattr(run_result, "response") and hasattr(
-                    run_result.response, "images"
-                ):
-                    images = run_result.response.images
-                    if images:
-                        logfire.info("images_generated", count=len(images))
-                        # Deduct credits on success
-                        idempotency_key = (
-                            f"imagine:{chat_settings.telegram_id}:{message.message_id}"
-                        )
-                        await service.deduct(
-                            result,
-                            user.id,
-                            chat_settings.id,
-                            "image_generate",
-                            idempotency_key=idempotency_key,
-                        )
-                        return await _send_multiple_images(meta.target_message, images)
-
-                # Deduct credits for successful generation
-                if isinstance(output, BinaryImage):
+                images = run_result.response.images
+                if images:
+                    logfire.info("images_generated", count=len(images))
                     idempotency_key = (
-                        f"imagine:{chat_settings.telegram_id}:{message.message_id}"
+                        f"imagine:{chat_model.telegram_id}:{message.message_id}"
                     )
-                    await service.deduct(
+                    await credit_service.deduct(
                         result,
-                        user.id,
-                        chat_settings.id,
+                        user_model,
+                        chat_model,
                         "image_generate",
                         idempotency_key=idempotency_key,
                     )
+                    return await _send_multiple_images(meta.target_message, images)
 
-                return await _send_image_result(meta.target_message, output)
+            if isinstance(output, BinaryImage):
+                idempotency_key = (
+                    f"imagine:{chat_model.telegram_id}:{message.message_id}"
+                )
+                await credit_service.deduct(
+                    result,
+                    user_model,
+                    chat_model,
+                    "image_generate",
+                    idempotency_key=idempotency_key,
+                )
 
-        except UnexpectedModelBehavior:
-            logfire.warning("imagine_rate_limited")
-            return await message.reply(
-                _(
-                    "⏳ I'm getting too many requests right now. "
-                    "Please try again in about 30 seconds."
-                )
+            return await _send_image_result(meta.target_message, output)
+
+    except UnexpectedModelBehavior:
+        logfire.warning("imagine_rate_limited")
+        return await message.reply(
+            _(
+                "⏳ I'm getting too many requests right now. "
+                "Please try again in about 30 seconds."
             )
-        except Exception:
-            logfire.exception("imagine_failed")
-            return await message.reply(
-                _(
-                    "😅 Something went wrong while generating the image. Try again later."
-                )
-            )
+        )
+    except Exception:
+        logfire.exception("imagine_failed")
+        return await message.reply(
+            _("😅 Something went wrong while generating the image. Try again later.")
+        )
 
 
 @router.message(MetaCommand("edit", "ed", "e", "е"))
@@ -205,8 +189,9 @@ async def handle_imagine(
 async def handle_edit(
     message: Message,
     meta: MetaInfo,
-    chat_settings: ChatModel | None = None,
-    user: UserModel | None = None,
+    credit_service: CreditService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     """Handle /edit command for image editing.
 
@@ -222,101 +207,83 @@ async def handle_edit(
             _("Please reply to an image (photo/document/sticker) to edit it.")
         )
 
-    # Check credits
-    if not user or not chat_settings:
+    if not user_model or not chat_model:
         return await message.reply(
             _("😅 Could not verify your access. Please try again.")
         )
 
-    db = get_db_manager()
-    async with db.session() as session:
-        service = CreditService(session)
-        result = await service.check_tool_access(
-            user_id=user.id,
-            chat_id=chat_settings.id,
-            user_telegram_id=user.telegram_id,
-            chat_telegram_id=chat_settings.telegram_id,
-            tool_name="image_generate",  # Same tool as generate
+    result = await credit_service.check_tool_access(
+        user_model, chat_model, "image_generate"
+    )
+
+    if not result.allowed:
+        return await message.reply(
+            _(
+                "✨ {reason}\n\n💡 Use /buy to get credits for unlimited image editing!"
+            ).format(reason=result.reject_reason)
         )
 
-        if not result.allowed:
-            return await message.reply(
-                _(
-                    "✨ {reason}\n\n"
-                    "💡 Use /buy to get credits for unlimited image editing!"
-                ).format(reason=result.reject_reason)
-            )
+    try:
+        with logfire.span(
+            "image_edit",
+            _tags=["agent", "image"],
+            telegram_chat_id=message.chat.id,
+            telegram_user_id=message.from_user and message.from_user.id,
+            prompt_length=len(prompt),
+            credit_source=result.source,
+        ):
+            data = await photo.download()
+            logfire.debug("source_image_downloaded", size=len(data))
 
-        try:
-            with logfire.span(
-                "image_edit",
-                _tags=["agent", "image"],
-                telegram_chat_id=message.chat.id,
-                telegram_user_id=message.from_user and message.from_user.id,
-                prompt_length=len(prompt),
-                credit_source=result.source,
+            agent = create_image_agent()
+            user_prompt: list[str | BinaryContent] = [
+                prompt,
+                BinaryContent(data=data, media_type=photo.media_type),
+            ]
+
+            run_result = await agent.run(user_prompt)
+            output = run_result.output
+
+            if hasattr(run_result, "response") and hasattr(
+                run_result.response, "images"
             ):
-                data = await photo.download()
-                logfire.debug("source_image_downloaded", size=len(data))
-
-                agent = create_image_agent()
-
-                # Build prompt with image
-                user_prompt: list[str | BinaryContent] = [
-                    prompt,
-                    BinaryContent(data=data, media_type=photo.media_type),
-                ]
-
-                run_result = await agent.run(user_prompt)
-
-                # Handle the output
-                output = run_result.output
-
-                # Check for images in response object
-                if hasattr(run_result, "response") and hasattr(
-                    run_result.response, "images"
-                ):
-                    images = run_result.response.images
-                    if images:
-                        logfire.info("images_edited", count=len(images))
-                        # Deduct credits on success
-                        idempotency_key = (
-                            f"edit:{chat_settings.telegram_id}:{message.message_id}"
-                        )
-                        await service.deduct(
-                            result,
-                            user.id,
-                            chat_settings.id,
-                            "image_generate",
-                            idempotency_key=idempotency_key,
-                        )
-                        return await _send_multiple_images(meta.target_message, images)
-
-                # Deduct credits for successful edit
-                if isinstance(output, BinaryImage):
+                images = run_result.response.images
+                if images:
+                    logfire.info("images_edited", count=len(images))
                     idempotency_key = (
-                        f"edit:{chat_settings.telegram_id}:{message.message_id}"
+                        f"edit:{chat_model.telegram_id}:{message.message_id}"
                     )
-                    await service.deduct(
+                    await credit_service.deduct(
                         result,
-                        user.id,
-                        chat_settings.id,
+                        user_model,
+                        chat_model,
                         "image_generate",
                         idempotency_key=idempotency_key,
                     )
+                    return await _send_multiple_images(meta.target_message, images)
 
-                return await _send_image_result(meta.target_message, output)
-
-        except UnexpectedModelBehavior:
-            logfire.warning("edit_rate_limited")
-            return await message.reply(
-                _(
-                    "⏳ I'm getting too many requests right now. "
-                    "Please try again in about 30 seconds."
+            if isinstance(output, BinaryImage):
+                idempotency_key = f"edit:{chat_model.telegram_id}:{message.message_id}"
+                await credit_service.deduct(
+                    result,
+                    user_model,
+                    chat_model,
+                    "image_generate",
+                    idempotency_key=idempotency_key,
                 )
+
+            return await _send_image_result(meta.target_message, output)
+
+    except UnexpectedModelBehavior:
+        logfire.warning("edit_rate_limited")
+        return await message.reply(
+            _(
+                "⏳ I'm getting too many requests right now. "
+                "Please try again in about 30 seconds."
             )
-        except Exception:
-            logfire.exception("edit_failed")
-            return await message.reply(
-                _("😅 Something went wrong while editing the image. Try again later.")
-            )
+        )
+    except Exception:
+        logfire.exception("edit_failed")
+        return await message.reply(
+            _("😅 Something went wrong while editing the image. Try again later.")
+        )

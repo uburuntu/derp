@@ -173,7 +173,7 @@ async def build_context_prompt(
                     "message_id": m.telegram_message_id,
                     "sender": m.user
                     and {
-                        "user_id": m.user.telegram_id,
+                        "user_id": m.user_telegram_id,
                         "name": m.user.display_name,
                         "username": m.user.username,
                     },
@@ -209,7 +209,7 @@ async def build_context_prompt(
 
 
 @router.message(Command("context"), F.from_user.id.in_(settings.admin_ids))
-async def show_context(message: Message, chat_settings: ChatModel | None) -> None:
+async def show_context(message: Message, chat_model: ChatModel | None) -> None:
     """Admin command to show the context that would be sent to the agent."""
     db = get_db_manager()
     ctx = await build_context_prompt(message, db)
@@ -239,8 +239,9 @@ class ChatAgentHandler(MessageHandler):
         # Extract dependencies from middleware data
         db: DatabaseManager = self.data.get("db") or get_db_manager()
         bot: Bot = self.data.get("bot") or self.event.bot
-        chat_settings: ChatModel | None = self.data.get("chat_settings")
-        user: UserModel | None = self.data.get("user")
+        user_model: UserModel | None = self.data.get("user_model")
+        chat_model: ChatModel | None = self.data.get("chat_model")
+        credit_service: CreditService | None = self.data.get("credit_service")
 
         # Determine tier and context limit based on credits
         tier = LLMModelTier.CHEAP  # Default for free tier
@@ -252,26 +253,21 @@ class ChatAgentHandler(MessageHandler):
             CreditModelTier.PREMIUM: LLMModelTier.PREMIUM,
         }
 
-        if user and chat_settings:
-            async with db.session() as session:
-                credit_service = CreditService(session)
-                (
-                    credit_tier,
-                    _model_id,
-                    context_limit,
-                ) = await credit_service.get_orchestrator_config(
-                    user_telegram_id=user.telegram_id,
-                    chat_telegram_id=chat_settings.telegram_id,
-                )
-                tier = tier_map.get(credit_tier, LLMModelTier.CHEAP)
+        if user_model and chat_model and credit_service:
+            (
+                credit_tier,
+                _model_id,
+                context_limit,
+            ) = await credit_service.get_orchestrator_config(user_model, chat_model)
+            tier = tier_map.get(credit_tier, LLMModelTier.CHEAP)
 
         # Create agent dependencies with determined tier
         deps = AgentDeps(
             message=self.event,
             db=db,
             bot=bot,
-            chat=chat_settings,
-            user=user,
+            user_model=user_model,
+            chat_model=chat_model,
             tier=tier,
         )
 

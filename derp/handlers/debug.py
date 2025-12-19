@@ -28,7 +28,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from derp.config import settings
 from derp.credits import CreditService, ModelTier
-from derp.db import get_db_manager
 from derp.db.credits import get_balances
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
@@ -104,14 +103,14 @@ def _build_debug_buy_keyboard(chat_id: int | None = None) -> InlineKeyboardMarku
 @router.message(Command("debug_buy", "dbuy"))
 async def debug_buy_command(
     message: Message,
-    chat_settings: ChatModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     """Show debug credit purchase options (1 star each).
 
     Usage:
     - /debug_buy - Shows test packs for both user and chat credits
     """
-    chat_id = chat_settings.telegram_id if chat_settings else None
+    chat_id = chat_model.telegram_id if chat_model else None
 
     text = _(
         "🛠 **Debug Buy Menu**\n\n"
@@ -130,8 +129,6 @@ async def debug_buy_command(
 async def handle_debug_buy_callback(
     callback: CallbackQuery,
     bot: Bot,
-    user: UserModel | None = None,
-    chat_settings: ChatModel | None = None,
 ) -> None:
     """Handle debug buy button press - create invoice with 1 star."""
     if not callback.data or not callback.message:
@@ -209,8 +206,9 @@ async def handle_debug_pre_checkout(pre_checkout: PreCheckoutQuery) -> None:
 )
 async def handle_debug_successful_payment(
     message: Message,
-    user: UserModel | None = None,
-    chat_settings: ChatModel | None = None,
+    credit_service: CreditService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> None:
     """Handle successful debug payment - add credits via real CreditService."""
     if not message.successful_payment or not message.from_user:
@@ -233,71 +231,67 @@ async def handle_debug_successful_payment(
         await message.answer("❌ Unknown debug pack")
         return
 
-    if not user:
+    if not user_model:
         logfire.error("debug_no_user", user_id=message.from_user.id)
         await message.answer("❌ User not found")
         return
 
-    # Use real CreditService to add credits
-    db = get_db_manager()
-    async with db.session() as session:
-        service = CreditService(session)
-
-        try:
-            if payload.target_type == "chat" and chat_settings:
-                new_balance = await service.purchase_credits(
-                    user_id=user.id,
-                    chat_id=chat_settings.id,
-                    amount=pack.credits,
-                    telegram_charge_id=payment.telegram_payment_charge_id,
-                    pack_name=f"DEBUG:{pack.name}",
-                )
-                await message.answer(
-                    f"✅ **DEBUG Payment OK**\n\n"
-                    f"Added **{pack.credits}** credits to chat.\n"
-                    f"New chat balance: **{new_balance}** credits\n"
-                    f"Charge ID: `{payment.telegram_payment_charge_id}`",
-                    parse_mode="Markdown",
-                )
-            else:
-                new_balance = await service.purchase_credits(
-                    user_id=user.id,
-                    chat_id=None,
-                    amount=pack.credits,
-                    telegram_charge_id=payment.telegram_payment_charge_id,
-                    pack_name=f"DEBUG:{pack.name}",
-                )
-                await message.answer(
-                    f"✅ **DEBUG Payment OK**\n\n"
-                    f"Added **{pack.credits}** credits to your account.\n"
-                    f"New balance: **{new_balance}** credits\n"
-                    f"Charge ID: `{payment.telegram_payment_charge_id}`",
-                    parse_mode="Markdown",
-                )
-
-            logfire.info(
-                "debug_payment_processed",
-                pack_id=pack.id,
-                credits=pack.credits,
-                user_id=user.telegram_id,
-                target_type=payload.target_type,
-                charge_id=payment.telegram_payment_charge_id,
+    try:
+        if payload.target_type == "chat" and chat_model:
+            new_balance = await credit_service.purchase_credits(
+                user_model,
+                chat_model,
+                pack.credits,
+                payment.telegram_payment_charge_id,
+                pack_name=f"DEBUG:{pack.name}",
             )
-
-        except Exception:
-            logfire.exception("debug_payment_processing_failed")
             await message.answer(
-                f"❌ Payment processing failed.\n"
+                f"✅ **DEBUG Payment OK**\n\n"
+                f"Added **{pack.credits}** credits to chat.\n"
+                f"New chat balance: **{new_balance}** credits\n"
                 f"Charge ID: `{payment.telegram_payment_charge_id}`",
                 parse_mode="Markdown",
             )
+        else:
+            new_balance = await credit_service.purchase_credits(
+                user_model,
+                None,
+                pack.credits,
+                payment.telegram_payment_charge_id,
+                pack_name=f"DEBUG:{pack.name}",
+            )
+            await message.answer(
+                f"✅ **DEBUG Payment OK**\n\n"
+                f"Added **{pack.credits}** credits to your account.\n"
+                f"New balance: **{new_balance}** credits\n"
+                f"Charge ID: `{payment.telegram_payment_charge_id}`",
+                parse_mode="Markdown",
+            )
+
+        logfire.info(
+            "debug_payment_processed",
+            pack_id=pack.id,
+            credits=pack.credits,
+            user_id=user_model.telegram_id,
+            target_type=payload.target_type,
+            charge_id=payment.telegram_payment_charge_id,
+        )
+
+    except Exception:
+        logfire.exception("debug_payment_processing_failed")
+        await message.answer(
+            f"❌ Payment processing failed.\n"
+            f"Charge ID: `{payment.telegram_payment_charge_id}`",
+            parse_mode="Markdown",
+        )
 
 
 @router.message(Command("debug_credits", "dcredits"))
 async def debug_add_credits(
     message: Message,
-    user: UserModel | None = None,
-    chat_settings: ChatModel | None = None,
+    credit_service: CreditService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     """Directly add credits without payment (for testing).
 
@@ -305,7 +299,7 @@ async def debug_add_credits(
     - /debug_credits 100 - Add 100 credits to your account
     - /debug_credits 100 chat - Add 100 credits to this chat
     """
-    if not user:
+    if not user_model:
         return await message.reply("❌ User not found")
 
     args = (message.text or "").split()[1:] if message.text else []
@@ -323,69 +317,65 @@ async def debug_add_credits(
         if len(args) > 1 and args[1].lower() == "chat":
             target = "chat"
 
-    if target == "chat" and not chat_settings:
+    if target == "chat" and not chat_model:
         return await message.reply("❌ Not in a chat context")
 
-    db = get_db_manager()
-    async with db.session() as session:
-        service = CreditService(session)
+    fake_charge_id = f"debug-{int(time.time())}"
 
-        # Generate fake charge ID for traceability
-        fake_charge_id = f"debug-{int(time.time())}"
-
-        try:
-            if target == "chat" and chat_settings:
-                new_balance = await service.purchase_credits(
-                    user_id=user.id,
-                    chat_id=chat_settings.id,
-                    amount=amount,
-                    telegram_charge_id=fake_charge_id,
-                    pack_name="DEBUG:manual",
-                )
-                logfire.info(
-                    "debug_credits_added",
-                    amount=amount,
-                    target="chat",
-                    chat_id=chat_settings.telegram_id,
-                    charge_id=fake_charge_id,
-                )
-                return await message.reply(
-                    f"✅ Added **{amount}** credits to chat.\n"
-                    f"New balance: **{new_balance}**\n"
-                    f"Charge ID: `{fake_charge_id}`",
-                    parse_mode="Markdown",
-                )
-            else:
-                new_balance = await service.purchase_credits(
-                    user_id=user.id,
-                    chat_id=None,
-                    amount=amount,
-                    telegram_charge_id=fake_charge_id,
-                    pack_name="DEBUG:manual",
-                )
-                logfire.info(
-                    "debug_credits_added",
-                    amount=amount,
-                    target="user",
-                    user_id=user.telegram_id,
-                    charge_id=fake_charge_id,
-                )
-                return await message.reply(
-                    f"✅ Added **{amount}** credits to your account.\n"
-                    f"New balance: **{new_balance}**\n"
-                    f"Charge ID: `{fake_charge_id}`",
-                    parse_mode="Markdown",
-                )
-        except Exception:
-            logfire.exception("debug_credits_failed")
-            return await message.reply("❌ Failed to add credits")
+    try:
+        if target == "chat" and chat_model:
+            new_balance = await credit_service.purchase_credits(
+                user_model,
+                chat_model,
+                amount,
+                fake_charge_id,
+                pack_name="DEBUG:manual",
+            )
+            logfire.info(
+                "debug_credits_added",
+                amount=amount,
+                target="chat",
+                chat_id=chat_model.telegram_id,
+                charge_id=fake_charge_id,
+            )
+            return await message.reply(
+                f"✅ Added **{amount}** credits to chat.\n"
+                f"New balance: **{new_balance}**\n"
+                f"Charge ID: `{fake_charge_id}`",
+                parse_mode="Markdown",
+            )
+        else:
+            new_balance = await credit_service.purchase_credits(
+                user_model,
+                None,
+                amount,
+                fake_charge_id,
+                pack_name="DEBUG:manual",
+            )
+            logfire.info(
+                "debug_credits_added",
+                amount=amount,
+                target="user",
+                user_id=user_model.telegram_id,
+                charge_id=fake_charge_id,
+            )
+            return await message.reply(
+                f"✅ Added **{amount}** credits to your account.\n"
+                f"New balance: **{new_balance}**\n"
+                f"Charge ID: `{fake_charge_id}`",
+                parse_mode="Markdown",
+            )
+    except Exception:
+        logfire.exception("debug_credits_failed")
+        return await message.reply("❌ Failed to add credits")
 
 
 @router.message(Command("debug_reset", "dreset"))
 async def debug_reset_credits(
     message: Message,
-    user: UserModel | None = None,
-    chat_settings: ChatModel | None = None,
+    credit_service: CreditService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     """Reset credits to 0 for testing.
 
@@ -393,7 +383,7 @@ async def debug_reset_credits(
     - /debug_reset - Reset your credits to 0
     - /debug_reset chat - Reset chat credits to 0
     """
-    if not user:
+    if not user_model:
         return await message.reply("❌ User not found")
 
     args = (message.text or "").split()[1:] if message.text else []
@@ -402,148 +392,144 @@ async def debug_reset_credits(
     if args and args[0].lower() == "chat":
         target = "chat"
 
-    if target == "chat" and not chat_settings:
+    if target == "chat" and not chat_model:
         return await message.reply("❌ Not in a chat context")
 
-    db = get_db_manager()
-    async with db.session() as session:
-        service = CreditService(session)
-
-        # Get current balance first
-        if target == "chat" and chat_settings:
-            chat_credits, _ = await get_balances(
-                session, user.telegram_id, chat_settings.telegram_id
+    # Get current balance first (use credit_service.session for raw query)
+    if target == "chat" and chat_model:
+        chat_credits, _ = await get_balances(
+            credit_service.session, user_model.telegram_id, chat_model.telegram_id
+        )
+        if chat_credits > 0:
+            fake_charge_id = f"debug-reset-{int(time.time())}"
+            await credit_service.purchase_credits(
+                user_model,
+                chat_model,
+                -chat_credits,  # Negative to subtract
+                fake_charge_id,
+                pack_name="DEBUG:reset",
             )
-            if chat_credits > 0:
-                # Deduct all credits
-                fake_charge_id = f"debug-reset-{int(time.time())}"
-                await service.purchase_credits(
-                    user_id=user.id,
-                    chat_id=chat_settings.id,
-                    amount=-chat_credits,  # Negative to subtract
-                    telegram_charge_id=fake_charge_id,
-                    pack_name="DEBUG:reset",
-                )
-            logfire.info(
-                "debug_credits_reset",
-                target="chat",
-                chat_id=chat_settings.telegram_id,
-                previous_balance=chat_credits,
+        logfire.info(
+            "debug_credits_reset",
+            target="chat",
+            chat_id=chat_model.telegram_id,
+            previous_balance=chat_credits,
+        )
+        return await message.reply(
+            f"✅ Chat credits reset.\nPrevious: **{chat_credits}** → Now: **0**",
+            parse_mode="Markdown",
+        )
+    else:
+        _, user_credits = await get_balances(
+            credit_service.session, user_model.telegram_id, None
+        )
+        if user_credits > 0:
+            fake_charge_id = f"debug-reset-{int(time.time())}"
+            await credit_service.purchase_credits(
+                user_model,
+                None,
+                -user_credits,
+                fake_charge_id,
+                pack_name="DEBUG:reset",
             )
-            return await message.reply(
-                f"✅ Chat credits reset.\nPrevious: **{chat_credits}** → Now: **0**",
-                parse_mode="Markdown",
-            )
-        else:
-            _, user_credits = await get_balances(session, user.telegram_id, None)
-            if user_credits > 0:
-                fake_charge_id = f"debug-reset-{int(time.time())}"
-                await service.purchase_credits(
-                    user_id=user.id,
-                    chat_id=None,
-                    amount=-user_credits,
-                    telegram_charge_id=fake_charge_id,
-                    pack_name="DEBUG:reset",
-                )
-            logfire.info(
-                "debug_credits_reset",
-                target="user",
-                user_id=user.telegram_id,
-                previous_balance=user_credits,
-            )
-            return await message.reply(
-                f"✅ Your credits reset.\nPrevious: **{user_credits}** → Now: **0**",
-                parse_mode="Markdown",
-            )
+        logfire.info(
+            "debug_credits_reset",
+            target="user",
+            user_id=user_model.telegram_id,
+            previous_balance=user_credits,
+        )
+        return await message.reply(
+            f"✅ Your credits reset.\nPrevious: **{user_credits}** → Now: **0**",
+            parse_mode="Markdown",
+        )
 
 
 @router.message(Command("debug_status", "dstatus"))
 async def debug_status(
     message: Message,
-    user: UserModel | None = None,
-    chat_settings: ChatModel | None = None,
+    credit_service: CreditService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
 ) -> Message:
     """Show detailed debug status for credits and tier detection.
 
     Usage:
     - /debug_status - Show full diagnostic info
     """
-    if not user:
+    if not user_model:
         return await message.reply("❌ User not found")
 
-    db = get_db_manager()
-    async with db.session() as session:
-        service = CreditService(session)
+    # Get balances
+    chat_id = chat_model.telegram_id if chat_model else None
+    chat_credits, user_credits = await get_balances(
+        credit_service.session, user_model.telegram_id, chat_id
+    )
 
-        # Get balances
-        chat_id = chat_settings.telegram_id if chat_settings else None
-        chat_credits, user_credits = await get_balances(
-            session, user.telegram_id, chat_id
+    # Get orchestrator config (requires both models for the new API)
+    if chat_model:
+        tier, model_id, context_limit = await credit_service.get_orchestrator_config(
+            user_model, chat_model
         )
+    else:
+        # No chat model, use defaults
+        tier = ModelTier.CHEAP if user_credits == 0 else ModelTier.STANDARD
+        model_id = "default"
+        context_limit = 10 if tier == ModelTier.CHEAP else 100
 
-        # Get orchestrator config
-        tier, model_id, context_limit = await service.get_orchestrator_config(
-            user_telegram_id=user.telegram_id,
-            chat_telegram_id=chat_id,
-        )
+    # Build status report
+    lines = [
+        "🛠 **Debug Status**\n",
+        f"**User ID:** `{user_model.telegram_id}`",
+        f"**User DB ID:** `{user_model.id}`",
+        f"**User Credits:** {user_credits}",
+    ]
 
-        # Build status report
-        lines = [
-            "🛠 **Debug Status**\n",
-            f"**User ID:** `{user.telegram_id}`",
-            f"**User DB ID:** `{user.id}`",
-            f"**User Credits:** {user_credits}",
-        ]
-
-        if chat_settings:
-            lines.extend(
-                [
-                    "",
-                    f"**Chat ID:** `{chat_settings.telegram_id}`",
-                    f"**Chat DB ID:** `{chat_settings.id}`",
-                    f"**Chat Credits:** {chat_credits}",
-                    f"**Chat Memory:** {len(chat_settings.llm_memory or '')} chars",
-                ]
-            )
-
+    if chat_model:
         lines.extend(
             [
                 "",
-                "**Tier Detection:**",
-                f"• Tier: `{tier.value}`",
-                f"• Model: `{model_id}`",
-                f"• Context Limit: {context_limit} messages",
-                "",
-                f"**Is Paid Tier:** {'✅ Yes' if (chat_credits + user_credits) > 0 else '❌ No (free)'}",
-                f"**Premium Tools:** {'✅ Available' if tier != ModelTier.CHEAP else '❌ Not available'}",
+                f"**Chat ID:** `{chat_model.telegram_id}`",
+                f"**Chat DB ID:** `{chat_model.id}`",
+                f"**Chat Credits:** {chat_credits}",
+                f"**Chat Memory:** {len(chat_model.llm_memory or '')} chars",
             ]
         )
 
-        logfire.info(
-            "debug_status_shown",
-            user_id=user.telegram_id,
-            chat_id=chat_id,
-            tier=tier.value,
-            user_credits=user_credits,
-            chat_credits=chat_credits,
-        )
+    lines.extend(
+        [
+            "",
+            "**Tier Detection:**",
+            f"• Tier: `{tier.value}`",
+            f"• Model: `{model_id}`",
+            f"• Context Limit: {context_limit} messages",
+            "",
+            f"**Is Paid Tier:** {'✅ Yes' if (chat_credits + user_credits) > 0 else '❌ No (free)'}",
+            f"**Premium Tools:** {'✅ Available' if tier != ModelTier.CHEAP else '❌ Not available'}",
+        ]
+    )
 
-        return await message.reply("\n".join(lines), parse_mode="Markdown")
+    logfire.info(
+        "debug_status_shown",
+        user_id=user_model.telegram_id,
+        chat_id=chat_id,
+        tier=tier.value,
+        user_credits=user_credits,
+        chat_credits=chat_credits,
+    )
+
+    return await message.reply("\n".join(lines), parse_mode="Markdown")
 
 
 @router.message(Command("debug_refund", "drefund"))
 async def debug_refund(
     message: Message,
-    user: UserModel | None = None,
+    credit_service: CreditService,
 ) -> Message:
     """Test refund flow with a charge ID.
 
     Usage:
     - /debug_refund <charge_id> - Attempt to refund a transaction
     """
-    if not user:
-        return await message.reply("❌ User not found")
-
     args = (message.text or "").split()[1:] if message.text else []
     if not args:
         return await message.reply(
@@ -553,25 +539,21 @@ async def debug_refund(
 
     charge_id = args[0]
 
-    db = get_db_manager()
-    async with db.session() as session:
-        service = CreditService(session)
+    success = await credit_service.refund_credits(charge_id)
 
-        success = await service.refund_credits(charge_id)
-
-        if success:
-            logfire.info("debug_refund_success", charge_id=charge_id)
-            return await message.reply(
-                f"✅ Refund processed for `{charge_id}`",
-                parse_mode="Markdown",
-            )
-        else:
-            logfire.warn("debug_refund_failed", charge_id=charge_id)
-            return await message.reply(
-                f"❌ Refund failed for `{charge_id}`\n"
-                f"Transaction not found or already refunded.",
-                parse_mode="Markdown",
-            )
+    if success:
+        logfire.info("debug_refund_success", charge_id=charge_id)
+        return await message.reply(
+            f"✅ Refund processed for `{charge_id}`",
+            parse_mode="Markdown",
+        )
+    else:
+        logfire.warn("debug_refund_failed", charge_id=charge_id)
+        return await message.reply(
+            f"❌ Refund failed for `{charge_id}`\n"
+            f"Transaction not found or already refunded.",
+            parse_mode="Markdown",
+        )
 
 
 @router.message(Command("debug_tools", "dtools"))

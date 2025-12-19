@@ -746,7 +746,7 @@ def mock_chat_model():
     Usage:
         async def test_handler(mock_chat_model):
             chat = mock_chat_model(telegram_id=-100123)
-            await handler(message, chat_settings=chat)
+            await handler(message, chat_model=chat)
     """
 
     def _make(
@@ -846,30 +846,28 @@ def make_credit_check_result():
 
 
 @pytest.fixture
-def mock_credit_service(mock_db_client, make_credit_check_result):
+def mock_credit_service_factory(make_credit_check_result):
     """Create a pre-configured mock CreditService.
 
-    Returns a tuple of (service_mock, patcher) for use with context manager.
+    Returns a mock that can be passed directly to handlers.
 
     Usage:
-        async def test_with_credits(mock_credit_service, make_credit_check_result):
-            service, patch_credit_service = mock_credit_service(
-                "derp.handlers.video",
+        async def test_with_credits(mock_credit_service_factory, make_credit_check_result):
+            service = mock_credit_service_factory(
                 check_result=make_credit_check_result(allowed=True)
             )
-            with patch_credit_service:
-                await handle_video(...)
-                service.deduct.assert_awaited_once()
+            await handle_video(message, meta, service, user_model=user, chat_model=chat)
+            service.deduct.assert_awaited_once()
     """
 
     def _make(
-        module_path: str,
         check_result=None,
         purchase_result: int = 100,
     ):
         check_result = check_result or make_credit_check_result()
 
         service = MagicMock()
+        service.session = MagicMock()
         service.check_tool_access = AsyncMock(return_value=check_result)
         service.check_model_access = AsyncMock(return_value=check_result)
         service.deduct = AsyncMock()
@@ -877,8 +875,32 @@ def mock_credit_service(mock_db_client, make_credit_check_result):
         service.get_orchestrator_config = AsyncMock(
             return_value=(check_result.tier, check_result.model_id, 100)
         )
+        service.refund_credits = AsyncMock(return_value=True)
 
-        # Create the patcher
+        return service
+
+    return _make
+
+
+# Legacy fixture for backward compatibility
+@pytest.fixture
+def mock_credit_service(mock_credit_service_factory, make_credit_check_result):
+    """Legacy fixture that returns (service, patcher) tuple.
+
+    Deprecated: Use mock_credit_service_factory instead.
+    """
+
+    def _make(
+        module_path: str,
+        check_result=None,
+        purchase_result: int = 100,
+    ):
+        service = mock_credit_service_factory(
+            check_result=check_result,
+            purchase_result=purchase_result,
+        )
+
+        # Create the patcher (for backward compatibility)
         patcher = patch(f"{module_path}.CreditService", return_value=service)
 
         return service, patcher

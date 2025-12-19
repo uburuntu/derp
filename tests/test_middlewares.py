@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram.types import Update
 
-from derp.middlewares.chat_settings import ChatSettingsMiddleware
+from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 
 
@@ -183,8 +183,8 @@ class TestEventContextMiddleware:
         handler.assert_awaited_once()
 
 
-class TestChatSettingsMiddleware:
-    """Tests for ChatSettingsMiddleware."""
+class TestDatabaseModelMiddleware:
+    """Tests for DatabaseModelMiddleware."""
 
     @pytest.fixture
     def mock_db_manager(self):
@@ -202,10 +202,10 @@ class TestChatSettingsMiddleware:
     def middleware(self, mock_db_manager):
         """Create middleware instance with mock database."""
         db, _ = mock_db_manager
-        return ChatSettingsMiddleware(db=db)
+        return DatabaseModelMiddleware(db=db)
 
     @pytest.mark.asyncio
-    async def test_injects_chat_settings_when_chat_present(
+    async def test_injects_chat_model_when_chat_present(
         self, middleware, mock_db_manager, make_chat
     ):
         """Should load and inject chat settings when chat is present."""
@@ -219,7 +219,7 @@ class TestChatSettingsMiddleware:
         mock_settings.llm_memory = "test memory"
 
         with patch(
-            "derp.middlewares.chat_settings.get_chat_settings",
+            "derp.middlewares.db_models.get_chat_settings",
             new=AsyncMock(return_value=mock_settings),
         ) as mock_query:
             handler = AsyncMock()
@@ -231,9 +231,9 @@ class TestChatSettingsMiddleware:
             # Should call get_chat_settings query
             mock_query.assert_awaited_once_with(session, telegram_id=chat.id)
 
-            # Should inject chat_settings into data
-            assert "chat_settings" in data
-            assert data["chat_settings"] == mock_settings
+            # Should inject chat_model into data
+            assert "chat_model" in data
+            assert data["chat_model"] == mock_settings
 
             # Handler should be called
             handler.assert_awaited_once_with(event, data)
@@ -247,8 +247,8 @@ class TestChatSettingsMiddleware:
 
         await middleware(handler, event, data)
 
-        # Should not inject chat_settings
-        assert "chat_settings" not in data
+        # Should not inject chat_model
+        assert "chat_model" not in data
 
         # Handler should still be called
         handler.assert_awaited_once_with(event, data)
@@ -263,12 +263,10 @@ class TestChatSettingsMiddleware:
         chat = make_chat(id=-100123)
 
         with patch(
-            "derp.middlewares.chat_settings.get_chat_settings",
+            "derp.middlewares.db_models.get_chat_settings",
             new=AsyncMock(side_effect=Exception("Database error")),
         ):
-            with patch(
-                "derp.middlewares.chat_settings.logfire.exception"
-            ) as mock_logfire:
+            with patch("derp.middlewares.db_models.logfire.exception") as mock_logfire:
                 handler = AsyncMock()
                 event = MagicMock()
                 data = {EVENT_CHAT_KEY: chat}
@@ -279,11 +277,11 @@ class TestChatSettingsMiddleware:
                 # Should log the exception
                 mock_logfire.assert_called_once()
                 args, kwargs = mock_logfire.call_args
-                assert "chat_settings_load_failed" in args
+                assert "db_model_load_failed" in args
                 assert kwargs.get("chat_id") == chat.id
 
-                # Should not inject chat_settings
-                assert "chat_settings" not in data
+                # Should not inject chat_model
+                assert "chat_model" not in data
 
                 # Handler should still be called
                 handler.assert_awaited_once_with(event, data)
@@ -296,7 +294,7 @@ class TestChatSettingsMiddleware:
         chat = make_chat(id=-100123)
 
         with patch(
-            "derp.middlewares.chat_settings.get_chat_settings",
+            "derp.middlewares.db_models.get_chat_settings",
             new=AsyncMock(return_value=None),
         ):
             handler = AsyncMock(return_value="handler_return")
@@ -321,7 +319,7 @@ class TestChatSettingsMiddleware:
         mock_settings.llm_memory = "private memory"
 
         with patch(
-            "derp.middlewares.chat_settings.get_chat_settings",
+            "derp.middlewares.db_models.get_chat_settings",
             new=AsyncMock(return_value=mock_settings),
         ) as mock_query:
             handler = AsyncMock()
@@ -332,7 +330,7 @@ class TestChatSettingsMiddleware:
 
             # Should load settings even for private chats
             mock_query.assert_awaited_once_with(session, telegram_id=12345)
-            assert data["chat_settings"] == mock_settings
+            assert data["chat_model"] == mock_settings
 
     @pytest.mark.asyncio
     async def test_multiple_calls_independent(
@@ -350,7 +348,7 @@ class TestChatSettingsMiddleware:
         settings2.llm_memory = "memory2"
 
         with patch(
-            "derp.middlewares.chat_settings.get_chat_settings",
+            "derp.middlewares.db_models.get_chat_settings",
             new=AsyncMock(side_effect=[settings1, settings2]),
         ) as mock_query:
             handler = AsyncMock()
@@ -366,6 +364,6 @@ class TestChatSettingsMiddleware:
             await middleware(handler, event2, data2)
 
             # Both should have loaded their own settings
-            assert data1["chat_settings"] == settings1
-            assert data2["chat_settings"] == settings2
+            assert data1["chat_model"] == settings1
+            assert data2["chat_model"] == settings2
             assert mock_query.await_count == 2
