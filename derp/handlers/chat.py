@@ -359,8 +359,8 @@ class ChatAgentHandler(MessageHandler):
             return await self.event.reply(
                 _("⚠️ Too many tool calls. Please try a simpler request.")
             )
-        except UnexpectedModelBehavior as exc:
-            logfire.warning("agent_unexpected_behavior", error=str(exc))
+        except UnexpectedModelBehavior:
+            logfire.warning("agent_unexpected_behavior", _exc_info=True)
             return await self.event.reply(
                 _(
                     "⏳ I'm getting too many requests right now. "
