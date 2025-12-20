@@ -8,13 +8,14 @@ This module provides provider-agnostic LLM access with:
 
 from derp.llm.agents import create_chat_agent, create_image_agent, create_inline_agent
 from derp.llm.deps import AgentDeps
-from derp.llm.providers import ModelTier, create_model
+from derp.llm.providers import RELAXED_SAFETY_SETTINGS, ModelTier, create_model
 from derp.llm.result import AgentResult
 
 __all__ = [
     # Providers
     "ModelTier",
     "create_model",
+    "RELAXED_SAFETY_SETTINGS",
     # Dependencies
     "AgentDeps",
     # Agents

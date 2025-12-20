@@ -34,6 +34,7 @@ from derp.credits import ModelTier as CreditModelTier
 from derp.db import DatabaseManager, get_db_manager, get_recent_messages
 from derp.filters import DerpMentionFilter
 from derp.llm import (
+    RELAXED_SAFETY_SETTINGS,
     AgentDeps,
     AgentResult,
     create_chat_agent,
@@ -317,6 +318,7 @@ class ChatAgentHandler(MessageHandler):
                     deps=deps,
                     toolsets=[toolset],
                     usage_limits=UsageLimits(tool_calls_limit=3),
+                    model_settings=RELAXED_SAFETY_SETTINGS,
                 )
 
                 # Convert to AgentResult and send response
