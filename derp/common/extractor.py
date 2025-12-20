@@ -188,10 +188,40 @@ class ExtractedText(BaseModel):
 
 
 class Extractor:
-    """Modern extractor for media and text from Telegram messages."""
+    """Unified extractor for media and text from Telegram messages.
+
+    Provides a consistent API for extracting different content types (photos, videos,
+    audio, documents, text) from messages, with configurable reply-checking behavior.
+
+    All public methods return typed wrapper objects (ExtractedPhoto, ExtractedVideo, etc.)
+    that provide:
+    - Access to underlying media metadata (dimensions, duration, MIME type)
+    - Async `download()` method to fetch raw bytes
+    - Reference to the source message
+
+    Key features:
+    - Automatic reply fallback: By default, checks the replied-to message if no media
+      found in the original (configurable via ReplyPolicy)
+    - Profile photo support: `photo()` can fall back to user profile photos
+    - Image-like document detection: Documents with image MIME types are treated as photos
+    - Sticker handling: Static stickers → photos, video stickers → videos
+
+    Example:
+        >>> photo = await Extractor.photo(message, with_profile_photo=True)
+        >>> if photo:
+        ...     data = await photo.download()
+        ...     print(f"Got {photo.width}x{photo.height} image, {len(data)} bytes")
+    """
 
     class ReplyPolicy(IntEnum):
-        """Policy for checking reply messages."""
+        """Controls how reply messages are checked when extracting media.
+
+        Attributes:
+            only_origin: Only check the original message, ignore any reply.
+            prefer_origin: Check original first; if not found, check reply (default).
+            prefer_reply: Check reply first; if not found, check original.
+            only_reply: Only check the reply message, ignore the original.
+        """
 
         only_origin = auto()
         prefer_origin = auto()
@@ -316,15 +346,36 @@ class Extractor:
         with_profile_photo: bool = False,
         reply_policy: "Extractor.ReplyPolicy" = None,
     ) -> ExtractedPhoto | None:
-        """
-        Extract photo from message or its reply.
+        """Extract photo content from a message, with reply and profile photo fallbacks.
+
+        Checks for photo content in this order:
+        1. Photo attachments (message.photo) - returns largest size
+        2. Image documents (message.document with image/* MIME type)
+        3. Static stickers (non-animated, non-video stickers)
+        4. If with_profile_photo=True and nothing found:
+           - Profile photo of forwarded user (if message is forwarded)
+           - Profile photo of message author
+
+        The reply_policy controls whether/how the replied-to message is checked.
+        Default is prefer_origin: check original first, then reply.
 
         Args:
-            message: The message to extract from
-            reply_policy: Policy for checking reply messages
+            message: The Telegram message to extract from.
+            with_profile_photo: If True, fall back to user profile photo when no
+                image is attached. Uses prefer_reply policy for profile lookup.
+            reply_policy: How to handle reply messages. Defaults to prefer_origin.
 
         Returns:
-            ExtractedPhoto object or None if no photo found
+            ExtractedPhoto with download() capability, or None if no photo found.
+
+        Example:
+            >>> # Get any image from message or its reply
+            >>> photo = await Extractor.photo(message)
+            >>> if photo:
+            ...     data = await photo.download()
+            >>>
+            >>> # Get user's profile photo as fallback
+            >>> photo = await Extractor.photo(message, with_profile_photo=True)
         """
         source_message, media = await cls._extract_with_policy(
             message, cls._extract_photo_from_message, reply_policy
@@ -347,15 +398,27 @@ class Extractor:
     async def video(
         cls, message: Message, reply_policy: "Extractor.ReplyPolicy" = None
     ) -> ExtractedVideo | None:
-        """
-        Extract video from message or its reply.
+        """Extract video content from a message, with optional reply fallback.
+
+        Checks for video content in this order:
+        1. Video stickers (is_video=True stickers, excludes animated Lottie stickers)
+        2. Regular videos (message.video)
+        3. GIF animations (message.animation)
+        4. Video notes / circles (message.video_note)
 
         Args:
-            message: The message to extract from
-            reply_policy: Policy for checking reply messages
+            message: The Telegram message to extract from.
+            reply_policy: How to handle reply messages. Defaults to prefer_origin.
 
         Returns:
-            ExtractedVideo object or None if no video found
+            ExtractedVideo with duration, dimensions, and download() capability,
+            or None if no video found.
+
+        Example:
+            >>> video = await Extractor.video(message)
+            >>> if video:
+            ...     print(f"{video.duration}s video at {video.width}x{video.height}")
+            ...     data = await video.download()
         """
         source_message, media = await cls._extract_with_policy(
             message, cls._extract_video_from_message, reply_policy
@@ -368,15 +431,24 @@ class Extractor:
     async def audio(
         cls, message: Message, reply_policy: "Extractor.ReplyPolicy" = None
     ) -> ExtractedAudio | None:
-        """
-        Extract audio from message or its reply.
+        """Extract audio content from a message, with optional reply fallback.
+
+        Checks for audio content:
+        1. Audio files (message.audio) - music files with metadata
+        2. Voice messages (message.voice)
 
         Args:
-            message: The message to extract from
-            reply_policy: Policy for checking reply messages
+            message: The Telegram message to extract from.
+            reply_policy: How to handle reply messages. Defaults to prefer_origin.
 
         Returns:
-            ExtractedAudio object or None if no audio found
+            ExtractedAudio with duration, title, performer, and download() capability,
+            or None if no audio found.
+
+        Example:
+            >>> audio = await Extractor.audio(message)
+            >>> if audio:
+            ...     print(f"{audio.title} by {audio.performer}, {audio.duration}s")
         """
         source_message, media = await cls._extract_with_policy(
             message, cls._extract_audio_from_message, reply_policy
@@ -389,15 +461,23 @@ class Extractor:
     async def document(
         cls, message: Message, reply_policy: "Extractor.ReplyPolicy" = None
     ) -> ExtractedDocument | None:
-        """
-        Extract document from message or its reply.
+        """Extract any document attachment from a message, with optional reply fallback.
+
+        Returns the raw document without type interpretation. For image documents,
+        consider using photo() instead, which automatically detects image/* MIME types.
 
         Args:
-            message: The message to extract from
-            reply_policy: Policy for checking reply messages
+            message: The Telegram message to extract from.
+            reply_policy: How to handle reply messages. Defaults to prefer_origin.
 
         Returns:
-            ExtractedDocument object or None if no document found
+            ExtractedDocument with file_name, mime_type, and download() capability,
+            or None if no document found.
+
+        Example:
+            >>> doc = await Extractor.document(message)
+            >>> if doc and doc.mime_type == "application/pdf":
+            ...     pdf_bytes = await doc.download()
         """
         source_message, media = await cls._extract_with_policy(
             message, cls._extract_document_from_message, reply_policy
@@ -410,15 +490,23 @@ class Extractor:
     async def text(
         cls, message: Message, reply_policy: "Extractor.ReplyPolicy" = None
     ) -> ExtractedText | None:
-        """
-        Extract text from message or its reply (includes both text and caption).
+        """Extract text content from a message, with optional reply fallback.
+
+        Checks both message.text (plain text messages) and message.caption
+        (text attached to media). Returns whichever is present.
 
         Args:
-            message: The message to extract from
-            reply_policy: Policy for checking reply messages
+            message: The Telegram message to extract from.
+            reply_policy: How to handle reply messages. Defaults to prefer_origin.
 
         Returns:
-            ExtractedText object or None if no text found
+            ExtractedText with length, startswith(), contains() helpers,
+            or None if no text found.
+
+        Example:
+            >>> text = await Extractor.text(message)
+            >>> if text and text.startswith("/"):
+            ...     print(f"Command: {text.text}")
         """
         source_message, text_content = await cls._extract_with_policy(
             message, cls._extract_text_from_message, reply_policy
@@ -437,15 +525,26 @@ class Extractor:
         ExtractedDocument | None,
         ExtractedText | None,
     ]:
-        """
-        Extract all media types from message or its reply in one call.
+        """Extract all media types from a message in parallel.
+
+        Runs photo(), video(), audio(), document(), and text() concurrently
+        using asyncio.gather. Useful when you need to inspect multiple media
+        types from a single message without sequential await overhead.
+
+        Note: Does not enable with_profile_photo for the photo extraction.
 
         Args:
-            message: The message to extract from
-            reply_policy: Policy for checking reply messages
+            message: The Telegram message to extract from.
+            reply_policy: How to handle reply messages. Defaults to prefer_origin.
 
         Returns:
-            Tuple of (photo, video, audio, document, text) - any can be None
+            Tuple of (photo, video, audio, document, text). Each element is
+            the corresponding Extracted* object or None if not present.
+
+        Example:
+            >>> photo, video, audio, doc, text = await Extractor.all_media(message)
+            >>> if video:
+            ...     print(f"Message has a {video.duration}s video")
         """
         photo, video, audio, document, text = await asyncio.gather(
             cls.photo(message, reply_policy),
