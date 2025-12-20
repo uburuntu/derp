@@ -31,6 +31,7 @@ from derp.handlers import (
     video,
 )
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
+from derp.middlewares.api_resilient import ResilientRequestMiddleware
 from derp.middlewares.credit_service import CreditServiceMiddleware
 from derp.middlewares.database_logger import DatabaseLoggerMiddleware
 from derp.middlewares.db_models import DatabaseModelMiddleware
@@ -102,7 +103,9 @@ async def main() -> None:
     )
     await db.connect()
 
-    # Persist all outbound API calls to messages table
+    # Bot session middlewares (applied to all outbound API calls)
+    # Order matters: resilient retry wraps persist, so retries happen before persistence
+    bot.session.middleware(ResilientRequestMiddleware(max_retries=3))
     bot.session.middleware(PersistBotActionsMiddleware(db=db))
 
     # Outer middlewares (run before filters)

@@ -72,7 +72,6 @@ async def generate_and_send_video(
     quality: str = "fast",
     duration_seconds: int = 6,
     aspect_ratio: str = "16:9",
-    enhance_prompt: bool = True,
     model: str | None = None,
 ) -> None:
     """Generate and send a video to the chat.
@@ -107,7 +106,6 @@ async def generate_and_send_video(
             number_of_videos=1,
             duration_seconds=duration_seconds,
             aspect_ratio=aspect_ratio,
-            enhance_prompt=enhance_prompt,
         ),
     )
 
@@ -141,7 +139,6 @@ async def video_generate(
     quality: str = "fast",
     duration_seconds: int = 6,
     aspect_ratio: str = "16:9",
-    enhance_prompt: bool = True,
     model: str | None = None,
 ) -> str:
     """Generate a video using Veo 3.1 and send it to the chat."""
@@ -151,7 +148,6 @@ async def video_generate(
         quality=quality,
         duration_seconds=duration_seconds,
         aspect_ratio=aspect_ratio,
-        enhance_prompt=enhance_prompt,
         model=model,
     )
     return "I've generated and sent the video."

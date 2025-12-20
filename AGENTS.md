@@ -75,13 +75,43 @@ def submit_order(cart_id: str) -> OrderId  # command
 logfire.info("checkout", cart_id=cart_id, total=total.amount)
 ```
 
+### Exception & Logging Best Practices
+
+- **Never log error then raise:** Let exceptions propagate; the final handler logs.
+- **Warning for recoverable, then fallback:** Log warning, then use fallback value.
+- **`logfire.exception()` only at boundaries:** Use in top-level handlers where you catch-all and reply with a friendly message.
+- **Include context in logs:** Always add identifiers as structured attributes for traceability.
+- **Fail fast internally, degrade gracefully externally:** Raise for programmer errors; recover for environmental failures.
+
+```python
+# BAD: double-logging
+except SomeError as exc:
+    logfire.exception("operation_failed")  # logged here
+    raise  # ...and logged again by caller
+
+# GOOD: warning + fallback
+except SomeError as exc:
+    logfire.warning("operation_failed_fallback")
+    return fallback_value
+
+# GOOD: let it propagate, log at boundary
+async def handler(...):
+    try:
+        await do_work()
+    except Exception:
+        logfire.exception("handler_failed")  # only logged here
+        await message.reply("Something went wrong")
+```
+
 ### Smells to Avoid
 
 - Deep nesting → guard clauses
 - "Util" god-modules → per-domain modules
-- Dicts as objects → `dataclass`/`TypedDict`
+- Dicts as objects → Pydantic/`dataclass`/`TypedDict`
 - Boolean args → explicit functions or `Enum`
 - Silent exception swallowing → log + re-raise
+- Logging error before raising → double-logging noise
+- Context-specific comments → code should be self-explanatory; comments explain *why*, not *what*
 
 ## Testing Guidelines
 
