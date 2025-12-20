@@ -86,12 +86,24 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
                         tool_name, result.reject_reason or ""
                     )
 
-                # Log access granted
-                logfire.debug(
-                    "tool_access_granted",
+                # Log access granted with tool call parameters
+                # Serialize kwargs for logging (exclude large binary data)
+                loggable_kwargs = {
+                    k: (
+                        f"<{type(v).__name__}:{len(v)} bytes>"
+                        if isinstance(v, bytes)
+                        else v
+                    )
+                    for k, v in kwargs.items()
+                }
+                logfire.info(
+                    "tool_invoked",
                     tool=tool_name,
                     source=result.source,
                     credits_to_deduct=result.credits_to_deduct,
+                    user_id=deps.user_id,
+                    chat_id=deps.chat_id,
+                    args=loggable_kwargs,
                 )
 
                 # Execute tool

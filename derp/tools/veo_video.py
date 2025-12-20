@@ -12,6 +12,7 @@ Video docs: https://ai.google.dev/gemini-api/docs/video.md.txt
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import logfire
 from google import genai
@@ -26,6 +27,33 @@ from derp.tools.wrapper import credit_aware_tool
 
 VEO_31_FAST = "veo-3.1-fast-generate-preview"
 VEO_31_STANDARD = "veo-3.1-generate-preview"
+
+
+class VideoGenerationError(Exception):
+    """Raised when video generation fails with specific details."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation_name: str | None = None,
+        error_details: dict[str, Any] | None = None,
+        rai_filtered_count: int | None = None,
+        rai_filtered_reasons: list[str] | None = None,
+    ):
+        super().__init__(message)
+        self.operation_name = operation_name
+        self.error_details = error_details
+        self.rai_filtered_count = rai_filtered_count
+        self.rai_filtered_reasons = rai_filtered_reasons
+
+    def __str__(self) -> str:
+        parts = [super().__str__()]
+        if self.rai_filtered_reasons:
+            parts.append(f"RAI filtered: {', '.join(self.rai_filtered_reasons)}")
+        if self.error_details:
+            parts.append(f"Error: {self.error_details}")
+        return " | ".join(parts)
 
 
 def _pick_veo_model(*, quality: str, model: str | None) -> str:
@@ -113,17 +141,70 @@ async def generate_and_send_video(
         ),
     )
 
+    logfire.debug(
+        "veo_operation_started",
+        operation_name=operation.name,
+        chat_id=deps.chat_id,
+    )
+
+    poll_count = 0
     while not operation.done:
+        poll_count += 1
         await asyncio.sleep(5)
         operation = await client.aio.operations.get(operation)
+        logfire.debug(
+            "veo_operation_poll",
+            operation_name=operation.name,
+            poll_count=poll_count,
+            done=operation.done,
+        )
 
-    generated = operation.response.generated_videos
+    # Check for operation-level errors first
+    if operation.error:
+        raise VideoGenerationError(
+            "Video generation operation failed",
+            operation_name=operation.name,
+            error_details=operation.error,
+        )
+
+    # Check response exists
+    if not operation.response:
+        raise VideoGenerationError(
+            "Video generation completed but no response was returned",
+            operation_name=operation.name,
+        )
+
+    response = operation.response
+
+    # Log RAI filtering information if present
+    if response.rai_media_filtered_count:
+        logfire.warning(
+            "veo_rai_filtered",
+            operation_name=operation.name,
+            filtered_count=response.rai_media_filtered_count,
+            filtered_reasons=response.rai_media_filtered_reasons,
+            chat_id=deps.chat_id,
+        )
+
+    # Check for generated videos
+    generated = response.generated_videos
     if not generated:
-        raise RuntimeError("No videos were generated.")
+        raise VideoGenerationError(
+            "No videos were generated",
+            operation_name=operation.name,
+            rai_filtered_count=response.rai_media_filtered_count,
+            rai_filtered_reasons=response.rai_media_filtered_reasons,
+        )
 
+    # Check the first video object
     video_obj = generated[0].video
     if not video_obj:
-        raise RuntimeError("No video was generated.")
+        raise VideoGenerationError(
+            "Video generation returned empty video object",
+            operation_name=operation.name,
+            rai_filtered_count=response.rai_media_filtered_count,
+            rai_filtered_reasons=response.rai_media_filtered_reasons,
+        )
     video_bytes = await _download_video_to_bytes(client, video_obj)
 
     sender = MessageSender.from_message(deps.message)
