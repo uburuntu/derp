@@ -12,7 +12,6 @@ Video docs: https://ai.google.dev/gemini-api/docs/video.md.txt
 from __future__ import annotations
 
 import asyncio
-import tempfile
 
 import logfire
 from google import genai
@@ -44,12 +43,12 @@ def _pick_veo_model(*, quality: str, model: str | None) -> str:
 
 
 async def _download_video_to_bytes(client: genai.Client, video: object) -> bytes:
-    """Download a generated video to memory using async client."""
-    with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp:
-        # Download directly to file path using async client
-        await client.aio.files.download(file=video, path=tmp.name)
-        tmp.seek(0)
-        return tmp.read()
+    """Download a generated video to memory using async client.
+
+    The google-genai SDK populates video.video_bytes after download().
+    """
+    await client.aio.files.download(file=video)
+    return video.video_bytes
 
 
 async def generate_and_send_video(

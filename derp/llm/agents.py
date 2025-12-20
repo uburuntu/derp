@@ -77,6 +77,7 @@ def create_image_agent() -> Agent[None, BinaryImage | str]:
         model,
         output_type=BinaryImage | str,
         instructions=IMAGE_SYSTEM_PROMPT,
+        retries=2,  # Image models may need more attempts for output validation
     )
 
     logfire.debug("image_agent_created")
