@@ -42,6 +42,7 @@ Always run commands instead of creating generated files manually. If Docker/data
 - Imports: prefer absolute within `derp.*`.
 - Keep handlers small; place cross‑cutting logic in `middlewares/` or `common/`.
 - Lint/format before pushing; CI runs Ruff check and format validation.
+- Prefer concise idiomatic Python: walrus operator (`if x := getattr(obj, "attr", None):`), comprehensions with conditionals, `or` for defaults.
 
 ## Code Quality Principles
 
@@ -80,6 +81,7 @@ logfire.info("checkout", cart_id=cart_id, total=total.amount)
 - **Never log error then raise:** Let exceptions propagate; the final handler logs.
 - **Warning for recoverable, then fallback:** Log warning, then use fallback value.
 - **`logfire.exception()` only at boundaries:** Use in top-level handlers where you catch-all and reply with a friendly message.
+- **Include traceback with `_exc_info=True`:** For `.warning()` and `.error()` inside `except` blocks, add `_exc_info=True` to capture the traceback. `.exception()` does this automatically.
 - **Include context in logs:** Always add identifiers as structured attributes for traceability.
 - **Fail fast internally, degrade gracefully externally:** Raise for programmer errors; recover for environmental failures.
 
@@ -112,6 +114,8 @@ async def handler(...):
 - Silent exception swallowing → log + re-raise
 - Logging error before raising → double-logging noise
 - Context-specific comments → code should be self-explanatory; comments explain *why*, not *what*
+- Hardcoded field maps → use `hasattr()` for duck typing when fields are mutually exclusive (e.g., `text` vs `caption` in Telegram methods)
+- Scattered error handling → centralize in middleware when the same fallback applies everywhere (e.g., HTML parse errors handled in `ResilientRequestMiddleware`)
 
 ## Testing Guidelines
 
@@ -120,6 +124,7 @@ async def handler(...):
 - Database tests use real PostgreSQL via Docker (`make test-db`).
 - Use `db_session` fixture for tests with automatic transaction rollback.
 - Use factory fixtures (`user_factory`, `chat_factory`, `message_factory`) to create test data.
+- Prefer reusable fixtures in `conftest.py` over duplicating mocks across test files.
 - Aim to cover filters, handlers' pure logic, database queries, and utilities.
 - Run locally with `uv run pytest -v` or `make test`.
 
@@ -166,6 +171,8 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
   - `CreditServiceMiddleware`: creates a `CreditService` instance with a fresh DB session and injects it as `credit_service` into handler `data`.
   - `ChatActionMiddleware`: shows typing/upload actions for long‑running handlers.
   - `ThrottleUsersMiddleware` (available): prevents concurrent handling per user; not enabled by default.
+- **Session middlewares:**
+  - `ResilientRequestMiddleware`: handles transient Telegram API errors at the session level, including retry on `TelegramRetryAfter` (flood control) and automatic fallback to plain text on HTML parse errors (`can't parse entities`). This means handlers don't need to catch these errors individually.
 
 ## LLM Integration (Pydantic-AI)
 

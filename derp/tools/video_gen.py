@@ -121,7 +121,7 @@ async def generate_and_send_video(
     video_bytes = await _download_video_to_bytes(client, video_obj)
 
     sender = MessageSender.from_message(deps.message)
-    await sender.reply_video(video_bytes, caption=prompt)
+    await sender.compose().text(prompt).video(video_bytes).reply()
 
     logfire.info(
         "veo_generate_done",

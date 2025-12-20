@@ -28,71 +28,12 @@ from derp.models import User as UserModel
 router = Router(name="image")
 
 
-def _to_filename(mime: str, idx: int) -> str:
-    """Generate a filename based on mime type."""
-    ext = "jpg" if mime.endswith(("jpeg", "jpg")) else "png"
-    return f"generated_{idx}.{ext}"
-
-
-async def _send_image_result(
-    message: Message,
-    output: BinaryImage | str,
-    *,
-    caption: str | None = None,
-) -> Message:
-    """Send an image result or text fallback."""
-    if isinstance(output, str):
-        # Text response (refusal or error message from model)
-        return await message.reply(output or _("🤷 No image generated."))
-
-    sender = MessageSender.from_message(message)
-    result = await sender.reply_photo(
-        output.data,
-        caption=caption,
-        filename=_to_filename(output.media_type, 1),
-    )
-    return result if isinstance(result, Message) else result[-1]
-
-
-async def _send_multiple_images(
-    message: Message,
-    images: list[BinaryImage],
-    *,
-    caption: str | None = None,
-) -> Message:
-    """Send multiple images as a media group."""
-    if not images:
-        return await message.reply(_("🤷 No images generated."))
-
-    if len(images) == 1:
-        return await _send_image_result(message, images[0], caption=caption)
-
-    # Convert BinaryImages to MediaItems
-    from derp.common.sender import MediaItem, MediaType
-
-    media = [
-        MediaItem(
-            type=MediaType.PHOTO,
-            data=image.data,
-            filename=_to_filename(image.media_type, idx + 1),
-        )
-        for idx, image in enumerate(images)
-    ]
-
-    sender = MessageSender.from_message(message)
-    sent_messages = await sender.send_media_group(
-        media=media,
-        caption=caption,
-        reply_to=message,
-    )
-    return sent_messages[-1] if sent_messages else message
-
-
 @router.message(MetaCommand("imagine", "image", "img", "и"))
 @flags.chat_action(initial_sleep=2, action="upload_photo")
 async def handle_imagine(
     message: Message,
     meta: MetaInfo,
+    sender: MessageSender,
     credit_service: CreditService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
@@ -122,6 +63,9 @@ async def handle_imagine(
             ).format(reason=result.reject_reason)
         )
 
+    # Create sender bound to target message for reply
+    target_sender = MessageSender.from_message(meta.target_message)
+
     try:
         with logfire.span(
             "image_generate",
@@ -135,6 +79,7 @@ async def handle_imagine(
             run_result = await agent.run(prompt)
             output = run_result.output
 
+            # Check for multiple images in response
             if hasattr(run_result, "response") and hasattr(
                 run_result.response, "images"
             ):
@@ -151,8 +96,10 @@ async def handle_imagine(
                         "image_generate",
                         idempotency_key=idempotency_key,
                     )
-                    return await _send_multiple_images(meta.target_message, images)
+                    sent = await target_sender.compose().images(images).reply()
+                    return sent if isinstance(sent, Message) else sent[-1]
 
+            # Handle single image or text output
             if isinstance(output, BinaryImage):
                 idempotency_key = (
                     f"imagine:{chat_model.telegram_id}:{message.message_id}"
@@ -164,8 +111,13 @@ async def handle_imagine(
                     "image_generate",
                     idempotency_key=idempotency_key,
                 )
+                sent = await target_sender.compose().image(output).reply()
+                return sent if isinstance(sent, Message) else sent[-1]
 
-            return await _send_image_result(meta.target_message, output)
+            # Text response (refusal or error from model)
+            return await meta.target_message.reply(
+                output or _("🤷 No image generated.")
+            )
 
     except ModelHTTPError as exc:
         if exc.status_code == 429:
@@ -205,6 +157,7 @@ async def handle_imagine(
 async def handle_edit(
     message: Message,
     meta: MetaInfo,
+    sender: MessageSender,
     credit_service: CreditService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
@@ -239,6 +192,9 @@ async def handle_edit(
             ).format(reason=result.reject_reason)
         )
 
+    # Create sender bound to target message for reply
+    target_sender = MessageSender.from_message(meta.target_message)
+
     try:
         with logfire.span(
             "image_edit",
@@ -260,6 +216,7 @@ async def handle_edit(
             run_result = await agent.run(user_prompt)
             output = run_result.output
 
+            # Check for multiple images in response
             if hasattr(run_result, "response") and hasattr(
                 run_result.response, "images"
             ):
@@ -276,8 +233,10 @@ async def handle_edit(
                         "image_generate",
                         idempotency_key=idempotency_key,
                     )
-                    return await _send_multiple_images(meta.target_message, images)
+                    sent = await target_sender.compose().images(images).reply()
+                    return sent if isinstance(sent, Message) else sent[-1]
 
+            # Handle single image or text output
             if isinstance(output, BinaryImage):
                 idempotency_key = f"edit:{chat_model.telegram_id}:{message.message_id}"
                 await credit_service.deduct(
@@ -287,8 +246,13 @@ async def handle_edit(
                     "image_generate",
                     idempotency_key=idempotency_key,
                 )
+                sent = await target_sender.compose().image(output).reply()
+                return sent if isinstance(sent, Message) else sent[-1]
 
-            return await _send_image_result(meta.target_message, output)
+            # Text response (refusal or error from model)
+            return await meta.target_message.reply(
+                output or _("🤷 No image generated.")
+            )
 
     except ModelHTTPError as exc:
         if exc.status_code == 429:
