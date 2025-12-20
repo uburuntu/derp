@@ -85,7 +85,11 @@ async def generate_and_send_video(
 
     # Extract reference image from message/reply, with optional profile photo fallback
     photo = await Extractor.photo(deps.message, with_profile_photo=with_profile_photo)
-    image = types.Image(image_bytes=await photo.download()) if photo else None
+    image = (
+        types.Image(image_bytes=await photo.download(), mime_type=photo.media_type)
+        if photo
+        else None
+    )
 
     logfire.info(
         "veo_generate_start",
