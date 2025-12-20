@@ -189,6 +189,18 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
   - Tools wrapped with `credit_aware_tool` for access control and credit deduction.
   - Chat memory stored in `chats.llm_memory` column, capped at 1024 chars.
 
+### Pydantic-AI Tool Best Practices
+
+**Naming:** `snake_case`, descriptive (`generate_image` not `gen_img`). File names reflect provider (`gemini_image.py`, `veo_video.py`).
+
+**Docstrings:** Google style. First line = tool description for model. `Args:` = parameter descriptions (omit `ctx`).
+
+**Return values:** Strings only. Direct-sending tools return `"[Sent directly to chat. Do not output anything else unless the user asked a follow-up question.]"`.
+
+**Limits:** `UsageLimits(tool_calls_limit=3)` on agent runs to prevent abuse.
+
+**Parameters:** Simple types (`str`, `int`, `bool`). Use `| None` for optionals.
+
 ## Data & Persistence (PostgreSQL + SQLAlchemy)
 
 - **Session Management:** `derp/db/session.py` provides `DatabaseManager` with async session context managers.

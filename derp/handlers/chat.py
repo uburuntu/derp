@@ -20,8 +20,12 @@ from aiogram.filters import Command
 from aiogram.handlers import MessageHandler
 from aiogram.types import Message, ReactionTypeEmoji
 from aiogram.utils.i18n import gettext as _
-from pydantic_ai import BinaryContent
-from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
+from pydantic_ai import BinaryContent, UsageLimits
+from pydantic_ai.exceptions import (
+    ModelHTTPError,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+)
 
 from derp.common.extractor import Extractor
 from derp.config import settings
@@ -312,6 +316,7 @@ class ChatAgentHandler(MessageHandler):
                     user_prompt,
                     deps=deps,
                     toolsets=[toolset],
+                    usage_limits=UsageLimits(tool_calls_limit=3),
                 )
 
                 # Convert to AgentResult and send response
@@ -348,6 +353,11 @@ class ChatAgentHandler(MessageHandler):
             logfire.exception("chat_model_http_error", status_code=exc.status_code)
             return await self.event.reply(
                 _("😅 Something went wrong. I couldn't process that message.")
+            )
+        except UsageLimitExceeded:
+            logfire.warning("agent_usage_limit_exceeded", _exc_info=True)
+            return await self.event.reply(
+                _("⚠️ Too many tool calls. Please try a simpler request.")
             )
         except UnexpectedModelBehavior as exc:
             logfire.warning("agent_unexpected_behavior", error=str(exc))

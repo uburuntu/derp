@@ -21,7 +21,7 @@ from derp.db import get_db_manager
 from derp.filters.meta import MetaCommand, MetaInfo
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
-from derp.tools.video_gen import VEO_31_FAST, VEO_31_STANDARD, generate_and_send_video
+from derp.tools.veo_video import VEO_31_FAST, VEO_31_STANDARD, generate_and_send_video
 
 router = Router(name="video")
 

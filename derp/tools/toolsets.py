@@ -14,10 +14,10 @@ from pydantic_ai import FunctionToolset
 
 from derp.llm.deps import AgentDeps
 from derp.tools.chat_memory import update_chat_memory
-from derp.tools.image_gen import edit_image, generate_image
-from derp.tools.think import think_deep
-from derp.tools.tts import voice_tts
-from derp.tools.video_gen import video_generate
+from derp.tools.gemini_image import edit_image, generate_image
+from derp.tools.gemini_think import think_deep
+from derp.tools.gemini_tts import voice_tts
+from derp.tools.veo_video import video_generate
 from derp.tools.web_search import web_search
 
 

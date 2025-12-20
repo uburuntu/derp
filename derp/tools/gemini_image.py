@@ -31,12 +31,8 @@ async def generate_image(
     make an image. The image will be sent directly to the chat.
 
     Args:
-        ctx: The run context with agent dependencies.
         prompt: A detailed description of the image to generate.
         style: Optional style hint (realistic, cartoon, artistic, etc.)
-
-    Returns:
-        A message confirming the image was generated or an error.
     """
     deps = ctx.deps
 
@@ -69,7 +65,7 @@ async def generate_image(
                 prompt_length=len(prompt),
             )
 
-            return "I've generated and sent the image to the chat."
+            return "[Sent directly to chat. Do not output anything else unless the user asked a follow-up question.]"
 
         elif isinstance(output, str):
             # Model returned text instead of image (refusal or error)
@@ -96,6 +92,8 @@ async def generate_image(
 async def edit_image(
     ctx: RunContext[AgentDeps],
     edit_prompt: str,
+    *,
+    use_profile_photo: bool = False,
 ) -> str:
     """Edit an image that the user has sent.
 
@@ -103,11 +101,9 @@ async def edit_image(
     edit, or change it in some way. The edited image will be sent to the chat.
 
     Args:
-        ctx: The run context with agent dependencies.
         edit_prompt: Description of the edits to make to the image.
-
-    Returns:
-        A message confirming the edit was applied or an error.
+        use_profile_photo: Set to True when the user asks to edit "my photo"
+            but hasn't attached an image. Uses their Telegram profile picture.
     """
     deps = ctx.deps
     message = deps.message
@@ -118,10 +114,8 @@ async def edit_image(
         chat_id=deps.chat_id,
     )
 
-    # Extract the image from the message or replied message
-    photo = await Extractor.photo(message)
-    if not photo and message.reply_to_message:
-        photo = await Extractor.photo(message.reply_to_message)
+    # Extract the image from the message or replied message, with optional profile fallback
+    photo = await Extractor.photo(message, with_profile_photo=use_profile_photo)
 
     if not photo:
         return (
@@ -157,7 +151,7 @@ async def edit_image(
                 prompt_length=len(edit_prompt),
             )
 
-            return "I've edited and sent the image to the chat."
+            return "[Sent directly to chat. Do not output anything else unless the user asked a follow-up question.]"
 
         elif isinstance(output, str):
             logfire.warning(

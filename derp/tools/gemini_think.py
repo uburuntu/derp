@@ -41,18 +41,13 @@ async def think_deep(
     ctx: RunContext[AgentDeps],
     problem: str,
 ) -> str:
-    """Apply deep reasoning to a complex problem using the most powerful model.
+    """Apply deep reasoning to a complex problem using Gemini 3 Pro.
 
     Use this tool when the user asks you to "think harder", "analyze deeply",
-    or when faced with a complex mathematical or logical problem that would
-    benefit from extended reasoning with Gemini 3 Pro.
+    or for complex mathematical or logical problems.
 
     Args:
-        ctx: The run context with agent dependencies.
         problem: The problem or question to analyze deeply.
-
-    Returns:
-        A detailed analysis of the problem.
     """
     deps = ctx.deps
 
