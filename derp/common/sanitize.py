@@ -138,9 +138,12 @@ def _convert_italic(text: str) -> str:
     # Don't match if preceded by * (would be bold) or followed by * (would be bold)
     text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", text)
 
-    # _italic_ - only match if surrounded by whitespace or start/end of string
-    # This avoids matching snake_case_variables
-    text = re.sub(r"(?:^|(?<=\s))_([^_]+)_(?:$|(?=\s))", r"<i>\1</i>", text)
+    # _italic_ - match if preceded by whitespace/start/opening-punct and followed by
+    # whitespace/end/closing-punct. This handles _word_, _word_! (_word_) etc.
+    # while still avoiding snake_case_variables (no letter before underscore)
+    text = re.sub(
+        r"(?:^|(?<=[\s([{<]))_([^_]+)_(?:$|(?=[\s.,!?;:)}\]>]))", r"<i>\1</i>", text
+    )
     return text
 
 

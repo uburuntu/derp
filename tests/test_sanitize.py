@@ -51,6 +51,24 @@ class TestMarkdownToHtml:
         result = markdown_to_html("foo_bar_baz")
         assert result == "foo_bar_baz"
 
+    def test_italic_underscores_followed_by_punctuation(self):
+        # Should match _text_ followed by common punctuation
+        assert markdown_to_html("hello _world_!") == "hello <i>world</i>!"
+        assert markdown_to_html("hello _world_,") == "hello <i>world</i>,"
+        assert markdown_to_html("hello _world_.") == "hello <i>world</i>."
+        assert markdown_to_html("hello _world_?") == "hello <i>world</i>?"
+        assert markdown_to_html("hello _world_;") == "hello <i>world</i>;"
+        assert markdown_to_html("hello _world_:") == "hello <i>world</i>:"
+        assert markdown_to_html("(_word_)") == "(<i>word</i>)"
+
+    def test_italic_underscores_russian_with_punctuation(self):
+        # Real-world case: Russian text with underscore italic and punctuation
+        text = "слишком... _гладкими_, а должны быть по-настоящему _говняными_!"
+        result = markdown_to_html(text)
+        assert "<i>гладкими</i>" in result
+        assert "<i>говняными</i>" in result
+        assert "_" not in result  # No literal underscores
+
     # --- Code ---
     def test_inline_code(self):
         assert markdown_to_html("use `print()` here") == "use <code>print()</code> here"
