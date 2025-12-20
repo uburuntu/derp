@@ -176,6 +176,7 @@ class ContentBuilder:
     _images: list[MediaItem] = field(default_factory=list, repr=False)
     _videos: list[MediaItem] = field(default_factory=list, repr=False)
     _audio: list[MediaItem] = field(default_factory=list, repr=False)
+    _voice: list[MediaItem] = field(default_factory=list, repr=False)
     _documents: list[MediaItem] = field(default_factory=list, repr=False)
     _reply_markup: ReplyMarkup = field(default=None, repr=False)
 
@@ -272,6 +273,22 @@ class ContentBuilder:
             )
         return self
 
+    def voice(self, audio: bytes, mime_type: str = "audio/ogg") -> Self:
+        """Add a voice message (sent via send_voice, plays inline in Telegram).
+
+        Voice messages must be OGG/Opus format for Telegram to display as playable.
+        Use convert_to_ogg_opus() from derp.common.audio to convert other formats.
+        """
+        self._voice.append(
+            MediaItem(
+                type=MediaType.VOICE,
+                data=audio,
+                filename="voice.ogg",
+                mime_type=mime_type,
+            )
+        )
+        return self
+
     def document(
         self,
         document: BinaryContent | bytes,
@@ -324,6 +341,7 @@ class ContentBuilder:
             images=self._images,
             videos=self._videos,
             audio=self._audio,
+            voice=self._voice,
             documents=self._documents,
             reply_to=reply_to,
             reply_markup=self._reply_markup,
@@ -729,6 +747,7 @@ class MessageSender:
         images: list[MediaItem],
         videos: list[MediaItem],
         audio: list[MediaItem],
+        voice: list[MediaItem],
         documents: list[MediaItem],
         reply_to: Message | None,
         reply_markup: ReplyMarkup,
@@ -737,12 +756,13 @@ class MessageSender:
 
         Sending strategy:
         1. If only text: send as text message(s) with chunking
-        2. If single media + short text: send as captioned media
-        3. If multiple media of same type: send as album with caption
-        4. Different media types are sent as separate albums
+        2. If voice: send via send_voice (special case, not part of albums)
+        3. If single media + short text: send as captioned media
+        4. If multiple media of same type: send as album with caption
+        5. Different media types are sent as separate albums
         """
         all_sent: list[Message] = []
-        has_media = images or videos or audio or documents
+        has_media = images or videos or audio or voice or documents
 
         # Case 1: Text only
         if not has_media:
@@ -764,7 +784,34 @@ class MessageSender:
 
             return all_sent[-1] if len(all_sent) == 1 else all_sent
 
-        # Case 2: Single media with short caption
+        # Case 2: Voice messages (special: sent via send_voice, not albums)
+        if voice:
+            caption, overflow_text = self._prepare_caption(text)
+            for i, v in enumerate(voice):
+                is_first = i == 0
+                is_last = i == len(voice) - 1
+                voice_caption = caption if is_first else None
+                msg = await self.bot.send_voice(
+                    **self._common_send_kwargs,
+                    voice=v.to_input_file(),
+                    caption=voice_caption,
+                    parse_mode="HTML" if voice_caption else None,
+                    reply_to_message_id=reply_to.message_id if reply_to else None,
+                    reply_markup=reply_markup
+                    if is_last and not overflow_text
+                    else None,
+                )
+                all_sent.append(msg)
+
+            if overflow_text:
+                overflow_msgs = await self._send_overflow_messages(
+                    overflow_text, all_sent[-1], reply_markup=reply_markup
+                )
+                all_sent.extend(overflow_msgs)
+
+            return all_sent[-1] if len(all_sent) == 1 else all_sent
+
+        # Case 3: Single media with short caption
         total_media = len(images) + len(videos) + len(audio) + len(documents)
         if total_media == 1 and (not text or len(text) <= MAX_CAPTION_LENGTH):
             # Find the single item

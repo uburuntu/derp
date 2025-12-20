@@ -37,6 +37,11 @@ COPY --from=builder --chown=app:app /app/derp /app/derp
 COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini
 COPY --from=builder --chown=app:app /app/migrations /app/migrations
 
+# Install ffmpeg for audio conversion (TTS voice messages)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
 # Create non-root user for security
 RUN groupadd --gid=1000 app && \
     useradd --uid=1000 --gid=app --shell=/bin/bash --create-home app
