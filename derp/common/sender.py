@@ -436,7 +436,7 @@ class MessageSender:
         return cls(
             bot=message.bot,
             chat_id=message.chat.id,
-            thread_id=message.message_thread_id,
+            thread_id=message.message_thread_id if message.is_topic_message else None,
             business_connection_id=getattr(message, "business_connection_id", None),
             _source_message=message,
             **kwargs,

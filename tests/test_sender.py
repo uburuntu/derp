@@ -135,6 +135,39 @@ class TestMessageSenderCreation:
         assert sender.chat_id == 123
         assert sender._source_message is None
 
+    def test_from_message_topic_message_uses_thread_id(self, mock_message):
+        """When is_topic_message is True, thread_id should be copied."""
+        mock_message.message_thread_id = 42
+        mock_message.is_topic_message = True
+
+        sender = MessageSender.from_message(mock_message)
+
+        assert sender.thread_id == 42
+
+    def test_from_message_non_topic_ignores_thread_id(self, mock_message):
+        """When is_topic_message is False, thread_id should be None.
+
+        This matches aiogram's behavior where message_thread_id is only passed
+        when is_topic_message is True, preventing 'message thread not found' errors.
+        """
+        mock_message.message_thread_id = 42
+        mock_message.is_topic_message = False
+
+        sender = MessageSender.from_message(mock_message)
+
+        assert sender.thread_id is None
+
+    def test_from_message_missing_is_topic_message_ignores_thread_id(
+        self, mock_message
+    ):
+        """When is_topic_message is None (not set), thread_id should be None."""
+        mock_message.message_thread_id = 42
+        mock_message.is_topic_message = None
+
+        sender = MessageSender.from_message(mock_message)
+
+        assert sender.thread_id is None
+
 
 class TestMessageSenderSend:
     """Tests for MessageSender.send() method."""
