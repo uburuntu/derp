@@ -7,18 +7,13 @@ output types (text, images, mixed) and sending them as Telegram replies.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 import logfire
-from aiogram.types import BufferedInputFile, Message, ReactionTypeEmoji
+from aiogram.types import Message, ReactionTypeEmoji
 from aiogram.utils.i18n import gettext as _
-from aiogram.utils.media_group import MediaGroupBuilder
 from pydantic_ai import AgentRunResult, BinaryImage
 
 from derp.common.sender import MessageSender
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass
@@ -69,13 +64,15 @@ class AgentResult:
     ) -> Message | None:
         """Send the result as a reply to the given message.
 
-        Uses MessageSender for automatic markdown-to-HTML conversion,
-        chunking for long texts, and safe sending with fallback to plain text.
+        Uses MessageSender's ContentBuilder for automatic handling of:
+        - Markdown-to-HTML conversion
+        - Text chunking for long messages
+        - Image album grouping
+        - Fallback to plain text on parse errors
 
         Args:
             message: The message to reply to.
-            max_length: Maximum text length before truncation (deprecated,
-                        MessageSender handles chunking automatically).
+            max_length: Deprecated, kept for backward compatibility.
 
         Returns:
             The sent message, or None if nothing was sent.
@@ -89,78 +86,31 @@ class AgentResult:
                 logfire.debug("react_failed", message_id=message.message_id)
             return None
 
-        sent_message: Message | None = None
         sender = MessageSender.from_message(message)
 
-        # Send text if present (MessageSender handles chunking automatically)
+        # Use ContentBuilder to handle all content types
+        builder = sender.compose()
+
         text_response = self.formatted_text
         if text_response:
-            sent_message = await sender.reply(text_response)
+            builder.text(text_response)
 
-        # Send images if present
         if self.images:
-            sent_message = (
-                await self._send_images(message, sent_message) or sent_message
-            )
-
-        return sent_message
-
-    async def _send_images(
-        self, original_message: Message, reply_to: Message | None = None
-    ) -> Message | None:
-        """Send images as photo messages or media groups."""
-        if not self.images:
-            return None
-
-        target = reply_to or original_message
+            builder.images(self.images)
 
         try:
-            # Single image: reply with photo
-            if len(self.images) == 1:
-                image = self.images[0]
-                input_file = BufferedInputFile(
-                    file=image.data,
-                    filename=self._get_filename(image.media_type, 1),
-                )
-                return await target.reply_photo(photo=input_file)
-
-            # Multiple images: send as media group(s)
-            sent_messages: list[Message] = []
-            start = 0
-            idx = 1
-
-            while start < len(self.images):
-                chunk = self.images[start : start + 10]
-                builder = MediaGroupBuilder()
-
-                for image in chunk:
-                    input_file = BufferedInputFile(
-                        file=image.data,
-                        filename=self._get_filename(image.media_type, idx),
-                    )
-                    builder.add_photo(media=input_file)
-                    idx += 1
-
-                msgs = await target.reply_media_group(media=builder.build())
-                sent_messages.extend(msgs)
-                start += 10
-
-            logfire.info("images_sent", count=len(self.images))
-            return sent_messages[-1] if sent_messages else None
-
+            result = await builder.reply()
+            if self.images:
+                logfire.info("images_sent", count=len(self.images))
+            return result if isinstance(result, Message) else result[-1]
         except Exception:
-            logfire.warning("send_images_failed", _exc_info=True)
-            if not reply_to:
-                return await original_message.reply(
-                    _("📊 Generated images, but couldn't display them.")
-                )
-            return None
-
-    @staticmethod
-    def _get_filename(mime_type: str, idx: int) -> str:
-        """Generate a filename based on mime type."""
-        ext = "png" if "png" in mime_type else "jpg"
-        return f"generated_{idx}.{ext}"
+            logfire.warning("send_content_failed", _exc_info=True)
+            # Fallback: try text only if we had images
+            if self.images and text_response:
+                return await sender.reply(text_response)
+            return await message.reply(
+                _("📊 Generated content, but couldn't display it.")
+            )
 
     @classmethod
     def from_run_result(cls, result: AgentRunResult) -> AgentResult:

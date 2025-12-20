@@ -18,12 +18,6 @@ from derp.llm.deps import AgentDeps
 from derp.tools.wrapper import credit_aware_tool
 
 
-def _to_filename(mime: str, idx: int = 1) -> str:
-    """Generate a filename based on mime type."""
-    ext = "png" if "png" in mime else "jpg"
-    return f"generated_{idx}.{ext}"
-
-
 @credit_aware_tool("image_generate")
 async def generate_image(
     ctx: RunContext[AgentDeps],
@@ -66,13 +60,8 @@ async def generate_image(
 
         # Handle the output
         if isinstance(output, BinaryImage):
-            caption = f"🎨 {prompt}"
             sender = MessageSender.from_message(deps.message)
-            await sender.reply_photo(
-                output.data,
-                caption=caption,
-                filename=_to_filename(output.media_type),
-            )
+            await sender.compose().text(f"🎨 {prompt}").image(output).reply()
 
             logfire.info(
                 "image_generated_and_sent",
@@ -159,13 +148,8 @@ async def edit_image(
 
         # Handle the output
         if isinstance(output, BinaryImage):
-            caption = f"✏️ {edit_prompt}"
             sender = MessageSender.from_message(message)
-            await sender.reply_photo(
-                output.data,
-                caption=caption,
-                filename=_to_filename(output.media_type),
-            )
+            await sender.compose().text(f"✏️ {edit_prompt}").image(output).reply()
 
             logfire.info(
                 "image_edited_and_sent",

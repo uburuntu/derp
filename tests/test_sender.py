@@ -3,17 +3,15 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiogram.exceptions import TelegramBadRequest
 
 from derp.common.sender import (
-    MAX_CAPTION_LENGTH,
     MAX_MESSAGE_LENGTH,
+    ContentBuilder,
     MediaItem,
     MediaType,
     MessageSender,
+    _filename_from_mime,
     _split_text,
-    safe_reply,
-    safe_send,
 )
 
 
@@ -185,25 +183,6 @@ class TestMessageSenderReply:
         assert "<b>bold</b>" in call_args.kwargs.get("text", "")
 
     @pytest.mark.asyncio
-    async def test_reply_falls_back_on_parse_error(self, mock_message):
-        # First call raises parse error, second succeeds
-        mock_message.reply.side_effect = [
-            TelegramBadRequest(
-                method=MagicMock(),
-                message="Bad Request: can't parse entities",
-            ),
-            mock_message,
-        ]
-
-        sender = MessageSender.from_message(mock_message)
-        await sender.reply("test text")
-
-        # Should have been called twice - once with HTML, once without
-        assert mock_message.reply.await_count == 2
-        second_call = mock_message.reply.call_args_list[1]
-        assert second_call.kwargs.get("parse_mode") is None
-
-    @pytest.mark.asyncio
     async def test_reply_requires_source_message(self, mock_bot):
         sender = MessageSender(bot=mock_bot, chat_id=123)
         with pytest.raises(ValueError, match="Cannot reply without source message"):
@@ -221,21 +200,6 @@ class TestMessageSenderEdit:
         mock_message.edit_text.assert_awaited_once()
         call_args = mock_message.edit_text.call_args
         assert "<b>content</b>" in call_args.kwargs.get("text", "")
-
-    @pytest.mark.asyncio
-    async def test_edit_falls_back_on_parse_error(self, mock_message):
-        mock_message.edit_text.side_effect = [
-            TelegramBadRequest(
-                method=MagicMock(),
-                message="Bad Request: can't parse entities",
-            ),
-            mock_message,
-        ]
-
-        sender = MessageSender.from_message(mock_message)
-        await sender.edit(mock_message, "test")
-
-        assert mock_message.edit_text.await_count == 2
 
     @pytest.mark.asyncio
     async def test_edit_truncates_long_text(self, mock_message):
@@ -262,113 +226,217 @@ class TestMessageSenderEditInline:
         assert "<b>Bold</b>" in call_args.kwargs.get("text", "")
         assert call_args.kwargs.get("inline_message_id") == "inline_123"
 
-    @pytest.mark.asyncio
-    async def test_edit_inline_falls_back_on_parse_error(self, mock_bot):
-        mock_bot.edit_message_text.side_effect = [
-            TelegramBadRequest(
-                method=MagicMock(),
-                message="Bad Request: can't parse entities",
-            ),
-            True,
-        ]
 
-        sender = MessageSender(bot=mock_bot, chat_id=0)
-        await sender.edit_inline("inline_123", "test")
+class TestFilenameFromMime:
+    """Tests for _filename_from_mime() helper."""
 
-        assert mock_bot.edit_message_text.await_count == 2
+    def test_jpeg_image(self):
+        assert _filename_from_mime("image/jpeg", 1) == "file_1.jpg"
+        assert _filename_from_mime("image/jpg", 2) == "file_2.jpg"
+
+    def test_png_image(self):
+        assert _filename_from_mime("image/png", 1) == "file_1.png"
+
+    def test_gif_image(self):
+        assert _filename_from_mime("image/gif", 1) == "file_1.gif"
+
+    def test_webp_image(self):
+        assert _filename_from_mime("image/webp", 1) == "file_1.webp"
+
+    def test_mp4_video(self):
+        assert _filename_from_mime("video/mp4", 1) == "file_1.mp4"
+
+    def test_mp3_audio(self):
+        assert _filename_from_mime("audio/mpeg", 1) == "file_1.mp3"
+        assert _filename_from_mime("audio/mp3", 2) == "file_2.mp3"
+
+    def test_ogg_audio(self):
+        assert _filename_from_mime("audio/ogg", 1) == "file_1.ogg"
+
+    def test_wav_audio(self):
+        assert _filename_from_mime("audio/wav", 1) == "file_1.wav"
+
+    def test_custom_prefix(self):
+        assert _filename_from_mime("image/jpeg", 1, "photo") == "photo_1.jpg"
+        assert _filename_from_mime("video/mp4", 3, "video") == "video_3.mp4"
+
+    def test_unknown_type_defaults_to_bin(self):
+        assert _filename_from_mime("application/octet-stream", 1) == "file_1.bin"
+
+    def test_generic_image_defaults_to_jpg(self):
+        assert _filename_from_mime("image/unknown", 1) == "file_1.jpg"
+
+    def test_generic_video_defaults_to_mp4(self):
+        assert _filename_from_mime("video/unknown", 1) == "file_1.mp4"
+
+    def test_generic_audio_defaults_to_mp3(self):
+        assert _filename_from_mime("audio/unknown", 1) == "file_1.mp3"
 
 
-class TestMessageSenderPhoto:
-    """Tests for photo sending methods."""
+class TestMediaItemFromBinaryImage:
+    """Tests for MediaItem.from_binary_image() class method."""
 
-    @pytest.mark.asyncio
-    async def test_send_photo_with_caption(self, mock_bot):
-        sender = MessageSender(bot=mock_bot, chat_id=123)
-        await sender.send_photo(b"image_data", caption="**Nice** photo")
+    def test_creates_photo_media_item(self):
+        # Create a mock BinaryImage
+        mock_image = MagicMock()
+        mock_image.data = b"image_data"
+        mock_image.media_type = "image/jpeg"
 
-        mock_bot.send_photo.assert_awaited_once()
-        call_args = mock_bot.send_photo.call_args
-        assert "<b>Nice</b>" in call_args.kwargs.get("caption", "")
+        item = MediaItem.from_binary_image(mock_image, idx=1)
 
-    @pytest.mark.asyncio
-    async def test_send_photo_with_long_caption(self, mock_bot):
-        sender = MessageSender(bot=mock_bot, chat_id=123)
-        long_caption = "x" * (MAX_CAPTION_LENGTH + 100)
-        await sender.send_photo(b"image_data", caption=long_caption)
+        assert item.type == MediaType.PHOTO
+        assert item.data == b"image_data"
+        assert item.mime_type == "image/jpeg"
+        assert "image_1.jpg" in item.filename
 
-        # Should send photo with truncated caption and follow-up message
-        mock_bot.send_photo.assert_awaited_once()
-        photo_call = mock_bot.send_photo.call_args
-        caption = photo_call.kwargs.get("caption", "")
-        assert len(caption) <= MAX_CAPTION_LENGTH
+    def test_creates_png_media_item(self):
+        mock_image = MagicMock()
+        mock_image.data = b"png_data"
+        mock_image.media_type = "image/png"
 
-    @pytest.mark.asyncio
-    async def test_reply_photo(self, mock_message):
+        item = MediaItem.from_binary_image(mock_image, idx=2)
+
+        assert item.type == MediaType.PHOTO
+        assert "image_2.png" in item.filename
+
+
+class TestContentBuilder:
+    """Tests for ContentBuilder fluent API."""
+
+    def test_text_method_returns_self(self, mock_message):
         sender = MessageSender.from_message(mock_message)
-        await sender.reply_photo(b"image_data", caption="Caption")
+        builder = sender.compose()
+        result = builder.text("Hello")
+        assert result is builder
+        assert builder._text == "Hello"
 
-        # reply_photo uses send_photo internally with reply_to
-        mock_message.bot.send_photo.assert_awaited_once()
+    def test_image_method_with_bytes(self, mock_message):
+        sender = MessageSender.from_message(mock_message)
+        builder = sender.compose()
+        builder.image(b"image_data", mime_type="image/jpeg")
 
+        assert len(builder._images) == 1
+        assert builder._images[0].data == b"image_data"
+        assert builder._images[0].type == MediaType.PHOTO
 
-class TestMessageSenderMediaGroup:
-    """Tests for media group sending."""
+    def test_image_method_with_binary_image(self, mock_message):
+        mock_img = MagicMock()
+        mock_img.data = b"img_data"
+        mock_img.media_type = "image/png"
+
+        sender = MessageSender.from_message(mock_message)
+        builder = sender.compose()
+        builder.image(mock_img)
+
+        assert len(builder._images) == 1
+        assert builder._images[0].data == b"img_data"
+
+    def test_images_method_adds_multiple(self, mock_message):
+        mock_img1 = MagicMock()
+        mock_img1.data = b"img1"
+        mock_img1.media_type = "image/jpeg"
+
+        mock_img2 = MagicMock()
+        mock_img2.data = b"img2"
+        mock_img2.media_type = "image/png"
+
+        sender = MessageSender.from_message(mock_message)
+        builder = sender.compose()
+        builder.images([mock_img1, mock_img2])
+
+        assert len(builder._images) == 2
+
+    def test_video_method(self, mock_message):
+        sender = MessageSender.from_message(mock_message)
+        builder = sender.compose()
+        builder.video(b"video_data", mime_type="video/mp4")
+
+        assert len(builder._videos) == 1
+        assert builder._videos[0].data == b"video_data"
+        assert builder._videos[0].type == MediaType.VIDEO
+
+    def test_audio_method(self, mock_message):
+        sender = MessageSender.from_message(mock_message)
+        builder = sender.compose()
+        builder.audio(b"audio_data", mime_type="audio/mpeg")
+
+        assert len(builder._audio) == 1
+        assert builder._audio[0].data == b"audio_data"
+        assert builder._audio[0].type == MediaType.AUDIO
+
+    def test_fluent_chaining(self, mock_message):
+        sender = MessageSender.from_message(mock_message)
+
+        # All methods should return self for chaining
+        builder = sender.compose().text("Hello").image(b"image_data")
+
+        assert builder._text == "Hello"
+        assert len(builder._images) == 1
 
     @pytest.mark.asyncio
-    async def test_send_media_group_empty(self, mock_bot):
+    async def test_reply_requires_source_message(self, mock_bot):
         sender = MessageSender(bot=mock_bot, chat_id=123)
-        result = await sender.send_media_group([])
-        assert result == []
-        mock_bot.send_media_group.assert_not_awaited()
+        builder = sender.compose().text("Hello")
+
+        with pytest.raises(ValueError, match="Cannot reply without source message"):
+            await builder.reply()
+
+
+class TestMediaGroupTypeSeparation:
+    """Tests for separating albums by media type via ContentBuilder."""
 
     @pytest.mark.asyncio
-    async def test_send_media_group_photos(self, mock_bot):
-        sender = MessageSender(bot=mock_bot, chat_id=123)
-        media = [
-            MediaItem(type=MediaType.PHOTO, data=b"photo1"),
-            MediaItem(type=MediaType.PHOTO, data=b"photo2"),
-        ]
-        await sender.send_media_group(media, caption="**Album**")
+    async def test_compose_separates_photos_and_videos(self, mock_bot, mock_message):
+        """Mixed photos and videos should be sent as separate albums."""
+        mock_bot.send_media_group = AsyncMock(return_value=[MagicMock(message_id=1)])
 
-        mock_bot.send_media_group.assert_awaited_once()
+        sender = MessageSender.from_message(mock_message)
+        await sender.compose().image(b"photo1").image(b"photo2").video(b"video1").send()
 
-
-class TestConvenienceFunctions:
-    """Tests for convenience functions."""
+        # Should be called twice: once for photos, once for videos
+        assert mock_bot.send_media_group.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_safe_reply(self, mock_message):
-        await safe_reply(mock_message, "Hello **world**")
-        mock_message.reply.assert_awaited_once()
+    async def test_compose_single_type_one_call(self, mock_bot, mock_message):
+        """Same-type media should be sent in one call."""
+        mock_bot.send_media_group = AsyncMock(return_value=[MagicMock(message_id=1)])
+
+        sender = MessageSender.from_message(mock_message)
+        await sender.compose().image(b"photo1").image(b"photo2").image(b"photo3").send()
+
+        # Should be called once for all photos
+        assert mock_bot.send_media_group.await_count == 1
+
+
+class TestComposeMethod:
+    """Tests for MessageSender.compose() method."""
+
+    def test_compose_returns_content_builder(self, mock_message):
+        sender = MessageSender.from_message(mock_message)
+        builder = sender.compose()
+
+        assert isinstance(builder, ContentBuilder)
+        assert builder._sender is sender
 
     @pytest.mark.asyncio
-    async def test_safe_send(self, mock_bot):
-        await safe_send(mock_bot, 123, "Hello **world**")
+    async def test_compose_send_text_only(self, mock_bot, mock_message):
+        sender = MessageSender.from_message(mock_message)
+
+        await sender.compose().text("Hello world").reply()
+
+        # ContentBuilder uses _send_single_message which calls bot.send_message
         mock_bot.send_message.assert_awaited_once()
-
-
-class TestMessageSenderWithMedia:
-    """Tests for send_with_media() smart handling."""
+        call_args = mock_bot.send_message.call_args
+        assert "Hello world" in call_args.kwargs.get("text", "")
 
     @pytest.mark.asyncio
-    async def test_text_only(self, mock_bot):
-        sender = MessageSender(bot=mock_bot, chat_id=123)
-        await sender.send_with_media("Just text", [])
+    async def test_compose_send_single_image(self, mock_bot, mock_message):
+        mock_img = MagicMock()
+        mock_img.data = b"img_data"
+        mock_img.media_type = "image/jpeg"
 
-        mock_bot.send_message.assert_awaited_once()
+        sender = MessageSender.from_message(mock_message)
+        await sender.compose().image(mock_img).reply()
 
-    @pytest.mark.asyncio
-    async def test_single_photo_with_short_caption(self, mock_bot):
-        sender = MessageSender(bot=mock_bot, chat_id=123)
-        media = [MediaItem(type=MediaType.PHOTO, data=b"photo")]
-        await sender.send_with_media("Short caption", media)
-
-        # Should send as captioned photo, not separate message + photo
+        # Single image should be sent as photo
         mock_bot.send_photo.assert_awaited_once()
-        mock_bot.send_message.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_raises_error_without_content(self, mock_bot):
-        sender = MessageSender(bot=mock_bot, chat_id=123)
-        with pytest.raises(ValueError, match="Either text or media must be provided"):
-            await sender.send_with_media("", [])

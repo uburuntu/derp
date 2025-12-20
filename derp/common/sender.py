@@ -3,6 +3,9 @@
 MessageSender provides a consistent interface for sending messages to Telegram
 with automatic markdown-to-HTML conversion, text chunking for long messages,
 and fallback to plain text on errors.
+
+ContentBuilder provides a fluent API for composing mixed-content messages
+(text, images, videos, audio) and sending them with proper Telegram API handling.
 """
 
 from __future__ import annotations
@@ -10,11 +13,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any, Self
 
 import logfire
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     BufferedInputFile,
     InlineKeyboardMarkup,
@@ -23,13 +25,65 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 from aiogram.utils.media_group import MediaGroupBuilder
+from pydantic_ai import BinaryContent
 
-from derp.common.sanitize import sanitize_for_telegram, strip_html_tags
+from derp.common.sanitize import sanitize_for_telegram
+
+if TYPE_CHECKING:
+    from pydantic_ai import BinaryImage
 
 # Telegram limits
 MAX_MESSAGE_LENGTH = 4096
 MAX_CAPTION_LENGTH = 1024
 MAX_ALBUM_SIZE = 10
+
+
+def _filename_from_mime(mime_type: str, idx: int = 1, prefix: str = "file") -> str:
+    """Generate a filename from a MIME type.
+
+    Args:
+        mime_type: MIME type string (e.g., "image/jpeg", "video/mp4").
+        idx: Index for numbered filenames (e.g., "image_1.jpg").
+        prefix: Filename prefix (default: "file").
+
+    Returns:
+        Generated filename with appropriate extension.
+    """
+    mime_lower = mime_type.lower()
+
+    # Image types
+    if "jpeg" in mime_lower or "jpg" in mime_lower:
+        return f"{prefix}_{idx}.jpg"
+    if "png" in mime_lower:
+        return f"{prefix}_{idx}.png"
+    if "gif" in mime_lower:
+        return f"{prefix}_{idx}.gif"
+    if "webp" in mime_lower:
+        return f"{prefix}_{idx}.webp"
+
+    # Video types
+    if "mp4" in mime_lower or "video" in mime_lower:
+        return f"{prefix}_{idx}.mp4"
+    if "webm" in mime_lower:
+        return f"{prefix}_{idx}.webm"
+
+    # Audio types
+    if "mpeg" in mime_lower or "mp3" in mime_lower:
+        return f"{prefix}_{idx}.mp3"
+    if "ogg" in mime_lower:
+        return f"{prefix}_{idx}.ogg"
+    if "wav" in mime_lower:
+        return f"{prefix}_{idx}.wav"
+
+    # Default based on category
+    if mime_lower.startswith("image/"):
+        return f"{prefix}_{idx}.jpg"
+    if mime_lower.startswith("video/"):
+        return f"{prefix}_{idx}.mp4"
+    if mime_lower.startswith("audio/"):
+        return f"{prefix}_{idx}.mp3"
+
+    return f"{prefix}_{idx}.bin"
 
 
 class MediaType(str, Enum):
@@ -54,6 +108,28 @@ class MediaItem:
     filename: str | None = None
     mime_type: str | None = None
 
+    @classmethod
+    def from_binary_image(cls, image: BinaryImage, idx: int = 1) -> MediaItem:
+        """Create a MediaItem from a pydantic-ai BinaryImage."""
+        return cls(
+            type=MediaType.PHOTO,
+            data=image.data,
+            filename=_filename_from_mime(image.media_type, idx, "image"),
+            mime_type=image.media_type,
+        )
+
+    @classmethod
+    def from_binary_content(
+        cls, content: BinaryContent, media_type: MediaType, idx: int = 1
+    ) -> MediaItem:
+        """Create a MediaItem from a pydantic-ai BinaryContent."""
+        return cls(
+            type=media_type,
+            data=content.data,
+            filename=_filename_from_mime(content.media_type, idx, media_type.value),
+            mime_type=content.media_type,
+        )
+
     def to_input_file(self) -> BufferedInputFile | str:
         """Convert to aiogram input file or return file_id/URL string."""
         if isinstance(self.data, bytes):
@@ -65,6 +141,8 @@ class MediaItem:
 
     def _default_filename(self) -> str:
         """Generate default filename based on type."""
+        if self.mime_type:
+            return _filename_from_mime(self.mime_type, 1, self.type.value)
         ext_map = {
             MediaType.PHOTO: "jpg",
             MediaType.VIDEO: "mp4",
@@ -79,6 +157,186 @@ class MediaItem:
 
 
 ReplyMarkup = InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | None
+
+
+@dataclass
+class ContentBuilder:
+    """Fluent builder for composing mixed-content messages.
+
+    Accumulates text, images, videos, and audio, then sends everything
+    with proper Telegram API handling (albums grouped by type, chunking, etc.).
+
+    Usage:
+        await sender.compose().text("Hello").images(result.images).reply()
+        await sender.compose().text("Caption").video(video_bytes).reply()
+    """
+
+    _sender: MessageSender
+    _text: str | None = field(default=None, repr=False)
+    _images: list[MediaItem] = field(default_factory=list, repr=False)
+    _videos: list[MediaItem] = field(default_factory=list, repr=False)
+    _audio: list[MediaItem] = field(default_factory=list, repr=False)
+    _documents: list[MediaItem] = field(default_factory=list, repr=False)
+    _reply_markup: ReplyMarkup = field(default=None, repr=False)
+
+    def text(self, text: str) -> Self:
+        """Set the text content (also used as caption for media)."""
+        self._text = text
+        return self
+
+    def image(
+        self, image: BinaryImage | BinaryContent | bytes, mime_type: str = "image/jpeg"
+    ) -> Self:
+        """Add a single image."""
+        if isinstance(image, bytes):
+            self._images.append(
+                MediaItem(
+                    type=MediaType.PHOTO,
+                    data=image,
+                    filename=_filename_from_mime(
+                        mime_type, len(self._images) + 1, "image"
+                    ),
+                    mime_type=mime_type,
+                )
+            )
+        else:
+            self._images.append(
+                MediaItem(
+                    type=MediaType.PHOTO,
+                    data=image.data,
+                    filename=_filename_from_mime(
+                        image.media_type, len(self._images) + 1, "image"
+                    ),
+                    mime_type=image.media_type,
+                )
+            )
+        return self
+
+    def images(self, images: list[BinaryImage] | list[bytes]) -> Self:
+        """Add multiple images."""
+        for img in images:
+            self.image(img)
+        return self
+
+    def video(self, video: BinaryContent | bytes, mime_type: str = "video/mp4") -> Self:
+        """Add a single video."""
+        if isinstance(video, bytes):
+            self._videos.append(
+                MediaItem(
+                    type=MediaType.VIDEO,
+                    data=video,
+                    filename=_filename_from_mime(
+                        mime_type, len(self._videos) + 1, "video"
+                    ),
+                    mime_type=mime_type,
+                )
+            )
+        else:
+            self._videos.append(
+                MediaItem(
+                    type=MediaType.VIDEO,
+                    data=video.data,
+                    filename=_filename_from_mime(
+                        video.media_type, len(self._videos) + 1, "video"
+                    ),
+                    mime_type=video.media_type,
+                )
+            )
+        return self
+
+    def audio(
+        self, audio: BinaryContent | bytes, mime_type: str = "audio/mpeg"
+    ) -> Self:
+        """Add a single audio file."""
+        if isinstance(audio, bytes):
+            self._audio.append(
+                MediaItem(
+                    type=MediaType.AUDIO,
+                    data=audio,
+                    filename=_filename_from_mime(
+                        mime_type, len(self._audio) + 1, "audio"
+                    ),
+                    mime_type=mime_type,
+                )
+            )
+        else:
+            self._audio.append(
+                MediaItem(
+                    type=MediaType.AUDIO,
+                    data=audio.data,
+                    filename=_filename_from_mime(
+                        audio.media_type, len(self._audio) + 1, "audio"
+                    ),
+                    mime_type=audio.media_type,
+                )
+            )
+        return self
+
+    def document(
+        self,
+        document: BinaryContent | bytes,
+        mime_type: str = "application/octet-stream",
+    ) -> Self:
+        """Add a document."""
+        if isinstance(document, bytes):
+            self._documents.append(
+                MediaItem(
+                    type=MediaType.DOCUMENT,
+                    data=document,
+                    filename=_filename_from_mime(
+                        mime_type, len(self._documents) + 1, "document"
+                    ),
+                    mime_type=mime_type,
+                )
+            )
+        else:
+            self._documents.append(
+                MediaItem(
+                    type=MediaType.DOCUMENT,
+                    data=document.data,
+                    filename=_filename_from_mime(
+                        document.media_type, len(self._documents) + 1, "document"
+                    ),
+                    mime_type=document.media_type,
+                )
+            )
+        return self
+
+    def markup(self, reply_markup: ReplyMarkup) -> Self:
+        """Set the reply markup."""
+        self._reply_markup = reply_markup
+        return self
+
+    async def send(self, reply_to: Message | None = None) -> Message | list[Message]:
+        """Send the accumulated content.
+
+        Sending strategy:
+        1. If only text: send as text message(s) with chunking
+        2. If single media + short text: send as captioned media
+        3. If multiple media: send as album(s) with caption on first
+        4. Different media types are sent as separate albums
+
+        Returns:
+            The last sent Message, or list of all Messages.
+        """
+        return await self._sender._send_composed_content(
+            text=self._text,
+            images=self._images,
+            videos=self._videos,
+            audio=self._audio,
+            documents=self._documents,
+            reply_to=reply_to,
+            reply_markup=self._reply_markup,
+        )
+
+    async def reply(self) -> Message | list[Message]:
+        """Reply to the source message with the accumulated content."""
+        if self._sender._source_message is None:
+            raise ValueError(
+                "Cannot reply without source message. "
+                "Use ContentBuilder.send() instead."
+            )
+        return await self.send(reply_to=self._sender._source_message)
 
 
 def _split_text(text: str, max_len: int = MAX_MESSAGE_LENGTH) -> list[str]:
@@ -184,6 +442,14 @@ class MessageSender:
             **kwargs,
         )
 
+    def compose(self) -> ContentBuilder:
+        """Create a ContentBuilder for composing mixed-content messages.
+
+        Usage:
+            await sender.compose().text("Hello").images(images).reply()
+        """
+        return ContentBuilder(_sender=self)
+
     # -------------------------------------------------------------------------
     # Internal helpers
     # -------------------------------------------------------------------------
@@ -266,30 +532,14 @@ class MessageSender:
         reply_to_message_id: int | None = None,
         reply_markup: ReplyMarkup = None,
     ) -> Message:
-        """Send a single message with HTML fallback on parse error."""
-        try:
-            return await self.bot.send_message(
-                **self._common_send_kwargs,
-                text=text,
-                parse_mode="HTML",
-                reply_to_message_id=reply_to_message_id,
-                reply_markup=reply_markup,
-            )
-        except TelegramBadRequest as exc:
-            if "can't parse entities" in exc.message.lower():
-                logfire.warning(
-                    "html_parse_failed_fallback",
-                    error=exc.message,
-                    text_preview=text[:100] if text else None,
-                )
-                return await self.bot.send_message(
-                    **self._common_send_kwargs,
-                    text=strip_html_tags(text) if text else "",
-                    parse_mode=None,
-                    reply_to_message_id=reply_to_message_id,
-                    reply_markup=reply_markup,
-                )
-            raise
+        """Send a single message (HTML fallback handled by middleware)."""
+        return await self.bot.send_message(
+            **self._common_send_kwargs,
+            text=text,
+            parse_mode="HTML",
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+        )
 
     async def _send_captioned_media(
         self,
@@ -303,50 +553,21 @@ class MessageSender:
     ) -> Message | list[Message]:
         """Generic sender for captioned media (photo, video, audio).
 
-        Handles:
-        - Caption preparation and splitting at 1024 chars
-        - HTML parse error fallback to plain text
-        - Overflow text as follow-up messages
-
-        Args:
-            send_method: Bot method to call (e.g., self.bot.send_photo).
-            media_key: Parameter name for the media (e.g., "photo", "video").
-            media_file: The file to send.
-            caption: Optional caption text.
-            reply_to: Optional message to reply to.
-            reply_markup: Optional keyboard markup.
-
-        Returns:
-            Single Message or list[Message] if caption was split.
+        Handles caption preparation and splitting at 1024 chars.
+        HTML parse error fallback is handled by ResilientRequestMiddleware.
         """
         media_caption, overflow_text = self._prepare_caption(caption)
         sent_messages: list[Message] = []
 
-        send_kwargs = {
+        msg = await send_method(
             **self._common_send_kwargs,
-            media_key: media_file,
-            "caption": media_caption,
-            "parse_mode": "HTML" if media_caption else None,
-            "reply_to_message_id": reply_to.message_id if reply_to else None,
-            "reply_markup": reply_markup if not overflow_text else None,
-        }
-
-        try:
-            msg = await send_method(**send_kwargs)
-            sent_messages.append(msg)
-        except TelegramBadRequest as exc:
-            if "can't parse entities" in exc.message.lower() and media_caption:
-                logfire.warning(
-                    "html_parse_failed_fallback",
-                    error=exc.message,
-                    media_type=media_key,
-                )
-                send_kwargs["caption"] = strip_html_tags(media_caption)
-                send_kwargs["parse_mode"] = None
-                msg = await send_method(**send_kwargs)
-                sent_messages.append(msg)
-            else:
-                raise
+            **{media_key: media_file},
+            caption=media_caption,
+            parse_mode="HTML" if media_caption else None,
+            reply_to_message_id=reply_to.message_id if reply_to else None,
+            reply_markup=reply_markup if not overflow_text else None,
+        )
+        sent_messages.append(msg)
 
         if overflow_text:
             overflow_msgs = await self._send_overflow_messages(
@@ -429,49 +650,21 @@ class MessageSender:
             is_first = i == 0
             is_last = i == len(chunks) - 1
 
-            try:
-                if is_first:
-                    last_message = await self._source_message.reply(
-                        text=chunk,
-                        parse_mode="HTML",
-                        reply_markup=reply_markup if is_last else None,
-                        disable_notification=self.disable_notification,
-                    )
-                else:
-                    last_message = await self._send_single_message(
-                        chunk,
-                        reply_to_message_id=last_message.message_id
-                        if last_message
-                        else None,
-                        reply_markup=reply_markup if is_last else None,
-                    )
-            except TelegramBadRequest as exc:
-                if "can't parse entities" in exc.message.lower():
-                    logfire.warning(
-                        "html_parse_failed_fallback",
-                        error=exc.message,
-                        text_preview=chunk[:100] if chunk else None,
-                    )
-                    plain_chunk = strip_html_tags(chunk)
-                    if is_first:
-                        last_message = await self._source_message.reply(
-                            text=plain_chunk,
-                            parse_mode=None,
-                            reply_markup=reply_markup if is_last else None,
-                            disable_notification=self.disable_notification,
-                        )
-                    else:
-                        last_message = await self.bot.send_message(
-                            **self._common_send_kwargs,
-                            text=plain_chunk,
-                            parse_mode=None,
-                            reply_to_message_id=last_message.message_id
-                            if last_message
-                            else None,
-                            reply_markup=reply_markup if is_last else None,
-                        )
-                else:
-                    raise
+            if is_first:
+                last_message = await self._source_message.reply(
+                    text=chunk,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup if is_last else None,
+                    disable_notification=self.disable_notification,
+                )
+            else:
+                last_message = await self._send_single_message(
+                    chunk,
+                    reply_to_message_id=last_message.message_id
+                    if last_message
+                    else None,
+                    reply_markup=reply_markup if is_last else None,
+                )
 
         return last_message  # type: ignore[return-value]
 
@@ -486,17 +679,9 @@ class MessageSender:
         *,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> Message | bool:
-        """Edit a message's text.
+        """Edit a message's text (HTML fallback handled by middleware).
 
         Note: Editing does not support chunking - text must fit in one message.
-
-        Args:
-            message: The message to edit.
-            text: The new text (markdown will be converted to HTML).
-            reply_markup: Optional inline keyboard markup.
-
-        Returns:
-            The edited Message or True for inline messages.
         """
         prepared_text = self._prepare_text(text)
 
@@ -504,25 +689,11 @@ class MessageSender:
         if len(prepared_text) > MAX_MESSAGE_LENGTH:
             prepared_text = prepared_text[: MAX_MESSAGE_LENGTH - 3] + "..."
 
-        try:
-            return await message.edit_text(
-                text=prepared_text,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-            )
-        except TelegramBadRequest as exc:
-            if "can't parse entities" in exc.message.lower():
-                logfire.warning(
-                    "html_parse_failed_fallback",
-                    error=exc.message,
-                    text_preview=prepared_text[:100] if prepared_text else None,
-                )
-                return await message.edit_text(
-                    text=strip_html_tags(prepared_text),
-                    parse_mode=None,
-                    reply_markup=reply_markup,
-                )
-            raise
+        return await message.edit_text(
+            text=prepared_text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
 
     async def edit_inline(
         self,
@@ -531,211 +702,123 @@ class MessageSender:
         *,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> bool:
-        """Edit an inline message's text.
+        """Edit an inline message's text (HTML fallback handled by middleware).
 
         Note: Editing does not support chunking - text must fit in one message.
-
-        Args:
-            inline_message_id: The inline message ID.
-            text: The new text (markdown will be converted to HTML).
-            reply_markup: Optional inline keyboard markup.
-
-        Returns:
-            True on success.
         """
         prepared_text = self._prepare_text(text)
 
         if len(prepared_text) > MAX_MESSAGE_LENGTH:
             prepared_text = prepared_text[: MAX_MESSAGE_LENGTH - 3] + "..."
 
-        try:
-            return await self.bot.edit_message_text(
-                text=prepared_text,
-                inline_message_id=inline_message_id,
-                parse_mode="HTML",
+        return await self.bot.edit_message_text(
+            text=prepared_text,
+            inline_message_id=inline_message_id,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+
+    # -------------------------------------------------------------------------
+    # Composed content (for ContentBuilder)
+    # -------------------------------------------------------------------------
+
+    async def _send_composed_content(
+        self,
+        *,
+        text: str | None,
+        images: list[MediaItem],
+        videos: list[MediaItem],
+        audio: list[MediaItem],
+        documents: list[MediaItem],
+        reply_to: Message | None,
+        reply_markup: ReplyMarkup,
+    ) -> Message | list[Message]:
+        """Internal method to send composed content from ContentBuilder.
+
+        Sending strategy:
+        1. If only text: send as text message(s) with chunking
+        2. If single media + short text: send as captioned media
+        3. If multiple media of same type: send as album with caption
+        4. Different media types are sent as separate albums
+        """
+        all_sent: list[Message] = []
+        has_media = images or videos or audio or documents
+
+        # Case 1: Text only
+        if not has_media:
+            if not text:
+                raise ValueError("No content to send")
+            prepared = self._prepare_text(text)
+            chunks = _split_text(prepared)
+            reply_to_id = reply_to.message_id if reply_to else None
+
+            for i, chunk in enumerate(chunks):
+                is_last = i == len(chunks) - 1
+                msg = await self._send_single_message(
+                    chunk,
+                    reply_to_message_id=reply_to_id,
+                    reply_markup=reply_markup if is_last else None,
+                )
+                all_sent.append(msg)
+                reply_to_id = msg.message_id
+
+            return all_sent[-1] if len(all_sent) == 1 else all_sent
+
+        # Case 2: Single media with short caption
+        total_media = len(images) + len(videos) + len(audio) + len(documents)
+        if total_media == 1 and (not text or len(text) <= MAX_CAPTION_LENGTH):
+            # Find the single item
+            item = (images or videos or audio or documents)[0]
+            send_method, media_key = {
+                MediaType.PHOTO: (self.bot.send_photo, "photo"),
+                MediaType.VIDEO: (self.bot.send_video, "video"),
+                MediaType.AUDIO: (self.bot.send_audio, "audio"),
+                MediaType.DOCUMENT: (self.bot.send_document, "document"),
+            }.get(item.type, (self.bot.send_document, "document"))
+
+            return await self._send_captioned_media(
+                send_method,
+                media_key,
+                item.to_input_file(),
+                caption=text,
+                reply_to=reply_to,
                 reply_markup=reply_markup,
             )
-        except TelegramBadRequest as exc:
-            if "can't parse entities" in exc.message.lower():
-                logfire.warning(
-                    "html_parse_failed_fallback_inline",
-                    error=exc.message,
-                    text_preview=prepared_text[:100] if prepared_text else None,
-                )
-                return await self.bot.edit_message_text(
-                    text=strip_html_tags(prepared_text),
-                    inline_message_id=inline_message_id,
-                    parse_mode=None,
-                    reply_markup=reply_markup,
-                )
-            raise
 
-    # -------------------------------------------------------------------------
-    # Media: Photo
-    # -------------------------------------------------------------------------
+        # Case 3: Multiple media - send as albums by type, caption on first
+        last_reply_to = reply_to
+        caption_used = False
 
-    async def send_photo(
-        self,
-        photo: bytes | str,
-        *,
-        caption: str | None = None,
-        filename: str = "photo.jpg",
-        reply_to: Message | None = None,
-        reply_markup: ReplyMarkup = None,
-    ) -> Message | list[Message]:
-        """Send a photo with optional caption.
+        # Send each media type as separate album(s)
+        for media_list in [images, videos, audio, documents]:
+            if not media_list:
+                continue
 
-        If caption exceeds 1024 characters, overflow is sent as follow-up messages.
-        """
-        input_file = (
-            BufferedInputFile(file=photo, filename=filename)
-            if isinstance(photo, bytes)
-            else photo
-        )
-        return await self._send_captioned_media(
-            self.bot.send_photo,
-            "photo",
-            input_file,
-            caption=caption,
-            reply_to=reply_to,
-            reply_markup=reply_markup,
-        )
+            album_caption = text if not caption_used else None
+            msgs = await self._send_typed_album(
+                media_list,
+                caption=album_caption,
+                reply_to=last_reply_to,
+            )
+            if msgs:
+                all_sent.extend(msgs)
+                last_reply_to = msgs[-1]
+                if album_caption:
+                    caption_used = True
 
-    async def reply_photo(
-        self,
-        photo: bytes | str,
-        *,
-        caption: str | None = None,
-        filename: str = "photo.jpg",
-        reply_markup: ReplyMarkup = None,
-    ) -> Message | list[Message]:
-        """Reply with a photo."""
-        return await self.send_photo(
-            photo,
-            caption=caption,
-            filename=filename,
-            reply_to=self._source_message,
-            reply_markup=reply_markup,
-        )
+        return all_sent[-1] if len(all_sent) == 1 else all_sent
 
-    # -------------------------------------------------------------------------
-    # Media: Video
-    # -------------------------------------------------------------------------
-
-    async def send_video(
-        self,
-        video: bytes | str,
-        *,
-        caption: str | None = None,
-        filename: str = "video.mp4",
-        reply_to: Message | None = None,
-        reply_markup: ReplyMarkup = None,
-    ) -> Message | list[Message]:
-        """Send a video with optional caption.
-
-        If caption exceeds 1024 characters, overflow is sent as follow-up messages.
-        """
-        input_file = (
-            BufferedInputFile(file=video, filename=filename)
-            if isinstance(video, bytes)
-            else video
-        )
-        return await self._send_captioned_media(
-            self.bot.send_video,
-            "video",
-            input_file,
-            caption=caption,
-            reply_to=reply_to,
-            reply_markup=reply_markup,
-        )
-
-    async def reply_video(
-        self,
-        video: bytes | str,
-        *,
-        caption: str | None = None,
-        filename: str = "video.mp4",
-        reply_markup: ReplyMarkup = None,
-    ) -> Message | list[Message]:
-        """Reply with a video."""
-        return await self.send_video(
-            video,
-            caption=caption,
-            filename=filename,
-            reply_to=self._source_message,
-            reply_markup=reply_markup,
-        )
-
-    # -------------------------------------------------------------------------
-    # Media: Audio
-    # -------------------------------------------------------------------------
-
-    async def send_audio(
-        self,
-        audio: bytes | str,
-        *,
-        caption: str | None = None,
-        filename: str = "audio.mp3",
-        reply_to: Message | None = None,
-        reply_markup: ReplyMarkup = None,
-    ) -> Message | list[Message]:
-        """Send an audio file with optional caption.
-
-        If caption exceeds 1024 characters, overflow is sent as follow-up messages.
-        """
-        input_file = (
-            BufferedInputFile(file=audio, filename=filename)
-            if isinstance(audio, bytes)
-            else audio
-        )
-        return await self._send_captioned_media(
-            self.bot.send_audio,
-            "audio",
-            input_file,
-            caption=caption,
-            reply_to=reply_to,
-            reply_markup=reply_markup,
-        )
-
-    async def reply_audio(
-        self,
-        audio: bytes | str,
-        *,
-        caption: str | None = None,
-        filename: str = "audio.mp3",
-        reply_markup: ReplyMarkup = None,
-    ) -> Message | list[Message]:
-        """Reply with an audio file."""
-        return await self.send_audio(
-            audio,
-            caption=caption,
-            filename=filename,
-            reply_to=self._source_message,
-            reply_markup=reply_markup,
-        )
-
-    # -------------------------------------------------------------------------
-    # Media groups
-    # -------------------------------------------------------------------------
-
-    async def send_media_group(
+    async def _send_typed_album(
         self,
         media: list[MediaItem],
         *,
         caption: str | None = None,
         reply_to: Message | None = None,
+        reply_markup: ReplyMarkup = None,
     ) -> list[Message]:
-        """Send a media group (album).
+        """Send a homogeneous media album (HTML fallback handled by middleware).
 
-        If caption exceeds 1024 characters, overflow is sent as follow-up messages.
-
-        Args:
-            media: List of MediaItem objects.
-            caption: Optional caption for the first item.
-            reply_to: Optional message to reply to.
-
-        Returns:
-            List of sent Messages.
+        Splits into chunks of MAX_ALBUM_SIZE (10) if needed.
         """
         if not media:
             return []
@@ -743,7 +826,6 @@ class MessageSender:
         album_caption, overflow_text = self._prepare_caption(caption)
         all_messages: list[Message] = []
 
-        # Process in chunks of 10 (Telegram limit)
         for chunk_idx, chunk_start in enumerate(range(0, len(media), MAX_ALBUM_SIZE)):
             chunk = media[chunk_start : chunk_start + MAX_ALBUM_SIZE]
             builder = MediaGroupBuilder(
@@ -763,285 +845,22 @@ class MessageSender:
                         builder.add_document(media=input_file)
                     case _:
                         logfire.warning(
-                            "unsupported_media_group_type",
+                            "unsupported_album_type",
                             type=item.type.value,
                         )
                         continue
 
-            try:
-                messages = await self.bot.send_media_group(
-                    **self._common_send_kwargs,
-                    media=builder.build(),
-                    reply_to_message_id=reply_to.message_id if reply_to else None,
-                )
-                all_messages.extend(messages)
-            except TelegramBadRequest as exc:
-                if "can't parse entities" in exc.message.lower() and album_caption:
-                    # Rebuild with plain caption
-                    builder_plain = MediaGroupBuilder(
-                        caption=strip_html_tags(album_caption)
-                        if chunk_idx == 0
-                        else None
-                    )
-                    for item in chunk:
-                        input_file = item.to_input_file()
-                        match item.type:
-                            case MediaType.PHOTO:
-                                builder_plain.add_photo(media=input_file)
-                            case MediaType.VIDEO:
-                                builder_plain.add_video(media=input_file)
-                            case MediaType.AUDIO:
-                                builder_plain.add_audio(media=input_file)
-                            case MediaType.DOCUMENT:
-                                builder_plain.add_document(media=input_file)
+            messages = await self.bot.send_media_group(
+                **self._common_send_kwargs,
+                media=builder.build(),
+                reply_to_message_id=reply_to.message_id if reply_to else None,
+            )
+            all_messages.extend(messages)
 
-                    messages = await self.bot.send_media_group(
-                        **self._common_send_kwargs,
-                        media=builder_plain.build(),
-                        reply_to_message_id=reply_to.message_id if reply_to else None,
-                    )
-                    all_messages.extend(messages)
-                else:
-                    raise
-
-        # Send overflow text as follow-up messages
         if overflow_text and all_messages:
             overflow_msgs = await self._send_overflow_messages(
-                overflow_text, all_messages[-1]
+                overflow_text, all_messages[-1], reply_markup=reply_markup
             )
             all_messages.extend(overflow_msgs)
 
         return all_messages
-
-    # -------------------------------------------------------------------------
-    # Mixed content
-    # -------------------------------------------------------------------------
-
-    async def send_with_media(
-        self,
-        text: str,
-        media: list[MediaItem],
-        *,
-        reply_to: Message | None = None,
-        reply_markup: ReplyMarkup = None,
-    ) -> Message | list[Message]:
-        """Send text with optional media attachments.
-
-        Smart handling:
-        - Single media + short text (<=1024): sends as captioned media
-        - Multiple media: sends as media group with caption on first
-        - Text only: sends as text message(s), auto-chunked
-        - Text + media (long text): sends text first, then media
-
-        Args:
-            text: The message text.
-            media: List of media items to attach.
-            reply_to: Optional message to reply to.
-            reply_markup: Optional keyboard markup.
-
-        Returns:
-            The sent Message(s).
-        """
-        prepared_text = self._prepare_text(text) if text else ""
-
-        # No media - just send text (with chunking)
-        if not media:
-            if not prepared_text:
-                raise ValueError("Either text or media must be provided")
-
-            chunks = _split_text(prepared_text)
-            sent_messages: list[Message] = []
-            reply_to_id = reply_to.message_id if reply_to else None
-
-            for i, chunk in enumerate(chunks):
-                is_last = i == len(chunks) - 1
-                msg = await self._send_single_message(
-                    chunk,
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=reply_markup if is_last else None,
-                )
-                sent_messages.append(msg)
-                reply_to_id = msg.message_id
-
-            return sent_messages[0] if len(sent_messages) == 1 else sent_messages
-
-        # Single media + short text - send as captioned media
-        if len(media) == 1 and len(prepared_text) <= MAX_CAPTION_LENGTH:
-            item = media[0]
-            input_file = item.to_input_file()
-
-            send_method = {
-                MediaType.PHOTO: self.bot.send_photo,
-                MediaType.VIDEO: self.bot.send_video,
-                MediaType.AUDIO: self.bot.send_audio,
-                MediaType.VOICE: self.bot.send_voice,
-                MediaType.ANIMATION: self.bot.send_animation,
-                MediaType.DOCUMENT: self.bot.send_document,
-                MediaType.VIDEO_NOTE: self.bot.send_video_note,
-                MediaType.STICKER: self.bot.send_sticker,
-            }.get(item.type)
-
-            if not send_method:
-                logfire.warning("unknown_media_type", type=item.type.value)
-                return await self.send(prepared_text, reply_markup=reply_markup)
-
-            # Handle media types that don't support captions
-            if item.type in {MediaType.STICKER, MediaType.VIDEO_NOTE}:
-                sent: list[Message] = []
-                if prepared_text:
-                    text_msg = await self._send_single_message(
-                        prepared_text,
-                        reply_to_message_id=reply_to.message_id if reply_to else None,
-                    )
-                    sent.append(text_msg)
-                    reply_to = text_msg
-
-                media_key = (
-                    "sticker" if item.type == MediaType.STICKER else "video_note"
-                )
-                media_msg = await send_method(
-                    **self._common_send_kwargs,
-                    **{media_key: input_file},
-                    reply_markup=reply_markup or self.reply_markup,
-                )
-                sent.append(media_msg)
-                return sent[-1] if len(sent) == 1 else sent
-
-            media_key = {
-                MediaType.PHOTO: "photo",
-                MediaType.VIDEO: "video",
-                MediaType.AUDIO: "audio",
-                MediaType.VOICE: "voice",
-                MediaType.ANIMATION: "animation",
-                MediaType.DOCUMENT: "document",
-            }.get(item.type, "document")
-
-            try:
-                return await send_method(
-                    **self._common_send_kwargs,
-                    **{media_key: input_file},
-                    caption=prepared_text or None,
-                    parse_mode="HTML" if prepared_text else None,
-                    reply_to_message_id=reply_to.message_id if reply_to else None,
-                    reply_markup=reply_markup or self.reply_markup,
-                )
-            except TelegramBadRequest as exc:
-                if "can't parse entities" in exc.message.lower() and prepared_text:
-                    return await send_method(
-                        **self._common_send_kwargs,
-                        **{media_key: input_file},
-                        caption=strip_html_tags(prepared_text) or None,
-                        parse_mode=None,
-                        reply_to_message_id=reply_to.message_id if reply_to else None,
-                        reply_markup=reply_markup or self.reply_markup,
-                    )
-                raise
-
-        # Multiple media or long text - send text first, then media group
-        sent_messages: list[Message] = []
-
-        if prepared_text:
-            text_chunks = _split_text(prepared_text)
-            last_msg: Message | None = None
-            for chunk in text_chunks:
-                last_msg = await self._send_single_message(
-                    chunk,
-                    reply_to_message_id=reply_to.message_id
-                    if reply_to and last_msg is None
-                    else (last_msg.message_id if last_msg else None),
-                    reply_markup=None,  # Markup on media
-                )
-                sent_messages.append(last_msg)
-            reply_to = last_msg
-
-        # Group media by type for sending
-        groupable_media = [
-            m for m in media if m.type in {MediaType.PHOTO, MediaType.VIDEO}
-        ]
-        if groupable_media:
-            media_msgs = await self.send_media_group(
-                media=groupable_media,
-                reply_to=reply_to,
-            )
-            sent_messages.extend(media_msgs)
-
-        # Send non-groupable media individually
-        for item in media:
-            if item.type not in {MediaType.PHOTO, MediaType.VIDEO}:
-                input_file = item.to_input_file()
-                reply_to_id = sent_messages[-1].message_id if sent_messages else None
-
-                match item.type:
-                    case MediaType.AUDIO:
-                        msg = await self.bot.send_audio(
-                            **self._common_send_kwargs,
-                            audio=input_file,
-                            reply_to_message_id=reply_to_id,
-                        )
-                        sent_messages.append(msg)
-                    case MediaType.VOICE:
-                        msg = await self.bot.send_voice(
-                            **self._common_send_kwargs,
-                            voice=input_file,
-                            reply_to_message_id=reply_to_id,
-                        )
-                        sent_messages.append(msg)
-                    case MediaType.ANIMATION:
-                        msg = await self.bot.send_animation(
-                            **self._common_send_kwargs,
-                            animation=input_file,
-                            reply_to_message_id=reply_to_id,
-                        )
-                        sent_messages.append(msg)
-                    case MediaType.DOCUMENT:
-                        msg = await self.bot.send_document(
-                            **self._common_send_kwargs,
-                            document=input_file,
-                            reply_to_message_id=reply_to_id,
-                        )
-                        sent_messages.append(msg)
-                    case MediaType.STICKER:
-                        msg = await self.bot.send_sticker(
-                            **self._common_send_kwargs,
-                            sticker=input_file,
-                            reply_markup=reply_markup or self.reply_markup,
-                        )
-                        sent_messages.append(msg)
-                    case MediaType.VIDEO_NOTE:
-                        msg = await self.bot.send_video_note(
-                            **self._common_send_kwargs,
-                            video_note=input_file,
-                            reply_markup=reply_markup or self.reply_markup,
-                        )
-                        sent_messages.append(msg)
-
-        return sent_messages[-1] if len(sent_messages) == 1 else sent_messages
-
-
-# -----------------------------------------------------------------------------
-# Convenience functions
-# -----------------------------------------------------------------------------
-
-
-async def safe_reply(
-    message: Message,
-    text: str,
-    *,
-    reply_markup: ReplyMarkup = None,
-) -> Message:
-    """Convenience function to safely reply to a message with sanitized text."""
-    sender = MessageSender.from_message(message)
-    return await sender.reply(text, reply_markup=reply_markup)
-
-
-async def safe_send(
-    bot: Bot,
-    chat_id: int,
-    text: str,
-    *,
-    thread_id: int | None = None,
-    reply_markup: ReplyMarkup = None,
-) -> Message:
-    """Convenience function to safely send a message with sanitized text."""
-    sender = MessageSender(bot=bot, chat_id=chat_id, thread_id=thread_id)
-    return await sender.send(text, reply_markup=reply_markup)

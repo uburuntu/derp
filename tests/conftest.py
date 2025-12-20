@@ -946,10 +946,6 @@ def mock_sender(make_message):
         sender.reply = AsyncMock(return_value=MagicMock())
         sender.edit = AsyncMock(return_value=MagicMock())
         sender.edit_inline = AsyncMock(return_value=True)
-        sender.send_photo = AsyncMock(return_value=MagicMock())
-        sender.reply_photo = AsyncMock(return_value=MagicMock())
-        sender.send_media_group = AsyncMock(return_value=[MagicMock()])
-        sender.send_with_media = AsyncMock(return_value=MagicMock())
 
         for key, value in kwargs.items():
             setattr(sender, key, value)

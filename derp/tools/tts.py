@@ -21,14 +21,6 @@ from derp.tools.wrapper import credit_aware_tool
 TTS_MODEL = "gemini-2.5-pro-preview-tts"
 
 
-def _filename_for_mime(mime: str) -> str:
-    if "mpeg" in mime or "mp3" in mime:
-        return "tts.mp3"
-    if "ogg" in mime:
-        return "tts.ogg"
-    return "tts.wav"
-
-
 async def generate_and_send_tts(
     deps: AgentDeps,
     *,
@@ -61,11 +53,7 @@ async def generate_and_send_tts(
         raise RuntimeError("No audio returned from TTS model.")
 
     sender = MessageSender.from_message(deps.message)
-    await sender.reply_audio(
-        audio_bytes,
-        caption=text,
-        filename=_filename_for_mime(audio_mime),
-    )
+    await sender.compose().text(text).audio(audio_bytes, audio_mime).reply()
 
     logfire.info(
         "tts_done",
