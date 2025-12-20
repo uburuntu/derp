@@ -42,13 +42,15 @@ def _pick_veo_model(*, quality: str, model: str | None) -> str:
     return VEO_31_FAST
 
 
-async def _download_video_to_bytes(client: genai.Client, video: object) -> bytes:
+async def _download_video_to_bytes(client: genai.Client, video: types.Video) -> bytes:
     """Download a generated video to memory using async client.
 
     The google-genai SDK populates video.video_bytes after download().
     """
-    await client.aio.files.download(file=video)
-    return video.video_bytes
+    if video.video_bytes:
+        return video.video_bytes
+
+    return await client.aio.files.download(file=video)
 
 
 async def generate_and_send_video(
@@ -120,6 +122,8 @@ async def generate_and_send_video(
         raise RuntimeError("No videos were generated.")
 
     video_obj = generated[0].video
+    if not video_obj:
+        raise RuntimeError("No video was generated.")
     video_bytes = await _download_video_to_bytes(client, video_obj)
 
     sender = MessageSender.from_message(deps.message)
