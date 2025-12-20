@@ -789,16 +789,18 @@ class MessageSender:
         last_reply_to = reply_to
         caption_used = False
 
-        # Send each media type as separate album(s)
-        for media_list in [images, videos, audio, documents]:
-            if not media_list:
-                continue
+        # Collect non-empty media lists to determine which is last
+        media_lists = [m for m in [images, videos, audio, documents] if m]
 
+        # Send each media type as separate album(s)
+        for i, media_list in enumerate(media_lists):
+            is_last = i == len(media_lists) - 1
             album_caption = text if not caption_used else None
             msgs = await self._send_typed_album(
                 media_list,
                 caption=album_caption,
                 reply_to=last_reply_to,
+                reply_markup=reply_markup if is_last else None,
             )
             if msgs:
                 all_sent.extend(msgs)
@@ -862,5 +864,13 @@ class MessageSender:
                 overflow_text, all_messages[-1], reply_markup=reply_markup
             )
             all_messages.extend(overflow_msgs)
+        elif reply_markup and all_messages:
+            # Albums don't support reply_markup - send keyboard in a separate message
+            keyboard_msg = await self._send_single_message(
+                "\u2800",  # Braille pattern blank - invisible but valid
+                reply_to_message_id=all_messages[-1].message_id,
+                reply_markup=reply_markup,
+            )
+            all_messages.append(keyboard_msg)
 
         return all_messages
