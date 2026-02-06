@@ -320,6 +320,9 @@ derp/credits/
 - Logging: instrument decision points with `logfire` and include identifiers (chat_id, user_id, payload) for traceability.
 - Resilience: wrap network sends in try/except, degrade gracefully (e.g., fall back from media to text), and ensure auxiliary failures don't impact the core user flow.
 - Comments: keep comments purposeful (document intent/invariants); avoid restating obvious behavior that the code already conveys.
+- **Admin detection:** Check both `admin_rights` AND `creator` fields—channel owners have `creator=True` but may not have `admin_rights` populated.
+- **Error debugging:** Show original error alongside user-friendly message (e.g., `f"{friendly_msg} ({original_error})"`). Generic "unexpected error" messages hide root causes.
+- **MTProto APIs:** Don't assume convenience methods exist in client libraries. When in doubt, use raw API calls (e.g., `channels.GetAdminLog`) and check library docs via Context7.
 
 ## Major Libraries
 

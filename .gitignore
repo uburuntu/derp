@@ -165,3 +165,4 @@ secrets.yml
 .Trashes
 ehthumbs.db
 Thumbs.db
+.claude/settings.json
