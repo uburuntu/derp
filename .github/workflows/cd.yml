@@ -101,88 +101,91 @@ jobs:
           script: |
             set -e
             echo "=== Deployment starting ==="
-            
+
             # Authenticate with GitHub Container Registry
             echo "$GITHUB_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            
+
             # Pull new image FIRST (before stopping anything)
             echo "Pulling: $IMAGE"
             docker pull "$IMAGE"
-            
+
             # Check if current container exists
             CURRENT_EXISTS=$(docker ps -a -q --filter "name=^derp-bot$" 2>/dev/null || echo "")
-            
+
             if [ -n "$CURRENT_EXISTS" ]; then
-              echo "=== Stopping current container (prevents dual polling) ==="
-              
-              # Remove any leftover previous container
+              echo "=== Stopping current container ==="
               docker rm -f derp-bot-previous 2>/dev/null || true
-              
-              # Rename current to previous (for rollback)
               docker rename derp-bot derp-bot-previous 2>/dev/null || true
-              
-              # Stop and WAIT for complete stop (critical for Telegram polling)
               docker stop derp-bot-previous --time 10 2>/dev/null || true
-              
-              # Verify it's stopped
+
+              # Verify stopped (critical for Telegram long-polling — no dual polling)
               for i in 1 2 3; do
                 if docker ps -q --filter "name=derp-bot-previous" | grep -q .; then
                   echo "  Waiting for stop... ($i)"
                   sleep 2
                 else
-                  echo "  Previous container stopped ✓"
+                  echo "  Previous container stopped"
                   break
                 fi
               done
             fi
-            
+
             # Run database migrations
             echo "=== Running database migrations ==="
             docker run --rm \
               --env-file /opt/derp/.env.prod \
               "$IMAGE" \
-              alembic upgrade head
-            
-            # Start new container (old one is FULLY stopped now)
+              bunx drizzle-kit push --force
+
+            # Start new container
             echo "=== Starting new container ==="
             docker run -d \
               --name derp-bot \
               --restart unless-stopped \
               --env-file /opt/derp/.env.prod \
-              -e IS_DOCKER=true \
+              -p 127.0.0.1:8080:8080 \
               "$IMAGE"
-            
-            # Health check - wait for container to stabilize
-            echo "=== Health check ==="
-            sleep 5
-            
-            for i in 1 2 3 4 5 6; do
-              if docker ps --filter "name=^derp-bot$" --filter "status=running" | grep -q derp-bot; then
-                echo "  Check $i/6: Running ✓"
-              else
-                echo "  Check $i/6: Not running ✗"
-                echo "=== ROLLBACK ==="
-                docker stop derp-bot 2>/dev/null || true
-                docker rm derp-bot 2>/dev/null || true
-                
-                # Restore previous container
-                if docker ps -a -q --filter "name=derp-bot-previous" | grep -q .; then
-                  docker rename derp-bot-previous derp-bot
-                  docker start derp-bot
-                  echo "Rolled back to previous version"
-                fi
-                exit 1
-              fi
+
+            # Application-level health check — wait for /health to return 200
+            echo "=== Health check (waiting for healthy status) ==="
+            HEALTHY=false
+            for i in $(seq 1 12); do
               sleep 5
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/health 2>/dev/null || echo "000")
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "  Check $i/12: HTTP $HTTP_CODE — healthy"
+                HEALTHY=true
+                break
+              else
+                echo "  Check $i/12: HTTP $HTTP_CODE — waiting..."
+              fi
             done
-            
-            echo "=== SUCCESS ==="
-            # Cleanup old container and images
+
+            if [ "$HEALTHY" != "true" ]; then
+              echo "=== HEALTH CHECK FAILED — ROLLBACK ==="
+              echo "Container logs:"
+              docker logs derp-bot --tail 30 2>&1 || true
+
+              docker stop derp-bot 2>/dev/null || true
+              docker rm derp-bot 2>/dev/null || true
+
+              if docker ps -a -q --filter "name=derp-bot-previous" | grep -q .; then
+                docker rename derp-bot-previous derp-bot
+                docker start derp-bot
+                echo "Rolled back to previous version"
+              fi
+              exit 1
+            fi
+
+            # Show health response
+            echo "=== Health status ==="
+            curl -s http://127.0.0.1:8080/health | python3 -m json.tool 2>/dev/null || curl -s http://127.0.0.1:8080/health
+
+            # Cleanup
             docker rm derp-bot-previous 2>/dev/null || true
             docker image prune -f
-            
-            # Show status
-            docker ps --filter "name=derp-bot" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+
+            echo "=== DEPLOY SUCCESS ==="
 
       - name: Verify deployment
         uses: appleboy/ssh-action@v1
@@ -191,15 +194,19 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "=== Container Status ==="
+            echo "=== Container ==="
             docker ps --filter "name=derp-bot" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
             echo ""
+            echo "=== Health ==="
+            curl -s http://127.0.0.1:8080/health
+            echo ""
+            echo ""
             echo "=== Recent Logs ==="
-            docker logs derp-bot --tail 15 2>&1 || echo "No logs available"
+            docker logs derp-bot --tail 10 2>&1 || echo "No logs available"
 
       - name: Deployment summary
         run: |
-          echo "### ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "**Digest:** \`${{ needs.build.outputs.image_digest }}\`" >> $GITHUB_STEP_SUMMARY
