@@ -47,7 +47,8 @@ async function executeTTS(
 export const ttsTool: ToolDefinition<TTSParams> = {
 	name: "tts",
 	commands: ["/tts"],
-	description: "Convert text to a voice message",
+	description:
+		"Convert text to a voice message. Use this when the user asks to hear something, read aloud, narrate a story, or wants audio output.",
 	helpText: "tool-tts",
 	category: "media",
 	parameters: ttsParamsSchema,

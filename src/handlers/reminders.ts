@@ -47,6 +47,7 @@ remindersComposer.command("reminders", async (ctx) => {
 
 	await ctx.reply(`${lines.join("\n")}`, {
 		reply_markup: kb,
+		reply_to_message_id: ctx.message?.message_id,
 	});
 });
 

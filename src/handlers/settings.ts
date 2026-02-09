@@ -196,12 +196,16 @@ settingsComposer.command("settings", async (ctx) => {
 	const remAccess = ctx.dbChat.settings?.remindersAccess ?? "admins";
 
 	await ctx.reply(
-		`Settings\n\n` +
-			`Personality: ${personality}\n` +
-			`Language: ${lang}\n` +
-			`Memory access: ${memAccess}\n` +
-			`Reminders access: ${remAccess}`,
-		{ reply_markup: settingsMenu },
+		`⚙️ <b>Settings</b>\n\n` +
+			`<b>Personality:</b> ${personality}\n` +
+			`<b>Language:</b> ${lang}\n` +
+			`<b>Memory access:</b> ${memAccess}\n` +
+			`<b>Reminders access:</b> ${remAccess}`,
+		{
+			parse_mode: "HTML",
+			reply_markup: settingsMenu,
+			reply_to_message_id: ctx.message?.message_id,
+		},
 	);
 });
 

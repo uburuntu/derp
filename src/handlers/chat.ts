@@ -369,19 +369,24 @@ chatComposer.on("message", async (ctx) => {
 
 chatComposer.command("memory", async (ctx) => {
 	if (!ctx.dbChat) return;
+	const replyTo = ctx.message?.message_id;
 	const memory = ctx.dbChat.memory;
 	if (!memory) {
-		await ctx.reply(ctx.t("memory-none"));
+		await ctx.reply(ctx.t("memory-none"), { reply_to_message_id: replyTo });
 		return;
 	}
-	await ctx.reply(`${ctx.t("memory-none").replace(/.+/, "")}\n\n${memory}`);
+	await ctx.reply(`📝 <b>Chat Memory</b>\n\n${memory}`, {
+		parse_mode: "HTML",
+		reply_to_message_id: replyTo,
+	});
 });
 
 chatComposer.command("memory_set", async (ctx) => {
 	if (!ctx.dbChat) return;
+	const replyTo = ctx.message?.message_id;
 	const text = ctx.match;
 	if (!text) {
-		await ctx.reply(ctx.t("memory-usage"));
+		await ctx.reply(ctx.t("memory-usage"), { reply_to_message_id: replyTo });
 		return;
 	}
 
@@ -392,18 +397,21 @@ chatComposer.command("memory_set", async (ctx) => {
 			chatMember.status !== "administrator" &&
 			chatMember.status !== "creator"
 		) {
-			await ctx.reply(ctx.t("memory-admin-only", { action: "set" }));
+			await ctx.reply(ctx.t("memory-admin-only", { action: "set" }), {
+				reply_to_message_id: replyTo,
+			});
 			return;
 		}
 	}
 
 	const { updateChatMemory } = await import("../db/queries/chats");
 	await updateChatMemory(ctx.db, ctx.dbChat.id, text.slice(0, 4096));
-	await ctx.reply(ctx.t("memory-updated"));
+	await ctx.reply(ctx.t("memory-updated"), { reply_to_message_id: replyTo });
 });
 
 chatComposer.command("memory_clear", async (ctx) => {
 	if (!ctx.dbChat) return;
+	const replyTo = ctx.message?.message_id;
 
 	const settings = ctx.dbChat.settings;
 	if (settings?.memoryAccess === "admins" && ctx.chat?.type !== "private") {
@@ -412,14 +420,16 @@ chatComposer.command("memory_clear", async (ctx) => {
 			chatMember.status !== "administrator" &&
 			chatMember.status !== "creator"
 		) {
-			await ctx.reply(ctx.t("memory-admin-only", { action: "clear" }));
+			await ctx.reply(ctx.t("memory-admin-only", { action: "clear" }), {
+				reply_to_message_id: replyTo,
+			});
 			return;
 		}
 	}
 
 	const { updateChatMemory } = await import("../db/queries/chats");
 	await updateChatMemory(ctx.db, ctx.dbChat.id, null);
-	await ctx.reply(ctx.t("memory-cleared"));
+	await ctx.reply(ctx.t("memory-cleared"), { reply_to_message_id: replyTo });
 });
 
 chatComposer.command("derp", async (_ctx) => {
