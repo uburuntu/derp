@@ -2,6 +2,7 @@
 
 import { Composer } from "grammy";
 import type { DerpContext } from "../bot/context";
+import { MESSAGE_EFFECTS } from "../common/telegram";
 
 const startComposer = new Composer<DerpContext>();
 
@@ -16,7 +17,10 @@ startComposer.command("start", async (ctx) => {
 
 	const html = `👋 <b>${ctx.t("welcome")}</b>${bonusLine}\n\n${ctx.t("welcome-features")}`;
 
-	await ctx.reply(html, { parse_mode: "HTML" });
+	await ctx.reply(html, {
+		parse_mode: "HTML",
+		...(granted && { message_effect_id: MESSAGE_EFFECTS.party }),
+	});
 });
 
 startComposer.on("my_chat_member", async (ctx) => {

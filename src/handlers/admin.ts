@@ -253,6 +253,15 @@ adminComposer.command("admin", async (ctx) => {
 			break;
 		}
 
+		case "stars": {
+			const result = await ctx.api.getMyStarBalance();
+			await ctx.reply(
+				`⭐ <b>Bot Stars Balance</b>\n\nBalance: ${result.amount} ⭐`,
+				{ parse_mode: "HTML" },
+			);
+			break;
+		}
+
 		case "db": {
 			// /admin db — table row counts
 			const { sql } = await import("drizzle-orm");
@@ -383,6 +392,7 @@ adminComposer.command("admin", async (ctx) => {
 					"/admin user [userId] — Inspect user DB state\n" +
 					"/admin ledger [userId] — Last 10 transactions\n" +
 					"/admin tools — List registered tools with pricing\n" +
+					"/admin stars — Bot Stars balance\n" +
 					"/admin db — Table row counts\n" +
 					"/admin test — E2E smoke test (grants 100 credits)\n\n" +
 					"/refund &lt;userId&gt; &lt;chargeId&gt; — Refund a payment",

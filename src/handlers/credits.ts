@@ -6,6 +6,7 @@ import {
 	formatPaymentNotification,
 	notifyAdmins,
 } from "../common/admin-notify";
+import { MESSAGE_EFFECTS } from "../common/telegram";
 import { derpMetrics } from "../common/observability";
 import { getTopUpPack } from "../credits/packs";
 import { getSubscriptionPlan } from "../credits/subscriptions";
@@ -277,7 +278,7 @@ creditsComposer.on("message:successful_payment", async (ctx) => {
 		const msg = isRenewal
 			? `${plan.label} subscription renewed! ${plan.credits} credits added.`
 			: `Subscribed to ${plan.label}! ${plan.credits} credits added. Your subscription renews monthly.`;
-		await ctx.reply(msg);
+		await ctx.reply(msg, { message_effect_id: MESSAGE_EFFECTS.party });
 
 		await notifyAdmins(
 			formatPaymentNotification({
@@ -313,7 +314,9 @@ creditsComposer.on("message:successful_payment", async (ctx) => {
 				`pack:${chargeId}`,
 				{ packId: pack.id, stars: pack.stars },
 			);
-			await ctx.reply(`${pack.credits} credits added to this chat's pool!`);
+			await ctx.reply(`${pack.credits} credits added to this chat's pool!`, {
+				message_effect_id: MESSAGE_EFFECTS.party,
+			});
 			await notifyAdmins(
 				formatPaymentNotification({
 					type: "purchase",
@@ -337,7 +340,9 @@ creditsComposer.on("message:successful_payment", async (ctx) => {
 				`pack:${chargeId}`,
 				{ packId: pack.id, stars: pack.stars },
 			);
-			await ctx.reply(`${pack.credits} credits added to your balance!`);
+			await ctx.reply(`${pack.credits} credits added to your balance!`, {
+				message_effect_id: MESSAGE_EFFECTS.party,
+			});
 			await notifyAdmins(
 				formatPaymentNotification({
 					type: "purchase",

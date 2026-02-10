@@ -21,6 +21,14 @@ export function escapeMarkdownV2(text: string): string {
 	return text.replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 }
 
+/** Telegram message effect IDs for sendMessage */
+export const MESSAGE_EFFECTS = {
+	party: "5046509860389126442",
+	fire: "5107584321108051014",
+	heart: "5159385139981059251",
+	thumbsUp: "5104841245755180586",
+} as const;
+
 /** Build display name from DB user fields */
 export function displayNameFromDb(
 	firstName: string,
