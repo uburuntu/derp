@@ -1,11 +1,13 @@
 /** Credit gate — wraps tool execution with credit checks and deductions */
 
+import { notifyAdmins } from "../common/admin-notify";
 import {
 	derpMetrics,
 	logger,
 	recordHandledFailure,
 	withSpan,
 } from "../common/observability";
+import { escapeHtml } from "../common/sanitize";
 import type { CreditCheckResult } from "../credits/types";
 import { ModelTier } from "../llm/registry";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types";
@@ -200,12 +202,9 @@ export async function executeWithCreditGate(
 				result = await tool.execute(params, ctx);
 			} catch (err) {
 				const error = err instanceof Error ? err.message : String(err);
-				await ctx.creditService.refundDeduction(
-					creditResult,
-					tool.name,
-					idempotencyKey,
-					{ error },
-				);
+				await refundToolDeduction(ctx, creditResult, tool, idempotencyKey, {
+					error,
+				});
 				span.setAttribute("derp.tool.outcome", "error");
 				derpMetrics.toolCalls.add(1, {
 					tool: tool.name,
@@ -240,12 +239,9 @@ export async function executeWithCreditGate(
 					tool: tool.name,
 					outcome: "error",
 				});
-				await ctx.creditService.refundDeduction(
-					creditResult,
-					tool.name,
-					idempotencyKey,
-					{ error: result.error },
-				);
+				await refundToolDeduction(ctx, creditResult, tool, idempotencyKey, {
+					error: result.error,
+				});
 				recordHandledFailure("tool", result.error, { tool: tool.name });
 				logger.error("tool_returned_error", {
 					tool: tool.name,
@@ -274,6 +270,48 @@ export async function executeWithCreditGate(
 			};
 		},
 	);
+}
+
+async function refundToolDeduction(
+	ctx: ToolContext,
+	creditResult: CreditCheckResult,
+	tool: ToolDefinition,
+	idempotencyKey: string | undefined,
+	meta: Record<string, unknown>,
+): Promise<void> {
+	try {
+		await ctx.creditService.refundDeduction(
+			creditResult,
+			tool.name,
+			idempotencyKey,
+			meta,
+		);
+	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		recordHandledFailure("tool_refund", error, {
+			tool: tool.name,
+			reason_code: "refund_failed",
+		});
+		logger.error("tool_refund_failed", {
+			tool: tool.name,
+			idempotencyKey,
+			source: creditResult.source,
+			credits: creditResult.creditsToDeduct,
+			error,
+		});
+
+		if (creditResult.creditsToDeduct > 0) {
+			await notifyAdmins(
+				`⚠️ <b>Tool refund failed</b>\n\nTool: <code>${escapeHtml(tool.name)}</code>\nCredits: ${creditResult.creditsToDeduct}\nSource: <code>${escapeHtml(creditResult.source)}</code>\nIdempotency: <code>${escapeHtml(idempotencyKey ?? "none")}</code>\nReason: ${escapeHtml(error)}`,
+			).catch((notifyErr) => {
+				logger.error("tool_refund_admin_notify_failed", {
+					tool: tool.name,
+					error:
+						notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+				});
+			});
+		}
+	}
 }
 
 function buildUpsellMessage(tool: ToolDefinition): string {

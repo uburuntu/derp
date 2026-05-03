@@ -372,7 +372,7 @@ class ToolRegistry {
 					},
 					replyMedia: media,
 					threadId: ctx.message?.message_thread_id ?? null,
-					replyToMessageId: ctx.message?.message_id ?? null,
+					replyToMessageId: ctx.message?.reply_to_message?.message_id ?? null,
 					idempotencyKey:
 						ctx.chat && ctx.message
 							? `tool:${tool.name}:cmd:${ctx.chat.id}:${ctx.message.message_id}`

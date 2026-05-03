@@ -27,6 +27,14 @@ inlineComposer.on("inline_query", async (ctx) => {
 	}
 
 	const responseText = await getInlineAnswer(query, ctx);
+	if (!responseText) {
+		await ctx.answerInlineQuery([], {
+			cache_time: 1,
+			is_personal: true,
+		});
+		return;
+	}
+
 	const result = InlineQueryResultBuilder.article(
 		`derp:${ctx.inlineQuery.id}`,
 		ctx.t("inline-title"),
@@ -41,9 +49,9 @@ inlineComposer.on("inline_query", async (ctx) => {
 async function getInlineAnswer(
 	query: string,
 	ctx: DerpContext,
-): Promise<string> {
+): Promise<string | null> {
 	if (query.length < INLINE_MIN_QUERY_LENGTH) {
-		return ctx.t("inline-placeholder");
+		return null;
 	}
 
 	const userId = ctx.from?.id ?? 0;
@@ -62,7 +70,7 @@ async function getInlineAnswer(
 		...userEntries.map(([, entry]) => entry.lastRequestedAt),
 	);
 	if (Date.now() - lastRequestAt < INLINE_THROTTLE_MS) {
-		return ctx.t("inline-wait");
+		return null;
 	}
 
 	const text = await generateInlineAnswer(query, ctx);

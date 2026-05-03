@@ -194,15 +194,31 @@ export function recordHandledFailure(
 	attrs: Record<string, string | number | boolean> = {},
 ): void {
 	const span = trace.getActiveSpan();
+	const metricAttrs = boundedFailureMetricAttrs(subsystem, attrs);
 	if (span) {
 		handledFailureSpans.add(span);
 		span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
 		span.setAttribute("derp.failure.subsystem", subsystem);
 		span.setAttribute("derp.failure.reason", reason);
+		for (const [key, value] of Object.entries(attrs)) {
+			span.setAttribute(`derp.failure.${key}`, value);
+		}
 	}
-	derpMetrics?.handledFailures.add(1, { subsystem, ...attrs });
+	derpMetrics?.handledFailures.add(1, metricAttrs);
 }
 
 export function spanHasHandledFailure(span: Span): boolean {
 	return handledFailureSpans.has(span);
+}
+
+function boundedFailureMetricAttrs(
+	subsystem: string,
+	attrs: Record<string, string | number | boolean>,
+): Record<string, string | number | boolean> {
+	const bounded: Record<string, string | number | boolean> = { subsystem };
+	for (const key of ["tool", "model", "outcome", "source", "reason_code"]) {
+		const value = attrs[key];
+		if (value != null) bounded[key] = value;
+	}
+	return bounded;
 }

@@ -926,14 +926,7 @@ export async function applySubscriptionPayment(
 				.where(eq(ledger.idempotencyKey, idempotencyKey))
 				.limit(1);
 
-			const existingExpiryText = existing?.meta?.subscriptionExpiresAt;
-			const existingExpiry =
-				typeof existingExpiryText === "string"
-					? new Date(existingExpiryText)
-					: subscriptionExpiresAt;
-			if (!Number.isNaN(existingExpiry.getTime())) {
-				await ensureSubscriptionExpiry(tx, userId, planId, existingExpiry);
-			}
+			await recomputeActiveSubscriptionIn(tx, userId);
 
 			return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
 		}
@@ -958,8 +951,6 @@ export async function applySubscriptionPayment(
 			.update(users)
 			.set({
 				credits: sql`${users.credits} + ${amount}`,
-				subscriptionTier: planId,
-				subscriptionExpiresAt,
 			})
 			.where(eq(users.id, userId))
 			.returning({ credits: users.credits });
@@ -986,34 +977,10 @@ export async function applySubscriptionPayment(
 				target: subscriptionPeriods.telegramChargeId,
 			});
 
+		await recomputeActiveSubscriptionIn(tx, userId);
+
 		return { balanceAfter: updated.credits, applied: true };
 	});
-}
-
-async function ensureSubscriptionExpiry(
-	tx: CreditTransaction,
-	userId: string,
-	planId: string,
-	expiresAt: Date,
-): Promise<void> {
-	const [userRow] = await tx
-		.select({ subscriptionExpiresAt: users.subscriptionExpiresAt })
-		.from(users)
-		.where(eq(users.id, userId))
-		.limit(1);
-
-	if (
-		!userRow?.subscriptionExpiresAt ||
-		userRow.subscriptionExpiresAt < expiresAt
-	) {
-		await tx
-			.update(users)
-			.set({
-				subscriptionTier: planId,
-				subscriptionExpiresAt: expiresAt,
-			})
-			.where(eq(users.id, userId));
-	}
 }
 
 async function recomputeActiveSubscriptionIn(

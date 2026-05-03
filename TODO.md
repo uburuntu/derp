@@ -15,8 +15,8 @@ This file is the persistent harness for the five-loop hardening pass. If the ses
 ## Loop Status
 
 - [x] Loop 1: Initial cross-functional review and fixes.
-- [ ] Loop 2: Re-review after first fixes. In progress.
-- [ ] Loop 3: Re-review after second fixes.
+- [x] Loop 2: Re-review after first fixes.
+- [x] Loop 3: Re-review after second fixes.
 - [ ] Loop 4: Re-review after third fixes.
 - [ ] Loop 5: Final hardening review and fixes.
 
@@ -54,6 +54,18 @@ Items below are added by reviewer loop. Keep P0/P1 only here; P2+ notes can stay
 - [x] P1 L2-OPS-3: CD can leave production stopped if migrations fail after the old container is stopped; migrate before stop or trap rollback.
 - [x] P1 L2-OPS-4: Retention must scrub inactive reminder user text/prompt/meta, not only messages and ledger metadata.
 - [x] P1 L2-OPS-5: Readiness must verify critical migration/index state, including `ledger_payment_receipt_charge_unique`.
+- [x] P1 L3-UX-1: Inline mode must not expose throttle/placeholder copy as selectable inline results while users type.
+- [x] P1 L3-UX-2: `/remind list` short IDs must be cancellable, or cancellation must provide inline buttons/full IDs.
+- [x] P1 L3-UX-3: Scheduled reminders must not fail permanently because the original setup command was deleted; use actual reply targets only and fallback when Telegram rejects a reply target.
+- [x] P1 L3-DATA-1: Successful payment DB application must be separated from post-commit replies/admin notifications/metrics to avoid false manual reconciliation after credits were already applied.
+- [x] P1 L3-DATA-2: Subscription payments must not downgrade/shorten the user projection when payment updates arrive out of order; recompute projection from active durable subscription periods.
+- [x] P1 L3-CODE-1: Auto-called tool failures must pass sanitized user-facing failure text back to the LLM, not raw internal/provider errors.
+- [x] P1 L3-CODE-2: Tool refund failures after provider/tool failure must be isolated, logged, and admin-notified instead of masking the original failure.
+- [x] P1 L3-OPS-1: CD must roll back the previous container on new-container start errors, not only failed health checks.
+- [x] P1 L3-OPS-2: Reminder delivery failures must make scheduler health fail instead of returning green after marking the row failed.
+- [x] P1 L3-OPS-3: Reminder retry must not duplicate sends after Telegram delivery succeeds but DB state update fails.
+- [x] P1 L3-OPS-4: Handled failure metrics must avoid high-cardinality IDs while keeping IDs on spans/logs.
+- [ ] P1 L3-TEST-1: Add Postgres-backed tests for durable payment/refund/quota paths.
 
 ## Loop 1
 
@@ -98,7 +110,7 @@ Status: complete.
 
 ## Loop 2
 
-Status: in progress.
+Status: complete.
 
 ### Reviewers
 
@@ -135,3 +147,43 @@ Status: in progress.
 - 2026-05-03: `bun run check` passed after donation parity work.
 - 2026-05-03: `bun run check` passed after Loop 2 operational hardening.
 - 2026-05-03: `bun run check` passed after durable payment/subscription model.
+
+## Loop 3
+
+Status: complete. `P1 L3-TEST-1` is carried forward because it needs a Postgres-backed integration harness.
+
+### Reviewers
+
+- Product/Telegram UX reviewer: complete.
+- Data model/pricing reviewer: complete.
+- Observability/ops reviewer: complete.
+- Code quality/regression reviewer: complete.
+
+### P0/P1 Findings
+
+- No P0 findings.
+- UX P1: inline typing still produced selectable throttle placeholders; `/remind list` exposed short IDs that `/remind cancel` could not use; reminder delivery could fail if the original reply target was deleted.
+- Data/pricing P1: successful payment DB commits shared a `try/catch` with notifications, creating false reconciliation alerts after applied payments; out-of-order subscription payments could shorten the user projection despite durable subscription periods.
+- Code P1: auto-called tool failures returned raw error text to the LLM; refund failures after paid tool failure were not isolated/admin-notified; durable credit paths still need Postgres-backed tests.
+- Ops P1: deploy rollback did not cover all start-time errors; scheduler health stayed green for terminal reminder delivery failures; reminder retry could duplicate sends after successful Telegram delivery; handled failure metric labels could include high-cardinality IDs.
+
+### Execution
+
+- Changed inline mode to answer empty while typing/throttled and only expose real generated/cached answers as selectable articles.
+- Made `/remind cancel` accept unique prefixes from `/remind list`, and stopped storing the setup command as the future reply target; reminders now only use an actual replied-to message.
+- Added Telegram reminder delivery fallback: if a stored reply target is unavailable, send in the same topic without replying.
+- Split reminder delivery retry from DB state retry so a sent reminder is not sent again when marking delivered fails; terminal delivery/state failures now surface to scheduler health.
+- Added delivery metadata with Telegram message IDs on successful reminders.
+- Added scheduler failure counters and kept failure IDs out of handled-failure metric labels.
+- Added CD `ERR` trap rollback after the previous container is stopped.
+- Separated successful payment DB application from post-commit replies/admin notifications/metrics; post-commit failures now report "payment applied, notification failed" to admins only.
+- Recomputed subscription projection from durable active subscription periods after subscription payment insert/duplicate handling.
+- Returned sanitized tool failure text to the LLM for auto-called tools.
+- Isolated tool refund failures with Logfire/admin notification.
+
+### Verification
+
+- 2026-05-03: `ctx7 docs /websites/core_telegram_bots_api ...sendMessage reply_to_message_id...` confirmed Telegram `sendMessage` returns a `Message` and reply-target behavior/fallback options.
+- 2026-05-03: `ctx7 docs /grammyjs/website ...answerInlineQuery empty results...` confirmed grammY can answer inline queries with an empty result list and build article results with `InlineQueryResultBuilder`.
+- 2026-05-03: `ctx7 docs /drizzle-team/drizzle-orm-docs ...transaction insert update select...` confirmed Drizzle transaction/update/select patterns used for subscription projection.
+- 2026-05-03: `bun run check` passed after Loop 3 reliability/UX/payment hardening.

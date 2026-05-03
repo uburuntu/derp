@@ -34,6 +34,8 @@ interface SchedulerStatus {
 	lastSkippedAt: string | null;
 	lastDueCount: number | null;
 	lastRetentionAt: string | null;
+	consecutiveFailureTicks: number;
+	lastFailureAt: string | null;
 }
 
 const schedulerStatus: SchedulerStatus = {
@@ -48,6 +50,8 @@ const schedulerStatus: SchedulerStatus = {
 	lastSkippedAt: null,
 	lastDueCount: null,
 	lastRetentionAt: null,
+	consecutiveFailureTicks: 0,
+	lastFailureAt: null,
 };
 
 /** Start the reminder scheduler */
@@ -144,9 +148,12 @@ async function processAndRecord(
 		await runRetentionIfDue(db);
 		schedulerStatus.lastSuccessAt = new Date().toISOString();
 		schedulerStatus.lastError = null;
+		schedulerStatus.consecutiveFailureTicks = 0;
 	} catch (err) {
 		schedulerStatus.lastError =
 			err instanceof Error ? err.message : String(err);
+		schedulerStatus.lastFailureAt = new Date().toISOString();
+		schedulerStatus.consecutiveFailureTicks += 1;
 		throw err;
 	}
 }
@@ -166,6 +173,7 @@ async function processReminders(
 	isProcessing = true;
 	schedulerStatus.processing = true;
 	schedulerStatus.processingStartedAt = new Date().toISOString();
+	let failureCount = 0;
 	try {
 		const released = await releaseStaleProcessingReminders(
 			db,
@@ -197,9 +205,10 @@ async function processReminders(
 						if (!claimed) continue;
 						await executeReminder(db, bot, claimed, isStartup);
 					} catch (err) {
+						failureCount += 1;
 						const error = err instanceof Error ? err.message : String(err);
 						recordHandledFailure("scheduler", error, {
-							reminderId: reminder.id,
+							reason_code: "reminder_execution",
 						});
 						logger.error("scheduler_reminder_failed", {
 							reminderId: reminder.id,
@@ -210,6 +219,11 @@ async function processReminders(
 				}
 			},
 		);
+		if (failureCount > 0) {
+			throw new Error(
+				`${failureCount} reminder(s) failed during scheduler tick`,
+			);
+		}
 	} finally {
 		isProcessing = false;
 		schedulerStatus.processing = false;

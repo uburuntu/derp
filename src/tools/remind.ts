@@ -92,11 +92,7 @@ function getReminderMetadata(ctx: ToolContext): {
 	const metadataCtx = ctx as ReminderMetadataContext;
 	return {
 		threadId: getOptionalNumber(metadataCtx, ["threadId", "messageThreadId"]),
-		replyToMessageId: getOptionalNumber(metadataCtx, [
-			"replyToMessageId",
-			"triggerMessageId",
-			"messageId",
-		]),
+		replyToMessageId: getOptionalNumber(metadataCtx, ["replyToMessageId"]),
 	};
 }
 
@@ -289,7 +285,9 @@ async function handleList(ctx: ToolContext): Promise<ToolResult> {
 		return `${i + 1}. [${r.id.slice(0, 8)}] ${r.description} — ${schedule}`;
 	});
 
-	return { text: `Active reminders:\n${lines.join("\n")}` };
+	return {
+		text: `Active reminders:\n${lines.join("\n")}\n\nCancel with /remind cancel <shown id>.`,
+	};
 }
 
 async function handleCancel(
@@ -303,7 +301,25 @@ async function handleCancel(
 		};
 	}
 
-	const reminder = await getReminderById(ctx.db, params.reminderId);
+	const reminders = await getRemindersForChat(
+		ctx.db,
+		ctx.chat.id,
+		undefined,
+		ctx.threadId ?? null,
+	);
+	const matches = reminders.filter(
+		(r) =>
+			r.id === params.reminderId || r.id.startsWith(params.reminderId ?? ""),
+	);
+	if (matches.length > 1) {
+		return {
+			text: "That reminder ID is ambiguous. Use a longer prefix from /remind list.",
+			error: "Ambiguous ID",
+		};
+	}
+
+	const reminder =
+		matches[0] ?? (await getReminderById(ctx.db, params.reminderId));
 	if (!reminder) {
 		return { text: "Reminder not found.", error: "Not found" };
 	}
@@ -323,7 +339,7 @@ async function handleCancel(
 		};
 	}
 
-	await cancelReminder(ctx.db, params.reminderId);
+	await cancelReminder(ctx.db, reminder.id);
 	return { text: `Reminder "${reminder.description}" cancelled.` };
 }
 

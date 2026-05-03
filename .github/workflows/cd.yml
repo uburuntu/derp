@@ -101,6 +101,27 @@ jobs:
           script: |
             set -e
             echo "=== Deployment starting ==="
+            ROLLBACK_ARMED=false
+
+            rollback_previous() {
+              if [ "$ROLLBACK_ARMED" != "true" ]; then
+                return
+              fi
+              ROLLBACK_ARMED=false
+              trap - ERR
+              echo "=== ERROR — ROLLBACK ==="
+              docker logs derp-bot --tail 30 2>&1 || true
+              docker stop derp-bot 2>/dev/null || true
+              docker rm derp-bot 2>/dev/null || true
+
+              if docker ps -a -q --filter "name=derp-bot-previous" | grep -q .; then
+                docker rename derp-bot-previous derp-bot 2>/dev/null || true
+                docker start derp-bot
+                echo "Rolled back to previous version"
+              fi
+            }
+
+            trap 'rollback_previous' ERR
 
             # Authenticate with GitHub Container Registry
             echo "$GITHUB_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -126,6 +147,7 @@ jobs:
               docker rm -f derp-bot-previous 2>/dev/null || true
               docker rename derp-bot derp-bot-previous 2>/dev/null || true
               docker stop derp-bot-previous --time 10 2>/dev/null || true
+              ROLLBACK_ARMED=true
 
               # Verify stopped (critical for Telegram long-polling — no dual polling)
               for i in 1 2 3; do
@@ -165,17 +187,7 @@ jobs:
 
             if [ "$HEALTHY" != "true" ]; then
               echo "=== HEALTH CHECK FAILED — ROLLBACK ==="
-              echo "Container logs:"
-              docker logs derp-bot --tail 30 2>&1 || true
-
-              docker stop derp-bot 2>/dev/null || true
-              docker rm derp-bot 2>/dev/null || true
-
-              if docker ps -a -q --filter "name=derp-bot-previous" | grep -q .; then
-                docker rename derp-bot-previous derp-bot
-                docker start derp-bot
-                echo "Rolled back to previous version"
-              fi
+              rollback_previous
               exit 1
             fi
 
@@ -184,6 +196,8 @@ jobs:
             curl -s http://127.0.0.1:8080/health | python3 -m json.tool 2>/dev/null || curl -s http://127.0.0.1:8080/health
 
             # Cleanup
+            ROLLBACK_ARMED=false
+            trap - ERR
             docker rm derp-bot-previous 2>/dev/null || true
             docker image prune -f
 

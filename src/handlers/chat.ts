@@ -181,7 +181,7 @@ async function buildToolContext(
 		},
 		replyMedia,
 		threadId: ctx.message?.message_thread_id ?? null,
-		replyToMessageId: ctx.message?.message_id ?? null,
+		replyToMessageId: ctx.message?.reply_to_message?.message_id ?? null,
 	};
 }
 
@@ -437,7 +437,11 @@ chatComposer.on("message", async (ctx) => {
 					return { result: "Response sent directly to chat." };
 				}
 				if (toolResult.error) {
-					return { error: toolResult.error };
+					return {
+						result:
+							toolResult.text ??
+							"I couldn't complete that tool request. Please try again later.",
+					};
 				}
 				return { result: toolResult.text ?? "Done." };
 			},

@@ -27,6 +27,7 @@ import { GoogleLLMProvider } from "../llm/providers/google";
 import { parseCronToNextDate } from "./cron";
 
 const LLM_REMINDER_COST = 1;
+const REPLY_TARGET_ERROR = /reply|message to reply|replied message/i;
 
 async function reserveLlmReminderCredit(
 	db: Database,
@@ -90,12 +91,15 @@ async function sendReminderMessage(
 	chat: Chat,
 	reminder: Reminder,
 	delayNote: string,
-): Promise<void> {
-	const messageOptions = {
-		message_thread_id: reminder.threadId ?? undefined,
-		reply_to_message_id: reminder.replyToMessageId ?? undefined,
-	};
+): Promise<number> {
+	const text = await buildReminderMessageText(reminder, delayNote);
+	return sendTelegramMessageWithFallback(bot, chat, reminder, text);
+}
 
+async function buildReminderMessageText(
+	reminder: Reminder,
+	delayNote: string,
+): Promise<string> {
 	if (reminder.usesLlm && reminder.prompt) {
 		const provider = new GoogleLLMProvider(
 			getGoogleApiKeys(config),
@@ -116,42 +120,83 @@ async function sendReminderMessage(
 			throw new Error("LLM reminder returned an empty response");
 		}
 
-		await bot.api.sendMessage(
-			chat.telegramId,
-			`🔔 ${responseText}${delayNote}`,
-			messageOptions,
-		);
-		return;
+		return `🔔 ${responseText}${delayNote}`;
 	}
 
 	if (reminder.message) {
-		await bot.api.sendMessage(
-			chat.telegramId,
-			`🔔 ${reminder.message}${delayNote}`,
-			messageOptions,
-		);
-		return;
+		return `🔔 ${reminder.message}${delayNote}`;
 	}
 
-	await bot.api.sendMessage(
-		chat.telegramId,
-		`🔔 Reminder: ${reminder.description}${delayNote}`,
-		messageOptions,
-	);
+	return `🔔 Reminder: ${reminder.description}${delayNote}`;
 }
 
-async function markDelivered(db: Database, reminder: Reminder): Promise<void> {
+async function sendTelegramMessageWithFallback(
+	bot: Bot<DerpContext>,
+	chat: Chat,
+	reminder: Reminder,
+	text: string,
+): Promise<number> {
+	const threadedOptions = {
+		message_thread_id: reminder.threadId ?? undefined,
+		reply_to_message_id: reminder.replyToMessageId ?? undefined,
+	};
+
+	try {
+		const sent = await bot.api.sendMessage(
+			chat.telegramId,
+			text,
+			threadedOptions,
+		);
+		return sent.message_id;
+	} catch (err) {
+		if (!reminder.replyToMessageId || !isMissingReplyTargetError(err)) {
+			throw err;
+		}
+
+		logger.warn("reminder_reply_target_missing", {
+			reminderId: reminder.id,
+			replyToMessageId: reminder.replyToMessageId,
+			error: errorText(err),
+		});
+		const sent = await bot.api.sendMessage(chat.telegramId, text, {
+			message_thread_id: reminder.threadId ?? undefined,
+		});
+		return sent.message_id;
+	}
+}
+
+async function markDelivered(
+	db: Database,
+	reminder: Reminder,
+	telegramMessageId: number,
+): Promise<void> {
+	const meta = {
+		...(reminder.meta ?? {}),
+		lastDelivery: {
+			telegramMessageId,
+			deliveredAt: new Date().toISOString(),
+		},
+	};
+
 	if (reminder.isRecurring && reminder.cronExpression) {
 		const nextFire = parseCronToNextDate(reminder.cronExpression);
 		if (nextFire) {
-			await updateNextFireAt(db, reminder.id, nextFire);
+			await updateNextFireAt(db, reminder.id, nextFire, meta);
 		} else {
-			await markReminderCompleted(db, reminder.id);
+			await markReminderCompleted(db, reminder.id, meta);
 		}
 		return;
 	}
 
-	await markReminderCompleted(db, reminder.id);
+	await markReminderCompleted(db, reminder.id, meta);
+}
+
+function isMissingReplyTargetError(err: unknown): boolean {
+	return REPLY_TARGET_ERROR.test(errorText(err).toLowerCase());
+}
+
+function errorText(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
 }
 
 function recordReminderFired(reminder: Reminder, isStartup: boolean): void {
@@ -183,16 +228,12 @@ export async function executeReminder(
 	}
 
 	if (reminder.usesLlm) {
-		const messageOptions = {
-			message_thread_id: reminder.threadId ?? undefined,
-			reply_to_message_id: reminder.replyToMessageId ?? undefined,
-		};
-
 		if (reminder.isRecurring) {
-			await bot.api.sendMessage(
-				chat.telegramId,
+			await sendTelegramMessageWithFallback(
+				bot,
+				chat,
+				reminder,
 				"🔔 Recurring LLM reminders are disabled. Create a plain recurring reminder or a one-time LLM reminder.",
-				messageOptions,
 			);
 			await markReminderFailed(
 				db,
@@ -215,10 +256,11 @@ export async function executeReminder(
 			reminder,
 		);
 		if (!reservation.ok) {
-			await bot.api.sendMessage(
-				chat.telegramId,
+			await sendTelegramMessageWithFallback(
+				bot,
+				chat,
+				reminder,
 				`🔔 LLM reminder skipped: ${reservation.reason}. Use /buy to top up.`,
-				messageOptions,
 			);
 			await markReminderFailed(db, reminder.id, reservation.reason);
 			return;
@@ -227,12 +269,11 @@ export async function executeReminder(
 
 	const delayNote = isStartup ? "\n(delayed — bot was restarting)" : "";
 
+	let sentMessageId: number;
 	try {
-		await sendReminderMessage(bot, chat, reminder, delayNote);
-		await markDelivered(db, reminder);
-		recordReminderFired(reminder, isStartup);
+		sentMessageId = await sendReminderMessage(bot, chat, reminder, delayNote);
 	} catch (err) {
-		const errorMsg = err instanceof Error ? err.message : String(err);
+		const errorMsg = errorText(err);
 		logger.error("reminder_execution_failed", {
 			reminderId: reminder.id,
 			error: errorMsg,
@@ -240,16 +281,43 @@ export async function executeReminder(
 
 		// Retry once
 		try {
-			await sendReminderMessage(bot, chat, reminder, delayNote);
-			await markDelivered(db, reminder);
-			recordReminderFired(reminder, isStartup);
+			sentMessageId = await sendReminderMessage(bot, chat, reminder, delayNote);
 		} catch (retryErr) {
-			const retryMsg =
-				retryErr instanceof Error ? retryErr.message : String(retryErr);
+			const retryMsg = errorText(retryErr);
 			await markReminderFailed(
 				db,
 				reminder.id,
 				`${errorMsg}; retry: ${retryMsg}`,
+			);
+			throw new Error(
+				`Reminder delivery failed: ${errorMsg}; retry: ${retryMsg}`,
+			);
+		}
+	}
+
+	try {
+		await markDelivered(db, reminder, sentMessageId);
+		recordReminderFired(reminder, isStartup);
+	} catch (err) {
+		const errorMsg = errorText(err);
+		logger.error("reminder_state_update_failed_after_send", {
+			reminderId: reminder.id,
+			telegramMessageId: sentMessageId,
+			error: errorMsg,
+		});
+
+		try {
+			await markDelivered(db, reminder, sentMessageId);
+			recordReminderFired(reminder, isStartup);
+		} catch (retryErr) {
+			const retryMsg = errorText(retryErr);
+			await markReminderFailed(
+				db,
+				reminder.id,
+				`Delivered message ${sentMessageId}, but state update failed: ${errorMsg}; retry: ${retryMsg}`,
+			);
+			throw new Error(
+				`Reminder state update failed after delivery ${sentMessageId}: ${errorMsg}; retry: ${retryMsg}`,
 			);
 		}
 	}

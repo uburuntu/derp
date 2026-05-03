@@ -140,6 +140,7 @@ export async function cancelReminder(db: Database, id: string): Promise<void> {
 export async function markReminderCompleted(
 	db: Database,
 	id: string,
+	meta?: Record<string, unknown>,
 ): Promise<void> {
 	await db
 		.update(reminders)
@@ -147,6 +148,7 @@ export async function markReminderCompleted(
 			status: "completed",
 			lastFiredAt: new Date(),
 			fireCount: sql`${reminders.fireCount} + 1`,
+			...(meta ? { meta } : {}),
 		})
 		.where(eq(reminders.id, id));
 }
@@ -156,6 +158,7 @@ export async function updateNextFireAt(
 	db: Database,
 	id: string,
 	nextFireAt: Date,
+	meta?: Record<string, unknown>,
 ): Promise<void> {
 	await db
 		.update(reminders)
@@ -164,6 +167,7 @@ export async function updateNextFireAt(
 			status: "active",
 			lastFiredAt: new Date(),
 			fireCount: sql`${reminders.fireCount} + 1`,
+			...(meta ? { meta } : {}),
 		})
 		.where(eq(reminders.id, id));
 }

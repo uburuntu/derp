@@ -6,7 +6,11 @@ import {
 	formatPaymentNotification,
 	notifyAdmins,
 } from "../common/admin-notify";
-import { derpMetrics, recordHandledFailure } from "../common/observability";
+import {
+	derpMetrics,
+	logger,
+	recordHandledFailure,
+} from "../common/observability";
 import { escapeHtml } from "../common/sanitize";
 import { MESSAGE_EFFECTS } from "../common/telegram";
 import { getTopUpPack } from "../credits/packs";
@@ -123,6 +127,106 @@ async function replyWithPaymentEffect(
 	} catch {
 		await ctx.reply(text, options);
 	}
+}
+
+type SuccessfulPaymentLike = {
+	telegram_payment_charge_id: string;
+	invoice_payload: string;
+	total_amount: number;
+	currency: string;
+};
+
+type PaymentSideEffects = {
+	replyText: string;
+	adminText: string;
+	revenueStars: number;
+	revenueSource: string;
+	transactionType: string;
+};
+
+async function applyPaymentOrReport<T extends { applied: boolean }>(
+	ctx: DerpContext,
+	payment: SuccessfulPaymentLike,
+	applyPayment: () => Promise<T>,
+): Promise<T | null> {
+	try {
+		return await applyPayment();
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		recordHandledFailure("payment", reason, {
+			reason_code: "db_apply",
+		});
+		logger.error("payment_apply_failed", {
+			userId: ctx.dbUser?.telegramId,
+			chatId: ctx.dbChat?.telegramId,
+			chargeId: payment.telegram_payment_charge_id,
+			payload: payment.invoice_payload,
+			error: reason,
+		});
+		await ctx.reply(
+			"⚠️ <b>Payment received</b>\n\nI could not update the credit balance automatically. An admin has the charge details and can reconcile it.",
+			{
+				parse_mode: "HTML",
+				...commandReplyOptions(ctx),
+			},
+		);
+		await notifyAdmins(
+			`⚠️ <b>Payment processing failed</b>\n\nUser: <code>${ctx.dbUser?.telegramId ?? "unknown"}</code>\nChat: <code>${ctx.dbChat?.telegramId ?? "unknown"}</code>\nCharge: <code>${escapeHtml(payment.telegram_payment_charge_id)}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nAmount: ${payment.total_amount} ${escapeHtml(payment.currency)}\nReason: ${escapeHtml(reason)}`,
+		);
+		return null;
+	}
+}
+
+async function runAppliedPaymentSideEffects(
+	ctx: DerpContext,
+	payment: SuccessfulPaymentLike,
+	effects: PaymentSideEffects,
+): Promise<void> {
+	const failures: string[] = [];
+
+	try {
+		await replyWithPaymentEffect(ctx, effects.replyText);
+	} catch (err) {
+		failures.push(`reply: ${err instanceof Error ? err.message : String(err)}`);
+	}
+
+	try {
+		await notifyAdmins(effects.adminText);
+	} catch (err) {
+		failures.push(`admin: ${err instanceof Error ? err.message : String(err)}`);
+	}
+
+	try {
+		derpMetrics.creditRevenue.add(effects.revenueStars, {
+			source: effects.revenueSource,
+		});
+		derpMetrics.creditTransactions.add(1, { type: effects.transactionType });
+	} catch (err) {
+		failures.push(
+			`metrics: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+
+	if (failures.length === 0) return;
+
+	const reason = failures.join("; ");
+	recordHandledFailure("payment_notification", reason, {
+		reason_code: "post_commit",
+	});
+	logger.error("payment_post_commit_side_effect_failed", {
+		userId: ctx.dbUser?.telegramId,
+		chatId: ctx.dbChat?.telegramId,
+		chargeId: payment.telegram_payment_charge_id,
+		failures,
+	});
+	await notifyAdmins(
+		`⚠️ <b>Payment applied, notification failed</b>\n\nUser: <code>${ctx.dbUser?.telegramId ?? "unknown"}</code>\nCharge: <code>${escapeHtml(payment.telegram_payment_charge_id)}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nIssue: ${escapeHtml(reason)}`,
+	).catch((err) => {
+		logger.error("payment_post_commit_admin_notify_failed", {
+			chargeId: payment.telegram_payment_charge_id,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	});
 }
 
 type MaybeThreadedMessage = {
@@ -425,23 +529,23 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 		return;
 	}
 
-	try {
-		const { payload } = validation;
-		const chargeId = payment.telegram_payment_charge_id;
+	const { payload } = validation;
+	const chargeId = payment.telegram_payment_charge_id;
 
-		if (payload.type === "sub") {
-			// Subscription payment
-			const plan = getSubscriptionPlan(payload.planId);
-			if (!plan) return;
+	if (payload.type === "sub") {
+		// Subscription payment
+		const plan = getSubscriptionPlan(payload.planId);
+		if (!plan) return;
 
-			const subscriptionFields = getSubscriptionPaymentFields(payment);
-			const newExpiry = getSubscriptionExpiry(
-				payment,
-				ctx.dbUser.subscriptionExpiresAt,
-			);
-			const isRenewal = isSubscriptionRenewal(payment);
+		const subscriptionFields = getSubscriptionPaymentFields(payment);
+		const newExpiry = getSubscriptionExpiry(
+			payment,
+			ctx.dbUser.subscriptionExpiresAt,
+		);
+		const isRenewal = isSubscriptionRenewal(payment);
 
-			const result = await applySubscriptionPayment(
+		const result = await applyPaymentOrReport(ctx, payment, () =>
+			applySubscriptionPayment(
 				ctx.db,
 				ctx.dbUser.id,
 				plan.credits,
@@ -464,36 +568,37 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 					telegramSubscriptionExpirationDate:
 						subscriptionFields.subscription_expiration_date,
 				},
-			);
-			if (!result.applied) return;
+			),
+		);
+		if (!result?.applied) return;
 
-			const msg = isRenewal
-				? `${plan.label} subscription renewed! ${plan.credits} credits added.`
-				: `Subscribed to ${plan.label}! ${plan.credits} credits added. Your subscription renews monthly.`;
-			await replyWithPaymentEffect(ctx, msg);
+		const msg = isRenewal
+			? `${plan.label} subscription renewed! ${plan.credits} credits added.`
+			: `Subscribed to ${plan.label}! ${plan.credits} credits added. Your subscription renews monthly.`;
+		await runAppliedPaymentSideEffects(ctx, payment, {
+			replyText: msg,
+			adminText: formatPaymentNotification({
+				type: "subscription",
+				userId: ctx.dbUser.telegramId,
+				username: ctx.dbUser.username,
+				firstName: ctx.dbUser.firstName,
+				planOrPack: `${plan.label} Subscription`,
+				stars: plan.stars,
+				credits: plan.credits,
+				chargeId,
+				isRenewal,
+			}),
+			revenueStars: plan.stars,
+			revenueSource: "subscription",
+			transactionType: "subscription",
+		});
+	} else if (payload.type === "pack") {
+		const pack = getTopUpPack(payload.packId);
+		if (!pack) return;
 
-			await notifyAdmins(
-				formatPaymentNotification({
-					type: "subscription",
-					userId: ctx.dbUser.telegramId,
-					username: ctx.dbUser.username,
-					firstName: ctx.dbUser.firstName,
-					planOrPack: `${plan.label} Subscription`,
-					stars: plan.stars,
-					credits: plan.credits,
-					chargeId,
-					isRenewal,
-				}),
-			);
-
-			derpMetrics.creditRevenue.add(plan.stars, { source: "subscription" });
-			derpMetrics.creditTransactions.add(1, { type: "subscription" });
-		} else if (payload.type === "pack") {
-			const pack = getTopUpPack(payload.packId);
-			if (!pack) return;
-
-			if (payload.target === "chat") {
-				const result = await applyChatPackPayment(ctx.db, {
+		if (payload.target === "chat") {
+			const result = await applyPaymentOrReport(ctx, payment, () =>
+				applyChatPackPayment(ctx.db, {
 					userId: ctx.dbUser.id,
 					chatId: ctx.dbChat.id,
 					telegramChargeId: chargeId,
@@ -506,29 +611,29 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 					creditTarget: "chat",
 					credits: pack.credits,
 					meta: { packId: pack.id },
-				});
-				if (!result.applied) return;
-				await replyWithPaymentEffect(
-					ctx,
-					`${pack.credits} credits added to this chat's pool!`,
-				);
-				await notifyAdmins(
-					formatPaymentNotification({
-						type: "purchase",
-						userId: ctx.dbUser.telegramId,
-						username: ctx.dbUser.username,
-						firstName: ctx.dbUser.firstName,
-						planOrPack: `${pack.label} Group Pack`,
-						stars: pack.stars,
-						credits: pack.credits,
-						chargeId,
-						chatId: ctx.dbChat.telegramId,
-					}),
-				);
-				derpMetrics.creditRevenue.add(pack.stars, { source: "pack_chat" });
-				derpMetrics.creditTransactions.add(1, { type: "purchase" });
-			} else {
-				const result = await applyUserPackPayment(ctx.db, {
+				}),
+			);
+			if (!result?.applied) return;
+			await runAppliedPaymentSideEffects(ctx, payment, {
+				replyText: `${pack.credits} credits added to this chat's pool!`,
+				adminText: formatPaymentNotification({
+					type: "purchase",
+					userId: ctx.dbUser.telegramId,
+					username: ctx.dbUser.username,
+					firstName: ctx.dbUser.firstName,
+					planOrPack: `${pack.label} Group Pack`,
+					stars: pack.stars,
+					credits: pack.credits,
+					chargeId,
+					chatId: ctx.dbChat.telegramId,
+				}),
+				revenueStars: pack.stars,
+				revenueSource: "pack_chat",
+				transactionType: "purchase",
+			});
+		} else {
+			const result = await applyPaymentOrReport(ctx, payment, () =>
+				applyUserPackPayment(ctx.db, {
 					userId: ctx.dbUser.id,
 					chatId: null,
 					telegramChargeId: chargeId,
@@ -541,43 +646,26 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 					creditTarget: "user",
 					credits: pack.credits,
 					meta: { packId: pack.id },
-				});
-				if (!result.applied) return;
-				await replyWithPaymentEffect(
-					ctx,
-					`${pack.credits} credits added to your balance!`,
-				);
-				await notifyAdmins(
-					formatPaymentNotification({
-						type: "purchase",
-						userId: ctx.dbUser.telegramId,
-						username: ctx.dbUser.username,
-						firstName: ctx.dbUser.firstName,
-						planOrPack: `${pack.label} Pack`,
-						stars: pack.stars,
-						credits: pack.credits,
-						chargeId,
-					}),
-				);
-				derpMetrics.creditRevenue.add(pack.stars, { source: "pack_user" });
-				derpMetrics.creditTransactions.add(1, { type: "purchase" });
-			}
+				}),
+			);
+			if (!result?.applied) return;
+			await runAppliedPaymentSideEffects(ctx, payment, {
+				replyText: `${pack.credits} credits added to your balance!`,
+				adminText: formatPaymentNotification({
+					type: "purchase",
+					userId: ctx.dbUser.telegramId,
+					username: ctx.dbUser.username,
+					firstName: ctx.dbUser.firstName,
+					planOrPack: `${pack.label} Pack`,
+					stars: pack.stars,
+					credits: pack.credits,
+					chargeId,
+				}),
+				revenueStars: pack.stars,
+				revenueSource: "pack_user",
+				transactionType: "purchase",
+			});
 		}
-	} catch (err) {
-		const reason = err instanceof Error ? err.message : String(err);
-		recordHandledFailure("payment", reason, {
-			userId: ctx.dbUser.telegramId,
-		});
-		await ctx.reply(
-			"⚠️ <b>Payment received</b>\n\nI could not update the credit balance automatically. An admin has the charge details and can reconcile it.",
-			{
-				parse_mode: "HTML",
-				...commandReplyOptions(ctx),
-			},
-		);
-		await notifyAdmins(
-			`⚠️ <b>Payment processing failed</b>\n\nUser: <code>${ctx.dbUser.telegramId}</code>\nChat: <code>${ctx.dbChat.telegramId}</code>\nCharge: <code>${escapeHtml(payment.telegram_payment_charge_id)}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nAmount: ${payment.total_amount} ${escapeHtml(payment.currency)}\nReason: ${escapeHtml(reason)}`,
-		);
 	}
 });
 
