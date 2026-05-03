@@ -17,7 +17,7 @@ This file is the persistent harness for the five-loop hardening pass. If the ses
 - [x] Loop 1: Initial cross-functional review and fixes.
 - [x] Loop 2: Re-review after first fixes.
 - [x] Loop 3: Re-review after second fixes.
-- [ ] Loop 4: Re-review after third fixes.
+- [ ] Loop 4: Re-review after third fixes. In progress.
 - [ ] Loop 5: Final hardening review and fixes.
 
 ## Current Verification
@@ -65,7 +65,7 @@ Items below are added by reviewer loop. Keep P0/P1 only here; P2+ notes can stay
 - [x] P1 L3-OPS-2: Reminder delivery failures must make scheduler health fail instead of returning green after marking the row failed.
 - [x] P1 L3-OPS-3: Reminder retry must not duplicate sends after Telegram delivery succeeds but DB state update fails.
 - [x] P1 L3-OPS-4: Handled failure metrics must avoid high-cardinality IDs while keeping IDs on spans/logs.
-- [ ] P1 L3-TEST-1: Add Postgres-backed tests for durable payment/refund/quota paths.
+- [x] P1 L3-TEST-1: Add Postgres-backed tests for durable payment/refund/quota paths.
 
 ## Loop 1
 
@@ -150,7 +150,7 @@ Status: complete.
 
 ## Loop 3
 
-Status: complete. `P1 L3-TEST-1` is carried forward because it needs a Postgres-backed integration harness.
+Status: complete.
 
 ### Reviewers
 
@@ -187,3 +187,29 @@ Status: complete. `P1 L3-TEST-1` is carried forward because it needs a Postgres-
 - 2026-05-03: `ctx7 docs /grammyjs/website ...answerInlineQuery empty results...` confirmed grammY can answer inline queries with an empty result list and build article results with `InlineQueryResultBuilder`.
 - 2026-05-03: `ctx7 docs /drizzle-team/drizzle-orm-docs ...transaction insert update select...` confirmed Drizzle transaction/update/select patterns used for subscription projection.
 - 2026-05-03: `bun run check` passed after Loop 3 reliability/UX/payment hardening.
+
+## Loop 4
+
+Status: review in progress.
+
+### Reviewers
+
+- Product/Telegram UX reviewer: running.
+- Data model/pricing/parity reviewer: running.
+- Observability/ops/security reviewer: running.
+- Code quality/tests/regression reviewer: running.
+
+### P0/P1 Findings
+
+Pending.
+
+### Execution
+
+- Added explicit CI-gated Postgres integration tests for duplicate Stars charge idempotency, subscription projection/refund recomputation, concurrent free quota reservation, and paid debit/refund idempotency.
+- Updated CI to run `bun run check` with the migrated Postgres test database available to the integration suite.
+
+### Verification
+
+- 2026-05-03: `ctx7 library Bun ...` and `ctx7 docs /oven-sh/bun ...skipIf...` confirmed `describe.skipIf`/`test.skipIf` patterns for conditional integration tests.
+- 2026-05-03: `bun run check` passed locally with Postgres integration tests intentionally skipped unless `DERP_RUN_DB_TESTS=1`.
+- 2026-05-03: Local Docker-backed integration run could not start because the Docker daemon is not running; CI will execute these tests with its Postgres service.
