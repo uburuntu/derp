@@ -48,7 +48,6 @@ buy-pay-button = Оплатить { $stars }⭐/мес
 buy-plan-button = Ежемесячно { $plan } — { $stars }⭐ → { $credits } кр. (выгода { $savings }){ $tag }
 buy-pack-button = Разовый { $pack } — { $stars }⭐ → { $credits } кр.{ $bonus }
 buy-group-pack-button = В чат { $pack } — { $stars }⭐ → { $credits } общих кр.{ $bonus }
-buy-transfer-button = Перенести из личного баланса (мин. 100)
 buy-chat-groups-only = Эта команда работает в группах. Для личных кредитов используй /buy.
 buy-invoice-error = Не удалось создать ссылку на оплату. Попробуй ещё раз.
 
@@ -62,19 +61,6 @@ donate-thanks = ⭐ <b>Спасибо!</b>
 
     Получено звёзд: { $stars }.
 donate-error = Не удалось обработать донат. Попробуй ещё раз.
-
-## Transfer
-transfer-prompt = Перенеси личные кредиты в общий баланс этой группы.
-    Твой баланс: { $balance }
-    Минимум: 100
-
-    Ответь суммой для переноса.
-transfer-min = Минимальный перевод: 100 кредитов
-transfer-insufficient = Недостаточно кредитов. У тебя { $balance }.
-transfer-success = { $amount } кредитов перенесено в общий баланс этой группы.
-transfer-failed = Перевод не удался: { $error }
-transfer-groups-only = Переводы работают только в группах
-transfer-already-processed = Этот перевод уже обработан.
 
 ## Tools
 tool-web-search = Поиск в интернете

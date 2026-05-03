@@ -21,4 +21,4 @@ export type TransactionType =
 	| "spend"
 	| "refund"
 	| "grant"
-	| "transfer";
+	| "donation";

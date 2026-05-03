@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { and, eq, sql } from "drizzle-orm";
 import type { Chat as TelegramChat, User as TelegramUser } from "grammy/types";
+import { z } from "zod";
+import { initObservability } from "../../src/common/observability";
+import { CreditService, registerToolPricing } from "../../src/credits/service";
 import { closeDb, type Database, getDb } from "../../src/db/connection";
 import { upsertChat } from "../../src/db/queries/chats";
 import {
@@ -14,6 +17,9 @@ import {
 } from "../../src/db/queries/credits";
 import { upsertUser } from "../../src/db/queries/users";
 import { ledger, paymentReceipts, users } from "../../src/db/schema";
+import { ModelTier } from "../../src/llm/registry";
+import { executeWithCreditGate } from "../../src/tools/credit-gate";
+import type { ToolContext, ToolDefinition } from "../../src/tools/types";
 
 const databaseUrl =
 	process.env.DERP_RUN_DB_TESTS === "1" ? process.env.DATABASE_URL : undefined;
@@ -23,6 +29,22 @@ let sequence = 0;
 describe.skipIf(!databaseUrl)("credits database invariants", () => {
 	beforeAll(() => {
 		db = getDb(databaseUrl as string);
+		initObservability({
+			environment: "dev",
+			telegramBotToken: "123456:test",
+			botUsername: "DerpTestBot",
+			databaseUrl: databaseUrl as string,
+			googleApiKey: "test-google-key",
+			googleApiKeys: [],
+			googleApiPaidKey: undefined,
+			braveSearchApiKey: undefined,
+			botAdminIds: [],
+			botAdminEventsChatId: undefined,
+			logfireToken: undefined,
+			otelExporterOtlpEndpoint: undefined,
+			otelServiceName: "derp-test",
+			reminderCheckIntervalMs: 60_000,
+		});
 	});
 
 	afterAll(async () => {
@@ -189,12 +211,81 @@ describe.skipIf(!databaseUrl)("credits database invariants", () => {
 			{ reason: "test_refund" },
 		);
 
-		expect(afterDebit).toBe(6);
-		expect(duplicateDebit).toBe(6);
+		expect(afterDebit.applied).toBe(true);
+		expect(afterDebit.balanceAfter).toBe(6);
+		expect(duplicateDebit.applied).toBe(false);
+		expect(duplicateDebit.balanceAfter).toBe(6);
 		expect(refund.applied).toBe(true);
 		expect(refund.balanceAfter).toBe(10);
 		expect(duplicateRefund.applied).toBe(false);
 		expect(duplicateRefund.balanceAfter).toBe(10);
+	});
+
+	test("executes a paid tool once for concurrent duplicate idempotency keys", async () => {
+		const { user, chat } = await createActor("gate");
+		await addUserCreditsWithResult(
+			db,
+			user.id,
+			10,
+			"grant",
+			undefined,
+			uniqueKey("gate-seed"),
+		);
+
+		const toolName = uniqueKey("paid-tool");
+		const idempotencyKey = uniqueKey("gate-request");
+		let executions = 0;
+		registerToolPricing(toolName, { credits: 4, freeDaily: 0 });
+
+		const tool: ToolDefinition = {
+			name: toolName,
+			commands: [],
+			description: "Integration test paid tool",
+			helpText: "integration-test-paid-tool",
+			category: "utility",
+			parameters: z.object({}),
+			execute: async () => {
+				executions += 1;
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				return { text: "done" };
+			},
+			credits: 4,
+			freeDaily: 0,
+		};
+
+		const toolCtx: ToolContext = {
+			db,
+			user,
+			chat,
+			creditService: new CreditService(db, user, chat),
+			tier: ModelTier.STANDARD,
+			isChatAdmin: true,
+			canManageMemory: true,
+			canManageReminders: true,
+			sendMessage: async () => {},
+			sendPhoto: async () => {},
+			sendVoice: async () => {},
+			sendVideo: async () => {},
+			editMessage: async () => {},
+			deleteMessage: async () => {},
+			idempotencyKey,
+		};
+
+		const results = await Promise.all([
+			executeWithCreditGate(tool, {}, toolCtx),
+			executeWithCreditGate(tool, {}, toolCtx),
+		]);
+
+		expect(executions).toBe(1);
+		expect(results.filter((result) => result.error === undefined)).toHaveLength(
+			1,
+		);
+		expect(
+			results.filter((result) => result.error === "Duplicate request"),
+		).toHaveLength(1);
+
+		const projection = await getUserProjection(user.id);
+		expect(projection?.credits).toBe(6);
 	});
 });
 

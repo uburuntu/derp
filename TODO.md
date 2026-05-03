@@ -18,11 +18,12 @@ This file is the persistent harness for the five-loop hardening pass. If the ses
 - [x] Loop 2: Re-review after first fixes.
 - [x] Loop 3: Re-review after second fixes.
 - [x] Loop 4: Re-review after third fixes.
-- [ ] Loop 5: Final hardening review and fixes. In progress.
+- [x] Loop 5: Final hardening review and fixes.
 
 ## Current Verification
 
 - 2026-05-03 before loop start: `bun run check` passed locally and GitHub CI passed on PR #28.
+- 2026-05-03 after loop 5: `bun run check` passed locally with DB integration tests gated by `DERP_RUN_DB_TESTS=1`.
 
 ## P0/P1 Queue
 
@@ -79,6 +80,12 @@ Items below are added by reviewer loop. Keep P0/P1 only here; P2+ notes can stay
 - [x] P1 L4-CODE-1: Donation successful-payment DB apply needs payment-failure wrapping and post-commit side-effect isolation.
 - [x] P1 L4-CODE-2: LLM reminder paid reservations must refund on provider/send failure and hide raw reservation errors from users.
 - [x] P1 L4-CODE-3: Memory must obey tool-command duality; command and LLM tool behavior must not diverge.
+- [x] P1 L5-OPS-1: Root update spans must redact raw exceptions consistently with child spans and handled failures.
+- [x] P1 L5-OPS-2: Inline mode throttling must cover concurrent in-flight generations, not only completed cache entries.
+- [x] P1 L5-OPS-3: Refund/reconciliation admin alerts must be critical so production failures cannot be silently swallowed.
+- [x] P1 L5-CODE-1: Paid idempotency duplicates must propagate through `CreditService.deduct()` so duplicate requests do not rerun providers after a ledger conflict.
+- [x] P1 L5-UX-1: Slash-tool replies and direct media sends must be persisted so follow-up chat and `/info` retain command output context.
+- [x] P1 L5-UX-2: `/remind` usage copy must not advertise an unsupported bare-message create path.
 
 ## Loop 1
 
@@ -251,23 +258,35 @@ Status: complete.
 
 ## Loop 5
 
-Status: final review in progress.
+Status: complete.
 
 ### Reviewers
 
-- Product/Telegram UX final reviewer: running.
-- Data model/pricing/parity final reviewer: running.
-- Observability/ops/security final reviewer: running.
-- Code quality/tests/regression final reviewer: running.
+- Product/Telegram UX final reviewer: complete.
+- Data model/pricing/parity final reviewer: complete; no new P0/P1 findings.
+- Observability/ops/security final reviewer: complete.
+- Code quality/tests/regression final reviewer: complete.
 
 ### P0/P1 Findings
 
-Pending.
+- No P0 findings.
+- UX P1: slash command tool replies/media were not persisted, so later chat context and `/info` lost command output; `/remind` usage advertised an unsupported bare-message create form.
+- Ops/security P1: root update spans could still record raw exception text; inline generation throttling had a concurrent in-flight race; refund/reconciliation admin alerts needed critical delivery.
+- Code/tests P1: paid debit idempotency conflicts returned an existing balance but still looked like a fresh reservation to `CreditService.deduct()`, allowing duplicate provider execution under concurrent idempotency keys.
 
 ### Execution
 
-Pending.
+- Redacted root update span statuses and recorded exceptions via the shared observability redaction helpers.
+- Added in-flight inline throttling so concurrent inline queries for the same user do not all start model work.
+- Marked manual and automatic refund/reconciliation admin notifications as critical.
+- Changed user/chat paid debit helpers to return `{ balanceAfter, applied }`, propagated duplicate debit status through `CreditService.deduct()`, and made LLM reminder reservations treat duplicate debit keys as already reserved.
+- Added a Postgres-backed integration test for concurrent `executeWithCreditGate` calls with the same paid idempotency key.
+- Persisted slash command outputs, usage replies, and direct tool text/photo/voice/video sends into `messages` with tool/tier/duration metadata; final command replies also retain model, credit, and source metadata.
+- Removed the remaining transfer ledger/query/i18n surface for launch and kept `donation` in the transaction type vocabulary.
+- Corrected `/remind` usage copy to list only supported list, cancel, `at`, and `cron | message` forms.
 
 ### Verification
 
-Pending.
+- 2026-05-03: `ctx7 docs /grammyjs/website ...ctx.reply replyWithPhoto...` confirmed grammY reply helpers are send-method shortcuts and support the same message options.
+- 2026-05-03: `ctx7 docs /websites/core_telegram_bots_api ...sendMessage sendPhoto sendVoice sendVideo return Message...` confirmed Telegram send methods return `Message` objects with IDs, dates, captions, and media fields suitable for persistence.
+- 2026-05-03: `bun run check` passed locally with Postgres integration tests intentionally skipped unless `DERP_RUN_DB_TESTS=1`.

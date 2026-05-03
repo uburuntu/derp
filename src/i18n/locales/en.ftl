@@ -48,7 +48,6 @@ buy-pay-button = Pay { $stars }⭐/month
 buy-plan-button = Monthly { $plan } — { $stars }⭐ → { $credits } credits ({ $savings } off){ $tag }
 buy-pack-button = One-time { $pack } — { $stars }⭐ → { $credits } credits{ $bonus }
 buy-group-pack-button = Group { $pack } — { $stars }⭐ → { $credits } shared credits{ $bonus }
-buy-transfer-button = Move from my balance (min 100)
 buy-chat-groups-only = This command is for groups. Use /buy for personal credits.
 buy-invoice-error = Could not create the payment link. Please try again.
 
@@ -62,19 +61,6 @@ donate-thanks = ⭐ <b>Thank you!</b>
 
     { $stars } Stars received.
 donate-error = Donation could not be processed. Please try again.
-
-## Transfer
-transfer-prompt = Move personal credits into this group's shared balance.
-    Your balance: { $balance }
-    Minimum: 100
-
-    Reply with the amount to move.
-transfer-min = Minimum transfer: 100 credits
-transfer-insufficient = Insufficient credits. You have { $balance }.
-transfer-success = Moved { $amount } credits into this group's shared balance.
-transfer-failed = Transfer failed: { $error }
-transfer-groups-only = Transfers only work in groups
-transfer-already-processed = Transfer already processed.
 
 ## Tools
 tool-web-search = Search the web for current information

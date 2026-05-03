@@ -240,7 +240,7 @@ export class CreditService {
 				);
 			}
 		} else if (result.source === "chat") {
-			await deductChatCredits(
+			const debit = await deductChatCredits(
 				this.db,
 				this.chat.id,
 				this.user.id,
@@ -250,9 +250,9 @@ export class CreditService {
 				idempotencyKey,
 				meta,
 			);
-			return "applied";
+			return debit.applied ? "applied" : "duplicate";
 		} else if (result.source === "user") {
-			await deductUserCredits(
+			const debit = await deductUserCredits(
 				this.db,
 				this.user.id,
 				result.creditsToDeduct,
@@ -261,7 +261,7 @@ export class CreditService {
 				idempotencyKey,
 				meta,
 			);
-			return "applied";
+			return debit.applied ? "applied" : "duplicate";
 		}
 		return "applied";
 	}

@@ -17,12 +17,6 @@ export interface IdempotentCreditResult {
 	applied: boolean;
 }
 
-export interface CreditTransferResult {
-	userCredits: number;
-	chatCredits: number;
-	applied: boolean;
-}
-
 export interface RefundReconciliationResult {
 	applied: boolean;
 	target: "user" | "chat";
@@ -264,7 +258,7 @@ export async function deductUserCredits(
 	modelId: string | null,
 	idempotencyKey?: string,
 	meta?: Record<string, unknown>,
-): Promise<number> {
+): Promise<IdempotentCreditResult> {
 	return db.transaction(async (tx) => {
 		if (idempotencyKey) {
 			const [inserted] = await tx
@@ -288,7 +282,7 @@ export async function deductUserCredits(
 					.from(ledger)
 					.where(eq(ledger.idempotencyKey, idempotencyKey))
 					.limit(1);
-				return existing?.balanceAfter ?? 0;
+				return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
 			}
 
 			const [updated] = await tx
@@ -306,7 +300,7 @@ export async function deductUserCredits(
 				.set({ balanceAfter: updated.credits })
 				.where(eq(ledger.id, inserted.id));
 
-			return updated.credits;
+			return { balanceAfter: updated.credits, applied: true };
 		}
 
 		const [updated] = await tx
@@ -330,7 +324,7 @@ export async function deductUserCredits(
 			meta,
 		});
 
-		return updated.credits;
+		return { balanceAfter: updated.credits, applied: true };
 	});
 }
 
@@ -344,7 +338,7 @@ export async function deductChatCredits(
 	modelId: string | null,
 	idempotencyKey?: string,
 	meta?: Record<string, unknown>,
-): Promise<number> {
+): Promise<IdempotentCreditResult> {
 	return db.transaction(async (tx) => {
 		if (idempotencyKey) {
 			const [inserted] = await tx
@@ -369,7 +363,7 @@ export async function deductChatCredits(
 					.from(ledger)
 					.where(eq(ledger.idempotencyKey, idempotencyKey))
 					.limit(1);
-				return existing?.balanceAfter ?? 0;
+				return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
 			}
 
 			const [updated] = await tx
@@ -387,7 +381,7 @@ export async function deductChatCredits(
 				.set({ balanceAfter: updated.credits })
 				.where(eq(ledger.id, inserted.id));
 
-			return updated.credits;
+			return { balanceAfter: updated.credits, applied: true };
 		}
 
 		const [updated] = await tx
@@ -412,7 +406,7 @@ export async function deductChatCredits(
 			meta,
 		});
 
-		return updated.credits;
+		return { balanceAfter: updated.credits, applied: true };
 	});
 }
 
@@ -760,122 +754,6 @@ export async function recordFreeToolUsage(
 		if (err instanceof QuotaExhaustedError) return "quota_exhausted";
 		throw err;
 	}
-}
-
-/** Move credits from a user's balance into a chat pool in one transaction. */
-export async function transferUserCreditsToChat(
-	db: Database,
-	userId: string,
-	chatId: string,
-	amount: number,
-	idempotencyKey?: string,
-	meta?: Record<string, unknown>,
-): Promise<CreditTransferResult> {
-	return db.transaction(async (tx) => {
-		let transferLedgerId: string | null = null;
-		if (idempotencyKey) {
-			const [inserted] = await tx
-				.insert(ledger)
-				.values({
-					userId,
-					chatId,
-					type: "transfer",
-					amount: -amount,
-					balanceAfter: 0,
-					idempotencyKey,
-					meta,
-				})
-				.onConflictDoNothing({ target: ledger.idempotencyKey })
-				.returning({ id: ledger.id });
-
-			if (!inserted) {
-				const [existing] = await tx
-					.select({
-						balanceAfter: ledger.balanceAfter,
-						meta: ledger.meta,
-					})
-					.from(ledger)
-					.where(eq(ledger.idempotencyKey, idempotencyKey))
-					.limit(1);
-				const chatCredits =
-					typeof existing?.meta?.chatBalanceAfter === "number"
-						? existing.meta.chatBalanceAfter
-						: 0;
-				return {
-					userCredits: existing?.balanceAfter ?? 0,
-					chatCredits,
-					applied: false,
-				};
-			}
-			transferLedgerId = inserted.id;
-		}
-
-		const [updatedUser] = await tx
-			.update(users)
-			.set({
-				credits: sql`${users.credits} - ${amount}`,
-			})
-			.where(and(eq(users.id, userId), sql`${users.credits} >= ${amount}`))
-			.returning({ credits: users.credits });
-
-		if (!updatedUser) throw new Error("Insufficient credits");
-
-		const [updatedChat] = await tx
-			.update(chats)
-			.set({
-				credits: sql`${chats.credits} + ${amount}`,
-			})
-			.where(eq(chats.id, chatId))
-			.returning({ credits: chats.credits });
-
-		if (!updatedChat) throw new Error("Chat not found");
-
-		const transferMeta = {
-			...meta,
-			chatBalanceAfter: updatedChat.credits,
-		};
-
-		if (transferLedgerId) {
-			await tx
-				.update(ledger)
-				.set({
-					balanceAfter: updatedUser.credits,
-					meta: transferMeta,
-				})
-				.where(eq(ledger.id, transferLedgerId));
-		} else {
-			await tx.insert(ledger).values({
-				userId,
-				chatId,
-				type: "transfer",
-				amount: -amount,
-				balanceAfter: updatedUser.credits,
-				meta: transferMeta,
-			});
-		}
-
-		await tx
-			.insert(ledger)
-			.values({
-				userId,
-				chatId,
-				type: "transfer",
-				amount,
-				balanceAfter: updatedChat.credits,
-				idempotencyKey: idempotencyKey ? `${idempotencyKey}:chat` : undefined,
-				meta: {
-					...meta,
-					userBalanceAfter: updatedUser.credits,
-				},
-			})
-			.onConflictDoNothing({ target: ledger.idempotencyKey });
-
-		return {
-			userCredits: updatedUser.credits,
-			chatCredits: updatedChat.credits,
-			applied: true,
-		};
-	});
 }
 
 /** Apply a subscription payment and update subscription status atomically. */

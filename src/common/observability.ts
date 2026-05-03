@@ -72,7 +72,7 @@ export function redactErrorMessage(error: unknown): string {
 	return redactString(error instanceof Error ? error.message : String(error));
 }
 
-function redactedException(error: unknown): Error {
+export function redactedException(error: unknown): Error {
 	const redacted = new Error(redactErrorMessage(error));
 	if (error instanceof Error) {
 		redacted.name = error.name;

@@ -191,7 +191,7 @@ export const ledger = pgTable(
 			.notNull()
 			.references(() => users.id),
 		chatId: uuid("chat_id").references(() => chats.id), // null for user-only transactions
-		type: varchar("type", { length: 20 }).notNull(), // purchase, spend, refund, grant, transfer
+		type: varchar("type", { length: 20 }).notNull(), // purchase, spend, refund, grant, subscription, donation
 		amount: integer("amount").notNull(), // positive = credit in, negative = credit out
 		balanceAfter: integer("balance_after").notNull(),
 		toolName: varchar("tool_name", { length: 50 }),

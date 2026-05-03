@@ -16,6 +16,7 @@ const inlineCache = new Map<
 	string,
 	{ text: string; generatedAt: number; lastRequestedAt: number }
 >();
+const inlineUserThrottle = new Map<number, number>();
 
 // ── Inline query ────────────────────────────────────────────────────────────
 
@@ -59,20 +60,16 @@ async function getInlineAnswer(
 	const cached = inlineCache.get(cacheKey);
 	if (cached && Date.now() - cached.generatedAt < INLINE_CACHE_MS) {
 		cached.lastRequestedAt = Date.now();
+		inlineUserThrottle.set(userId, Date.now());
 		return cached.text;
 	}
 
-	const userEntries = [...inlineCache.entries()].filter(([key]) =>
-		key.startsWith(`${userId}:`),
-	);
-	const lastRequestAt = Math.max(
-		0,
-		...userEntries.map(([, entry]) => entry.lastRequestedAt),
-	);
+	const lastRequestAt = inlineUserThrottle.get(userId) ?? 0;
 	if (Date.now() - lastRequestAt < INLINE_THROTTLE_MS) {
 		return null;
 	}
 
+	inlineUserThrottle.set(userId, Date.now());
 	const text = await generateInlineAnswer(query, ctx);
 	inlineCache.set(cacheKey, {
 		text,
@@ -120,6 +117,11 @@ function pruneInlineCache(): void {
 	for (const [key, value] of inlineCache.entries()) {
 		if (value.generatedAt < cutoff) {
 			inlineCache.delete(key);
+		}
+	}
+	for (const [userId, lastRequestAt] of inlineUserThrottle.entries()) {
+		if (Date.now() - lastRequestAt > INLINE_CACHE_MS) {
+			inlineUserThrottle.delete(userId);
 		}
 	}
 }

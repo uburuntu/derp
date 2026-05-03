@@ -64,7 +64,7 @@ async function reserveLlmReminderCredit(
 
 	try {
 		if (chatCredits >= LLM_REMINDER_COST) {
-			await deductChatCredits(
+			const debit = await deductChatCredits(
 				db,
 				chat.id,
 				user.id,
@@ -74,6 +74,13 @@ async function reserveLlmReminderCredit(
 				idempotencyKey,
 				meta,
 			);
+			if (!debit.applied) {
+				return {
+					ok: false,
+					userReason: "This LLM reminder fire was already reserved",
+					internalReason: "Duplicate LLM reminder credit reservation",
+				};
+			}
 			return {
 				ok: true,
 				source: "chat",
@@ -84,7 +91,7 @@ async function reserveLlmReminderCredit(
 		}
 
 		if (userCredits >= LLM_REMINDER_COST) {
-			await deductUserCredits(
+			const debit = await deductUserCredits(
 				db,
 				user.id,
 				LLM_REMINDER_COST,
@@ -93,6 +100,13 @@ async function reserveLlmReminderCredit(
 				idempotencyKey,
 				meta,
 			);
+			if (!debit.applied) {
+				return {
+					ok: false,
+					userReason: "This LLM reminder fire was already reserved",
+					internalReason: "Duplicate LLM reminder credit reservation",
+				};
+			}
 			return {
 				ok: true,
 				source: "user",

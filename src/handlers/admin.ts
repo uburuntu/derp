@@ -84,25 +84,14 @@ adminComposer.command("refund", async (ctx) => {
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		if (looksAlreadyRefunded(msg)) {
+			let reconciliation: RefundReconciliationResult;
 			try {
-				const reconciliation = await reconcileStarRefund(ctx.db, chargeId, {
+				reconciliation = await reconcileStarRefund(ctx.db, chargeId, {
 					adminId,
 					targetUserId,
 					source: "admin_refund_already_refunded",
 					telegramRefundError: msg,
 				});
-				await ctx.reply(formatReconciliation(chargeId, reconciliation), {
-					parse_mode: "HTML",
-				});
-				await notifyAdmins(
-					formatRefundNotification({
-						adminId,
-						targetUserId,
-						chargeId,
-						success: true,
-					}),
-				);
-				return;
 			} catch (reconcileErr) {
 				const reconcileMsg =
 					reconcileErr instanceof Error
@@ -120,9 +109,24 @@ adminComposer.command("refund", async (ctx) => {
 						success: false,
 						error: reconcileMsg,
 					}),
+					{ critical: true },
 				);
 				return;
 			}
+
+			await ctx.reply(formatReconciliation(chargeId, reconciliation), {
+				parse_mode: "HTML",
+			});
+			await notifyAdmins(
+				formatRefundNotification({
+					adminId,
+					targetUserId,
+					chargeId,
+					success: true,
+				}),
+				{ critical: true },
+			);
+			return;
 		}
 		await ctx.reply(`Refund failed: ${msg}`);
 
@@ -134,28 +138,17 @@ adminComposer.command("refund", async (ctx) => {
 				success: false,
 				error: msg,
 			}),
+			{ critical: true },
 		);
 		return;
 	}
 
+	let reconciliation: RefundReconciliationResult;
 	try {
-		const reconciliation = await reconcileStarRefund(ctx.db, chargeId, {
+		reconciliation = await reconcileStarRefund(ctx.db, chargeId, {
 			adminId,
 			targetUserId,
 		});
-		await ctx.reply(
-			`Refund processed in Telegram.\nUser: <code>${targetUserId}</code>\n${formatReconciliation(chargeId, reconciliation)}`,
-			{ parse_mode: "HTML" },
-		);
-
-		await notifyAdmins(
-			formatRefundNotification({
-				adminId,
-				targetUserId,
-				chargeId,
-				success: true,
-			}),
-		);
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		await ctx.reply(
@@ -170,8 +163,25 @@ adminComposer.command("refund", async (ctx) => {
 				success: false,
 				error: msg,
 			}),
+			{ critical: true },
 		);
+		return;
 	}
+
+	await ctx.reply(
+		`Refund processed in Telegram.\nUser: <code>${targetUserId}</code>\n${formatReconciliation(chargeId, reconciliation)}`,
+		{ parse_mode: "HTML" },
+	);
+
+	await notifyAdmins(
+		formatRefundNotification({
+			adminId,
+			targetUserId,
+			chargeId,
+			success: true,
+		}),
+		{ critical: true },
+	);
 });
 
 // ── /admin <subcommand> — admin panel ───────────────────────────────────────
@@ -395,6 +405,16 @@ adminComposer.command("admin", async (ctx) => {
 				await ctx.reply(`Refund reconciliation failed: ${escapeHtml(msg)}`, {
 					parse_mode: "HTML",
 				});
+				await notifyAdmins(
+					formatRefundNotification({
+						adminId,
+						targetUserId: 0,
+						chargeId,
+						success: false,
+						error: msg,
+					}),
+					{ critical: true },
+				);
 			}
 			break;
 		}

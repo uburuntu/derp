@@ -353,7 +353,7 @@ export const remindTool: ToolDefinition<RemindParams> = {
 	parameters: remindParamsSchema,
 	parseCommand: parseRemindCommand,
 	usage:
-		"/remind list | /remind cancel <id> | /remind at <ISO datetime> <message> | /remind cron <cron> | <message>",
+		"/remind list; /remind cancel <id>; /remind at <ISO datetime> <message>; /remind cron <cron> | <message>",
 	execute: executeRemind,
 	credits: 0,
 	freeDaily: Number.POSITIVE_INFINITY,

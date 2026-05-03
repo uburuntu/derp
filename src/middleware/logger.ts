@@ -3,7 +3,13 @@
 import { SpanStatusCode } from "@opentelemetry/api";
 import type { NextFunction } from "grammy";
 import type { DerpContext } from "../bot/context";
-import { derpMetrics, logger, tracer } from "../common/observability";
+import {
+	derpMetrics,
+	logger,
+	redactErrorMessage,
+	redactedException,
+	tracer,
+} from "../common/observability";
 
 export async function loggerMiddleware(
 	ctx: DerpContext,
@@ -42,11 +48,9 @@ export async function loggerMiddleware(
 			} catch (err) {
 				span.setStatus({
 					code: SpanStatusCode.ERROR,
-					message: err instanceof Error ? err.message : String(err),
+					message: redactErrorMessage(err),
 				});
-				span.recordException(
-					err instanceof Error ? err : new Error(String(err)),
-				);
+				span.recordException(redactedException(err));
 				throw err;
 			} finally {
 				const durationMs = Math.round(performance.now() - start);
