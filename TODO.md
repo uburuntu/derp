@@ -18,7 +18,7 @@ This file is the persistent harness for the five-loop hardening pass. If the ses
 - [x] Loop 2: Re-review after first fixes.
 - [x] Loop 3: Re-review after second fixes.
 - [x] Loop 4: Re-review after third fixes.
-- [ ] Loop 5: Final hardening review and fixes.
+- [ ] Loop 5: Final hardening review and fixes. In progress.
 
 ## Current Verification
 
@@ -248,3 +248,26 @@ Status: complete.
 - 2026-05-03: `bun run check` passed locally with Postgres integration tests intentionally skipped unless `DERP_RUN_DB_TESTS=1`.
 - 2026-05-03: Local Docker-backed integration run could not start because the Docker daemon is not running; CI will execute these tests with its Postgres service.
 - 2026-05-03: `bun run check` passed after Loop 4 UX/ops/payment hardening.
+
+## Loop 5
+
+Status: final review in progress.
+
+### Reviewers
+
+- Product/Telegram UX final reviewer: running.
+- Data model/pricing/parity final reviewer: running.
+- Observability/ops/security final reviewer: running.
+- Code quality/tests/regression final reviewer: running.
+
+### P0/P1 Findings
+
+Pending.
+
+### Execution
+
+Pending.
+
+### Verification
+
+Pending.
