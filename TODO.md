@@ -45,8 +45,8 @@ Items below are added by reviewer loop. Keep P0/P1 only here; P2+ notes can stay
 - [x] P1 L1-PRICE-2: Wrap successful payment processing in local failure handling with admin reconciliation details.
 - [x] P1 L1-PRICE-3: Add refund reconciliation path for already-refunded Telegram charges.
 - [x] P1 L2-DATA-1: Paid tools must atomically reserve/debit credits before provider work or return unsent media until billing succeeds; current post-success debit can deliver media after concurrent balance races.
-- [ ] P1 L2-DATA-2: Subscription state must survive refunding a later subscription; replace single user subscription fields as source-of-truth with durable subscription/payment rows or recompute from non-refunded periods.
-- [ ] P1 L2-DATA-3: Stars payments need durable accounting beyond scrubbed ledger meta: currency, Stars amount, product type/id, target, charge IDs, refund status, and revenue metrics for packs/subscriptions/donations.
+- [x] P1 L2-DATA-2: Subscription state must survive refunding a later subscription; replace single user subscription fields as source-of-truth with durable subscription/payment rows or recompute from non-refunded periods.
+- [x] P1 L2-DATA-3: Stars payments need durable accounting beyond scrubbed ledger meta: currency, Stars amount, product type/id, target, charge IDs, refund status, and revenue metrics for packs/subscriptions/donations.
 - [x] P1 L2-UX-1: Inline mode must not call the LLM on every keystroke while inline updates are rate-limit exempt; restore chosen-result generation or add per-user throttling/cache and credit policy.
 - [x] P1 L2-UX-2: Forum-topic reminders must be listed and canceled only within the current topic/general topic.
 - [x] P1 L2-OPS-1: Handled failures still become OK spans because `withSpan`/logger middleware overwrite error status; chat/scheduler/refund handled failures need explicit failure recording.
@@ -126,8 +126,12 @@ Status: in progress.
 - Moved CD migrations before stopping the running container.
 - Extended retention scrubbing to inactive reminder text, prompt, and metadata.
 - Added readiness validation for the critical Telegram charge unique index.
+- Added durable `payment_receipts` and `subscription_periods` tables with Drizzle migration `drizzle/0003_silent_scarecrow.sql`.
+- Routed subscription, pack, donation, and refund flows through durable payment receipts; pack and donation revenue now emits metrics.
+- Subscription refunds now mark the refunded period and recompute the active subscription from non-refunded active periods instead of clearing all subscription state.
 
 ### Verification
 
 - 2026-05-03: `bun run check` passed after donation parity work.
 - 2026-05-03: `bun run check` passed after Loop 2 operational hardening.
+- 2026-05-03: `bun run check` passed after durable payment/subscription model.

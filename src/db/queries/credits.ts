@@ -1,6 +1,13 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../connection";
-import { chats, ledger, usageQuotas, users } from "../schema";
+import {
+	chats,
+	ledger,
+	paymentReceipts,
+	subscriptionPeriods,
+	usageQuotas,
+	users,
+} from "../schema";
 
 type CreditTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 export type ToolDebitResult = "applied" | "duplicate" | "quota_exhausted";
@@ -26,6 +33,21 @@ export interface RefundReconciliationResult {
 	balanceAfter: number;
 }
 
+export interface StarsPaymentRecord {
+	userId: string;
+	chatId?: string | null;
+	telegramChargeId: string;
+	providerChargeId?: string | null;
+	invoicePayload?: string | null;
+	currency: string;
+	stars: number;
+	productType: "subscription" | "pack" | "donation";
+	productId?: string | null;
+	creditTarget: "user" | "chat" | "none";
+	credits: number;
+	meta?: Record<string, unknown>;
+}
+
 /** Get both user and chat credit balances */
 export async function getBalances(
 	db: Database,
@@ -48,6 +70,78 @@ export async function getBalances(
 		userCredits: userRow?.credits ?? 0,
 		chatCredits: chatRow?.credits ?? 0,
 	};
+}
+
+async function recordPaymentReceiptIn(
+	tx: CreditTransaction,
+	record: StarsPaymentRecord,
+): Promise<{ id: string; applied: boolean }> {
+	const [inserted] = await tx
+		.insert(paymentReceipts)
+		.values({
+			userId: record.userId,
+			chatId: record.chatId ?? null,
+			telegramChargeId: record.telegramChargeId,
+			providerChargeId: record.providerChargeId ?? null,
+			invoicePayload: record.invoicePayload ?? null,
+			currency: record.currency,
+			stars: record.stars,
+			productType: record.productType,
+			productId: record.productId ?? null,
+			creditTarget: record.creditTarget,
+			credits: record.credits,
+			meta: record.meta,
+		})
+		.onConflictDoNothing({ target: paymentReceipts.telegramChargeId })
+		.returning({ id: paymentReceipts.id });
+
+	if (inserted) return { id: inserted.id, applied: true };
+
+	const [existing] = await tx
+		.select({ id: paymentReceipts.id })
+		.from(paymentReceipts)
+		.where(eq(paymentReceipts.telegramChargeId, record.telegramChargeId))
+		.limit(1);
+
+	if (!existing) throw new Error("Payment receipt conflict without row");
+	return { id: existing.id, applied: false };
+}
+
+export async function recordDonationPayment(
+	db: Database,
+	record: StarsPaymentRecord,
+): Promise<IdempotentCreditResult> {
+	return db.transaction(async (tx) => {
+		const receipt = await recordPaymentReceiptIn(tx, record);
+		const refundKey = `donation:${record.telegramChargeId}`;
+		if (!receipt.applied) {
+			const [existing] = await tx
+				.select({ balanceAfter: ledger.balanceAfter })
+				.from(ledger)
+				.where(eq(ledger.idempotencyKey, refundKey))
+				.limit(1);
+			return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
+		}
+
+		const [userRow] = await tx
+			.select({ credits: users.credits })
+			.from(users)
+			.where(eq(users.id, record.userId))
+			.limit(1);
+
+		await tx.insert(ledger).values({
+			userId: record.userId,
+			chatId: record.chatId ?? null,
+			type: "donation",
+			amount: 0,
+			balanceAfter: userRow?.credits ?? 0,
+			telegramChargeId: record.telegramChargeId,
+			idempotencyKey: refundKey,
+			meta: { paymentReceiptId: receipt.id },
+		});
+
+		return { balanceAfter: userRow?.credits ?? 0, applied: true };
+	});
 }
 
 /** Get daily usage count for a specific tool */
@@ -525,6 +619,87 @@ export async function addChatCredits(
 	return result.balanceAfter;
 }
 
+export async function applyUserPackPayment(
+	db: Database,
+	record: StarsPaymentRecord,
+): Promise<IdempotentCreditResult> {
+	const idempotencyKey = `pack:${record.telegramChargeId}`;
+
+	return db.transaction(async (tx) => {
+		const receipt = await recordPaymentReceiptIn(tx, record);
+		if (!receipt.applied) {
+			const [existing] = await tx
+				.select({ balanceAfter: ledger.balanceAfter })
+				.from(ledger)
+				.where(eq(ledger.idempotencyKey, idempotencyKey))
+				.limit(1);
+			return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
+		}
+
+		const [updated] = await tx
+			.update(users)
+			.set({ credits: sql`${users.credits} + ${record.credits}` })
+			.where(eq(users.id, record.userId))
+			.returning({ credits: users.credits });
+
+		if (!updated) throw new Error("User not found");
+
+		await tx.insert(ledger).values({
+			userId: record.userId,
+			type: "purchase",
+			amount: record.credits,
+			balanceAfter: updated.credits,
+			telegramChargeId: record.telegramChargeId,
+			idempotencyKey,
+			meta: { paymentReceiptId: receipt.id },
+		});
+
+		return { balanceAfter: updated.credits, applied: true };
+	});
+}
+
+export async function applyChatPackPayment(
+	db: Database,
+	record: StarsPaymentRecord,
+): Promise<IdempotentCreditResult> {
+	if (!record.chatId) throw new Error("Chat payment missing chat ID");
+	const chatId = record.chatId;
+	const idempotencyKey = `pack:${record.telegramChargeId}`;
+
+	return db.transaction(async (tx) => {
+		const receipt = await recordPaymentReceiptIn(tx, record);
+		if (!receipt.applied) {
+			const [existing] = await tx
+				.select({ balanceAfter: ledger.balanceAfter })
+				.from(ledger)
+				.where(eq(ledger.idempotencyKey, idempotencyKey))
+				.limit(1);
+			return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
+		}
+
+		const [updated] = await tx
+			.update(chats)
+			.set({ credits: sql`${chats.credits} + ${record.credits}` })
+			.where(eq(chats.id, chatId))
+			.returning({ credits: chats.credits });
+
+		if (!updated) throw new Error("Chat not found");
+
+		await tx.insert(ledger).values({
+			userId: record.userId,
+			chatId,
+			type: "purchase",
+			amount: record.credits,
+			balanceAfter: updated.credits,
+			telegramChargeId: record.telegramChargeId,
+			idempotencyKey,
+			meta: { paymentReceiptId: receipt.id },
+		});
+
+		return { balanceAfter: updated.credits, applied: true };
+	});
+}
+
 /** Record an idempotent free tool use and increment its daily quota. */
 export async function recordFreeToolUsage(
 	db: Database,
@@ -711,6 +886,15 @@ export async function applySubscriptionPayment(
 	planId: string,
 	telegramChargeId: string,
 	subscriptionExpiresAt: Date,
+	payment: Omit<
+		StarsPaymentRecord,
+		| "userId"
+		| "telegramChargeId"
+		| "productType"
+		| "productId"
+		| "creditTarget"
+		| "credits"
+	>,
 	meta?: Record<string, unknown>,
 ): Promise<IdempotentCreditResult> {
 	const idempotencyKey = `sub:${telegramChargeId}`;
@@ -721,21 +905,18 @@ export async function applySubscriptionPayment(
 	};
 
 	return db.transaction(async (tx) => {
-		const [inserted] = await tx
-			.insert(ledger)
-			.values({
-				userId,
-				type: "subscription",
-				amount,
-				balanceAfter: 0,
-				telegramChargeId,
-				idempotencyKey,
-				meta: paymentMeta,
-			})
-			.onConflictDoNothing({ target: ledger.idempotencyKey })
-			.returning({ id: ledger.id });
+		const receipt = await recordPaymentReceiptIn(tx, {
+			...payment,
+			userId,
+			telegramChargeId,
+			productType: "subscription",
+			productId: planId,
+			creditTarget: "user",
+			credits: amount,
+			meta: paymentMeta,
+		});
 
-		if (!inserted) {
+		if (!receipt.applied) {
 			const [existing] = await tx
 				.select({
 					balanceAfter: ledger.balanceAfter,
@@ -757,6 +938,22 @@ export async function applySubscriptionPayment(
 			return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
 		}
 
+		const [inserted] = await tx
+			.insert(ledger)
+			.values({
+				userId,
+				type: "subscription",
+				amount,
+				balanceAfter: 0,
+				telegramChargeId,
+				idempotencyKey,
+				meta: paymentMeta,
+			})
+			.onConflictDoNothing({ target: ledger.idempotencyKey })
+			.returning({ id: ledger.id });
+
+		if (!inserted) throw new Error("Subscription ledger conflict");
+
 		const [updated] = await tx
 			.update(users)
 			.set({
@@ -773,6 +970,21 @@ export async function applySubscriptionPayment(
 			.update(ledger)
 			.set({ balanceAfter: updated.credits })
 			.where(eq(ledger.id, inserted.id));
+
+		await tx
+			.insert(subscriptionPeriods)
+			.values({
+				userId,
+				paymentId: receipt.id,
+				telegramChargeId,
+				planId,
+				credits: amount,
+				expiresAt: subscriptionExpiresAt,
+				meta: paymentMeta,
+			})
+			.onConflictDoNothing({
+				target: subscriptionPeriods.telegramChargeId,
+			});
 
 		return { balanceAfter: updated.credits, applied: true };
 	});
@@ -802,6 +1014,38 @@ async function ensureSubscriptionExpiry(
 			})
 			.where(eq(users.id, userId));
 	}
+}
+
+async function recomputeActiveSubscriptionIn(
+	tx: CreditTransaction,
+	userId: string,
+): Promise<void> {
+	const [active] = await tx
+		.select({
+			planId: subscriptionPeriods.planId,
+			expiresAt: subscriptionPeriods.expiresAt,
+		})
+		.from(subscriptionPeriods)
+		.where(
+			and(
+				eq(subscriptionPeriods.userId, userId),
+				eq(subscriptionPeriods.status, "active"),
+				sql`${subscriptionPeriods.expiresAt} > now()`,
+			),
+		)
+		.orderBy(
+			desc(subscriptionPeriods.expiresAt),
+			desc(subscriptionPeriods.createdAt),
+		)
+		.limit(1);
+
+	await tx
+		.update(users)
+		.set({
+			subscriptionTier: active?.planId ?? null,
+			subscriptionExpiresAt: active?.expiresAt ?? null,
+		})
+		.where(eq(users.id, userId));
 }
 
 async function debitUserCreditsForRefund(
@@ -883,7 +1127,55 @@ export async function reconcileStarRefund(
 			.limit(1);
 
 		if (!original) {
-			throw new Error("No local purchase found for charge");
+			const [receipt] = await tx
+				.select()
+				.from(paymentReceipts)
+				.where(eq(paymentReceipts.telegramChargeId, telegramChargeId))
+				.limit(1);
+
+			if (!receipt) {
+				throw new Error("No local payment found for charge");
+			}
+
+			const [inserted] = await tx
+				.insert(ledger)
+				.values({
+					userId: receipt.userId,
+					chatId: receipt.chatId,
+					type: "refund",
+					amount: 0,
+					balanceAfter: 0,
+					telegramChargeId,
+					idempotencyKey: refundKey,
+					meta: {
+						...meta,
+						paymentReceiptId: receipt.id,
+						originalType: receipt.productType,
+						originalAmount: receipt.credits,
+						originalStars: receipt.stars,
+						recoveredAmount: 0,
+						unrecoveredAmount: receipt.credits,
+					},
+				})
+				.onConflictDoNothing({ target: ledger.idempotencyKey })
+				.returning({ id: ledger.id });
+
+			if (inserted) {
+				await tx
+					.update(paymentReceipts)
+					.set({ status: "refunded", refundedAt: new Date() })
+					.where(eq(paymentReceipts.id, receipt.id));
+			}
+
+			return {
+				applied: Boolean(inserted),
+				target: receipt.chatId ? "chat" : "user",
+				originalType: receipt.productType,
+				originalAmount: receipt.credits,
+				recoveredAmount: 0,
+				unrecoveredAmount: receipt.credits,
+				balanceAfter: 0,
+			};
 		}
 
 		const [inserted] = await tx
@@ -961,29 +1253,17 @@ export async function reconcileStarRefund(
 			})
 			.where(eq(ledger.id, inserted.id));
 
-		if (original.type === "subscription") {
-			const [laterSubscription] = await tx
-				.select({ id: ledger.id })
-				.from(ledger)
-				.where(
-					and(
-						eq(ledger.userId, original.userId),
-						eq(ledger.type, "subscription"),
-						sql`${ledger.amount} > 0`,
-						sql`${ledger.createdAt} > ${original.createdAt}`,
-					),
-				)
-				.limit(1);
+		await tx
+			.update(paymentReceipts)
+			.set({ status: "refunded", refundedAt: new Date() })
+			.where(eq(paymentReceipts.telegramChargeId, telegramChargeId));
 
-			if (!laterSubscription) {
-				await tx
-					.update(users)
-					.set({
-						subscriptionTier: null,
-						subscriptionExpiresAt: null,
-					})
-					.where(eq(users.id, original.userId));
-			}
+		if (original.type === "subscription") {
+			await tx
+				.update(subscriptionPeriods)
+				.set({ status: "refunded", refundedAt: new Date() })
+				.where(eq(subscriptionPeriods.telegramChargeId, telegramChargeId));
+			await recomputeActiveSubscriptionIn(tx, original.userId);
 		}
 
 		return {

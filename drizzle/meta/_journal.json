@@ -22,6 +22,13 @@
 			"when": 1777844449536,
 			"tag": "0002_common_photon",
 			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "7",
+			"when": 1777845691608,
+			"tag": "0003_silent_scarecrow",
+			"breakpoints": true
 		}
 	]
 }

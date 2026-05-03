@@ -13,9 +13,9 @@ import { getTopUpPack } from "../credits/packs";
 import { getSubscriptionPlan } from "../credits/subscriptions";
 import { buildBuyKeyboard, formatBalanceMessage } from "../credits/ui";
 import {
-	addChatCreditsWithResult,
-	addUserCreditsWithResult,
+	applyChatPackPayment,
 	applySubscriptionPayment,
+	applyUserPackPayment,
 	getBalances,
 	reconcileStarRefund,
 	transferUserCreditsToChat,
@@ -449,6 +449,13 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 				chargeId,
 				newExpiry,
 				{
+					chatId: null,
+					providerChargeId: payment.provider_payment_charge_id,
+					invoicePayload: payment.invoice_payload,
+					currency: payment.currency,
+					stars: plan.stars,
+				},
+				{
 					planId: plan.id,
 					stars: plan.stars,
 					isRenewal,
@@ -486,16 +493,20 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 			if (!pack) return;
 
 			if (payload.target === "chat") {
-				const result = await addChatCreditsWithResult(
-					ctx.db,
-					ctx.dbChat.id,
-					ctx.dbUser.id,
-					pack.credits,
-					"purchase",
-					chargeId,
-					`pack:${chargeId}`,
-					{ packId: pack.id, stars: pack.stars },
-				);
+				const result = await applyChatPackPayment(ctx.db, {
+					userId: ctx.dbUser.id,
+					chatId: ctx.dbChat.id,
+					telegramChargeId: chargeId,
+					providerChargeId: payment.provider_payment_charge_id,
+					invoicePayload: payment.invoice_payload,
+					currency: payment.currency,
+					stars: pack.stars,
+					productType: "pack",
+					productId: pack.id,
+					creditTarget: "chat",
+					credits: pack.credits,
+					meta: { packId: pack.id },
+				});
 				if (!result.applied) return;
 				await replyWithPaymentEffect(
 					ctx,
@@ -514,16 +525,23 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 						chatId: ctx.dbChat.telegramId,
 					}),
 				);
+				derpMetrics.creditRevenue.add(pack.stars, { source: "pack_chat" });
+				derpMetrics.creditTransactions.add(1, { type: "purchase" });
 			} else {
-				const result = await addUserCreditsWithResult(
-					ctx.db,
-					ctx.dbUser.id,
-					pack.credits,
-					"purchase",
-					chargeId,
-					`pack:${chargeId}`,
-					{ packId: pack.id, stars: pack.stars },
-				);
+				const result = await applyUserPackPayment(ctx.db, {
+					userId: ctx.dbUser.id,
+					chatId: null,
+					telegramChargeId: chargeId,
+					providerChargeId: payment.provider_payment_charge_id,
+					invoicePayload: payment.invoice_payload,
+					currency: payment.currency,
+					stars: pack.stars,
+					productType: "pack",
+					productId: pack.id,
+					creditTarget: "user",
+					credits: pack.credits,
+					meta: { packId: pack.id },
+				});
 				if (!result.applied) return;
 				await replyWithPaymentEffect(
 					ctx,
@@ -541,6 +559,8 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 						chargeId,
 					}),
 				);
+				derpMetrics.creditRevenue.add(pack.stars, { source: "pack_user" });
+				derpMetrics.creditTransactions.add(1, { type: "purchase" });
 			}
 		}
 	} catch (err) {

@@ -6,7 +6,9 @@ import {
 	formatPaymentNotification,
 	notifyAdmins,
 } from "../common/admin-notify";
+import { derpMetrics } from "../common/observability";
 import { MESSAGE_EFFECTS } from "../common/telegram";
+import { recordDonationPayment } from "../db/queries/credits";
 
 const donationsComposer = new Composer<DerpContext>();
 const DONATION_OPTIONS = [20, 100, 250];
@@ -128,8 +130,28 @@ donationsComposer.on("message:successful_payment", async (ctx, next) => {
 
 	const amount = amountFromPayload(payment.invoice_payload);
 	if (amount == null) return next();
+	if (!ctx.dbUser) return;
 
 	const userId = ctx.from?.id ?? ctx.dbUser?.telegramId ?? 0;
+	const result = await recordDonationPayment(ctx.db, {
+		userId: ctx.dbUser.id,
+		chatId: ctx.dbChat?.id ?? null,
+		telegramChargeId: payment.telegram_payment_charge_id,
+		providerChargeId: payment.provider_payment_charge_id,
+		invoicePayload: payment.invoice_payload,
+		currency: payment.currency,
+		stars: amount,
+		productType: "donation",
+		productId: "support",
+		creditTarget: "none",
+		credits: 0,
+		meta: {
+			chatTelegramId: ctx.chat?.id,
+			threadId: ctx.message?.message_thread_id,
+		},
+	});
+	if (!result.applied) return;
+
 	try {
 		await ctx.reply(ctx.t("donate-thanks", { stars: amount }), {
 			parse_mode: "HTML",
@@ -156,6 +178,9 @@ donationsComposer.on("message:successful_payment", async (ctx, next) => {
 			chatId: ctx.chat?.id,
 		}),
 	);
+
+	derpMetrics.creditRevenue.add(amount, { source: "donation" });
+	derpMetrics.creditTransactions.add(1, { type: "donation" });
 });
 
 export { donationsComposer };

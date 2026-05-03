@@ -216,6 +216,86 @@ export const ledger = pgTable(
 	],
 );
 
+// ── Payment Receipts (durable Stars accounting) ─────────────────────────────
+
+export const paymentReceipts = pgTable(
+	"payment_receipts",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id),
+		chatId: uuid("chat_id").references(() => chats.id),
+		telegramChargeId: varchar("telegram_charge_id", { length: 255 }).notNull(),
+		providerChargeId: varchar("provider_charge_id", { length: 255 }),
+		invoicePayload: varchar("invoice_payload", { length: 255 }),
+		currency: varchar("currency", { length: 10 }).notNull().default("XTR"),
+		stars: integer("stars").notNull(),
+		productType: varchar("product_type", { length: 30 }).notNull(), // subscription, pack, donation
+		productId: varchar("product_id", { length: 100 }),
+		creditTarget: varchar("credit_target", { length: 20 }), // user, chat, none
+		credits: integer("credits").notNull().default(0),
+		status: varchar("status", { length: 20 }).notNull().default("paid"), // paid, refunded
+		refundedAt: timestamp("refunded_at", { withTimezone: true }),
+		meta: jsonb("meta").$type<Record<string, unknown>>(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date()),
+	},
+	(t) => [
+		uniqueIndex("payment_receipts_telegram_charge_unique").on(
+			t.telegramChargeId,
+		),
+		index("payment_receipts_user_id_idx").on(t.userId),
+		index("payment_receipts_chat_id_idx").on(t.chatId),
+		index("payment_receipts_status_idx").on(t.status),
+	],
+);
+
+// ── Subscription Periods ────────────────────────────────────────────────────
+
+export const subscriptionPeriods = pgTable(
+	"subscription_periods",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id),
+		paymentId: uuid("payment_id")
+			.notNull()
+			.references(() => paymentReceipts.id),
+		telegramChargeId: varchar("telegram_charge_id", { length: 255 }).notNull(),
+		planId: varchar("plan_id", { length: 50 }).notNull(),
+		credits: integer("credits").notNull(),
+		startsAt: timestamp("starts_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		status: varchar("status", { length: 20 }).notNull().default("active"), // active, refunded
+		refundedAt: timestamp("refunded_at", { withTimezone: true }),
+		meta: jsonb("meta").$type<Record<string, unknown>>(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date()),
+	},
+	(t) => [
+		uniqueIndex("subscription_periods_charge_unique").on(t.telegramChargeId),
+		index("subscription_periods_user_status_expiry_idx").on(
+			t.userId,
+			t.status,
+			t.expiresAt,
+		),
+	],
+);
+
 // ── Usage Quotas (daily free tier tracking) ──────────────────────────────────
 
 export const usageQuotas = pgTable(
@@ -307,5 +387,7 @@ export type NewChat = typeof chats.$inferInsert;
 export type ChatMember = typeof chatMembers.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type LedgerEntry = typeof ledger.$inferSelect;
+export type PaymentReceipt = typeof paymentReceipts.$inferSelect;
+export type SubscriptionPeriod = typeof subscriptionPeriods.$inferSelect;
 export type UsageQuota = typeof usageQuotas.$inferSelect;
 export type Reminder = typeof reminders.$inferSelect;

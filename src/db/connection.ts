@@ -18,11 +18,17 @@ const SCHEMA_CHECKS = [
 	"SELECT id, chat_id, user_id, role FROM chat_members LIMIT 0",
 	"SELECT id, chat_id, user_id, telegram_message_id, telegram_date FROM messages LIMIT 0",
 	"SELECT id, user_id, chat_id, amount, balance_after FROM ledger LIMIT 0",
+	"SELECT id, user_id, telegram_charge_id, stars, product_type, status FROM payment_receipts LIMIT 0",
+	"SELECT id, user_id, payment_id, plan_id, expires_at, status FROM subscription_periods LIMIT 0",
 	"SELECT id, user_id, chat_id, usage_date, usage FROM usage_quotas LIMIT 0",
 	"SELECT id, chat_id, user_id, description, status, fire_at, cron_expression FROM reminders LIMIT 0",
 ];
 
-const CRITICAL_INDEXES = ["ledger_payment_receipt_charge_unique"];
+const CRITICAL_INDEXES = [
+	"ledger_payment_receipt_charge_unique",
+	"payment_receipts_telegram_charge_unique",
+	"subscription_periods_charge_unique",
+];
 
 function createDb(databaseUrl: string) {
 	const client = postgres(databaseUrl, {
