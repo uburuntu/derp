@@ -12,10 +12,12 @@ infoComposer.command("info", async (ctx) => {
 	if (!ctx.dbChat) return;
 
 	const replyTo = ctx.message?.message_id;
+	const threadId = ctx.message?.message_thread_id;
 
 	const repliedTo = ctx.message?.reply_to_message;
 	if (!repliedTo) {
 		await replyHtml(ctx, ctx.t("info-reply-required"), {
+			message_thread_id: threadId,
 			reply_to_message_id: replyTo,
 		});
 		return;
@@ -29,6 +31,7 @@ infoComposer.command("info", async (ctx) => {
 
 	if (!msg) {
 		await replyHtml(ctx, ctx.t("info-not-found"), {
+			message_thread_id: threadId,
 			reply_to_message_id: replyTo,
 		});
 		return;
@@ -36,6 +39,7 @@ infoComposer.command("info", async (ctx) => {
 
 	if (msg.direction !== "out" || !msg.metadata) {
 		await replyHtml(ctx, ctx.t("info-no-details"), {
+			message_thread_id: threadId,
 			reply_to_message_id: replyTo,
 		});
 		return;
@@ -65,6 +69,7 @@ infoComposer.command("info", async (ctx) => {
 		lines.push(`<b>Duration:</b> ${meta.durationMs}ms`);
 
 	await replyHtml(ctx, lines.join("\n"), {
+		message_thread_id: threadId,
 		reply_to_message_id: repliedTo.message_id,
 	});
 });

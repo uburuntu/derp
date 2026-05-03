@@ -89,7 +89,7 @@ jobs:
       - name: Deploy to server
         uses: appleboy/ssh-action@v1
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}
           GITHUB_TOKEN: ${{ secrets.DEPLOY_GHCR_TOKEN }}
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -208,5 +208,4 @@ jobs:
         run: |
           echo "### Deployment Successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Digest:** \`${{ needs.build.outputs.image_digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}\`" >> $GITHUB_STEP_SUMMARY

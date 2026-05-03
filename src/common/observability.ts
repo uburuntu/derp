@@ -141,6 +141,9 @@ interface DerpMetrics {
 	contextTokens: ReturnType<
 		ReturnType<typeof otelMetrics.getMeter>["createHistogram"]
 	>;
+	handledFailures: ReturnType<
+		ReturnType<typeof otelMetrics.getMeter>["createCounter"]
+	>;
 }
 
 export let derpMetrics: DerpMetrics;
@@ -176,5 +179,22 @@ function initMetrics(): void {
 		contextTokens: meter.createHistogram("derp.context.tokens", {
 			description: "Context window message count by tier",
 		}),
+		handledFailures: meter.createCounter("derp.failures.handled", {
+			description: "Handled user-visible failures by subsystem",
+		}),
 	};
+}
+
+export function recordHandledFailure(
+	subsystem: string,
+	reason: string,
+	attrs: Record<string, string | number | boolean> = {},
+): void {
+	const span = trace.getActiveSpan();
+	if (span) {
+		span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
+		span.setAttribute("derp.failure.subsystem", subsystem);
+		span.setAttribute("derp.failure.reason", reason);
+	}
+	derpMetrics?.handledFailures.add(1, { subsystem, ...attrs });
 }

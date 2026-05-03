@@ -12,6 +12,8 @@ interface HealthStatus {
 	startedAt: string | null;
 	lastCheckedAt: string | null;
 	error: string | null;
+	botDetails: Record<string, unknown> | null;
+	schedulerDetails: Record<string, unknown> | null;
 }
 
 const status: HealthStatus = {
@@ -22,6 +24,8 @@ const status: HealthStatus = {
 	startedAt: null,
 	lastCheckedAt: null,
 	error: null,
+	botDetails: null,
+	schedulerDetails: null,
 };
 
 export interface ReadinessResult {
@@ -31,11 +35,26 @@ export interface ReadinessResult {
 }
 
 type ReadinessCheck = () => Promise<ReadinessResult>;
+type ComponentCheck = () => {
+	ready: boolean;
+	error?: string;
+	details?: Record<string, unknown>;
+};
 
 let readinessCheck: ReadinessCheck | null = null;
+let botCheck: ComponentCheck | null = null;
+let schedulerCheck: ComponentCheck | null = null;
 
 export function setReadinessCheck(check: ReadinessCheck): void {
 	readinessCheck = check;
+}
+
+export function setBotCheck(check: ComponentCheck): void {
+	botCheck = check;
+}
+
+export function setSchedulerCheck(check: ComponentCheck): void {
+	schedulerCheck = check;
 }
 
 export function markReady(
@@ -43,6 +62,14 @@ export function markReady(
 ): void {
 	status[component] = true;
 	markStartedIfReady();
+}
+
+export function markNotReady(
+	component: keyof Pick<HealthStatus, "db" | "schema" | "bot" | "scheduler">,
+	error?: string,
+): void {
+	status[component] = false;
+	if (error) status.error = error;
 }
 
 export async function isHealthy(): Promise<boolean> {
@@ -96,7 +123,31 @@ async function refreshReadiness(): Promise<void> {
 		status.error = error instanceof Error ? error.message : String(error);
 	}
 
+	refreshComponent("bot", botCheck);
+	refreshComponent("scheduler", schedulerCheck);
 	markStartedIfReady();
+}
+
+function refreshComponent(
+	component: "bot" | "scheduler",
+	check: ComponentCheck | null,
+): void {
+	const detailKey = component === "bot" ? "botDetails" : "schedulerDetails";
+	if (!check) {
+		status[detailKey] = null;
+		return;
+	}
+
+	try {
+		const result = check();
+		status[component] = result.ready;
+		status[detailKey] = result.details ?? null;
+		if (!result.ready && result.error) status.error = result.error;
+	} catch (error) {
+		status[component] = false;
+		status[detailKey] = null;
+		status.error = error instanceof Error ? error.message : String(error);
+	}
 }
 
 function markStartedIfReady(): void {

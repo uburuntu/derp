@@ -11,6 +11,9 @@ export function createRateLimiter() {
 		limit: 3,
 		keyGenerator: (ctx: DerpContext) => {
 			if (
+				ctx.callbackQuery ||
+				ctx.inlineQuery ||
+				ctx.chosenInlineResult ||
 				ctx.preCheckoutQuery ||
 				ctx.message?.successful_payment ||
 				ctx.message?.refunded_payment

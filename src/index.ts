@@ -4,8 +4,11 @@ import { run } from "@grammyjs/runner";
 import { createBot, registerCommands } from "./bot/bot";
 import { initAdminNotify, notifyAdmins } from "./common/admin-notify";
 import {
+	markNotReady,
 	markReady,
+	setBotCheck,
 	setReadinessCheck,
+	setSchedulerCheck,
 	startHealthServer,
 } from "./common/health";
 import {
@@ -20,7 +23,11 @@ import {
 	closeDb,
 	getDb,
 } from "./db/connection";
-import { startScheduler, stopScheduler } from "./scheduler/scheduler";
+import {
+	getSchedulerHealth,
+	startScheduler,
+	stopScheduler,
+} from "./scheduler/scheduler";
 
 // ── Startup ─────────────────────────────────────────────────────────────────
 
@@ -73,6 +80,14 @@ async function main() {
 	});
 
 	logger.info("bot_running");
+	setBotCheck(() => ({
+		ready: runner.isRunning(),
+		error: runner.isRunning() ? undefined : "bot_runner_not_running",
+		details: {
+			running: runner.isRunning(),
+			activeUpdates: runner.size(),
+		},
+	}));
 	markReady("bot");
 
 	// Notify admins
@@ -82,13 +97,16 @@ async function main() {
 
 	// Start reminder scheduler
 	startScheduler(db, bot, config.reminderCheckIntervalMs);
+	setSchedulerCheck(getSchedulerHealth);
 	markReady("scheduler");
 
 	// ── Graceful Shutdown ───────────────────────────────────────────────
 	const shutdown = async (signal: string) => {
 		logger.info("shutdown_initiated", { signal });
+		markNotReady("scheduler", "shutdown");
+		markNotReady("bot", "shutdown");
 		stopScheduler();
-		runner.stop();
+		await runner.stop();
 		await closeDb();
 		await shutdownObservability();
 		logger.info("shutdown_complete");

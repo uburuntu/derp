@@ -47,6 +47,27 @@ function pendingKey(ctx: DerpContext): string | null {
 	return `${chatId}:${userId}`;
 }
 
+type MaybeThreadedMessage = {
+	message_thread_id?: number;
+};
+
+function callbackThreadId(ctx: DerpContext): number | undefined {
+	const message = ctx.callbackQuery?.message;
+	if (!message || !("message_id" in message)) return undefined;
+	return (message as MaybeThreadedMessage).message_thread_id;
+}
+
+function messageThreadId(ctx: DerpContext): number | undefined {
+	return ctx.message?.message_thread_id ?? callbackThreadId(ctx);
+}
+
+function replyOptions(ctx: DerpContext) {
+	return {
+		message_thread_id: messageThreadId(ctx),
+		reply_to_message_id: ctx.message?.message_id,
+	};
+}
+
 function getPendingCustomPrompt(key: string): PendingCustomPrompt | null {
 	const pending = pendingCustomPrompts.get(key);
 	if (!pending) return null;
@@ -77,7 +98,7 @@ async function ensureCanMutateSettings(ctx: DerpContext): Promise<boolean> {
 	} else {
 		await ctx.reply(ctx.t("settings-admin-only"), {
 			parse_mode: "HTML",
-			reply_to_message_id: ctx.message?.message_id,
+			...replyOptions(ctx),
 		});
 	}
 	return false;
@@ -182,6 +203,7 @@ async function startCustomPromptFlow(ctx: DerpContext): Promise<void> {
 		}),
 		{
 			parse_mode: "HTML",
+			message_thread_id: messageThreadId(ctx),
 			reply_markup: {
 				force_reply: true,
 				selective: true,
@@ -270,7 +292,7 @@ async function handleCustomPromptReply(
 		pendingCustomPrompts.delete(key);
 		await ctx.reply(ctx.t("settings-custom-cancelled"), {
 			parse_mode: "HTML",
-			reply_to_message_id: ctx.message?.message_id,
+			...replyOptions(ctx),
 		});
 		return;
 	}
@@ -282,7 +304,7 @@ async function handleCustomPromptReply(
 		pendingCustomPrompts.delete(key);
 		await ctx.reply(ctx.t("settings-custom-sub-required"), {
 			parse_mode: "HTML",
-			reply_to_message_id: ctx.message?.message_id,
+			...replyOptions(ctx),
 		});
 		return;
 	}
@@ -294,7 +316,7 @@ async function handleCustomPromptReply(
 			}),
 			{
 				parse_mode: "HTML",
-				reply_to_message_id: ctx.message?.message_id,
+				...replyOptions(ctx),
 			},
 		);
 		return;
@@ -306,7 +328,7 @@ async function handleCustomPromptReply(
 	pendingCustomPrompts.delete(key);
 	await ctx.reply(ctx.t("settings-custom-saved"), {
 		parse_mode: "HTML",
-		reply_to_message_id: ctx.message?.message_id,
+		...replyOptions(ctx),
 	});
 }
 
@@ -355,7 +377,7 @@ const settingsMenu = new Menu<DerpContext>("settings")
 					chatCredits,
 					subscription,
 				}),
-				{ parse_mode: "HTML" },
+				{ parse_mode: "HTML", message_thread_id: messageThreadId(ctx) },
 			);
 		},
 	)
@@ -457,7 +479,7 @@ const memoryMenu = new Menu<DerpContext>("memory-menu")
 			await ctx.answerCallbackQuery();
 			await ctx.reply(
 				`📝 <b>${ctx.t("settings-memory-title")}</b>\n\n${escapeHtml(memory)}`,
-				{ parse_mode: "HTML" },
+				{ parse_mode: "HTML", message_thread_id: messageThreadId(ctx) },
 			);
 		},
 	)
@@ -496,7 +518,7 @@ settingsComposer.command("settings", async (ctx) => {
 	await ctx.reply(settingsSummary(ctx), {
 		parse_mode: "HTML",
 		reply_markup: settingsMenu,
-		reply_to_message_id: ctx.message?.message_id,
+		...replyOptions(ctx),
 	});
 });
 

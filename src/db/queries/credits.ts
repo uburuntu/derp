@@ -3,6 +3,7 @@ import type { Database } from "../connection";
 import { chats, ledger, usageQuotas, users } from "../schema";
 
 type CreditTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type ToolDebitResult = "applied" | "duplicate" | "quota_exhausted";
 
 export interface IdempotentCreditResult {
 	balanceAfter: number;
@@ -99,6 +100,55 @@ async function incrementDailyUsageIn(
 				)`,
 			},
 		});
+}
+
+class QuotaExhaustedError extends Error {
+	constructor() {
+		super("Daily free quota exhausted");
+	}
+}
+
+async function reserveDailyUsageIn(
+	db: Pick<Database, "execute">,
+	userId: string,
+	chatId: string,
+	toolName: string,
+	limit: number,
+): Promise<void> {
+	const today = new Date().toISOString().slice(0, 10);
+	const rows = await db.execute(sql`
+		INSERT INTO ${usageQuotas} (
+			${usageQuotas.userId},
+			${usageQuotas.chatId},
+			${usageQuotas.usageDate},
+			${usageQuotas.usage}
+		)
+		VALUES (
+			${userId},
+			${chatId},
+			${today},
+			jsonb_build_object(${toolName}, 1)
+		)
+		ON CONFLICT (
+			${usageQuotas.userId},
+			${usageQuotas.chatId},
+			${usageQuotas.usageDate}
+		)
+		DO UPDATE SET
+			${usageQuotas.usage} = jsonb_set(
+				COALESCE(${usageQuotas.usage}, '{}'::jsonb),
+				ARRAY[${toolName}]::text[],
+				to_jsonb(COALESCE((${usageQuotas.usage}->>${toolName})::int, 0) + 1),
+				true
+			),
+			${usageQuotas.updatedAt} = now()
+		WHERE COALESCE((${usageQuotas.usage}->>${toolName})::int, 0) < ${limit}
+		RETURNING ${usageQuotas.usage}
+	`);
+
+	if (rows.length === 0) {
+		throw new QuotaExhaustedError();
+	}
 }
 
 /** Increment daily usage for a tool */
@@ -482,47 +532,59 @@ export async function recordFreeToolUsage(
 	chatId: string,
 	toolName: string,
 	modelId: string | null,
+	freeDailyLimit: number,
 	idempotencyKey?: string,
 	meta?: Record<string, unknown>,
-): Promise<boolean> {
+): Promise<ToolDebitResult> {
 	if (!idempotencyKey) {
-		await incrementDailyUsage(db, userId, chatId, toolName);
-		return true;
+		try {
+			await reserveDailyUsageIn(db, userId, chatId, toolName, freeDailyLimit);
+			return "applied";
+		} catch (err) {
+			if (err instanceof QuotaExhaustedError) return "quota_exhausted";
+			throw err;
+		}
 	}
 
-	return db.transaction(async (tx) => {
-		const [inserted] = await tx
-			.insert(ledger)
-			.values({
-				userId,
-				chatId,
-				type: "spend",
-				amount: 0,
-				balanceAfter: 0,
-				toolName,
-				modelId,
-				idempotencyKey,
-				meta,
-			})
-			.onConflictDoNothing({ target: ledger.idempotencyKey })
-			.returning({ id: ledger.id });
+	try {
+		return await db.transaction(async (tx) => {
+			const [inserted] = await tx
+				.insert(ledger)
+				.values({
+					userId,
+					chatId,
+					type: "spend",
+					amount: 0,
+					balanceAfter: 0,
+					toolName,
+					modelId,
+					idempotencyKey,
+					meta,
+				})
+				.onConflictDoNothing({ target: ledger.idempotencyKey })
+				.returning({ id: ledger.id });
 
-		if (!inserted) return false;
+			if (!inserted) return "duplicate";
 
-		const [userRow] = await tx
-			.select({ credits: users.credits })
-			.from(users)
-			.where(eq(users.id, userId))
-			.limit(1);
+			await reserveDailyUsageIn(tx, userId, chatId, toolName, freeDailyLimit);
 
-		await tx
-			.update(ledger)
-			.set({ balanceAfter: userRow?.credits ?? 0 })
-			.where(eq(ledger.id, inserted.id));
+			const [userRow] = await tx
+				.select({ credits: users.credits })
+				.from(users)
+				.where(eq(users.id, userId))
+				.limit(1);
 
-		await incrementDailyUsageIn(tx, userId, chatId, toolName);
-		return true;
-	});
+			await tx
+				.update(ledger)
+				.set({ balanceAfter: userRow?.credits ?? 0 })
+				.where(eq(ledger.id, inserted.id));
+
+			return "applied";
+		});
+	} catch (err) {
+		if (err instanceof QuotaExhaustedError) return "quota_exhausted";
+		throw err;
+	}
 }
 
 /** Move credits from a user's balance into a chat pool in one transaction. */

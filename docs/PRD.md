@@ -75,10 +75,12 @@ Current automatic tools:
 - Forum topic context should stay inside its topic.
 - General chat context should not include forum-topic messages by default.
 - Stored memory and Telegram/user-provided text must be escaped before rendering as Telegram HTML.
+- Message text, Telegram file IDs, and generation metadata are scrubbed after 30 days.
+- Ledger metadata is scrubbed after 400 days; immutable credit amounts, charge IDs, and idempotency keys remain for accounting and refund reconciliation.
+- Chat memory and custom instructions are user-controlled persistent settings. They are retained until changed or cleared.
 
 ## Open Decisions
 
 - Chat turn metering: if normal chat turns should spend credits, define the per-turn cost here before implementation.
 - Free quota scope: if quotas should become global per user per day, add a migration and update help copy in the same change.
-- Retention: define retention windows for message text, file IDs, chat memory, custom instructions, and ledger metadata.
 - LLM reminders: define creation UX, lifetime limits, retry/refund behavior, and cancellation rules before exposing them to users.

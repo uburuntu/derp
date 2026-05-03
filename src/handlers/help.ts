@@ -22,6 +22,7 @@ helpComposer.command("help", async (ctx) => {
 
 	await ctx.reply(html, {
 		parse_mode: "HTML",
+		message_thread_id: ctx.message?.message_thread_id,
 		reply_to_message_id: ctx.message?.message_id,
 	});
 });

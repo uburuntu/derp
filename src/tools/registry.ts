@@ -296,7 +296,10 @@ class ToolRegistry {
 						await replyMarkdown(
 							ctx,
 							`Usage: ${tool.usage ?? `${primaryCmd} <${required?.[0] ?? "input"}>`}`,
-							{ reply_to_message_id: ctx.message?.message_id },
+							{
+								message_thread_id: ctx.message?.message_thread_id,
+								reply_to_message_id: ctx.message?.message_id,
+							},
 						);
 						return;
 					}
@@ -307,13 +310,20 @@ class ToolRegistry {
 					await replyMarkdown(
 						ctx,
 						`Usage: ${tool.usage ?? `${primaryCmd} <input>`}`,
-						{ reply_to_message_id: ctx.message?.message_id },
+						{
+							message_thread_id: ctx.message?.message_thread_id,
+							reply_to_message_id: ctx.message?.message_id,
+						},
 					);
 					return;
 				}
 
 				const admin = await isChatAdmin(ctx);
 				const media = await extractTriggerMedia(ctx);
+				const replyOptions = {
+					message_thread_id: ctx.message?.message_thread_id,
+					reply_to_message_id: ctx.message?.message_id,
+				};
 				const toolCtx: ToolContext = {
 					db: ctx.db,
 					user: ctx.dbUser,
@@ -330,19 +340,25 @@ class ToolRegistry {
 						admin,
 					),
 					sendMessage: async (text: string) => {
-						await ctx.reply(text);
+						await ctx.reply(text, replyOptions);
 					},
 					sendPhoto: async (photo: Buffer, caption?: string) => {
 						const { InputFile } = await import("grammy");
-						await ctx.replyWithPhoto(new InputFile(photo), { caption });
+						await ctx.replyWithPhoto(new InputFile(photo), {
+							caption,
+							...replyOptions,
+						});
 					},
 					sendVoice: async (audio: Buffer) => {
 						const { InputFile } = await import("grammy");
-						await ctx.replyWithVoice(new InputFile(audio));
+						await ctx.replyWithVoice(new InputFile(audio), replyOptions);
 					},
 					sendVideo: async (video: Buffer, caption?: string) => {
 						const { InputFile } = await import("grammy");
-						await ctx.replyWithVideo(new InputFile(video), { caption });
+						await ctx.replyWithVideo(new InputFile(video), {
+							caption,
+							...replyOptions,
+						});
 					},
 					editMessage: async (messageId: number, text: string) => {
 						const chatId = ctx.chat?.id;
@@ -376,6 +392,7 @@ class ToolRegistry {
 								)
 							: "";
 					await replyMarkdown(ctx, `${result.text}${footer}`, {
+						message_thread_id: ctx.message?.message_thread_id,
 						reply_to_message_id: ctx.message?.message_id,
 					});
 				}

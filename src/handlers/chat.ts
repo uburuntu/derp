@@ -108,7 +108,9 @@ async function sendCaptionFollowUps(
 	followUpChunks: string[],
 ): Promise<void> {
 	for (const chunk of followUpChunks) {
-		await ctx.reply(chunk);
+		await ctx.reply(chunk, {
+			message_thread_id: ctx.message?.message_thread_id,
+		});
 	}
 }
 
@@ -119,6 +121,10 @@ async function buildToolContext(
 	replyMedia: MediaAttachment[],
 ): Promise<ToolContext> {
 	const admin = await isChatAdmin(ctx);
+	const replyOptions = {
+		message_thread_id: ctx.message?.message_thread_id,
+		reply_to_message_id: ctx.message?.message_id,
+	};
 	return {
 		db: ctx.db,
 		user: ctx.dbUser,
@@ -138,22 +144,24 @@ async function buildToolContext(
 		getParticipantProfilePhoto: (participantRef) =>
 			getParticipantProfilePhoto(ctx, participantRefs, participantRef),
 		sendMessage: async (text: string) => {
-			await ctx.reply(text);
+			await ctx.reply(text, replyOptions);
 		},
 		sendPhoto: async (photo: Buffer, caption?: string) => {
 			const mediaCaption = captionPartsForMedia(caption);
 			await ctx.replyWithPhoto(new InputFile(photo), {
 				caption: mediaCaption.caption,
+				...replyOptions,
 			});
 			await sendCaptionFollowUps(ctx, mediaCaption.followUpChunks);
 		},
 		sendVoice: async (audio: Buffer) => {
-			await ctx.replyWithVoice(new InputFile(audio));
+			await ctx.replyWithVoice(new InputFile(audio), replyOptions);
 		},
 		sendVideo: async (video: Buffer, caption?: string) => {
 			const mediaCaption = captionPartsForMedia(caption);
 			await ctx.replyWithVideo(new InputFile(video), {
 				caption: mediaCaption.caption,
+				...replyOptions,
 			});
 			await sendCaptionFollowUps(ctx, mediaCaption.followUpChunks);
 		},
@@ -178,14 +186,17 @@ async function buildToolContext(
 chatComposer.command("memory", async (ctx) => {
 	if (!ctx.dbChat) return;
 	const replyTo = ctx.message?.message_id;
+	const threadId = ctx.message?.message_thread_id;
 	const memory = ctx.dbChat.memory;
 	if (!memory) {
 		await replyHtml(ctx, ctx.t("memory-none"), {
+			message_thread_id: threadId,
 			reply_to_message_id: replyTo,
 		});
 		return;
 	}
 	await replyHtml(ctx, `📝 <b>Chat Memory</b>\n\n${escapeHtml(memory)}`, {
+		message_thread_id: threadId,
 		reply_to_message_id: replyTo,
 	});
 });
@@ -193,9 +204,11 @@ chatComposer.command("memory", async (ctx) => {
 chatComposer.command(["memory_set", "set_memory"], async (ctx) => {
 	if (!ctx.dbChat) return;
 	const replyTo = ctx.message?.message_id;
+	const threadId = ctx.message?.message_thread_id;
 	const text = ctx.match;
 	if (!text) {
 		await replyHtml(ctx, ctx.t("memory-usage"), {
+			message_thread_id: threadId,
 			reply_to_message_id: replyTo,
 		});
 		return;
@@ -205,6 +218,7 @@ chatComposer.command(["memory_set", "set_memory"], async (ctx) => {
 	if (settings?.memoryAccess === "admins" && ctx.chat?.type !== "private") {
 		if (!(await isChatAdmin(ctx))) {
 			await replyHtml(ctx, ctx.t("memory-admin-only", { action: "set" }), {
+				message_thread_id: threadId,
 				reply_to_message_id: replyTo,
 			});
 			return;
@@ -214,6 +228,7 @@ chatComposer.command(["memory_set", "set_memory"], async (ctx) => {
 	const { updateChatMemory } = await import("../db/queries/chats");
 	await updateChatMemory(ctx.db, ctx.dbChat.id, text.slice(0, 4096));
 	await replyHtml(ctx, ctx.t("memory-updated"), {
+		message_thread_id: threadId,
 		reply_to_message_id: replyTo,
 	});
 });
@@ -221,11 +236,13 @@ chatComposer.command(["memory_set", "set_memory"], async (ctx) => {
 chatComposer.command(["memory_clear", "clear_memory"], async (ctx) => {
 	if (!ctx.dbChat) return;
 	const replyTo = ctx.message?.message_id;
+	const threadId = ctx.message?.message_thread_id;
 
 	const settings = ctx.dbChat.settings;
 	if (settings?.memoryAccess === "admins" && ctx.chat?.type !== "private") {
 		if (!(await isChatAdmin(ctx))) {
 			await replyHtml(ctx, ctx.t("memory-admin-only", { action: "clear" }), {
+				message_thread_id: threadId,
 				reply_to_message_id: replyTo,
 			});
 			return;
@@ -235,6 +252,7 @@ chatComposer.command(["memory_clear", "clear_memory"], async (ctx) => {
 	const { updateChatMemory } = await import("../db/queries/chats");
 	await updateChatMemory(ctx.db, ctx.dbChat.id, null);
 	await replyHtml(ctx, ctx.t("memory-cleared"), {
+		message_thread_id: threadId,
 		reply_to_message_id: replyTo,
 	});
 });
@@ -451,6 +469,7 @@ chatComposer.on("message", async (ctx) => {
 			const img = result.images[0];
 			if (!img) return;
 			const sent = await ctx.replyWithPhoto(new InputFile(img.data), {
+				message_thread_id: ctx.message?.message_thread_id,
 				reply_to_message_id: ctx.message?.message_id,
 			});
 			await insertMessage(ctx.db, {
@@ -482,17 +501,21 @@ chatComposer.on("message", async (ctx) => {
 				try {
 					sent = await ctx.reply(html, {
 						parse_mode: "HTML",
+						message_thread_id: ctx.message?.message_thread_id,
 						reply_to_message_id: i === 0 ? ctx.message?.message_id : undefined,
 					});
 				} catch {
 					// HTML parse error → fallback to plain text
 					try {
 						sent = await ctx.reply(stripHtmlTags(html), {
+							message_thread_id: ctx.message?.message_thread_id,
 							reply_to_message_id:
 								i === 0 ? ctx.message?.message_id : undefined,
 						});
 					} catch {
-						sent = await ctx.reply(stripHtmlTags(html));
+						sent = await ctx.reply(stripHtmlTags(html), {
+							message_thread_id: ctx.message?.message_thread_id,
+						});
 					}
 				}
 
@@ -532,6 +555,7 @@ chatComposer.on("message", async (ctx) => {
 			userId: ctx.dbUser.telegramId,
 		});
 		await replyHtml(ctx, ctx.t("chat-error"), {
+			message_thread_id: ctx.message?.message_thread_id,
 			reply_to_message_id: ctx.message?.message_id,
 		});
 	}

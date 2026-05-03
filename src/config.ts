@@ -1,40 +1,50 @@
 import { z } from "zod";
 
-const configSchema = z.object({
-	environment: z.enum(["dev", "prod"]).default("dev"),
-	telegramBotToken: z.string().min(1, "TELEGRAM_BOT_TOKEN is required"),
-	botUsername: z.string().default("DerpRobot"),
-	databaseUrl: z.string().min(1, "DATABASE_URL is required"),
-	googleApiKey: z.string().min(1, "GOOGLE_API_KEY is required"),
-	googleApiKeys: z
-		.string()
-		.default("")
-		.transform((s) => (s ? s.split(",").filter(Boolean) : [])),
-	googleApiPaidKey: z.string().optional(),
-	braveSearchApiKey: z.string().optional(),
-	botAdminIds: z
-		.string()
-		.default("")
-		.transform((s, ctx) => {
-			if (!s) return [];
-			const ids = s.split(",").map((part) => part.trim());
-			const parsed = ids.map(Number);
-			const invalid = ids.filter((_, index) => Number.isNaN(parsed[index]));
-			if (invalid.length > 0) {
-				ctx.addIssue({
-					code: "custom",
-					message: `Invalid BOT_ADMIN_IDS entries: ${invalid.join(", ")}`,
-				});
-				return z.NEVER;
-			}
-			return parsed;
-		}),
-	botAdminEventsChatId: z.coerce.number().optional(),
-	logfireToken: z.string().optional(),
-	otelExporterOtlpEndpoint: z.string().optional(),
-	otelServiceName: z.string().default("derp"),
-	reminderCheckIntervalMs: z.coerce.number().default(60_000),
-});
+const configSchema = z
+	.object({
+		environment: z.enum(["dev", "prod"]).default("dev"),
+		telegramBotToken: z.string().min(1, "TELEGRAM_BOT_TOKEN is required"),
+		botUsername: z.string().default("DerpRobot"),
+		databaseUrl: z.string().min(1, "DATABASE_URL is required"),
+		googleApiKey: z.string().min(1, "GOOGLE_API_KEY is required"),
+		googleApiKeys: z
+			.string()
+			.default("")
+			.transform((s) => (s ? s.split(",").filter(Boolean) : [])),
+		googleApiPaidKey: z.string().optional(),
+		braveSearchApiKey: z.string().optional(),
+		botAdminIds: z
+			.string()
+			.default("")
+			.transform((s, ctx) => {
+				if (!s) return [];
+				const ids = s.split(",").map((part) => part.trim());
+				const parsed = ids.map(Number);
+				const invalid = ids.filter((_, index) => Number.isNaN(parsed[index]));
+				if (invalid.length > 0) {
+					ctx.addIssue({
+						code: "custom",
+						message: `Invalid BOT_ADMIN_IDS entries: ${invalid.join(", ")}`,
+					});
+					return z.NEVER;
+				}
+				return parsed;
+			}),
+		botAdminEventsChatId: z.coerce.number().optional(),
+		logfireToken: z.string().optional(),
+		otelExporterOtlpEndpoint: z.string().optional(),
+		otelServiceName: z.string().default("derp"),
+		reminderCheckIntervalMs: z.coerce.number().default(60_000),
+	})
+	.superRefine((cfg, ctx) => {
+		if (cfg.environment === "prod" && !cfg.logfireToken) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["logfireToken"],
+				message: "LOGFIRE_TOKEN is required when ENVIRONMENT=prod",
+			});
+		}
+	});
 
 export type Config = z.infer<typeof configSchema>;
 

@@ -25,6 +25,7 @@ remindersComposer.command("reminders", async (ctx) => {
 
 	if (reminders.length === 0) {
 		await replyHtml(ctx, ctx.t("reminder-none"), {
+			message_thread_id: ctx.message?.message_thread_id,
 			reply_to_message_id: ctx.message?.message_id,
 		});
 		return;
@@ -50,6 +51,7 @@ remindersComposer.command("reminders", async (ctx) => {
 
 	await replyHtml(ctx, lines.join("\n"), {
 		reply_markup: kb,
+		message_thread_id: ctx.message?.message_thread_id,
 		reply_to_message_id: ctx.message?.message_id,
 	});
 });

@@ -9,6 +9,7 @@ import {
 	addUserCredits,
 	getBalances,
 	getTransactionByIdempotencyKey,
+	type RefundReconciliationResult,
 	reconcileStarRefund,
 } from "../db/queries/credits";
 import { getUserByTelegramId } from "../db/queries/users";
@@ -18,6 +19,27 @@ const adminComposer = new Composer<DerpContext>();
 
 function isAdmin(ctx: DerpContext): boolean {
 	return config.botAdminIds.includes(ctx.from?.id ?? 0);
+}
+
+function looksAlreadyRefunded(error: string): boolean {
+	return /payment_already_refunded|already.*refund|refund.*already/i.test(
+		error,
+	);
+}
+
+function formatReconciliation(
+	chargeId: string,
+	reconciliation: RefundReconciliationResult,
+): string {
+	const action = reconciliation.applied
+		? "Refund reconciled locally."
+		: "Refund was already reconciled locally.";
+	const unrecovered =
+		reconciliation.unrecoveredAmount > 0
+			? `\nUnrecovered credits: ${reconciliation.unrecoveredAmount}`
+			: "";
+
+	return `${action}\nCharge: <code>${escapeHtml(chargeId)}</code>\nReversed: ${reconciliation.recoveredAmount}/${reconciliation.originalAmount} ${reconciliation.target} credits${unrecovered}\nBalance after: ${reconciliation.balanceAfter}`;
 }
 
 // ── /refund <userId> <chargeId> — standalone refund command ─────────────────
@@ -61,6 +83,47 @@ adminComposer.command("refund", async (ctx) => {
 		});
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
+		if (looksAlreadyRefunded(msg)) {
+			try {
+				const reconciliation = await reconcileStarRefund(ctx.db, chargeId, {
+					adminId,
+					targetUserId,
+					source: "admin_refund_already_refunded",
+					telegramRefundError: msg,
+				});
+				await ctx.reply(formatReconciliation(chargeId, reconciliation), {
+					parse_mode: "HTML",
+				});
+				await notifyAdmins(
+					formatRefundNotification({
+						adminId,
+						targetUserId,
+						chargeId,
+						success: true,
+					}),
+				);
+				return;
+			} catch (reconcileErr) {
+				const reconcileMsg =
+					reconcileErr instanceof Error
+						? reconcileErr.message
+						: String(reconcileErr);
+				await ctx.reply(
+					`Telegram says this charge is already refunded, but local reconciliation failed: ${escapeHtml(reconcileMsg)}`,
+					{ parse_mode: "HTML" },
+				);
+				await notifyAdmins(
+					formatRefundNotification({
+						adminId,
+						targetUserId,
+						chargeId,
+						success: false,
+						error: reconcileMsg,
+					}),
+				);
+				return;
+			}
+		}
 		await ctx.reply(`Refund failed: ${msg}`);
 
 		await notifyAdmins(
@@ -80,12 +143,8 @@ adminComposer.command("refund", async (ctx) => {
 			adminId,
 			targetUserId,
 		});
-		const unrecovered =
-			reconciliation.unrecoveredAmount > 0
-				? `\nUnrecovered credits: ${reconciliation.unrecoveredAmount}`
-				: "";
 		await ctx.reply(
-			`Refund processed.\nUser: <code>${targetUserId}</code>\nCharge: <code>${chargeId}</code>\nReversed: ${reconciliation.recoveredAmount}/${reconciliation.originalAmount} ${reconciliation.target} credits${unrecovered}\nBalance after: ${reconciliation.balanceAfter}`,
+			`Refund processed in Telegram.\nUser: <code>${targetUserId}</code>\n${formatReconciliation(chargeId, reconciliation)}`,
 			{ parse_mode: "HTML" },
 		);
 
@@ -316,6 +375,30 @@ adminComposer.command("admin", async (ctx) => {
 			break;
 		}
 
+		case "reconcile_refund": {
+			const chargeId = args.trim();
+			if (!chargeId) {
+				await ctx.reply("Usage: /admin reconcile_refund <telegram_charge_id>");
+				return;
+			}
+
+			try {
+				const reconciliation = await reconcileStarRefund(ctx.db, chargeId, {
+					adminId,
+					source: "admin_manual_reconcile_refund",
+				});
+				await ctx.reply(formatReconciliation(chargeId, reconciliation), {
+					parse_mode: "HTML",
+				});
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				await ctx.reply(`Refund reconciliation failed: ${escapeHtml(msg)}`, {
+					parse_mode: "HTML",
+				});
+			}
+			break;
+		}
+
 		case "db": {
 			// /admin db — table row counts
 			const { sql } = await import("drizzle-orm");
@@ -447,6 +530,7 @@ adminComposer.command("admin", async (ctx) => {
 					"/admin ledger [userId] — Last 10 transactions\n" +
 					"/admin tools — List registered tools with pricing\n" +
 					"/admin stars — Bot Stars balance\n" +
+					"/admin reconcile_refund &lt;chargeId&gt; — Reconcile an already-refunded charge\n" +
 					"/admin db — Table row counts\n" +
 					"/admin test — E2E smoke test (grants 100 credits)\n\n" +
 					"/refund &lt;userId&gt; &lt;chargeId&gt; — Refund a payment",

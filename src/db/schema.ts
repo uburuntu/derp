@@ -11,6 +11,7 @@ import {
 	text,
 	timestamp,
 	unique,
+	uniqueIndex,
 	uuid,
 	varchar,
 } from "drizzle-orm/pg-core";
@@ -207,6 +208,11 @@ export const ledger = pgTable(
 		unique("ledger_idempotency_key_unique").on(t.idempotencyKey),
 		index("ledger_user_id_idx").on(t.userId),
 		index("ledger_chat_id_idx").on(t.chatId),
+		uniqueIndex("ledger_payment_receipt_charge_unique")
+			.on(t.telegramChargeId)
+			.where(
+				sql`${t.telegramChargeId} IS NOT NULL AND ${t.amount} > 0 AND ${t.type} IN ('purchase', 'subscription')`,
+			),
 	],
 );
 

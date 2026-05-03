@@ -8,6 +8,7 @@ import {
 	getDailyUsage,
 	getTransactionByIdempotencyKey,
 	recordFreeToolUsage,
+	type ToolDebitResult,
 } from "../db/queries/credits";
 import type { Chat, User } from "../db/schema";
 import {
@@ -198,19 +199,26 @@ export class CreditService {
 	}
 
 	/** Deduct credits after successful tool execution */
+	async hasProcessed(idempotencyKey: string): Promise<boolean> {
+		return (
+			(await getTransactionByIdempotencyKey(this.db, idempotencyKey)) != null
+		);
+	}
+
+	/** Deduct credits after successful tool execution */
 	async deduct(
 		result: CreditCheckResult,
 		toolName: string,
 		idempotencyKey?: string,
 		meta?: Record<string, unknown>,
-	): Promise<boolean> {
+	): Promise<ToolDebitResult> {
 		// Check idempotency
 		if (idempotencyKey) {
 			const existing = await getTransactionByIdempotencyKey(
 				this.db,
 				idempotencyKey,
 			);
-			if (existing) return false;
+			if (existing) return "duplicate";
 		}
 
 		if (result.source === "free") {
@@ -226,6 +234,7 @@ export class CreditService {
 					this.chat.id,
 					toolName,
 					result.modelId,
+					pricing.freeDaily,
 					idempotencyKey,
 					meta,
 				);
@@ -241,7 +250,7 @@ export class CreditService {
 				idempotencyKey,
 				meta,
 			);
-			return true;
+			return "applied";
 		} else if (result.source === "user") {
 			await deductUserCredits(
 				this.db,
@@ -252,9 +261,9 @@ export class CreditService {
 				idempotencyKey,
 				meta,
 			);
-			return true;
+			return "applied";
 		}
-		return true;
+		return "applied";
 	}
 
 	/** Refund a paid pre-execution reservation after a tool reports failure. */
@@ -298,17 +307,5 @@ export class CreditService {
 				refundMeta,
 			);
 		}
-	}
-
-	/** Grant welcome bonus (25 credits, idempotent) */
-	async grantWelcomeBonus(): Promise<boolean> {
-		const key = `welcome:${this.user.telegramId}`;
-		const existing = await getTransactionByIdempotencyKey(this.db, key);
-		if (existing) return false;
-
-		await addUserCredits(this.db, this.user.id, 25, "grant", undefined, key, {
-			reason: "welcome_bonus",
-		});
-		return true;
 	}
 }
