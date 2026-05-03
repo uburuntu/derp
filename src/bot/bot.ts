@@ -11,6 +11,7 @@ import type { Database } from "../db/connection";
 import { adminComposer } from "../handlers/admin";
 import { chatComposer } from "../handlers/chat";
 import { creditsComposer } from "../handlers/credits";
+import { donationsComposer } from "../handlers/donations";
 import { helpComposer } from "../handlers/help";
 import { infoComposer } from "../handlers/info";
 import { inlineComposer } from "../handlers/inline";
@@ -82,6 +83,7 @@ export function createBot(db: Database): Bot<DerpContext> {
 	// ── Register Handlers (composers) ───────────────────────────────
 	bot.use(startComposer);
 	bot.use(helpComposer);
+	bot.use(donationsComposer);
 	bot.use(creditsComposer);
 	bot.use(adminComposer);
 	bot.use(infoComposer);
@@ -104,6 +106,7 @@ export async function registerCommands(bot: Bot<DerpContext>): Promise<void> {
 		{ command: "settings", description: "Open settings menu" },
 		{ command: "credits", description: "Check credit balance" },
 		{ command: "buy", description: "Buy credits or subscribe" },
+		{ command: "donate", description: "Support Derp with Telegram Stars" },
 		{ command: "memory", description: "View chat memory" },
 		{ command: "memory_set", description: "Set chat memory" },
 		{ command: "memory_clear", description: "Clear chat memory" },

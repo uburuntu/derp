@@ -19,6 +19,7 @@ cmd-help-desc = Показать помощь и доступные команд
 cmd-settings-desc = Открыть настройки
 cmd-credits-desc = Проверить баланс кредитов
 cmd-buy-desc = Купить кредиты или подписку
+cmd-donate-desc = Поддержать Derp звёздами
 cmd-memory-desc = Показать память чата
 cmd-reminders-desc = Список активных напоминаний
 cmd-info-desc = Детали генерации сообщения
@@ -49,6 +50,17 @@ buy-pack-button = Разовый { $pack } — { $stars }⭐ → { $credits } к
 buy-group-pack-button = В чат { $pack } — { $stars }⭐ → { $credits } общих кр.{ $bonus }
 buy-transfer-button = Перенести из личного баланса (мин. 100)
 buy-chat-groups-only = Эта команда работает в группах. Для личных кредитов используй /buy.
+
+## Donations
+donate-choose = ⭐ <b>Поддержать Derp</b>
+
+    Донат не покупает кредиты; он помогает оплачивать хостинг и разработку.
+    Выбери сумму ниже или отправь <code>/donate 50</code>.
+donate-invalid = Некорректная сумма доната
+donate-thanks = ⭐ <b>Спасибо!</b>
+
+    Получено звёзд: { $stars }.
+donate-error = Не удалось обработать донат. Попробуй ещё раз.
 
 ## Transfer
 transfer-prompt = Перенеси личные кредиты в общий баланс этой группы.

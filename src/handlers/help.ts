@@ -15,6 +15,7 @@ helpComposer.command("help", async (ctx) => {
 		`⚙️ <b>${ctx.t("help-other")}</b>\n` +
 		`  /credits — ${ctx.t("cmd-credits-desc")}\n` +
 		`  /buy — ${ctx.t("cmd-buy-desc")}\n` +
+		`  /donate — ${ctx.t("cmd-donate-desc")}\n` +
 		`  /settings — ${ctx.t("cmd-settings-desc")}\n` +
 		`  /memory — ${ctx.t("cmd-memory-desc")}\n` +
 		`  /reminders — ${ctx.t("cmd-reminders-desc")}\n` +

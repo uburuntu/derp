@@ -15,7 +15,7 @@ This file is the persistent harness for the five-loop hardening pass. If the ses
 ## Loop Status
 
 - [x] Loop 1: Initial cross-functional review and fixes.
-- [ ] Loop 2: Re-review after first fixes.
+- [ ] Loop 2: Re-review after first fixes. In progress.
 - [ ] Loop 3: Re-review after second fixes.
 - [ ] Loop 4: Re-review after third fixes.
 - [ ] Loop 5: Final hardening review and fixes.
@@ -44,6 +44,16 @@ Items below are added by reviewer loop. Keep P0/P1 only here; P2+ notes can stay
 - [x] P1 L1-PRICE-1: Remove welcome credit permanent `STANDARD` unlock or split promo credits from paid unlock credits.
 - [x] P1 L1-PRICE-2: Wrap successful payment processing in local failure handling with admin reconciliation details.
 - [x] P1 L1-PRICE-3: Add refund reconciliation path for already-refunded Telegram charges.
+- [ ] P1 L2-DATA-1: Paid tools must atomically reserve/debit credits before provider work or return unsent media until billing succeeds; current post-success debit can deliver media after concurrent balance races.
+- [ ] P1 L2-DATA-2: Subscription state must survive refunding a later subscription; replace single user subscription fields as source-of-truth with durable subscription/payment rows or recompute from non-refunded periods.
+- [ ] P1 L2-DATA-3: Stars payments need durable accounting beyond scrubbed ledger meta: currency, Stars amount, product type/id, target, charge IDs, refund status, and revenue metrics for packs/subscriptions/donations.
+- [ ] P1 L2-UX-1: Inline mode must not call the LLM on every keystroke while inline updates are rate-limit exempt; restore chosen-result generation or add per-user throttling/cache and credit policy.
+- [ ] P1 L2-UX-2: Forum-topic reminders must be listed and canceled only within the current topic/general topic.
+- [ ] P1 L2-OPS-1: Handled failures still become OK spans because `withSpan`/logger middleware overwrite error status; chat/scheduler/refund handled failures need explicit failure recording.
+- [ ] P1 L2-OPS-2: Scheduler health must fail when processing is wedged; skipped ticks should not refresh successful health.
+- [ ] P1 L2-OPS-3: CD can leave production stopped if migrations fail after the old container is stopped; migrate before stop or trap rollback.
+- [ ] P1 L2-OPS-4: Retention must scrub inactive reminder user text/prompt/meta, not only messages and ledger metadata.
+- [ ] P1 L2-OPS-5: Readiness must verify critical migration/index state, including `ledger_payment_receipt_charge_unique`.
 
 ## Loop 1
 
@@ -85,3 +95,30 @@ Status: complete.
 - 2026-05-03: `ctx7 docs /websites/core_telegram_bots_api ...payments...` confirmed `sendInvoice.message_thread_id`, `refundStarPayment`, and Stars payment fields.
 - 2026-05-03: `ctx7 docs /grammyjs/website ...inline/callback...` confirmed grammY inline query and callback handling patterns.
 - 2026-05-03: `bun run check` passed.
+
+## Loop 2
+
+Status: in progress.
+
+### Reviewers
+
+- Product/Telegram UX reviewer: complete.
+- Data model/pricing reviewer: complete.
+- Observability/ops reviewer: complete.
+- Code quality/regression reviewer: complete.
+
+### P0/P1 Findings
+
+- No P0 findings.
+- Data/pricing P1: paid tool billing lacks atomic reservation, subscription refunds can erase a previous active subscription, and Stars payment accounting is not durable enough for launch.
+- UX P1: inline mode now spends model quota on every inline keystroke; forum-topic reminders still list/cancel across topics.
+- Ops P1: handled failures can still look OK, scheduler health can stay green while processing is wedged, CD migration failure can leave prod stopped, retention misses reminders, and readiness does not validate the critical payment index.
+- Code regression P1: donation callback typecheck issue was fixed before commit.
+
+### Execution
+
+- Audited old Python `origin/main` functionality and restored `/donate` and `/support` Stars donation flow in TypeScript with Telegram invoices, callbacks, localized copy, topic-aware invoice replies, and admin notifications.
+
+### Verification
+
+- 2026-05-03: `bun run check` passed after donation parity work.

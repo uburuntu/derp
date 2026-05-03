@@ -28,10 +28,10 @@ export async function notifyAdmins(message: string): Promise<void> {
 
 /** Format a payment notification */
 export function formatPaymentNotification(params: {
-	type: "subscription" | "purchase";
+	type: "subscription" | "purchase" | "donation";
 	userId: number;
 	username?: string | null;
-	firstName: string;
+	firstName: string | null;
 	planOrPack: string;
 	stars: number;
 	credits: number;
@@ -40,19 +40,24 @@ export function formatPaymentNotification(params: {
 	chatId?: number;
 	isRenewal?: boolean;
 }): string {
+	const displayName = params.firstName ?? "user";
 	const userLink = params.username
 		? `@${escapeHtml(params.username)}`
-		: `<a href="tg://user?id=${params.userId}">${escapeHtml(params.firstName)}</a>`;
+		: `<a href="tg://user?id=${params.userId}">${escapeHtml(displayName)}</a>`;
 
 	const label = params.isRenewal ? "RENEWAL" : params.type.toUpperCase();
 	const chatLine = params.chatId ? `\nChat: <code>${params.chatId}</code>` : "";
 	const chargeId = escapeHtml(params.chargeId);
+	const amountLine =
+		params.type === "donation"
+			? `Amount: ${params.stars}⭐ donation${chatLine}\n`
+			: `Amount: ${params.stars}⭐ → ${params.credits} credits${chatLine}\n`;
 
 	return (
 		`<b>${label}</b>\n` +
 		`User: ${userLink} (<code>${params.userId}</code>)\n` +
 		`Plan: ${escapeHtml(params.planOrPack)}\n` +
-		`Amount: ${params.stars}⭐ → ${params.credits} credits${chatLine}\n` +
+		amountLine +
 		`Charge: <code>${chargeId}</code>\n` +
 		`\nRefund: <code>/refund ${params.userId} ${chargeId}</code>`
 	);

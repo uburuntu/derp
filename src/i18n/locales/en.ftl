@@ -19,6 +19,7 @@ cmd-help-desc = Show help and available commands
 cmd-settings-desc = Open settings menu
 cmd-credits-desc = Check credit balance
 cmd-buy-desc = Buy credits or subscribe
+cmd-donate-desc = Support Derp with Stars
 cmd-memory-desc = View chat memory
 cmd-reminders-desc = List active reminders
 cmd-info-desc = Show message generation details
@@ -49,6 +50,17 @@ buy-pack-button = One-time { $pack } — { $stars }⭐ → { $credits } credits{
 buy-group-pack-button = Group { $pack } — { $stars }⭐ → { $credits } shared credits{ $bonus }
 buy-transfer-button = Move from my balance (min 100)
 buy-chat-groups-only = This command is for groups. Use /buy for personal credits.
+
+## Donations
+donate-choose = ⭐ <b>Support Derp</b>
+
+    Donations do not buy credits; they help cover hosting and development.
+    Choose an amount below, or send <code>/donate 50</code>.
+donate-invalid = Invalid donation amount
+donate-thanks = ⭐ <b>Thank you!</b>
+
+    { $stars } Stars received.
+donate-error = Donation could not be processed. Please try again.
 
 ## Transfer
 transfer-prompt = Move personal credits into this group's shared balance.

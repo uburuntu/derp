@@ -383,8 +383,10 @@ creditsComposer.hears(/^\d+$/, async (ctx, next: NextFunction) => {
 
 // ── Pre-checkout query ──────────────────────────────────────────────────────
 
-creditsComposer.on("pre_checkout_query", async (ctx) => {
+creditsComposer.on("pre_checkout_query", async (ctx, next) => {
 	const query = ctx.preCheckoutQuery;
+	if (query.invoice_payload.startsWith("donate:")) return next();
+
 	const validation = validateStarsPayment(
 		query.invoice_payload,
 		query.currency,
@@ -400,11 +402,13 @@ creditsComposer.on("pre_checkout_query", async (ctx) => {
 
 // ── Successful payment ──────────────────────────────────────────────────────
 
-creditsComposer.on("message:successful_payment", async (ctx) => {
+creditsComposer.on("message:successful_payment", async (ctx, next) => {
 	if (!ctx.dbUser || !ctx.dbChat) return;
 
 	const payment = ctx.message?.successful_payment;
 	if (!payment) return;
+	if (payment.invoice_payload.startsWith("donate:")) return next();
+
 	const validation = validateStarsPayment(
 		payment.invoice_payload,
 		payment.currency,
