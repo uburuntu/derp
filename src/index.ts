@@ -2,7 +2,11 @@
 
 import { run } from "@grammyjs/runner";
 import { createBot, registerCommands } from "./bot/bot";
-import { initAdminNotify, notifyAdmins } from "./common/admin-notify";
+import {
+	assertAdminNotifyReady,
+	initAdminNotify,
+	notifyAdmins,
+} from "./common/admin-notify";
 import {
 	markNotReady,
 	markReady,
@@ -14,6 +18,7 @@ import {
 import {
 	initObservability,
 	logger,
+	redactErrorMessage,
 	shutdownObservability,
 } from "./common/observability";
 import { config } from "./config";
@@ -56,6 +61,9 @@ async function main() {
 
 	// Initialize admin notifications
 	initAdminNotify(bot.api);
+	if (config.environment === "prod") {
+		await assertAdminNotifyReady();
+	}
 
 	// Register commands with Telegram
 	await registerCommands(bot);
@@ -96,9 +104,8 @@ async function main() {
 	);
 
 	// Start reminder scheduler
-	startScheduler(db, bot, config.reminderCheckIntervalMs);
 	setSchedulerCheck(getSchedulerHealth);
-	markReady("scheduler");
+	startScheduler(db, bot, config.reminderCheckIntervalMs);
 
 	// ── Graceful Shutdown ───────────────────────────────────────────────
 	const shutdown = async (signal: string) => {
@@ -118,6 +125,6 @@ async function main() {
 }
 
 main().catch((err) => {
-	console.error("[fatal]", err);
+	console.error("[fatal]", redactErrorMessage(err));
 	process.exit(1);
 });

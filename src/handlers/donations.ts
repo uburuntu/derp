@@ -1,13 +1,25 @@
 /** Donations handler — lightweight Telegram Stars support flow. */
 
 import { Composer, InlineKeyboard } from "grammy";
+import type { SuccessfulPayment } from "grammy/types";
 import type { DerpContext } from "../bot/context";
 import {
 	formatPaymentNotification,
 	notifyAdmins,
 } from "../common/admin-notify";
-import { derpMetrics } from "../common/observability";
+import {
+	derpMetrics,
+	logger,
+	recordHandledFailure,
+} from "../common/observability";
+import { escapeHtml } from "../common/sanitize";
 import { MESSAGE_EFFECTS } from "../common/telegram";
+import {
+	buildDonationPayload,
+	parseDonationPayload,
+	type SignedDonationPayload,
+} from "../credits/payment-payload";
+import { getChatByTelegramId } from "../db/queries/chats";
 import { recordDonationPayment } from "../db/queries/credits";
 
 const donationsComposer = new Composer<DerpContext>();
@@ -19,14 +31,12 @@ function parseDonationAmount(input: string | undefined): number | null {
 	return Math.min(amount, 2500);
 }
 
-function donationPayload(amount: number): string {
-	return `donate:${amount}`;
-}
-
-function amountFromPayload(payload: string): number | null {
-	const [kind, rawAmount] = payload.split(":");
-	if (kind !== "donate" || !rawAmount) return null;
-	return parseDonationAmount(rawAmount);
+function donationPayload(
+	amount: number,
+	targetChatId: number,
+	targetThreadId: number | null,
+): string {
+	return buildDonationPayload({ amount, targetChatId, targetThreadId });
 }
 
 function threadOptions(ctx: DerpContext) {
@@ -52,7 +62,11 @@ async function sendDonationInvoice(
 		ctx.chat.id,
 		"Support Derp",
 		`${amount} Stars to support Derp development and hosting`,
-		donationPayload(amount),
+		donationPayload(
+			amount,
+			ctx.chat.id,
+			ctx.message?.message_thread_id ?? null,
+		),
 		"XTR",
 		[{ label: "Donation", amount }],
 		{
@@ -94,7 +108,7 @@ donationsComposer.callbackQuery(/^donate:(\d+)$/, async (ctx) => {
 		ctx.chat.id,
 		"Support Derp",
 		`${amount} Stars to support Derp development and hosting`,
-		donationPayload(amount),
+		donationPayload(amount, ctx.chat.id, callbackThreadId(ctx) ?? null),
 		"XTR",
 		[{ label: "Donation", amount }],
 		{
@@ -106,17 +120,12 @@ donationsComposer.callbackQuery(/^donate:(\d+)$/, async (ctx) => {
 
 donationsComposer.on("pre_checkout_query", async (ctx, next) => {
 	const query = ctx.preCheckoutQuery;
-	const isDonation = query.invoice_payload.startsWith("donate:");
-	const amount = amountFromPayload(query.invoice_payload);
-	if (amount == null) {
-		if (isDonation) {
-			await ctx.answerPreCheckoutQuery(false, ctx.t("donate-invalid"));
-			return;
-		}
+	const payload = parseDonationPayload(query.invoice_payload);
+	if (!payload) {
 		return next();
 	}
 
-	if (query.currency !== "XTR" || query.total_amount !== amount) {
+	if (query.currency !== "XTR" || query.total_amount !== payload.amount) {
 		await ctx.answerPreCheckoutQuery(false, ctx.t("donate-invalid"));
 		return;
 	}
@@ -128,59 +137,128 @@ donationsComposer.on("message:successful_payment", async (ctx, next) => {
 	const payment = ctx.message?.successful_payment;
 	if (!payment) return;
 
-	const amount = amountFromPayload(payment.invoice_payload);
-	if (amount == null) return next();
+	const payload = parseDonationPayload(payment.invoice_payload);
+	if (!payload) return next();
 	if (!ctx.dbUser) return;
 
 	const userId = ctx.from?.id ?? ctx.dbUser?.telegramId ?? 0;
-	const result = await recordDonationPayment(ctx.db, {
-		userId: ctx.dbUser.id,
-		chatId: ctx.dbChat?.id ?? null,
-		telegramChargeId: payment.telegram_payment_charge_id,
-		providerChargeId: payment.provider_payment_charge_id,
-		invoicePayload: payment.invoice_payload,
-		currency: payment.currency,
-		stars: amount,
-		productType: "donation",
-		productId: "support",
-		creditTarget: "none",
-		credits: 0,
-		meta: {
-			chatTelegramId: ctx.chat?.id,
-			threadId: ctx.message?.message_thread_id,
-		},
+	const targetChat = await getChatByTelegramId(ctx.db, payload.targetChatId);
+	const result = await applyDonationOrReport(ctx, payment, payload, () => {
+		if (!targetChat) throw new Error("Donation target chat not found");
+		return recordDonationPayment(ctx.db, {
+			userId: ctx.dbUser.id,
+			chatId: targetChat.id,
+			telegramChargeId: payment.telegram_payment_charge_id,
+			providerChargeId: payment.provider_payment_charge_id,
+			invoicePayload: payment.invoice_payload,
+			currency: payment.currency,
+			stars: payload.amount,
+			productType: "donation",
+			productId: "support",
+			creditTarget: "none",
+			credits: 0,
+			meta: {
+				chatTelegramId: payload.targetChatId,
+				threadId: payload.targetThreadId,
+			},
+		});
 	});
 	if (!result.applied) return;
 
-	try {
-		await ctx.reply(ctx.t("donate-thanks", { stars: amount }), {
-			parse_mode: "HTML",
-			message_effect_id: MESSAGE_EFFECTS.party,
-			...threadOptions(ctx),
-		});
-	} catch {
-		await ctx.reply(ctx.t("donate-thanks", { stars: amount }), {
-			parse_mode: "HTML",
-			...threadOptions(ctx),
-		});
-	}
-
-	await notifyAdmins(
-		formatPaymentNotification({
+	await runDonationSideEffects(ctx, payment, payload, {
+		replyText: ctx.t("donate-thanks", { stars: payload.amount }),
+		adminText: formatPaymentNotification({
 			type: "donation",
 			userId,
 			username: ctx.from?.username ?? ctx.dbUser?.username ?? null,
 			firstName: ctx.from?.first_name ?? ctx.dbUser?.firstName ?? null,
 			planOrPack: "Donation",
-			stars: amount,
+			stars: payload.amount,
 			credits: 0,
 			chargeId: payment.telegram_payment_charge_id,
-			chatId: ctx.chat?.id,
+			chatId: payload.targetChatId,
 		}),
-	);
+	});
 
-	derpMetrics.creditRevenue.add(amount, { source: "donation" });
+	derpMetrics.creditRevenue.add(payload.amount, { source: "donation" });
 	derpMetrics.creditTransactions.add(1, { type: "donation" });
 });
+
+async function applyDonationOrReport<T extends { applied: boolean }>(
+	ctx: DerpContext,
+	payment: SuccessfulPayment,
+	payload: SignedDonationPayload,
+	applyPayment: () => Promise<T>,
+): Promise<T> {
+	try {
+		return await applyPayment();
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		recordHandledFailure("donation", reason, {
+			reason_code: "db_apply",
+		});
+		logger.error("donation_apply_failed", {
+			userId: ctx.dbUser?.telegramId,
+			targetChatId: payload.targetChatId,
+			chargeId: payment.telegram_payment_charge_id,
+			payload: payment.invoice_payload,
+			error: reason,
+		});
+		await ctx.reply(
+			`⚠️ <b>Donation received</b>\n\nI could not record it automatically. Charge: <code>${escapeHtml(payment.telegram_payment_charge_id)}</code>.`,
+			{
+				parse_mode: "HTML",
+				...threadOptions(ctx),
+			},
+		);
+		await notifyAdmins(
+			`⚠️ <b>Donation processing failed</b>\n\nUser: <code>${ctx.dbUser?.telegramId ?? "unknown"}</code>\nTarget chat: <code>${payload.targetChatId}</code>\nCharge: <code>${escapeHtml(payment.telegram_payment_charge_id)}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nAmount: ${payment.total_amount} ${escapeHtml(payment.currency)}\nReason: ${escapeHtml(reason)}`,
+			{ critical: true },
+		);
+		return { applied: false } as T;
+	}
+}
+
+async function runDonationSideEffects(
+	ctx: DerpContext,
+	payment: SuccessfulPayment,
+	payload: SignedDonationPayload,
+	effects: { replyText: string; adminText: string },
+): Promise<void> {
+	const failures: string[] = [];
+	try {
+		await ctx.api.sendMessage(payload.targetChatId, effects.replyText, {
+			parse_mode: "HTML",
+			message_thread_id: payload.targetThreadId ?? undefined,
+			message_effect_id: MESSAGE_EFFECTS.party,
+		});
+	} catch (err) {
+		failures.push(`reply: ${err instanceof Error ? err.message : String(err)}`);
+		try {
+			await ctx.api.sendMessage(payload.targetChatId, effects.replyText, {
+				parse_mode: "HTML",
+				message_thread_id: payload.targetThreadId ?? undefined,
+			});
+		} catch (fallbackErr) {
+			failures.push(
+				`reply_fallback: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`,
+			);
+		}
+	}
+
+	await notifyAdmins(effects.adminText).catch((err) => {
+		failures.push(`admin: ${err instanceof Error ? err.message : String(err)}`);
+	});
+	if (failures.length === 0) return;
+
+	const reason = failures.join("; ");
+	recordHandledFailure("donation_notification", reason, {
+		reason_code: "post_commit",
+	});
+	logger.error("donation_post_commit_side_effect_failed", {
+		chargeId: payment.telegram_payment_charge_id,
+		failures,
+	});
+}
 
 export { donationsComposer };

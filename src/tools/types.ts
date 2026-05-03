@@ -20,7 +20,7 @@ export interface ToolDefinition<TParams = unknown> {
 	category: ToolCategory;
 
 	parameters: z.ZodSchema<TParams>;
-	parseCommand?: (input: string) => TParams;
+	parseCommand?: (input: string, command?: string) => TParams;
 	usage?: string;
 
 	execute: (params: TParams, ctx: ToolContext) => Promise<ToolResult>;

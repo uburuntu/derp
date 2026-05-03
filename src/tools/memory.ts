@@ -20,6 +20,17 @@ const memoryParamsSchema = z.object({
 
 type MemoryParams = z.infer<typeof memoryParamsSchema>;
 
+function parseMemoryCommand(input: string, command?: string): MemoryParams {
+	const normalized = command?.replace(/^\//, "");
+	if (normalized === "memory_clear" || normalized === "clear_memory") {
+		return { action: "clear" };
+	}
+	if (normalized === "memory_set" || normalized === "set_memory") {
+		return { action: "update", content: input.trim() };
+	}
+	return { action: "read" };
+}
+
 async function executeMemory(
 	params: MemoryParams,
 	ctx: ToolContext,
@@ -51,13 +62,7 @@ async function executeMemory(
 			// Enforce max length
 			const content = params.content.slice(0, MAX_MEMORY_LENGTH);
 
-			// Append to existing memory or replace
-			const existing = ctx.chat.memory;
-			const newMemory = existing
-				? `${existing}\n${content}`.slice(0, MAX_MEMORY_LENGTH)
-				: content;
-
-			await updateChatMemory(ctx.db, ctx.chat.id, newMemory);
+			await updateChatMemory(ctx.db, ctx.chat.id, content);
 			return { text: "Memory updated." };
 		}
 
@@ -79,12 +84,20 @@ async function executeMemory(
 
 export const memoryTool: ToolDefinition<MemoryParams> = {
 	name: "memory",
-	commands: [], // Agent-only, no commands
+	commands: [
+		"/memory",
+		"/memory_set",
+		"/set_memory",
+		"/memory_clear",
+		"/clear_memory",
+	],
 	description:
 		"Read, update, or clear the persistent chat memory. Use this to remember important facts about users and the chat.",
 	helpText: "tool-memory",
 	category: "utility",
 	parameters: memoryParamsSchema,
+	parseCommand: parseMemoryCommand,
+	usage: "/memory | /memory_set <text> | /memory_clear",
 	execute: executeMemory,
 	credits: 0,
 	freeDaily: Number.POSITIVE_INFINITY,

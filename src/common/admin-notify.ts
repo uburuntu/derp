@@ -12,17 +12,41 @@ export function initAdminNotify(api: Api): void {
 	botApi = api;
 }
 
-/** Send a notification to the admin events chat (no-op if not configured) */
-export async function notifyAdmins(message: string): Promise<void> {
+export interface AdminNotifyResult {
+	delivered: boolean;
+	error?: string;
+}
+
+/** Validate that critical admin notifications can be delivered. */
+export async function assertAdminNotifyReady(): Promise<void> {
 	const chatId = config.botAdminEventsChatId;
-	if (!chatId || !botApi) return;
+	if (!chatId) throw new Error("BOT_ADMIN_EVENTS_CHAT_ID is required");
+	if (!botApi) throw new Error("Admin notifier is not initialized");
+	await botApi.getChat(chatId);
+}
+
+/** Send a notification to the admin events chat (no-op if not configured). */
+export async function notifyAdmins(
+	message: string,
+	options: { critical?: boolean } = {},
+): Promise<AdminNotifyResult> {
+	const chatId = config.botAdminEventsChatId;
+	if (!chatId || !botApi) {
+		const error = "admin notification chat is not configured";
+		if (options.critical) throw new Error(error);
+		return { delivered: false, error };
+	}
 
 	try {
 		await botApi.sendMessage(chatId, message, { parse_mode: "HTML" });
+		return { delivered: true };
 	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
 		logger.error("admin_notify_failed", {
-			error: err instanceof Error ? err.message : String(err),
+			error,
 		});
+		if (options.critical) throw new Error(error);
+		return { delivered: false, error };
 	}
 }
 

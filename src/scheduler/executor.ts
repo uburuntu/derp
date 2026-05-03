@@ -7,6 +7,8 @@ import { derpMetrics, logger } from "../common/observability";
 import { config, getGoogleApiKeys } from "../config";
 import type { Database } from "../db/connection";
 import {
+	addChatCredits,
+	addUserCredits,
 	deductChatCredits,
 	deductUserCredits,
 	getBalances,
@@ -29,12 +31,26 @@ import { parseCronToNextDate } from "./cron";
 const LLM_REMINDER_COST = 1;
 const REPLY_TARGET_ERROR = /reply|message to reply|replied message/i;
 
+type LlmReminderReservation =
+	| {
+			ok: true;
+			source: "chat" | "user";
+			ownerId: string;
+			userId: string;
+			idempotencyKey: string;
+	  }
+	| {
+			ok: false;
+			userReason: string;
+			internalReason: string;
+	  };
+
 async function reserveLlmReminderCredit(
 	db: Database,
 	chat: Chat,
 	user: User,
 	reminder: Reminder,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
+): Promise<LlmReminderReservation> {
 	const { userCredits, chatCredits } = await getBalances(
 		db,
 		user.telegramId,
@@ -58,7 +74,13 @@ async function reserveLlmReminderCredit(
 				idempotencyKey,
 				meta,
 			);
-			return { ok: true };
+			return {
+				ok: true,
+				source: "chat",
+				ownerId: chat.id,
+				userId: user.id,
+				idempotencyKey,
+			};
 		}
 
 		if (userCredits >= LLM_REMINDER_COST) {
@@ -71,19 +93,78 @@ async function reserveLlmReminderCredit(
 				idempotencyKey,
 				meta,
 			);
-			return { ok: true };
+			return {
+				ok: true,
+				source: "user",
+				ownerId: user.id,
+				userId: user.id,
+				idempotencyKey,
+			};
 		}
 	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		logger.error("reminder_llm_credit_reservation_failed", {
+			reminderId: reminder.id,
+			error: reason,
+		});
 		return {
 			ok: false,
-			reason: err instanceof Error ? err.message : String(err),
+			userReason: "I could not reserve a credit for this LLM reminder",
+			internalReason: reason,
 		};
 	}
 
 	return {
 		ok: false,
-		reason: `LLM reminders need ${LLM_REMINDER_COST} credit`,
+		userReason: `LLM reminders need ${LLM_REMINDER_COST} credit`,
+		internalReason: `LLM reminders need ${LLM_REMINDER_COST} credit`,
 	};
+}
+
+async function refundLlmReminderCredit(
+	db: Database,
+	reservation: LlmReminderReservation | null,
+	reminder: Reminder,
+	error: string,
+): Promise<void> {
+	if (!reservation?.ok) return;
+	const refundKey = `${reservation.idempotencyKey}:refund`;
+	const meta = {
+		reminderId: reminder.id,
+		reason: "llm_reminder_failed_after_reservation",
+		error,
+	};
+
+	try {
+		if (reservation.source === "chat") {
+			await addChatCredits(
+				db,
+				reservation.ownerId,
+				reservation.userId,
+				LLM_REMINDER_COST,
+				"refund",
+				undefined,
+				refundKey,
+				meta,
+			);
+			return;
+		}
+		await addUserCredits(
+			db,
+			reservation.ownerId,
+			LLM_REMINDER_COST,
+			"refund",
+			undefined,
+			refundKey,
+			meta,
+		);
+	} catch (err) {
+		logger.error("reminder_llm_credit_refund_failed", {
+			reminderId: reminder.id,
+			refundKey,
+			error: errorText(err),
+		});
+	}
 }
 
 async function sendReminderMessage(
@@ -227,6 +308,7 @@ export async function executeReminder(
 		return;
 	}
 
+	let llmReservation: LlmReminderReservation | null = null;
 	if (reminder.usesLlm) {
 		if (reminder.isRecurring) {
 			await sendTelegramMessageWithFallback(
@@ -260,11 +342,12 @@ export async function executeReminder(
 				bot,
 				chat,
 				reminder,
-				`🔔 LLM reminder skipped: ${reservation.reason}. Use /buy to top up.`,
+				`🔔 LLM reminder skipped: ${reservation.userReason}. Use /buy to top up.`,
 			);
-			await markReminderFailed(db, reminder.id, reservation.reason);
+			await markReminderFailed(db, reminder.id, reservation.internalReason);
 			return;
 		}
+		llmReservation = reservation;
 	}
 
 	const delayNote = isStartup ? "\n(delayed — bot was restarting)" : "";
@@ -284,6 +367,12 @@ export async function executeReminder(
 			sentMessageId = await sendReminderMessage(bot, chat, reminder, delayNote);
 		} catch (retryErr) {
 			const retryMsg = errorText(retryErr);
+			await refundLlmReminderCredit(
+				db,
+				llmReservation,
+				reminder,
+				`${errorMsg}; retry: ${retryMsg}`,
+			);
 			await markReminderFailed(
 				db,
 				reminder.id,

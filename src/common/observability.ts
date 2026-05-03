@@ -23,6 +23,7 @@ export function initObservability(cfg: Config): void {
 		cfg.googleApiKey,
 		cfg.googleApiPaidKey,
 		cfg.logfireToken,
+		cfg.braveSearchApiKey,
 		...cfg.googleApiKeys,
 	].filter((value): value is string => Boolean(value));
 
@@ -43,7 +44,7 @@ export async function shutdownObservability(): Promise<void> {
 
 // ── Logger ──────────────────────────────────────────────────────────────────
 
-function redactString(value: string): string {
+export function redactString(value: string): string {
 	let redacted = value;
 	for (const secret of redactionValues) {
 		redacted = redacted.replaceAll(secret, "[redacted]");
@@ -65,6 +66,18 @@ function redactValue(value: unknown): unknown {
 		);
 	}
 	return value;
+}
+
+export function redactErrorMessage(error: unknown): string {
+	return redactString(error instanceof Error ? error.message : String(error));
+}
+
+function redactedException(error: unknown): Error {
+	const redacted = new Error(redactErrorMessage(error));
+	if (error instanceof Error) {
+		redacted.name = error.name;
+	}
+	return redacted;
 }
 
 function redactAttrs(
@@ -102,11 +115,12 @@ export async function withSpan<T>(
 			}
 			return result;
 		} catch (err) {
+			const redacted = redactedException(err);
 			span.setStatus({
 				code: SpanStatusCode.ERROR,
-				message: err instanceof Error ? err.message : String(err),
+				message: redacted.message,
 			});
-			span.recordException(err instanceof Error ? err : new Error(String(err)));
+			span.recordException(redacted);
 			throw err;
 		} finally {
 			span.end();
@@ -194,17 +208,30 @@ export function recordHandledFailure(
 	attrs: Record<string, string | number | boolean> = {},
 ): void {
 	const span = trace.getActiveSpan();
-	const metricAttrs = boundedFailureMetricAttrs(subsystem, attrs);
+	const redactedReason = redactString(reason);
+	const redactedAttrs = redactFailureAttrs(attrs);
+	const metricAttrs = boundedFailureMetricAttrs(subsystem, redactedAttrs);
 	if (span) {
 		handledFailureSpans.add(span);
-		span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
+		span.setStatus({ code: SpanStatusCode.ERROR, message: redactedReason });
 		span.setAttribute("derp.failure.subsystem", subsystem);
-		span.setAttribute("derp.failure.reason", reason);
-		for (const [key, value] of Object.entries(attrs)) {
+		span.setAttribute("derp.failure.reason", redactedReason);
+		for (const [key, value] of Object.entries(redactedAttrs)) {
 			span.setAttribute(`derp.failure.${key}`, value);
 		}
 	}
 	derpMetrics?.handledFailures.add(1, metricAttrs);
+}
+
+function redactFailureAttrs(
+	attrs: Record<string, string | number | boolean>,
+): Record<string, string | number | boolean> {
+	return Object.fromEntries(
+		Object.entries(attrs).map(([key, value]) => [
+			key,
+			typeof value === "string" ? redactString(value) : value,
+		]),
+	);
 }
 
 export function spanHasHandledFailure(span: Span): boolean {

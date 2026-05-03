@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { getTopUpPack, TOPUP_PACKS } from "../../src/credits/packs";
+import {
+	buildCreditPaymentPayload,
+	buildDonationPayload,
+	parseCreditPaymentPayload,
+	parseDonationPayload,
+} from "../../src/credits/payment-payload";
 import { hasActiveSubscription } from "../../src/credits/service";
 import {
 	getSubscriptionPlan,
@@ -94,5 +100,52 @@ describe("Subscription state", () => {
 				subscriptionExpiresAt: new Date(Date.now() - 60_000),
 			}),
 		).toBe(false);
+	});
+});
+
+describe("Signed payment payloads", () => {
+	test("round-trips credit payment targets", () => {
+		const payload = buildCreditPaymentPayload({
+			type: "pack",
+			packId: "medium",
+			target: "chat",
+			targetChatId: -100123456789,
+			targetThreadId: 42,
+		});
+
+		expect(parseCreditPaymentPayload(payload)).toEqual({
+			type: "pack",
+			packId: "medium",
+			target: "chat",
+			targetChatId: -100123456789,
+			targetThreadId: 42,
+		});
+	});
+
+	test("rejects tampered payment targets", () => {
+		const payload = buildCreditPaymentPayload({
+			type: "sub",
+			planId: "lite",
+			targetChatId: 111,
+			targetThreadId: null,
+		});
+
+		expect(
+			parseCreditPaymentPayload(payload.replace(":111:", ":222:")),
+		).toBeNull();
+	});
+
+	test("round-trips donation targets", () => {
+		const payload = buildDonationPayload({
+			amount: 100,
+			targetChatId: -100777,
+			targetThreadId: null,
+		});
+
+		expect(parseDonationPayload(payload)).toEqual({
+			amount: 100,
+			targetChatId: -100777,
+			targetThreadId: null,
+		});
 	});
 });

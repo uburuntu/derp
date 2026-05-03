@@ -44,6 +44,20 @@ const configSchema = z
 				message: "LOGFIRE_TOKEN is required when ENVIRONMENT=prod",
 			});
 		}
+		if (cfg.environment === "prod" && cfg.botAdminIds.length === 0) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["botAdminIds"],
+				message: "BOT_ADMIN_IDS is required when ENVIRONMENT=prod",
+			});
+		}
+		if (cfg.environment === "prod" && !cfg.botAdminEventsChatId) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["botAdminEventsChatId"],
+				message: "BOT_ADMIN_EVENTS_CHAT_ID is required when ENVIRONMENT=prod",
+			});
+		}
 	});
 
 export type Config = z.infer<typeof configSchema>;

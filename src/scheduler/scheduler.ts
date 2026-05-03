@@ -103,6 +103,9 @@ export function getSchedulerHealth(): {
 	const startedAt = schedulerStatus.startedAt
 		? Date.parse(schedulerStatus.startedAt)
 		: 0;
+	const lastSuccessAt = schedulerStatus.lastSuccessAt
+		? Date.parse(schedulerStatus.lastSuccessAt)
+		: 0;
 	const lastTickAt = schedulerStatus.lastTickAt
 		? Date.parse(schedulerStatus.lastTickAt)
 		: 0;
@@ -120,7 +123,8 @@ export function getSchedulerHealth(): {
 			Math.max(intervalMs * 3, PROCESSING_STALE_MS);
 	const ready =
 		schedulerStatus.running &&
-		(recentlyStarted || recentlyTicked) &&
+		lastSuccessAt > 0 &&
+		recentlyTicked &&
 		!processingStale &&
 		!schedulerStatus.lastError;
 
@@ -131,8 +135,10 @@ export function getSchedulerHealth(): {
 			: (schedulerStatus.lastError ??
 				(processingStale
 					? "scheduler_processing_stale"
-					: "scheduler_not_running_or_stale")),
-		details: { ...schedulerStatus },
+					: lastSuccessAt === 0
+						? "scheduler_first_tick_pending"
+						: "scheduler_not_running_or_stale")),
+		details: { ...schedulerStatus, recentlyStarted },
 	};
 }
 

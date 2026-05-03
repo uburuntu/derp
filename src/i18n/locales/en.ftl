@@ -50,6 +50,7 @@ buy-pack-button = One-time { $pack } — { $stars }⭐ → { $credits } credits{
 buy-group-pack-button = Group { $pack } — { $stars }⭐ → { $credits } shared credits{ $bonus }
 buy-transfer-button = Move from my balance (min 100)
 buy-chat-groups-only = This command is for groups. Use /buy for personal credits.
+buy-invoice-error = Could not create the payment link. Please try again.
 
 ## Donations
 donate-choose = ⭐ <b>Support Derp</b>

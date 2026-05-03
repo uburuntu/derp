@@ -19,7 +19,6 @@ import {
 	replyHtml,
 	splitMessage,
 } from "../common/reply";
-import { escapeHtml } from "../common/sanitize";
 import { config, getBotId, getGoogleApiKeys } from "../config";
 import { hasActiveSubscription } from "../credits/service";
 import { getBalances } from "../db/queries/credits";
@@ -184,82 +183,6 @@ async function buildToolContext(
 		replyToMessageId: ctx.message?.reply_to_message?.message_id ?? null,
 	};
 }
-
-// ── Memory Commands ─────────────────────────────────────────────────────────
-
-chatComposer.command("memory", async (ctx) => {
-	if (!ctx.dbChat) return;
-	const replyTo = ctx.message?.message_id;
-	const threadId = ctx.message?.message_thread_id;
-	const memory = ctx.dbChat.memory;
-	if (!memory) {
-		await replyHtml(ctx, ctx.t("memory-none"), {
-			message_thread_id: threadId,
-			reply_to_message_id: replyTo,
-		});
-		return;
-	}
-	await replyHtml(ctx, `📝 <b>Chat Memory</b>\n\n${escapeHtml(memory)}`, {
-		message_thread_id: threadId,
-		reply_to_message_id: replyTo,
-	});
-});
-
-chatComposer.command(["memory_set", "set_memory"], async (ctx) => {
-	if (!ctx.dbChat) return;
-	const replyTo = ctx.message?.message_id;
-	const threadId = ctx.message?.message_thread_id;
-	const text = ctx.match;
-	if (!text) {
-		await replyHtml(ctx, ctx.t("memory-usage"), {
-			message_thread_id: threadId,
-			reply_to_message_id: replyTo,
-		});
-		return;
-	}
-
-	const settings = ctx.dbChat.settings;
-	if (settings?.memoryAccess === "admins" && ctx.chat?.type !== "private") {
-		if (!(await isChatAdmin(ctx))) {
-			await replyHtml(ctx, ctx.t("memory-admin-only", { action: "set" }), {
-				message_thread_id: threadId,
-				reply_to_message_id: replyTo,
-			});
-			return;
-		}
-	}
-
-	const { updateChatMemory } = await import("../db/queries/chats");
-	await updateChatMemory(ctx.db, ctx.dbChat.id, text.slice(0, 4096));
-	await replyHtml(ctx, ctx.t("memory-updated"), {
-		message_thread_id: threadId,
-		reply_to_message_id: replyTo,
-	});
-});
-
-chatComposer.command(["memory_clear", "clear_memory"], async (ctx) => {
-	if (!ctx.dbChat) return;
-	const replyTo = ctx.message?.message_id;
-	const threadId = ctx.message?.message_thread_id;
-
-	const settings = ctx.dbChat.settings;
-	if (settings?.memoryAccess === "admins" && ctx.chat?.type !== "private") {
-		if (!(await isChatAdmin(ctx))) {
-			await replyHtml(ctx, ctx.t("memory-admin-only", { action: "clear" }), {
-				message_thread_id: threadId,
-				reply_to_message_id: replyTo,
-			});
-			return;
-		}
-	}
-
-	const { updateChatMemory } = await import("../db/queries/chats");
-	await updateChatMemory(ctx.db, ctx.dbChat.id, null);
-	await replyHtml(ctx, ctx.t("memory-cleared"), {
-		message_thread_id: threadId,
-		reply_to_message_id: replyTo,
-	});
-});
 
 /** Main chat handler */
 chatComposer.on("message", async (ctx) => {

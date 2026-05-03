@@ -356,5 +356,5 @@ export const remindTool: ToolDefinition<RemindParams> = {
 		"/remind list | /remind cancel <id> | /remind at <ISO datetime> <message> | /remind cron <cron> | <message>",
 	execute: executeRemind,
 	credits: 0,
-	freeDaily: 5,
+	freeDaily: Number.POSITIVE_INFINITY,
 };

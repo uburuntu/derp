@@ -50,6 +50,7 @@ buy-pack-button = Разовый { $pack } — { $stars }⭐ → { $credits } к
 buy-group-pack-button = В чат { $pack } — { $stars }⭐ → { $credits } общих кр.{ $bonus }
 buy-transfer-button = Перенести из личного баланса (мин. 100)
 buy-chat-groups-only = Эта команда работает в группах. Для личных кредитов используй /buy.
+buy-invoice-error = Не удалось создать ссылку на оплату. Попробуй ещё раз.
 
 ## Donations
 donate-choose = ⭐ <b>Поддержать Derp</b>

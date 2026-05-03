@@ -21,6 +21,7 @@ export async function errorBoundary(
 		});
 
 		try {
+			await answerInteractiveFailure(ctx);
 			if (ctx.chat) {
 				await replyHtml(ctx, "Something went wrong. Please try again.", {
 					reply_to_message_id: ctx.msg?.message_id,
@@ -31,5 +32,19 @@ export async function errorBoundary(
 				updateId: ctx.update.update_id,
 			});
 		}
+	}
+}
+
+async function answerInteractiveFailure(ctx: DerpContext): Promise<void> {
+	if (ctx.callbackQuery) {
+		await ctx.answerCallbackQuery({
+			text: "Something went wrong. Please try again.",
+		});
+	}
+	if (ctx.preCheckoutQuery) {
+		await ctx.answerPreCheckoutQuery(
+			false,
+			"Payment could not be processed. Please try again.",
+		);
 	}
 }

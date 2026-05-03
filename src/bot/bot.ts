@@ -36,6 +36,26 @@ import { videoTool } from "../tools/video";
 import { webSearchTool } from "../tools/web-search";
 import type { DerpContext } from "./context";
 
+function sequentializeKeys(ctx: DerpContext): string[] | undefined {
+	if (
+		ctx.callbackQuery ||
+		ctx.inlineQuery ||
+		ctx.chosenInlineResult ||
+		ctx.preCheckoutQuery
+	) {
+		return undefined;
+	}
+	const message = ctx.message ?? ctx.editedMessage;
+	if (!message || message.successful_payment) return undefined;
+	const text = message.text ?? message.caption ?? "";
+	if (text.startsWith("/")) return undefined;
+
+	const chatId = ctx.chat?.id;
+	if (chatId == null) return undefined;
+	const threadId = message.message_thread_id ?? 0;
+	return [`chat:${chatId}:thread:${threadId}`];
+}
+
 export function createBot(db: Database): Bot<DerpContext> {
 	const bot = new Bot<DerpContext>(config.telegramBotToken);
 
@@ -48,13 +68,8 @@ export function createBot(db: Database): Bot<DerpContext> {
 	bot.use(errorBoundary);
 	// 2. Rate limiter — cheap per-user guard before DB work
 	bot.use(createRateLimiter());
-	// 3. Sequentialize — prevent race conditions per chat
-	bot.use(
-		sequentialize((ctx: DerpContext) => {
-			const chatId = ctx.chat?.id;
-			return chatId ? [String(chatId)] : undefined;
-		}),
-	);
+	// 3. Sequentialize ordinary chat messages only; buttons/payments must answer fast.
+	bot.use(sequentialize(sequentializeKeys));
 	// 4. Logger — structured logging
 	bot.use(loggerMiddleware);
 	// 5. Hydrator — upsert user/chat/member/message
@@ -90,6 +105,7 @@ export function createBot(db: Database): Bot<DerpContext> {
 	bot.use(remindersComposer);
 	bot.use(settingsComposer);
 	bot.use(inlineComposer);
+	bot.on("callback_query:data", (ctx) => ctx.answerCallbackQuery());
 	bot.use(chatComposer); // Must be last — catches all messages
 
 	return bot;
@@ -107,7 +123,6 @@ export async function registerCommands(bot: Bot<DerpContext>): Promise<void> {
 		{ command: "credits", description: "Check credit balance" },
 		{ command: "buy", description: "Buy credits or subscribe" },
 		{ command: "donate", description: "Support Derp with Telegram Stars" },
-		{ command: "memory", description: "View chat memory" },
 		{ command: "memory_set", description: "Set chat memory" },
 		{ command: "memory_clear", description: "Clear chat memory" },
 		{ command: "reminders", description: "List active reminders" },

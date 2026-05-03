@@ -17,7 +17,7 @@ This file is the persistent harness for the five-loop hardening pass. If the ses
 - [x] Loop 1: Initial cross-functional review and fixes.
 - [x] Loop 2: Re-review after first fixes.
 - [x] Loop 3: Re-review after second fixes.
-- [ ] Loop 4: Re-review after third fixes. In progress.
+- [x] Loop 4: Re-review after third fixes.
 - [ ] Loop 5: Final hardening review and fixes.
 
 ## Current Verification
@@ -66,6 +66,19 @@ Items below are added by reviewer loop. Keep P0/P1 only here; P2+ notes can stay
 - [x] P1 L3-OPS-3: Reminder retry must not duplicate sends after Telegram delivery succeeds but DB state update fails.
 - [x] P1 L3-OPS-4: Handled failure metrics must avoid high-cardinality IDs while keeping IDs on spans/logs.
 - [x] P1 L3-TEST-1: Add Postgres-backed tests for durable payment/refund/quota paths.
+- [x] P1 L4-UX-1: Chat-wide sequentialization must not freeze callbacks, inline updates, payments, or other forum topics behind long media requests.
+- [x] P1 L4-UX-2: Subscription purchase callbacks must answer immediately and handle invoice-link failures visibly.
+- [x] P1 L4-UX-3: `/remind list` and `/remind cancel` must remain free even after reminder creation quota is exhausted.
+- [x] P1 L4-DATA-1: Refunded personal credits transferred into chat pools cannot be clawed back; remove the exposed transfer path for launch instead of shipping without credit-lot accounting.
+- [x] P1 L4-DATA-2: Payment payloads must bind product, target chat, and target thread so group packs/donations apply to the intended target.
+- [x] P1 L4-OPS-1: CD must fail fast rather than starting a second long-polling bot if the old container cannot be renamed/stopped.
+- [x] P1 L4-OPS-2: Deploy readiness must require a completed scheduler tick, not only scheduler startup.
+- [x] P1 L4-OPS-3: Secret redaction must cover span status/recorded exceptions/handled-failure attributes/fatal logs, not only logger attrs.
+- [x] P1 L4-OPS-4: Production must require and validate admin notification delivery for payment/refund reconciliation paths.
+- [x] P1 L4-OPS-5: Error boundary must answer callback and pre-checkout updates on exceptions.
+- [x] P1 L4-CODE-1: Donation successful-payment DB apply needs payment-failure wrapping and post-commit side-effect isolation.
+- [x] P1 L4-CODE-2: LLM reminder paid reservations must refund on provider/send failure and hide raw reservation errors from users.
+- [x] P1 L4-CODE-3: Memory must obey tool-command duality; command and LLM tool behavior must not diverge.
 
 ## Loop 1
 
@@ -190,26 +203,48 @@ Status: complete.
 
 ## Loop 4
 
-Status: review in progress.
+Status: complete.
 
 ### Reviewers
 
-- Product/Telegram UX reviewer: running.
-- Data model/pricing/parity reviewer: running.
-- Observability/ops/security reviewer: running.
-- Code quality/tests/regression reviewer: running.
+- Product/Telegram UX reviewer: complete.
+- Data model/pricing/parity reviewer: complete.
+- Observability/ops/security reviewer: complete.
+- Code quality/tests/regression reviewer: complete.
 
 ### P0/P1 Findings
 
-Pending.
+- No P0 findings.
+- UX P1: chat-wide sequentialization could block callbacks behind long `/video`; subscription callbacks created invoice links before answering; reminder list/cancel was quota-gated with create.
+- Data/pricing P1: transfers made refund clawback unsound; payment payloads did not bind target chat/thread; DB invariant tests were missing.
+- Ops P1: CD could dual-poll if stop/rename failed; readiness could pass before scheduler first tick; span/fatal redaction was incomplete; prod admin notification config was optional; error boundary did not answer callback/pre-checkout failures.
+- Code P1: donation payment DB failures lacked reconciliation wrapping; transfer errors could leak raw DB errors; LLM reminder credits were not refunded after provider/send failure; memory violated tool-command duality.
 
 ### Execution
 
 - Added explicit CI-gated Postgres integration tests for duplicate Stars charge idempotency, subscription projection/refund recomputation, concurrent free quota reservation, and paid debit/refund idempotency.
 - Updated CI to run `bun run check` with the migrated Postgres test database available to the integration suite.
+- Narrowed sequentialization to ordinary non-command chat messages by chat/topic; callbacks, inline, pre-checkout, successful payments, and slash commands are no longer queued behind long requests.
+- Added compact signed payment payloads for subscriptions, packs, and donations with target chat/thread binding; successful payments now apply group credits and donation receipts to the signed target.
+- Removed the exposed personal-to-group credit transfer path for launch instead of shipping refund-unsafe credit movement.
+- Answered subscription callbacks before invoice-link creation and added visible invoice-link failure copy.
+- Made reminder list/cancel unlimited by moving launch constraints to active/recurring reminder limits rather than daily gating the whole tool.
+- Required prod admin IDs/events chat, validated the admin events chat on startup, and made critical reconciliation notifications fail loudly.
+- Extended redaction to Brave keys, span statuses, recorded exceptions, handled-failure span attrs, and fatal startup logging.
+- Changed scheduler readiness to require a completed successful tick, and hardened CD stop/rename checks to refuse dual long-polling.
+- Made the error boundary answer failed callbacks/pre-checkout queries.
+- Wrapped donation payment DB apply and post-commit side effects like credit purchases.
+- Added idempotent refunds for LLM reminder credit reservations when provider/send delivery fails, with sanitized user skip copy.
+- Moved memory slash commands into `memoryTool`, made command/tool memory updates consistently replace memory, and removed the duplicate manual handlers.
 
 ### Verification
 
 - 2026-05-03: `ctx7 library Bun ...` and `ctx7 docs /oven-sh/bun ...skipIf...` confirmed `describe.skipIf`/`test.skipIf` patterns for conditional integration tests.
+- 2026-05-03: `ctx7 docs /websites/core_telegram_bots_api ...answerCallbackQuery answerPreCheckoutQuery...` confirmed callback answers remove client wait state and pre-checkout must be answered within 10 seconds.
+- 2026-05-03: `ctx7 docs /websites/core_telegram_bots_api ...getChat...` confirmed startup validation can use `getChat` for the admin events chat.
+- 2026-05-03: `ctx7 docs /grammyjs/website ...error handling callback query...` confirmed grammY error handling and callback answer patterns.
+- 2026-05-03: `ctx7 docs /grammyjs/website ...runner sequentialize...` confirmed narrowing `sequentialize` constraints allows non-colliding updates to run concurrently.
+- 2026-05-03: `ctx7 docs /open-telemetry/opentelemetry-js ...recordException setStatus...` confirmed span status/exception APIs used for redacted errors.
 - 2026-05-03: `bun run check` passed locally with Postgres integration tests intentionally skipped unless `DERP_RUN_DB_TESTS=1`.
 - 2026-05-03: Local Docker-backed integration run could not start because the Docker daemon is not running; CI will execute these tests with its Postgres service.
+- 2026-05-03: `bun run check` passed after Loop 4 UX/ops/payment hardening.

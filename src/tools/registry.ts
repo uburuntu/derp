@@ -262,6 +262,9 @@ class ToolRegistry {
 				if (!ctx.dbUser || !ctx.dbChat || !ctx.creditService) return;
 
 				const input = ctx.match ?? "";
+				const command = ctx.message?.text
+					?.match(/^\/([^\s@]+)/)?.[1]
+					?.toLowerCase();
 
 				// Build the primary parameter from ctx.match
 				// Most tools have a single required string param (query, prompt, text, etc.)
@@ -278,7 +281,7 @@ class ToolRegistry {
 						| undefined;
 
 					if (tool.parseCommand) {
-						params = tool.parseCommand(input);
+						params = tool.parseCommand(input, command);
 					} else if (properties && required && required.length > 0) {
 						const firstField = required[0];
 						if (!firstField) {

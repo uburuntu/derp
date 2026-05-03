@@ -53,7 +53,6 @@ export function buildBuyKeyboard(
 			});
 			kb.text(label, `group_pack:${pack.id}`).row();
 		}
-		kb.text(t("buy-transfer-button"), "transfer").row();
 	}
 
 	return kb;
