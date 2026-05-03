@@ -9,8 +9,9 @@ import {
 	HarmBlockThreshold,
 	HarmCategory,
 	type Part,
+	VideoGenerationReferenceType,
 } from "@google/genai";
-import { derpMetrics, logger, withSpan } from "../../common/observability";
+import { derpMetrics, withSpan } from "../../common/observability";
 import type {
 	AudioResult,
 	BinaryMedia,
@@ -50,8 +51,22 @@ const SAFETY_SETTINGS = [
 const DEFAULT_CHAT_TIMEOUT = 30_000;
 const DEFAULT_IMAGE_TIMEOUT = 60_000;
 const DEFAULT_VIDEO_TIMEOUT = 180_000;
+const DEFAULT_REQUEST_TIMEOUT = 30_000;
 const MAX_TOOL_CALLS = 5;
+const MAX_RETRY_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 2_000;
+const MAX_GENERATED_VIDEO_BYTES = 50 * 1024 * 1024;
+const BLOCKED_FINISH_REASONS = new Set([
+	"SAFETY",
+	"RECITATION",
+	"LANGUAGE",
+	"BLOCKLIST",
+	"PROHIBITED_CONTENT",
+	"SPII",
+	"IMAGE_SAFETY",
+	"IMAGE_PROHIBITED_CONTENT",
+	"IMAGE_RECITATION",
+]);
 
 /** Check if an error is transient and retryable */
 function isTransientError(err: unknown): boolean {
@@ -77,6 +92,74 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function remainingMs(deadlineMs: number): number {
+	return Math.max(0, deadlineMs - Date.now());
+}
+
+async function withAbortTimeout<T>(
+	timeoutMs: number,
+	label: string,
+	operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+	if (timeoutMs <= 0) {
+		throw new Error(`${label} timed out`);
+	}
+	const abortController = new AbortController();
+	const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+
+	try {
+		return await operation(abortController.signal);
+	} catch (err) {
+		if (abortController.signal.aborted) {
+			throw new Error(`${label} timed out after ${timeoutMs}ms`);
+		}
+		throw err;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+async function readResponseLimited(
+	response: Response,
+	maxBytes: number,
+	label: string,
+): Promise<Buffer> {
+	const contentLength = response.headers.get("content-length");
+	if (contentLength) {
+		const bytes = Number(contentLength);
+		if (Number.isFinite(bytes) && bytes > maxBytes) {
+			throw new Error(`${label} is too large: ${bytes} bytes`);
+		}
+	}
+
+	if (!response.body) {
+		const data = Buffer.from(await response.arrayBuffer());
+		if (data.byteLength > maxBytes) {
+			throw new Error(`${label} is too large: ${data.byteLength} bytes`);
+		}
+		return data;
+	}
+
+	const reader = response.body.getReader();
+	const chunks: Buffer[] = [];
+	let total = 0;
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		if (!value) continue;
+
+		total += value.byteLength;
+		if (total > maxBytes) {
+			await reader.cancel();
+			throw new Error(`${label} is too large: ${total} bytes`);
+		}
+		chunks.push(Buffer.from(value));
+	}
+
+	return Buffer.concat(chunks, total);
+}
+
 /** Round-robin key selector */
 class KeyRotator {
 	private index = 0;
@@ -84,7 +167,8 @@ class KeyRotator {
 		if (keys.length === 0) throw new Error("No API keys provided");
 	}
 	next(): string {
-		const key = this.keys[this.index % this.keys.length]!;
+		const key = this.keys[this.index % this.keys.length];
+		if (!key) throw new Error("No API keys configured");
 		this.index++;
 		return key;
 	}
@@ -145,9 +229,25 @@ function extractText(response: GenerateContentResponse): string {
 	const parts = response.candidates?.[0]?.content?.parts;
 	if (!parts) return "";
 	return parts
-		.filter((p) => p.text != null)
-		.map((p) => p.text!)
+		.map((p) => p.text ?? "")
+		.filter(Boolean)
 		.join("");
+}
+
+function fallbackTextForEmptyResponse(
+	response: GenerateContentResponse,
+): string {
+	const blockReason = response.promptFeedback?.blockReason;
+	if (blockReason) {
+		return `I can't respond to that because the model blocked the request (${blockReason}).`;
+	}
+
+	const finishReason = response.candidates?.[0]?.finishReason;
+	if (finishReason && BLOCKED_FINISH_REASONS.has(String(finishReason))) {
+		return `I can't complete that because the model blocked the response (${finishReason}).`;
+	}
+
+	return "The model returned an empty response. Please try again.";
 }
 
 export class GoogleLLMProvider implements LLMProvider {
@@ -165,102 +265,135 @@ export class GoogleLLMProvider implements LLMProvider {
 		return new GoogleGenAI({ apiKey: key });
 	}
 
-	async chat(params: ChatParams): Promise<ChatResult> {
-		const ai = this.getClient();
-		const timeoutMs = params.timeoutMs ?? DEFAULT_CHAT_TIMEOUT;
+	private async callWithRetries<T>(
+		label: string,
+		options: {
+			usePaidKey?: boolean;
+			deadlineMs: number;
+			perAttemptTimeoutMs?: number;
+		},
+		operation: (ai: GoogleGenAI, signal: AbortSignal) => Promise<T>,
+	): Promise<T> {
+		let lastError: unknown;
 
-		const attempt = async (): Promise<ChatResult> => {
-			const abortController = new AbortController();
-			const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+		for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
+			const timeLeft = remainingMs(options.deadlineMs);
+			if (timeLeft <= 0) {
+				throw new Error(`${label} timed out`);
+			}
+
+			const perAttemptTimeoutMs = Math.min(
+				options.perAttemptTimeoutMs ?? timeLeft,
+				timeLeft,
+			);
 
 			try {
-				const contents = toGoogleContents(params.messages);
-
-				// Add inline media from params.media to the last user message
-				if (params.media && params.media.length > 0) {
-					const lastUserIdx = contents.findLastIndex((c) => c.role === "user");
-					if (lastUserIdx >= 0) {
-						const target = contents[lastUserIdx]!;
-						if (!target.parts) target.parts = [];
-						for (const m of params.media) {
-							target.parts.unshift({
-								inlineData: {
-									data: m.data.toString("base64"),
-									mimeType: m.mimeType,
-								},
-							});
-						}
-					}
-				}
-
-				const toolDeclarations = params.tools
-					? toGoogleFunctionDeclarations(params.tools)
-					: undefined;
-
-				const response = await ai.models.generateContent({
-					model: params.model,
-					contents,
-					config: {
-						systemInstruction: params.systemPrompt,
-						safetySettings: SAFETY_SETTINGS,
-						maxOutputTokens: params.maxOutputTokens,
-						temperature: params.temperature,
-						tools: toolDeclarations
-							? [{ functionDeclarations: toolDeclarations }]
-							: undefined,
-						abortSignal: abortController.signal,
-					},
-				});
-
-				const text = extractText(response);
-				const usage = extractUsage(response);
-				const finishReason = response.candidates?.[0]?.finishReason;
-
-				this.recordLlmMetrics(params.model, usage);
-
-				const images: BinaryMedia[] = [];
-				for (const candidate of response.candidates ?? []) {
-					for (const part of candidate.content?.parts ?? []) {
-						if (part.inlineData?.data) {
-							images.push({
-								data: Buffer.from(part.inlineData.data, "base64"),
-								mimeType: part.inlineData.mimeType ?? "image/png",
-							});
-						}
-					}
-				}
-
-				const functionCalls = response.functionCalls;
-				const toolCalls: ToolCallResult[] | undefined = functionCalls?.map(
-					(fc) => ({
-						name: fc.name ?? "",
-						args: (fc.args as Record<string, unknown>) ?? {},
-						result: undefined,
-					}),
+				const ai = this.getClient(options.usePaidKey);
+				return await withAbortTimeout(perAttemptTimeoutMs, label, (signal) =>
+					operation(ai, signal),
 				);
-
-				return {
-					text,
-					images: images.length > 0 ? images : undefined,
-					usage,
-					toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
-					finishReason: finishReason ?? undefined,
-				};
-			} finally {
-				clearTimeout(timeout);
+			} catch (err) {
+				lastError = err;
+				const canRetry =
+					attempt < MAX_RETRY_ATTEMPTS - 1 &&
+					isTransientError(err) &&
+					remainingMs(options.deadlineMs) > RETRY_DELAY_MS;
+				if (!canRetry) break;
+				await sleep(Math.min(RETRY_DELAY_MS, remainingMs(options.deadlineMs)));
 			}
-		};
-
-		// Try once, retry on transient error
-		try {
-			return await attempt();
-		} catch (err) {
-			if (isTransientError(err)) {
-				await sleep(RETRY_DELAY_MS);
-				return await attempt();
-			}
-			throw err;
 		}
+
+		throw lastError instanceof Error ? lastError : new Error(String(lastError));
+	}
+
+	async chat(params: ChatParams): Promise<ChatResult> {
+		const timeoutMs = params.timeoutMs ?? DEFAULT_CHAT_TIMEOUT;
+		const deadlineMs = Date.now() + timeoutMs;
+
+		const attempt = async (): Promise<ChatResult> => {
+			const contents = toGoogleContents(params.messages);
+
+			// Add inline media from params.media to the last user message
+			if (params.media && params.media.length > 0) {
+				const lastUserIdx = contents.findLastIndex((c) => c.role === "user");
+				const target = lastUserIdx >= 0 ? contents[lastUserIdx] : undefined;
+				if (target) {
+					if (!target.parts) target.parts = [];
+					for (const m of params.media) {
+						target.parts.unshift({
+							inlineData: {
+								data: m.data.toString("base64"),
+								mimeType: m.mimeType,
+							},
+						});
+					}
+				}
+			}
+
+			const toolDeclarations = params.tools
+				? toGoogleFunctionDeclarations(params.tools)
+				: undefined;
+
+			const response = await this.callWithRetries(
+				"generateContent",
+				{ deadlineMs },
+				(ai, signal) =>
+					ai.models.generateContent({
+						model: params.model,
+						contents,
+						config: {
+							systemInstruction: params.systemPrompt,
+							safetySettings: SAFETY_SETTINGS,
+							maxOutputTokens: params.maxOutputTokens,
+							temperature: params.temperature,
+							tools: toolDeclarations
+								? [{ functionDeclarations: toolDeclarations }]
+								: undefined,
+							abortSignal: signal,
+						},
+					}),
+			);
+
+			const text = extractText(response);
+			const usage = extractUsage(response);
+			const finishReason = response.candidates?.[0]?.finishReason;
+
+			this.recordLlmMetrics(params.model, usage);
+
+			const images: BinaryMedia[] = [];
+			for (const candidate of response.candidates ?? []) {
+				for (const part of candidate.content?.parts ?? []) {
+					if (part.inlineData?.data) {
+						images.push({
+							data: Buffer.from(part.inlineData.data, "base64"),
+							mimeType: part.inlineData.mimeType ?? "image/png",
+						});
+					}
+				}
+			}
+
+			const functionCalls = response.functionCalls;
+			const toolCalls: ToolCallResult[] | undefined = functionCalls?.map(
+				(fc) => ({
+					name: fc.name ?? "",
+					args: (fc.args as Record<string, unknown>) ?? {},
+					result: undefined,
+				}),
+			);
+			const hasPayload =
+				text ||
+				images.length > 0 ||
+				(toolCalls != null && toolCalls.length > 0);
+
+			return {
+				text: hasPayload ? text : fallbackTextForEmptyResponse(response),
+				images: images.length > 0 ? images : undefined,
+				usage,
+				toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+				finishReason: finishReason ?? undefined,
+			};
+		};
+		return await attempt();
 	}
 
 	/**
@@ -294,15 +427,15 @@ export class GoogleLLMProvider implements LLMProvider {
 		) => Promise<unknown>,
 		parentSpan: import("@opentelemetry/api").Span,
 	): Promise<ChatResult> {
-		const ai = this.getClient();
 		const timeoutMs = params.timeoutMs ?? DEFAULT_CHAT_TIMEOUT;
+		const deadlineMs = Date.now() + timeoutMs;
 		const contents = toGoogleContents(params.messages);
 
 		// Add inline media to the last user message
 		if (params.media && params.media.length > 0) {
 			const lastUserIdx = contents.findLastIndex((c) => c.role === "user");
-			if (lastUserIdx >= 0) {
-				const target = contents[lastUserIdx]!;
+			const target = lastUserIdx >= 0 ? contents[lastUserIdx] : undefined;
+			if (target) {
 				if (!target.parts) target.parts = [];
 				for (const m of params.media) {
 					target.parts.unshift({
@@ -328,30 +461,28 @@ export class GoogleLLMProvider implements LLMProvider {
 		const allImages: BinaryMedia[] = [];
 		let iteration = 0;
 
-		while (iteration < MAX_TOOL_CALLS) {
+		while (allToolCalls.length < MAX_TOOL_CALLS) {
 			iteration++;
-			const abortController = new AbortController();
-			const timeout = setTimeout(() => abortController.abort(), timeoutMs);
 
-			let response: GenerateContentResponse;
-			try {
-				response = await ai.models.generateContent({
-					model: params.model,
-					contents,
-					config: {
-						systemInstruction: params.systemPrompt,
-						safetySettings: SAFETY_SETTINGS,
-						maxOutputTokens: params.maxOutputTokens,
-						temperature: params.temperature,
-						tools: toolDeclarations
-							? [{ functionDeclarations: toolDeclarations }]
-							: undefined,
-						abortSignal: abortController.signal,
-					},
-				});
-			} finally {
-				clearTimeout(timeout);
-			}
+			const response = await this.callWithRetries(
+				"generateContent",
+				{ deadlineMs },
+				(ai, signal) =>
+					ai.models.generateContent({
+						model: params.model,
+						contents,
+						config: {
+							systemInstruction: params.systemPrompt,
+							safetySettings: SAFETY_SETTINGS,
+							maxOutputTokens: params.maxOutputTokens,
+							temperature: params.temperature,
+							tools: toolDeclarations
+								? [{ functionDeclarations: toolDeclarations }]
+								: undefined,
+							abortSignal: signal,
+						},
+					}),
+			);
 
 			// Accumulate usage
 			const usage = extractUsage(response);
@@ -386,8 +517,14 @@ export class GoogleLLMProvider implements LLMProvider {
 				);
 				parentSpan.setAttribute("derp.tool_calls.count", allToolCalls.length);
 				parentSpan.setAttribute("derp.iterations", iteration);
+				const text = extractText(response);
+				const responseText = text
+					? text
+					: allImages.length > 0
+						? ""
+						: fallbackTextForEmptyResponse(response);
 				return {
-					text: extractText(response),
+					text: responseText,
 					images: allImages.length > 0 ? allImages : undefined,
 					usage: totalUsage,
 					toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -413,7 +550,8 @@ export class GoogleLLMProvider implements LLMProvider {
 
 			// Execute each function call and collect results
 			const responseParts: Part[] = [];
-			for (const fc of functionCalls) {
+			const remainingToolCalls = MAX_TOOL_CALLS - allToolCalls.length;
+			for (const fc of functionCalls.slice(0, remainingToolCalls)) {
 				const name = fc.name ?? "";
 				const args = (fc.args as Record<string, unknown>) ?? {};
 
@@ -436,6 +574,10 @@ export class GoogleLLMProvider implements LLMProvider {
 							: { result: String(result) },
 					),
 				);
+			}
+
+			if (functionCalls.length > remainingToolCalls) {
+				break;
 			}
 
 			// Add function responses to the conversation
@@ -463,104 +605,144 @@ export class GoogleLLMProvider implements LLMProvider {
 	}
 
 	async generateImage(params: ImageParams): Promise<ImageResult> {
-		const ai = this.getClient(true); // Use paid key for image gen
 		const timeoutMs = params.timeoutMs ?? DEFAULT_IMAGE_TIMEOUT;
-		const abortController = new AbortController();
-		const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+		const deadlineMs = Date.now() + timeoutMs;
+		const contents: Content[] = [];
+		const parts: Part[] = [];
 
-		try {
-			const contents: Content[] = [];
-			const parts: Part[] = [];
-
-			// Add source image if editing
-			if (params.sourceImage) {
-				parts.push({
-					inlineData: {
-						data: params.sourceImage.toString("base64"),
-						mimeType: params.mimeType ?? "image/jpeg",
-					},
-				});
-			}
-
-			parts.push({ text: params.prompt });
-			contents.push({ role: "user", parts });
-
-			const response = await ai.models.generateContent({
-				model: params.model,
-				contents,
-				config: {
-					responseModalities: ["TEXT", "IMAGE"],
-					safetySettings: SAFETY_SETTINGS,
-					abortSignal: abortController.signal,
+		// Add source image if editing
+		if (params.sourceImage) {
+			parts.push({
+				inlineData: {
+					data: params.sourceImage.toString("base64"),
+					mimeType: params.mimeType ?? "image/jpeg",
 				},
 			});
+		}
 
-			// Find image in response
-			for (const candidate of response.candidates ?? []) {
-				for (const part of candidate.content?.parts ?? []) {
-					if (part.inlineData?.data) {
-						return {
-							image: {
-								data: Buffer.from(part.inlineData.data, "base64"),
-								mimeType: part.inlineData.mimeType ?? "image/png",
-							},
-							usage: extractUsage(response),
-						};
-					}
+		parts.push({ text: params.prompt });
+		contents.push({ role: "user", parts });
+
+		const response = await this.callWithRetries(
+			"generateImage",
+			{ usePaidKey: true, deadlineMs },
+			(ai, signal) =>
+				ai.models.generateContent({
+					model: params.model,
+					contents,
+					config: {
+						responseModalities: ["TEXT", "IMAGE"],
+						safetySettings: SAFETY_SETTINGS,
+						abortSignal: signal,
+					},
+				}),
+		);
+
+		// Find image in response
+		for (const candidate of response.candidates ?? []) {
+			for (const part of candidate.content?.parts ?? []) {
+				if (part.inlineData?.data) {
+					return {
+						image: {
+							data: Buffer.from(part.inlineData.data, "base64"),
+							mimeType: part.inlineData.mimeType ?? "image/png",
+						},
+						usage: extractUsage(response),
+					};
 				}
 			}
-
-			throw new Error(
-				"No image in response: " + (extractText(response) || "empty"),
-			);
-		} finally {
-			clearTimeout(timeout);
 		}
+
+		throw new Error(
+			`No image in response: ${
+				extractText(response) || fallbackTextForEmptyResponse(response)
+			}`,
+		);
 	}
 
 	async generateVideo(params: VideoParams): Promise<VideoResult> {
-		const ai = this.getClient(true); // Use paid key for video gen
 		const timeoutMs = params.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT;
+		const deadlineMs = Date.now() + timeoutMs;
 
-		let operation = await ai.models.generateVideos({
-			model: params.model,
-			prompt: params.prompt,
-			config: {
-				numberOfVideos: 1,
-				...(params.referenceImage
-					? {
-							image: {
-								imageBytes: params.referenceImage.toString("base64"),
-								mimeType: "image/jpeg",
-							},
-						}
-					: {}),
+		let operation = await this.callWithRetries(
+			"generateVideo",
+			{
+				usePaidKey: true,
+				deadlineMs,
+				perAttemptTimeoutMs: DEFAULT_REQUEST_TIMEOUT,
 			},
-		});
+			(ai, signal) =>
+				ai.models.generateVideos({
+					model: params.model,
+					prompt: params.prompt,
+					config: {
+						numberOfVideos: 1,
+						abortSignal: signal,
+						...(params.referenceImage
+							? {
+									referenceImages: [
+										{
+											image: {
+												imageBytes: params.referenceImage.toString("base64"),
+												mimeType: "image/jpeg",
+											},
+											referenceType: VideoGenerationReferenceType.ASSET,
+										},
+									],
+								}
+							: {}),
+					},
+				}),
+		);
 
 		// Poll for completion
-		const startTime = Date.now();
 		while (!operation.done) {
-			if (Date.now() - startTime > timeoutMs) {
+			if (remainingMs(deadlineMs) <= 0) {
 				throw new Error("Video generation timed out");
 			}
-			await new Promise((resolve) => setTimeout(resolve, 5_000));
-			operation = await ai.operations.getVideosOperation({
-				operation,
-			});
+			await sleep(Math.min(5_000, remainingMs(deadlineMs)));
+			operation = await this.callWithRetries(
+				"getVideosOperation",
+				{
+					usePaidKey: true,
+					deadlineMs,
+					perAttemptTimeoutMs: DEFAULT_REQUEST_TIMEOUT,
+				},
+				(ai, signal) =>
+					ai.operations.getVideosOperation({
+						operation,
+						config: { abortSignal: signal },
+					}),
+			);
 		}
 
+		if (operation.error) {
+			throw new Error(
+				`Video generation failed: ${JSON.stringify(operation.error)}`,
+			);
+		}
 		const generatedVideo = operation.response?.generatedVideos?.[0]?.video;
 		if (!generatedVideo?.uri) {
-			throw new Error("No video generated");
+			const reasons = operation.response?.raiMediaFilteredReasons?.join(", ");
+			throw new Error(
+				reasons ? `No video generated: ${reasons}` : "No video generated",
+			);
 		}
 
 		// Download the video from the URI
-		const videoResponse = await fetch(generatedVideo.uri);
+		const videoResponse = await withAbortTimeout(
+			Math.min(DEFAULT_REQUEST_TIMEOUT, remainingMs(deadlineMs)),
+			"downloadGeneratedVideo",
+			(signal) => fetch(generatedVideo.uri as string, { signal }),
+		);
 		if (!videoResponse.ok) {
 			throw new Error(`Failed to download video: ${videoResponse.status}`);
 		}
-		const videoData = Buffer.from(await videoResponse.arrayBuffer());
+		const videoData = await readResponseLimited(
+			videoResponse,
+			MAX_GENERATED_VIDEO_BYTES,
+			"Generated video",
+		);
 
 		return {
 			video: {
@@ -572,44 +754,45 @@ export class GoogleLLMProvider implements LLMProvider {
 	}
 
 	async synthesizeSpeech(params: TTSParams): Promise<AudioResult> {
-		const ai = this.getClient();
 		const timeoutMs = params.timeoutMs ?? DEFAULT_CHAT_TIMEOUT;
-		const abortController = new AbortController();
-		const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+		const deadlineMs = Date.now() + timeoutMs;
 
-		try {
-			const response = await ai.models.generateContent({
-				model: params.model,
-				contents: params.text,
-				config: {
-					responseModalities: ["AUDIO"],
-					speechConfig: {
-						voiceConfig: {
-							prebuiltVoiceConfig: {
-								voiceName: params.voice ?? "Kore",
+		const response = await this.callWithRetries(
+			"synthesizeSpeech",
+			{ deadlineMs },
+			(ai, signal) =>
+				ai.models.generateContent({
+					model: params.model,
+					contents: params.text,
+					config: {
+						responseModalities: ["AUDIO"],
+						speechConfig: {
+							voiceConfig: {
+								prebuiltVoiceConfig: {
+									voiceName: params.voice ?? "Kore",
+								},
 							},
 						},
+						abortSignal: signal,
 					},
-					abortSignal: abortController.signal,
-				},
-			});
+				}),
+		);
 
-			// Extract audio from response
-			for (const candidate of response.candidates ?? []) {
-				for (const part of candidate.content?.parts ?? []) {
-					if (part.inlineData?.data) {
-						return {
-							audio: Buffer.from(part.inlineData.data, "base64"),
-							mimeType: part.inlineData.mimeType ?? "audio/wav",
-						};
-					}
+		// Extract audio from response
+		for (const candidate of response.candidates ?? []) {
+			for (const part of candidate.content?.parts ?? []) {
+				if (part.inlineData?.data) {
+					return {
+						audio: Buffer.from(part.inlineData.data, "base64"),
+						mimeType: part.inlineData.mimeType ?? "audio/wav",
+					};
 				}
 			}
-
-			throw new Error("No audio in TTS response");
-		} finally {
-			clearTimeout(timeout);
 		}
+
+		throw new Error(
+			`No audio in TTS response: ${fallbackTextForEmptyResponse(response)}`,
+		);
 	}
 
 	private recordLlmMetrics(model: string, usage: TokenUsage): void {

@@ -17,7 +17,9 @@ async function executeEditImage(
 	ctx: ToolContext,
 ): Promise<ToolResult> {
 	// Source image from the triggering message's media
-	const sourceImage = ctx.replyMedia?.[0];
+	const sourceImage = ctx.replyMedia?.find((media) =>
+		media.mimeType.startsWith("image/"),
+	);
 	if (!sourceImage) {
 		return {
 			text: "No image found to edit. Reply to a message with an image, or send an image with your edit instructions.",
@@ -39,7 +41,7 @@ async function executeEditImage(
 			timeoutMs: 60_000,
 		});
 
-		await ctx.sendPhoto(result.image.data, params.prompt);
+		await ctx.sendPhoto(result.image.data, params.prompt.slice(0, 1024));
 		return { handled: true };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
@@ -49,7 +51,7 @@ async function executeEditImage(
 
 export const editImageTool: ToolDefinition<EditImageParams> = {
 	name: "editImage",
-	commands: ["/edit", "/e"],
+	commands: ["/edit", "/e", "/ed"],
 	description: "Edit an image based on text instructions (reply to an image)",
 	helpText: "tool-edit-image",
 	category: "media",

@@ -3,8 +3,13 @@
  * Every handler and tool uses this module. Single implementation for all response delivery.
  */
 
+import type { DerpContext } from "../bot/context";
+import { markdownToHtml, stripHtmlTags } from "./markdown";
+
 const TELEGRAM_MSG_LIMIT = 4096;
 const TELEGRAM_CAPTION_LIMIT = 1024;
+
+type ReplyOptions = Parameters<DerpContext["reply"]>[1];
 
 /** Split a long message on paragraph → sentence → word boundaries */
 export function splitMessage(
@@ -98,7 +103,7 @@ export function needsCaptionOverflow(caption: string): boolean {
 	return caption.length > TELEGRAM_CAPTION_LIMIT;
 }
 
-/** Split caption into (short caption for media, full text as follow-up) */
+/** Split caption into a short media caption and remaining follow-up text */
 export function splitCaption(caption: string): {
 	mediaCaption: string;
 	followUp: string;
@@ -112,17 +117,67 @@ export function splitCaption(caption: string): {
 	if (truncAt > TELEGRAM_CAPTION_LIMIT * 0.3) {
 		return {
 			mediaCaption: `${caption.slice(0, truncAt + 1)}…`,
-			followUp: caption,
+			followUp: caption.slice(truncAt + 2).trimStart(),
 		};
 	}
 
 	return {
 		mediaCaption: `${caption.slice(0, TELEGRAM_CAPTION_LIMIT - 1)}…`,
-		followUp: caption,
+		followUp: caption.slice(TELEGRAM_CAPTION_LIMIT - 1),
+	};
+}
+
+/** Prepare a Telegram-safe caption plus follow-up message chunks */
+export function captionPartsForMedia(caption?: string): {
+	caption?: string;
+	followUpChunks: string[];
+} {
+	if (!caption) return { followUpChunks: [] };
+	const { mediaCaption, followUp } = splitCaption(caption);
+	return {
+		caption: mediaCaption || undefined,
+		followUpChunks: followUp ? splitMessage(followUp) : [],
 	};
 }
 
 /** Strip HTML tags for plain text fallback */
 export function stripHtml(html: string): string {
 	return html.replace(/<[^>]*>/g, "");
+}
+
+/** Reply with Telegram HTML and fall back to plain text if entity parsing fails. */
+export async function replyHtml(
+	ctx: DerpContext,
+	html: string,
+	options: ReplyOptions = {},
+) {
+	try {
+		return await ctx.reply(html, { ...options, parse_mode: "HTML" });
+	} catch {
+		const { parse_mode: _parseMode, ...plainOptions } = options ?? {};
+		return await ctx.reply(stripHtmlTags(html), plainOptions);
+	}
+}
+
+/** Reply with standard Markdown converted to Telegram HTML, split into safe chunks. */
+export async function replyMarkdown(
+	ctx: DerpContext,
+	text: string,
+	options: ReplyOptions = {},
+) {
+	const sent = [];
+	const chunks = splitMessage(text);
+	for (let i = 0; i < chunks.length; i++) {
+		const chunk = chunks[i];
+		if (!chunk) continue;
+		const chunkOptions =
+			i === 0
+				? options
+				: {
+						...options,
+						reply_to_message_id: undefined,
+					};
+		sent.push(await replyHtml(ctx, markdownToHtml(chunk), chunkOptions));
+	}
+	return sent;
 }

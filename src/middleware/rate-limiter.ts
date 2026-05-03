@@ -9,6 +9,16 @@ export function createRateLimiter() {
 	return limit({
 		timeFrame: 2000,
 		limit: 3,
+		keyGenerator: (ctx: DerpContext) => {
+			if (
+				ctx.preCheckoutQuery ||
+				ctx.message?.successful_payment ||
+				ctx.message?.refunded_payment
+			) {
+				return undefined;
+			}
+			return ctx.from?.id.toString();
+		},
 		onLimitExceeded: async (ctx: DerpContext) => {
 			logger.warn("rate_limit_exceeded", {
 				userId: ctx.from?.id,

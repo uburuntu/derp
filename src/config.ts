@@ -15,14 +15,20 @@ const configSchema = z.object({
 	botAdminIds: z
 		.string()
 		.default("")
-		.transform((s) =>
-			s
-				? s
-						.split(",")
-						.map(Number)
-						.filter((n) => !Number.isNaN(n))
-				: [],
-		),
+		.transform((s, ctx) => {
+			if (!s) return [];
+			const ids = s.split(",").map((part) => part.trim());
+			const parsed = ids.map(Number);
+			const invalid = ids.filter((_, index) => Number.isNaN(parsed[index]));
+			if (invalid.length > 0) {
+				ctx.addIssue({
+					code: "custom",
+					message: `Invalid BOT_ADMIN_IDS entries: ${invalid.join(", ")}`,
+				});
+				return z.NEVER;
+			}
+			return parsed;
+		}),
 	botAdminEventsChatId: z.coerce.number().optional(),
 	logfireToken: z.string().optional(),
 	otelExporterOtlpEndpoint: z.string().optional(),
@@ -70,7 +76,11 @@ export function getGoogleApiKeys(cfg: Config): string[] {
 
 /** Get the bot's numeric ID from the token */
 export function getBotId(cfg: Config): number {
-	return Number.parseInt(cfg.telegramBotToken.split(":")[0]!, 10);
+	const [botId] = cfg.telegramBotToken.split(":");
+	if (!botId) {
+		throw new Error("Invalid TELEGRAM_BOT_TOKEN");
+	}
+	return Number.parseInt(botId, 10);
 }
 
 export const config = loadConfig();

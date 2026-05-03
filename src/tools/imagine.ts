@@ -1,6 +1,7 @@
 /** Image generation tool — generates images from text prompts */
 
 import { z } from "zod";
+import { captionPartsForMedia } from "../common/reply";
 import { config, getGoogleApiKeys } from "../config";
 import { GoogleLLMProvider } from "../llm/providers/google";
 import { ModelCapability } from "../llm/registry";
@@ -30,7 +31,11 @@ async function executeImagine(
 			timeoutMs: 60_000,
 		});
 
-		await ctx.sendPhoto(result.image.data, params.prompt);
+		const caption = captionPartsForMedia(params.prompt);
+		await ctx.sendPhoto(result.image.data, caption.caption);
+		for (const chunk of caption.followUpChunks) {
+			await ctx.sendMessage(chunk);
+		}
 		return { handled: true };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
@@ -40,7 +45,7 @@ async function executeImagine(
 
 export const imagineTool: ToolDefinition<ImagineParams> = {
 	name: "imagine",
-	commands: ["/imagine", "/i"],
+	commands: ["/imagine", "/i", "/image", "/img"],
 	description: "Generate an image from a text description",
 	helpText: "tool-imagine",
 	category: "media",

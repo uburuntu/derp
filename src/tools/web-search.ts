@@ -11,6 +11,10 @@ const searchParamsSchema = z.object({
 
 type SearchParams = z.infer<typeof searchParamsSchema>;
 
+const SEARCH_TIMEOUT_MS = 10_000;
+const SEARCH_RETRY_ATTEMPTS = 2;
+const SEARCH_RETRY_DELAY_MS = 1_000;
+
 interface BraveSearchResult {
 	web?: {
 		results?: Array<{
@@ -21,6 +25,63 @@ interface BraveSearchResult {
 	};
 }
 
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableStatus(status: number): boolean {
+	return status === 429 || status >= 500;
+}
+
+async function fetchWithTimeout(
+	url: URL,
+	init: RequestInit | undefined,
+	label: string,
+): Promise<Response> {
+	const abortController = new AbortController();
+	const timeout = setTimeout(() => abortController.abort(), SEARCH_TIMEOUT_MS);
+
+	try {
+		return await fetch(url, {
+			...init,
+			signal: abortController.signal,
+		});
+	} catch (err) {
+		if (abortController.signal.aborted) {
+			throw new Error(`${label} timed out after ${SEARCH_TIMEOUT_MS}ms`);
+		}
+		throw err;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+async function fetchWithRetry(
+	url: URL,
+	init: RequestInit | undefined,
+	label: string,
+): Promise<Response> {
+	let lastError: unknown;
+	for (let attempt = 0; attempt < SEARCH_RETRY_ATTEMPTS; attempt++) {
+		try {
+			const response = await fetchWithTimeout(url, init, label);
+			if (
+				!isRetryableStatus(response.status) ||
+				attempt === SEARCH_RETRY_ATTEMPTS - 1
+			) {
+				return response;
+			}
+			lastError = new Error(`${label} API error: ${response.status}`);
+		} catch (err) {
+			lastError = err;
+			if (attempt === SEARCH_RETRY_ATTEMPTS - 1) break;
+		}
+		await sleep(SEARCH_RETRY_DELAY_MS);
+	}
+
+	throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function searchBrave(query: string): Promise<string> {
 	const apiKey = config.braveSearchApiKey;
 	if (!apiKey) throw new Error("BRAVE_SEARCH_API_KEY not configured");
@@ -29,13 +90,17 @@ async function searchBrave(query: string): Promise<string> {
 	url.searchParams.set("q", query);
 	url.searchParams.set("count", "5");
 
-	const response = await fetch(url, {
-		headers: {
-			Accept: "application/json",
-			"Accept-Encoding": "gzip",
-			"X-Subscription-Token": apiKey,
+	const response = await fetchWithRetry(
+		url,
+		{
+			headers: {
+				Accept: "application/json",
+				"Accept-Encoding": "gzip",
+				"X-Subscription-Token": apiKey,
+			},
 		},
-	});
+		"Brave Search",
+	);
 
 	if (!response.ok) {
 		throw new Error(`Brave Search API error: ${response.status}`);
@@ -60,7 +125,7 @@ async function searchDuckDuckGo(query: string): Promise<string> {
 	url.searchParams.set("no_html", "1");
 	url.searchParams.set("skip_disambig", "1");
 
-	const response = await fetch(url);
+	const response = await fetchWithRetry(url, undefined, "DuckDuckGo");
 	if (!response.ok) {
 		throw new Error(`DuckDuckGo API error: ${response.status}`);
 	}
@@ -101,7 +166,21 @@ async function executeSearch(
 	try {
 		let results: string;
 		if (config.braveSearchApiKey) {
-			results = await searchBrave(params.query);
+			try {
+				results = await searchBrave(params.query);
+			} catch (braveErr) {
+				try {
+					results = await searchDuckDuckGo(params.query);
+				} catch (duckErr) {
+					const braveMsg =
+						braveErr instanceof Error ? braveErr.message : String(braveErr);
+					const duckMsg =
+						duckErr instanceof Error ? duckErr.message : String(duckErr);
+					throw new Error(
+						`Brave failed: ${braveMsg}; DuckDuckGo failed: ${duckMsg}`,
+					);
+				}
+			}
 		} else {
 			results = await searchDuckDuckGo(params.query);
 		}
@@ -123,4 +202,5 @@ export const webSearchTool: ToolDefinition<SearchParams> = {
 	credits: 0,
 	freeDaily: 15,
 	capability: ModelCapability.TEXT,
+	allowAutoCall: true,
 };

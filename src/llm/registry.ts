@@ -182,9 +182,10 @@ for (const model of MODELS) {
 	MODEL_REGISTRY.set(model.id, model);
 	if (model.isDefault) {
 		const key = `${model.capability}:${model.tier}`;
-		if (DEFAULTS.has(key)) {
+		const existing = DEFAULTS.get(key);
+		if (existing) {
 			throw new Error(
-				`Duplicate default model for ${key}: ${DEFAULTS.get(key)!.id} and ${model.id}`,
+				`Duplicate default model for ${key}: ${existing.id} and ${model.id}`,
 			);
 		}
 		DEFAULTS.set(key, model);

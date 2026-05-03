@@ -38,12 +38,7 @@ export function markdownToHtml(md: string): string {
 	});
 
 	// Step 3: Escape HTML entities in remaining text
-	text = text.replace(/[^]*?/g, (segment) => {
-		// Don't escape our placeholders
-		if (segment.startsWith("\x00")) return segment;
-		return segment;
-	});
-	// Actually escape the whole thing, but our placeholders don't contain <>&
+	// Placeholders do not contain escapable characters, so a full-string escape is safe.
 	text = escapeHtml(text);
 
 	// Step 4: Convert Markdown formatting to HTML
@@ -66,11 +61,11 @@ export function markdownToHtml(md: string): string {
 	text = text.replace(/<\/blockquote>\n<blockquote>/g, "\n");
 
 	// Step 5: Restore code blocks and inline code
-	for (let i = 0; i < codeBlocks.length; i++) {
-		text = text.replace(`\x00CB${i}\x00`, codeBlocks[i]!);
+	for (const [i, codeBlock] of codeBlocks.entries()) {
+		text = text.replace(`\x00CB${i}\x00`, codeBlock);
 	}
-	for (let i = 0; i < inlineCodes.length; i++) {
-		text = text.replace(`\x00IC${i}\x00`, inlineCodes[i]!);
+	for (const [i, inlineCode] of inlineCodes.entries()) {
+		text = text.replace(`\x00IC${i}\x00`, inlineCode);
 	}
 
 	return text;

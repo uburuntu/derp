@@ -1,5 +1,13 @@
 /** Text sanitization utilities */
 
+/** Escape text before interpolating it into Telegram HTML. */
+export function escapeHtml(text: string): string {
+	return text
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;");
+}
+
 /** Strip MarkdownV2 formatting characters */
 export function stripMarkdown(text: string): string {
 	return text.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");

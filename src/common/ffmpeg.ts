@@ -1,8 +1,93 @@
 /** ffmpeg wrapper using Bun.spawn for media conversion */
 
+const MiB = 1024 * 1024;
+const AUDIO_INPUT_LIMIT_BYTES = 25 * MiB;
+const AUDIO_OUTPUT_LIMIT_BYTES = 25 * MiB;
+const VIDEO_INPUT_LIMIT_BYTES = 50 * MiB;
+const VIDEO_OUTPUT_LIMIT_BYTES = 50 * MiB;
+const AUDIO_CONVERT_TIMEOUT_MS = 30_000;
+const VIDEO_CONVERT_TIMEOUT_MS = 60_000;
+
+async function readStreamLimited(
+	stream: ReadableStream<Uint8Array>,
+	maxBytes: number,
+): Promise<Buffer> {
+	const reader = stream.getReader();
+	const chunks: Buffer[] = [];
+	let total = 0;
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		if (!value) continue;
+
+		total += value.byteLength;
+		if (total > maxBytes) {
+			await reader.cancel();
+			throw new Error(`ffmpeg output is too large: ${total} bytes`);
+		}
+		chunks.push(Buffer.from(value));
+	}
+
+	return Buffer.concat(chunks, total);
+}
+
+async function runFfmpeg(
+	args: string[],
+	input: Buffer,
+	label: string,
+	limits: { maxInputBytes: number; maxOutputBytes: number; timeoutMs: number },
+): Promise<Buffer> {
+	if (input.byteLength > limits.maxInputBytes) {
+		throw new Error(
+			`${label} input is too large: ${input.byteLength} bytes > ${limits.maxInputBytes} bytes`,
+		);
+	}
+
+	const proc = Bun.spawn(args, {
+		stdin: "pipe",
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	let timedOut = false;
+	const timeout = setTimeout(() => {
+		timedOut = true;
+		proc.kill();
+	}, limits.timeoutMs);
+	const stderrPromise = new Response(proc.stderr).text();
+	const outputPromise = readStreamLimited(proc.stdout, limits.maxOutputBytes);
+
+	try {
+		proc.stdin.write(input);
+		proc.stdin.end();
+
+		const output = await outputPromise;
+		const exitCode = await proc.exited;
+		const stderr = await stderrPromise;
+
+		if (timedOut) {
+			throw new Error(`ffmpeg ${label} timed out after ${limits.timeoutMs}ms`);
+		}
+		if (exitCode !== 0) {
+			throw new Error(`ffmpeg ${label} failed (exit ${exitCode}): ${stderr}`);
+		}
+
+		return output;
+	} catch (err) {
+		proc.kill();
+		await proc.exited.catch(() => undefined);
+		if (timedOut) {
+			throw new Error(`ffmpeg ${label} timed out after ${limits.timeoutMs}ms`);
+		}
+		throw err;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 /** Convert WAV audio buffer to OGG Opus (for Telegram voice messages) */
 export async function convertToOggOpus(wavBuffer: Buffer): Promise<Buffer> {
-	const proc = Bun.spawn(
+	return runFfmpeg(
 		[
 			"ffmpeg",
 			"-i",
@@ -17,30 +102,19 @@ export async function convertToOggOpus(wavBuffer: Buffer): Promise<Buffer> {
 			"ogg",
 			"pipe:1",
 		],
+		wavBuffer,
+		"WAV->OGG",
 		{
-			stdin: "pipe",
-			stdout: "pipe",
-			stderr: "pipe",
+			maxInputBytes: AUDIO_INPUT_LIMIT_BYTES,
+			maxOutputBytes: AUDIO_OUTPUT_LIMIT_BYTES,
+			timeoutMs: AUDIO_CONVERT_TIMEOUT_MS,
 		},
 	);
-
-	proc.stdin.write(wavBuffer);
-	proc.stdin.end();
-
-	const output = await new Response(proc.stdout).arrayBuffer();
-	const exitCode = await proc.exited;
-
-	if (exitCode !== 0) {
-		const stderr = await new Response(proc.stderr).text();
-		throw new Error(`ffmpeg WAV->OGG failed (exit ${exitCode}): ${stderr}`);
-	}
-
-	return Buffer.from(output);
 }
 
 /** Convert WebM buffer to MP4 (for animated stickers) */
 export async function convertWebmToMp4(webmBuffer: Buffer): Promise<Buffer> {
-	const proc = Bun.spawn(
+	return runFfmpeg(
 		[
 			"ffmpeg",
 			"-i",
@@ -56,25 +130,14 @@ export async function convertWebmToMp4(webmBuffer: Buffer): Promise<Buffer> {
 			"mp4",
 			"pipe:1",
 		],
+		webmBuffer,
+		"WebM->MP4",
 		{
-			stdin: "pipe",
-			stdout: "pipe",
-			stderr: "pipe",
+			maxInputBytes: VIDEO_INPUT_LIMIT_BYTES,
+			maxOutputBytes: VIDEO_OUTPUT_LIMIT_BYTES,
+			timeoutMs: VIDEO_CONVERT_TIMEOUT_MS,
 		},
 	);
-
-	proc.stdin.write(webmBuffer);
-	proc.stdin.end();
-
-	const output = await new Response(proc.stdout).arrayBuffer();
-	const exitCode = await proc.exited;
-
-	if (exitCode !== 0) {
-		const stderr = await new Response(proc.stderr).text();
-		throw new Error(`ffmpeg WebM->MP4 failed (exit ${exitCode}): ${stderr}`);
-	}
-
-	return Buffer.from(output);
 }
 
 /** Convert any audio buffer to PCM WAV (for Gemini input) */
@@ -83,7 +146,7 @@ export async function convertToWav(
 	inputFormat?: string,
 ): Promise<Buffer> {
 	const inputArgs = inputFormat ? ["-f", inputFormat] : [];
-	const proc = Bun.spawn(
+	return runFfmpeg(
 		[
 			"ffmpeg",
 			...inputArgs,
@@ -97,23 +160,12 @@ export async function convertToWav(
 			"wav",
 			"pipe:1",
 		],
+		audioBuffer,
+		"audio->WAV",
 		{
-			stdin: "pipe",
-			stdout: "pipe",
-			stderr: "pipe",
+			maxInputBytes: AUDIO_INPUT_LIMIT_BYTES,
+			maxOutputBytes: AUDIO_OUTPUT_LIMIT_BYTES,
+			timeoutMs: AUDIO_CONVERT_TIMEOUT_MS,
 		},
 	);
-
-	proc.stdin.write(audioBuffer);
-	proc.stdin.end();
-
-	const output = await new Response(proc.stdout).arrayBuffer();
-	const exitCode = await proc.exited;
-
-	if (exitCode !== 0) {
-		const stderr = await new Response(proc.stderr).text();
-		throw new Error(`ffmpeg audio->WAV failed (exit ${exitCode}): ${stderr}`);
-	}
-
-	return Buffer.from(output);
 }

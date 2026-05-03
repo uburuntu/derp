@@ -2,10 +2,13 @@
 
 import type { Bot } from "grammy";
 import { toJSONSchema, type z } from "zod";
+import type { DerpContext } from "../bot/context";
+import { extractMedia } from "../common/extractor";
+import { formatBalanceFooter, replyMarkdown } from "../common/reply";
 import { registerToolPricing } from "../credits/service";
-import type { LLMToolSchema } from "../llm/types";
+import type { LLMToolSchema, MediaAttachment } from "../llm/types";
 import { executeWithCreditGate } from "./credit-gate";
-import type { ToolCategory, ToolDefinition } from "./types";
+import type { ToolCategory, ToolContext, ToolDefinition } from "./types";
 
 const CATEGORY_ORDER: ToolCategory[] = [
 	"search",
@@ -17,8 +20,15 @@ const CATEGORY_ORDER: ToolCategory[] = [
 const CATEGORY_LABELS: Record<ToolCategory, string> = {
 	search: "Search & Research",
 	reasoning: "Reasoning",
-	media: "Creative",
+	media: "Media",
 	utility: "Utilities",
+};
+
+const CATEGORY_LABEL_KEYS: Record<ToolCategory, string> = {
+	search: "tool-category-search",
+	reasoning: "tool-category-reasoning",
+	media: "tool-category-media",
+	utility: "tool-category-utility",
 };
 
 const CATEGORY_EMOJI: Record<ToolCategory, string> = {
@@ -27,6 +37,80 @@ const CATEGORY_EMOJI: Record<ToolCategory, string> = {
 	media: "🎨",
 	utility: "🛠",
 };
+
+type Translator = (
+	key: string,
+	args?: Record<string, string | number>,
+) => string;
+
+function escapeHtml(text: string): string {
+	return text
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;");
+}
+
+function formatToolCost(tool: ToolDefinition, t?: Translator): string {
+	const hasFiniteQuota = Number.isFinite(tool.freeDaily) && tool.freeDaily > 0;
+	if (tool.credits === 0) {
+		if (!hasFiniteQuota) return t ? t("tool-cost-free") : "free";
+		return t
+			? t("tool-cost-free-daily", { freeDaily: tool.freeDaily })
+			: `${tool.freeDaily} free per user/chat/day`;
+	}
+
+	if (!hasFiniteQuota) {
+		return t
+			? t("tool-cost-credits", { credits: tool.credits })
+			: `${tool.credits} cr`;
+	}
+
+	return t
+		? t("tool-cost-credits-with-quota", {
+				credits: tool.credits,
+				freeDaily: tool.freeDaily,
+			})
+		: `${tool.credits} cr, ${tool.freeDaily} free per user/chat/day`;
+}
+
+async function isChatAdmin(ctx: DerpContext): Promise<boolean> {
+	if (ctx.chat?.type === "private") return true;
+	if (!ctx.from) return false;
+
+	try {
+		const member = await ctx.getChatMember(ctx.from.id);
+		return member.status === "administrator" || member.status === "creator";
+	} catch {
+		return false;
+	}
+}
+
+function canUseAdminGatedSetting(
+	setting: "admins" | "everyone" | undefined,
+	isAdmin: boolean,
+): boolean {
+	return setting !== "admins" || isAdmin;
+}
+
+async function extractTriggerMedia(
+	ctx: DerpContext,
+): Promise<MediaAttachment[]> {
+	const attachments: MediaAttachment[] = [];
+	if (ctx.message) {
+		for (const media of await extractMedia(ctx.api, ctx.message)) {
+			attachments.push(media);
+		}
+	}
+	if (ctx.message?.reply_to_message) {
+		for (const media of await extractMedia(
+			ctx.api,
+			ctx.message.reply_to_message,
+		)) {
+			attachments.push(media);
+		}
+	}
+	return attachments;
+}
 
 class ToolRegistry {
 	private tools = new Map<string, ToolDefinition>();
@@ -44,9 +128,10 @@ class ToolRegistry {
 		// Map all commands to this tool
 		for (const cmd of tool.commands) {
 			const name = cmd.replace(/^\//, "");
-			if (this.commandMap.has(name)) {
+			const existing = this.commandMap.get(name);
+			if (existing) {
 				throw new Error(
-					`Duplicate command ${cmd}: already registered by ${this.commandMap.get(name)!.name}`,
+					`Duplicate command ${cmd}: already registered by ${existing.name}`,
 				);
 			}
 			this.commandMap.set(name, tool);
@@ -95,8 +180,24 @@ class ToolRegistry {
 		return schemas;
 	}
 
+	/** Generate LLM function schemas for tools safe to call without explicit command intent. */
+	getAutoCallableLLMToolSchemas(): LLMToolSchema[] {
+		const schemas: LLMToolSchema[] = [];
+
+		for (const tool of this.tools.values()) {
+			if (!tool.allowAutoCall) continue;
+			schemas.push({
+				name: tool.name,
+				description: tool.description,
+				parameters: zodToJsonSchema(tool.parameters),
+			});
+		}
+
+		return schemas;
+	}
+
 	/** Generate help text grouped by category (Telegram HTML) */
-	getHelpText(): string {
+	getHelpText(t?: Translator): string {
 		const grouped = new Map<ToolCategory, ToolDefinition[]>();
 
 		for (const tool of this.tools.values()) {
@@ -112,16 +213,18 @@ class ToolRegistry {
 			if (!tools || tools.length === 0) continue;
 
 			const emoji = CATEGORY_EMOJI[category];
-			const label = CATEGORY_LABELS[category];
+			const label = escapeHtml(
+				t ? t(CATEGORY_LABEL_KEYS[category]) : CATEGORY_LABELS[category],
+			);
 			const lines = tools
-				.map((t) => {
-					if (t.commands.length === 0) return null; // skip agent-only tools
-					const cmds = t.commands.join(", ");
-					const cost =
-						t.credits === 0
-							? "free"
-							: `${t.credits} cr${t.freeDaily > 0 ? `, ${t.freeDaily} free/day` : ""}`;
-					return `  ${cmds} — ${t.description} · <i>${cost}</i>`;
+				.map((tool) => {
+					if (tool.commands.length === 0) return null; // skip agent-only tools
+					const cmds = tool.commands.join(", ");
+					const description = escapeHtml(
+						t ? t(tool.helpText) : tool.description,
+					);
+					const cost = escapeHtml(formatToolCost(tool, t));
+					return `  ${cmds} — ${description} · <i>${cost}</i>`;
 				})
 				.filter(Boolean);
 
@@ -149,14 +252,13 @@ class ToolRegistry {
 	}
 
 	/** Auto-generate grammY command handlers for all tools with commands */
-	// biome-ignore lint: Bot type uses any context
-	registerCommandHandlers(bot: Bot<any>): void {
+	registerCommandHandlers(bot: Bot<DerpContext>): void {
 		for (const tool of this.tools.values()) {
 			if (tool.commands.length === 0) continue;
 
 			const commandNames = tool.commands.map((c) => c.replace(/^\//, ""));
 
-			bot.command(commandNames, async (ctx: any) => {
+			bot.command(commandNames, async (ctx) => {
 				if (!ctx.dbUser || !ctx.dbChat || !ctx.creditService) return;
 
 				const input = ctx.match ?? "";
@@ -175,9 +277,15 @@ class ToolRegistry {
 						| string[]
 						| undefined;
 
-					if (properties && required && required.length > 0) {
-						const firstField = required[0]!;
-						params = { [firstField]: input };
+					if (tool.parseCommand) {
+						params = tool.parseCommand(input);
+					} else if (properties && required && required.length > 0) {
+						const firstField = required[0];
+						if (!firstField) {
+							params = {};
+						} else {
+							params = { [firstField]: input };
+						}
 					} else {
 						params = { query: input };
 					}
@@ -185,23 +293,42 @@ class ToolRegistry {
 					const parsed = schemaShape.safeParse(params);
 					if (!parsed.success) {
 						const primaryCmd = tool.commands[0] ?? tool.name;
-						await ctx.reply(
-							`Usage: ${primaryCmd} <${required?.[0] ?? "input"}>`,
+						await replyMarkdown(
+							ctx,
+							`Usage: ${tool.usage ?? `${primaryCmd} <${required?.[0] ?? "input"}>`}`,
+							{ reply_to_message_id: ctx.message?.message_id },
 						);
 						return;
 					}
 
 					params = parsed.data;
 				} catch {
-					params = {};
+					const primaryCmd = tool.commands[0] ?? tool.name;
+					await replyMarkdown(
+						ctx,
+						`Usage: ${tool.usage ?? `${primaryCmd} <input>`}`,
+						{ reply_to_message_id: ctx.message?.message_id },
+					);
+					return;
 				}
 
-				const toolCtx = {
+				const admin = await isChatAdmin(ctx);
+				const media = await extractTriggerMedia(ctx);
+				const toolCtx: ToolContext = {
 					db: ctx.db,
 					user: ctx.dbUser,
 					chat: ctx.dbChat,
 					creditService: ctx.creditService,
 					tier: ctx.tier,
+					isChatAdmin: admin,
+					canManageMemory: canUseAdminGatedSetting(
+						ctx.dbChat.settings?.memoryAccess,
+						admin,
+					),
+					canManageReminders: canUseAdminGatedSetting(
+						ctx.dbChat.settings?.remindersAccess,
+						admin,
+					),
 					sendMessage: async (text: string) => {
 						await ctx.reply(text);
 					},
@@ -218,17 +345,37 @@ class ToolRegistry {
 						await ctx.replyWithVideo(new InputFile(video), { caption });
 					},
 					editMessage: async (messageId: number, text: string) => {
-						await ctx.api.editMessageText(ctx.chat!.id, messageId, text);
+						const chatId = ctx.chat?.id;
+						if (chatId == null) throw new Error("No chat for editMessage");
+						await ctx.api.editMessageText(chatId, messageId, text);
 					},
 					deleteMessage: async (messageId: number) => {
-						await ctx.api.deleteMessage(ctx.chat!.id, messageId);
+						const chatId = ctx.chat?.id;
+						if (chatId == null) throw new Error("No chat for deleteMessage");
+						await ctx.api.deleteMessage(chatId, messageId);
 					},
+					replyMedia: media,
+					threadId: ctx.message?.message_thread_id ?? null,
+					replyToMessageId: ctx.message?.message_id ?? null,
+					idempotencyKey:
+						ctx.chat && ctx.message
+							? `tool:${tool.name}:cmd:${ctx.chat.id}:${ctx.message.message_id}`
+							: undefined,
 				};
 
 				const result = await executeWithCreditGate(tool, params, toolCtx);
 
 				if (!result.handled && result.text) {
-					await ctx.reply(result.text, {
+					const footer =
+						result.creditResult &&
+						result.creditResult.creditsToDeduct > 0 &&
+						result.creditResult.creditsRemaining != null
+							? formatBalanceFooter(
+									result.creditResult.creditsToDeduct,
+									result.creditResult.creditsRemaining,
+								)
+							: "";
+					await replyMarkdown(ctx, `${result.text}${footer}`, {
 						reply_to_message_id: ctx.message?.message_id,
 					});
 				}

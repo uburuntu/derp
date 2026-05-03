@@ -2,8 +2,9 @@ import type { z } from "zod";
 import type { CreditService } from "../credits/service";
 import type { Database } from "../db/connection";
 import type { Chat, User } from "../db/schema";
+import type { ContextParticipant } from "../llm/context-builder";
 import type { ModelCapability, ModelTier } from "../llm/registry";
-import type { BinaryMedia } from "../llm/types";
+import type { BinaryMedia, MediaAttachment } from "../llm/types";
 
 // ── Tool Categories ──────────────────────────────────────────────────────────
 
@@ -19,6 +20,8 @@ export interface ToolDefinition<TParams = unknown> {
 	category: ToolCategory;
 
 	parameters: z.ZodSchema<TParams>;
+	parseCommand?: (input: string) => TParams;
+	usage?: string;
 
 	execute: (params: TParams, ctx: ToolContext) => Promise<ToolResult>;
 
@@ -30,6 +33,7 @@ export interface ToolDefinition<TParams = unknown> {
 
 	minTier?: ModelTier;
 	chatAdminOnly?: boolean; // Telegram chat admins, not bot admins
+	allowAutoCall?: boolean; // Safe for model-initiated calls without explicit slash command
 }
 
 // ── Tool Context ─────────────────────────────────────────────────────────────
@@ -40,6 +44,15 @@ export interface ToolContext {
 	chat: Chat;
 	creditService: CreditService;
 	tier: ModelTier;
+	isChatAdmin: boolean;
+	canManageMemory: boolean;
+	canManageReminders: boolean;
+
+	// Scoped participant references exposed to the LLM as p1, p2, ...
+	participants?: Map<string, ContextParticipant>;
+	getParticipantProfilePhoto?: (
+		participantRef: string,
+	) => Promise<MediaAttachment | null>;
 
 	// Telegram context helpers
 	sendMessage: (text: string) => Promise<void>;
@@ -50,7 +63,10 @@ export interface ToolContext {
 	deleteMessage: (messageId: number) => Promise<void>;
 
 	// Media from the triggering message
-	replyMedia?: BinaryMedia[];
+	replyMedia?: MediaAttachment[];
+	threadId?: number | null;
+	replyToMessageId?: number | null;
+	idempotencyKey?: string;
 }
 
 // ── Tool Result ──────────────────────────────────────────────────────────────

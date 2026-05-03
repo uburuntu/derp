@@ -1,24 +1,125 @@
 /** Credits handler — /credits, /buy, payment flows */
 
-import { Composer } from "grammy";
+import { Composer, type NextFunction } from "grammy";
 import type { DerpContext } from "../bot/context";
 import {
 	formatPaymentNotification,
 	notifyAdmins,
 } from "../common/admin-notify";
-import { MESSAGE_EFFECTS } from "../common/telegram";
 import { derpMetrics } from "../common/observability";
+import { escapeHtml } from "../common/sanitize";
+import { MESSAGE_EFFECTS } from "../common/telegram";
 import { getTopUpPack } from "../credits/packs";
 import { getSubscriptionPlan } from "../credits/subscriptions";
 import { buildBuyKeyboard, formatBalanceMessage } from "../credits/ui";
 import {
-	addChatCredits,
-	addUserCredits,
-	deductUserCredits,
+	addChatCreditsWithResult,
+	addUserCreditsWithResult,
+	applySubscriptionPayment,
 	getBalances,
+	reconcileStarRefund,
+	transferUserCreditsToChat,
 } from "../db/queries/credits";
 
 const creditsComposer = new Composer<DerpContext>();
+
+type PaymentPayload =
+	| { type: "sub"; planId: string }
+	| { type: "pack"; packId: string; target: "user" | "chat" };
+
+const TRANSFER_PROMPT_MARKERS = [
+	"Move personal credits",
+	"Перенеси личные кредиты",
+	"Transfer credits",
+];
+
+function parsePaymentPayload(payload: string): PaymentPayload | null {
+	const parts = payload.split(":");
+	if (parts[0] === "sub" && parts[1] && parts.length === 2) {
+		return { type: "sub", planId: parts[1] };
+	}
+	if (
+		parts[0] === "pack" &&
+		parts[1] &&
+		(parts[2] === "user" || parts[2] === "chat") &&
+		parts.length === 3
+	) {
+		return { type: "pack", packId: parts[1], target: parts[2] };
+	}
+	return null;
+}
+
+function expectedStars(payload: PaymentPayload): number | null {
+	if (payload.type === "sub") {
+		return getSubscriptionPlan(payload.planId)?.stars ?? null;
+	}
+	return getTopUpPack(payload.packId)?.stars ?? null;
+}
+
+function validateStarsPayment(
+	payloadText: string,
+	currency: string,
+	totalAmount: number,
+): { payload: PaymentPayload; stars: number } | { error: string } {
+	const payload = parsePaymentPayload(payloadText);
+	if (!payload) return { error: "Unknown invoice payload" };
+	if (currency !== "XTR") return { error: "Unsupported payment currency" };
+
+	const stars = expectedStars(payload);
+	if (stars == null) return { error: "Unknown plan or pack" };
+	if (totalAmount !== stars) return { error: "Invoice amount mismatch" };
+
+	return { payload, stars };
+}
+
+type SuccessfulSubscriptionPaymentFields = {
+	is_recurring?: boolean;
+	is_first_recurring?: boolean;
+	subscription_expiration_date?: number;
+};
+
+function getSubscriptionPaymentFields(
+	payment: unknown,
+): SuccessfulSubscriptionPaymentFields {
+	return payment as SuccessfulSubscriptionPaymentFields;
+}
+
+function getSubscriptionExpiry(
+	payment: unknown,
+	currentExpiry: Date | null,
+): Date {
+	const fields = getSubscriptionPaymentFields(payment);
+	if (
+		typeof fields.subscription_expiration_date === "number" &&
+		fields.subscription_expiration_date > 0
+	) {
+		return new Date(fields.subscription_expiration_date * 1000);
+	}
+
+	const now = new Date();
+	const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+	const base = currentExpiry && currentExpiry > now ? currentExpiry : now;
+	return new Date(base.getTime() + thirtyDays);
+}
+
+function isSubscriptionRenewal(payment: unknown): boolean {
+	const fields = getSubscriptionPaymentFields(payment);
+	return fields.is_recurring === true && fields.is_first_recurring !== true;
+}
+
+async function replyWithPaymentEffect(
+	ctx: DerpContext,
+	text: string,
+): Promise<void> {
+	try {
+		await ctx.reply(text, {
+			parse_mode: "HTML",
+			message_effect_id: MESSAGE_EFFECTS.party,
+		});
+	} catch {
+		await ctx.reply(text, { parse_mode: "HTML" });
+	}
+}
 
 // ── /credits, /balance, /bal ────────────────────────────────────────────────
 
@@ -36,6 +137,7 @@ creditsComposer.command(["credits", "balance", "bal"], async (ctx) => {
 		chatCredits,
 		ctx.dbUser.subscriptionTier,
 		ctx.dbUser.subscriptionExpiresAt,
+		(key, args) => ctx.t(key, args),
 	);
 
 	await ctx.reply(message, {
@@ -46,11 +148,30 @@ creditsComposer.command(["credits", "balance", "bal"], async (ctx) => {
 
 // ── /buy ────────────────────────────────────────────────────────────────────
 
-creditsComposer.command("buy", async (ctx) => {
+creditsComposer.command(["buy", "purchase", "shop"], async (ctx) => {
 	const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
-	const keyboard = buildBuyKeyboard(isGroup);
+	const keyboard = buildBuyKeyboard(isGroup, (key, args) => ctx.t(key, args));
 
 	await ctx.reply(ctx.t("buy-choose"), {
+		parse_mode: "HTML",
+		reply_markup: keyboard,
+		reply_to_message_id: ctx.message?.message_id,
+	});
+});
+
+creditsComposer.command(["buy_chat", "buychat"], async (ctx) => {
+	const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+	if (!isGroup) {
+		await ctx.reply(ctx.t("buy-chat-groups-only"), {
+			parse_mode: "HTML",
+			reply_to_message_id: ctx.message?.message_id,
+		});
+		return;
+	}
+
+	const keyboard = buildBuyKeyboard(true, (key, args) => ctx.t(key, args));
+	await ctx.reply(ctx.t("buy-choose"), {
+		parse_mode: "HTML",
 		reply_markup: keyboard,
 		reply_to_message_id: ctx.message?.message_id,
 	});
@@ -63,7 +184,7 @@ creditsComposer.callbackQuery(/^sub:(.+)$/, async (ctx) => {
 	if (!planId) return;
 	const plan = getSubscriptionPlan(planId);
 	if (!plan) {
-		await ctx.answerCallbackQuery("Plan not found");
+		await ctx.answerCallbackQuery(ctx.t("buy-plan-not-found"));
 		return;
 	}
 
@@ -79,9 +200,12 @@ creditsComposer.callbackQuery(/^sub:(.+)$/, async (ctx) => {
 	);
 
 	await ctx.answerCallbackQuery();
-	await ctx.reply(`Subscribe to ${plan.label}:`, {
+	await ctx.reply(ctx.t("buy-subscribe", { plan: escapeHtml(plan.label) }), {
+		parse_mode: "HTML",
 		reply_markup: {
-			inline_keyboard: [[{ text: `Pay ${plan.stars}⭐/month`, url: link }]],
+			inline_keyboard: [
+				[{ text: ctx.t("buy-pay-button", { stars: plan.stars }), url: link }],
+			],
 		},
 	});
 });
@@ -93,13 +217,14 @@ creditsComposer.callbackQuery(/^pack:(.+)$/, async (ctx) => {
 	if (!packId) return;
 	const pack = getTopUpPack(packId);
 	if (!pack) {
-		await ctx.answerCallbackQuery("Pack not found");
+		await ctx.answerCallbackQuery(ctx.t("buy-pack-not-found"));
 		return;
 	}
+	if (!ctx.chat) return;
 
 	await ctx.answerCallbackQuery();
 	await ctx.api.sendInvoice(
-		ctx.chat!.id,
+		ctx.chat.id,
 		`${pack.label} Credit Pack`,
 		`${pack.credits} credits`,
 		`pack:${pack.id}:user`,
@@ -116,13 +241,14 @@ creditsComposer.callbackQuery(/^group_pack:(.+)$/, async (ctx) => {
 	if (!packId) return;
 	const pack = getTopUpPack(packId);
 	if (!pack) {
-		await ctx.answerCallbackQuery("Pack not found");
+		await ctx.answerCallbackQuery(ctx.t("buy-pack-not-found"));
 		return;
 	}
+	if (!ctx.chat) return;
 
 	await ctx.answerCallbackQuery();
 	await ctx.api.sendInvoice(
-		ctx.chat!.id,
+		ctx.chat.id,
 		`${pack.label} Group Credit Pack`,
 		`${pack.credits} credits for this chat`,
 		`pack:${pack.id}:chat`,
@@ -132,12 +258,6 @@ creditsComposer.callbackQuery(/^group_pack:(.+)$/, async (ctx) => {
 	);
 });
 
-// ── Callback: noop (separator buttons) ──────────────────────────────────────
-
-creditsComposer.callbackQuery("noop", async (ctx) => {
-	await ctx.answerCallbackQuery();
-});
-
 // ── Callback: credit transfer (personal → group pool) ──────────────────────
 
 creditsComposer.callbackQuery("transfer", async (ctx) => {
@@ -145,7 +265,7 @@ creditsComposer.callbackQuery("transfer", async (ctx) => {
 
 	const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
 	if (!isGroup) {
-		await ctx.answerCallbackQuery("Transfers only work in groups");
+		await ctx.answerCallbackQuery(ctx.t("transfer-groups-only"));
 		return;
 	}
 
@@ -156,26 +276,32 @@ creditsComposer.callbackQuery("transfer", async (ctx) => {
 	);
 
 	if (userCredits < 100) {
-		await ctx.answerCallbackQuery("Minimum transfer: 100 credits");
+		await ctx.answerCallbackQuery(ctx.t("transfer-min"));
 		return;
 	}
 
 	await ctx.answerCallbackQuery();
-	await ctx.reply(
-		`Transfer credits to this chat's pool.\nYour balance: ${userCredits}\nMinimum: 100\n\nReply with the amount to transfer:`,
-	);
+	await ctx.reply(ctx.t("transfer-prompt", { balance: userCredits }), {
+		parse_mode: "HTML",
+		reply_markup: { force_reply: true, selective: true },
+	});
 });
 
 // Handle transfer amount as a reply
-creditsComposer.hears(/^\d+$/, async (ctx) => {
+creditsComposer.hears(/^\d+$/, async (ctx, next: NextFunction) => {
 	// Only handle if replying to a transfer prompt from the bot
-	if (!ctx.dbUser || !ctx.dbChat) return;
-	if (!ctx.message?.reply_to_message?.from?.is_bot) return;
-	if (!ctx.message.reply_to_message.text?.includes("Transfer credits")) return;
+	if (!ctx.dbUser || !ctx.dbChat) return next();
+	if (!ctx.message?.reply_to_message?.from?.is_bot) return next();
+	const replyText = ctx.message.reply_to_message.text ?? "";
+	if (!TRANSFER_PROMPT_MARKERS.some((marker) => replyText.includes(marker))) {
+		return next();
+	}
 
-	const amount = Number.parseInt(ctx.message.text!, 10);
+	const text = ctx.message.text;
+	if (!text) return;
+	const amount = Number.parseInt(text, 10);
 	if (Number.isNaN(amount) || amount < 100) {
-		await ctx.reply("Minimum transfer: 100 credits");
+		await ctx.reply(ctx.t("transfer-min"), { parse_mode: "HTML" });
 		return;
 	}
 
@@ -186,39 +312,52 @@ creditsComposer.hears(/^\d+$/, async (ctx) => {
 	);
 
 	if (userCredits < amount) {
-		await ctx.reply(`Insufficient credits. You have ${userCredits}.`);
+		await ctx.reply(ctx.t("transfer-insufficient", { balance: userCredits }), {
+			parse_mode: "HTML",
+		});
 		return;
 	}
 
 	try {
-		await deductUserCredits(
+		const result = await transferUserCreditsToChat(
 			ctx.db,
 			ctx.dbUser.id,
-			amount,
-			"transfer",
-			null,
-			`transfer:${ctx.dbUser.id}:${ctx.dbChat.id}:${Date.now()}`,
-		);
-		await addChatCredits(
-			ctx.db,
 			ctx.dbChat.id,
-			ctx.dbUser.id,
 			amount,
-			"transfer",
-			undefined,
-			`transfer_in:${ctx.dbUser.id}:${ctx.dbChat.id}:${Date.now()}`,
+			`transfer:${ctx.dbUser.id}:${ctx.dbChat.id}:${ctx.message.message_id}`,
+			{ telegramMessageId: ctx.message.message_id },
 		);
-		await ctx.reply(`Transferred ${amount} credits to this chat's pool.`);
+		if (!result.applied) {
+			await ctx.reply(ctx.t("transfer-already-processed"), {
+				parse_mode: "HTML",
+			});
+			return;
+		}
+		await ctx.reply(ctx.t("transfer-success", { amount }), {
+			parse_mode: "HTML",
+		});
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		await ctx.reply(`Transfer failed: ${msg}`);
+		await ctx.reply(ctx.t("transfer-failed", { error: escapeHtml(msg) }), {
+			parse_mode: "HTML",
+		});
 	}
 });
 
 // ── Pre-checkout query ──────────────────────────────────────────────────────
 
 creditsComposer.on("pre_checkout_query", async (ctx) => {
-	// Always accept — validation happens on successful_payment
+	const query = ctx.preCheckoutQuery;
+	const validation = validateStarsPayment(
+		query.invoice_payload,
+		query.currency,
+		query.total_amount,
+	);
+	if ("error" in validation) {
+		await ctx.answerPreCheckoutQuery(false, validation.error);
+		return;
+	}
+
 	await ctx.answerPreCheckoutQuery(true);
 });
 
@@ -227,58 +366,61 @@ creditsComposer.on("pre_checkout_query", async (ctx) => {
 creditsComposer.on("message:successful_payment", async (ctx) => {
 	if (!ctx.dbUser || !ctx.dbChat) return;
 
-	const payment = ctx.message!.successful_payment!;
-	const payload = payment.invoice_payload;
+	const payment = ctx.message?.successful_payment;
+	if (!payment) return;
+	const validation = validateStarsPayment(
+		payment.invoice_payload,
+		payment.currency,
+		payment.total_amount,
+	);
+	if ("error" in validation) {
+		await ctx.reply(`Payment rejected: ${escapeHtml(validation.error)}`, {
+			parse_mode: "HTML",
+		});
+		await notifyAdmins(
+			`⚠️ <b>Payment validation failed</b>\n\nUser: <code>${ctx.dbUser.telegramId}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nReason: ${escapeHtml(validation.error)}`,
+		);
+		return;
+	}
+
+	const { payload } = validation;
 	const chargeId = payment.telegram_payment_charge_id;
 
-	// Parse payload: "sub:pro" or "pack:medium:user" or "pack:medium:chat"
-	const parts = payload.split(":");
-	const type = parts[0];
-
-	if (type === "sub") {
+	if (payload.type === "sub") {
 		// Subscription payment
-		const planId = parts[1];
-		if (!planId) return;
-		const plan = getSubscriptionPlan(planId);
+		const plan = getSubscriptionPlan(payload.planId);
 		if (!plan) return;
 
-		// Grant credits
-		await addUserCredits(
+		const subscriptionFields = getSubscriptionPaymentFields(payment);
+		const newExpiry = getSubscriptionExpiry(
+			payment,
+			ctx.dbUser.subscriptionExpiresAt,
+		);
+		const isRenewal = isSubscriptionRenewal(payment);
+
+		const result = await applySubscriptionPayment(
 			ctx.db,
 			ctx.dbUser.id,
 			plan.credits,
-			"subscription",
+			plan.id,
 			chargeId,
-			`sub:${chargeId}`,
-			{ planId: plan.id, stars: plan.stars },
+			newExpiry,
+			{
+				planId: plan.id,
+				stars: plan.stars,
+				isRenewal,
+				isRecurring: subscriptionFields.is_recurring === true,
+				isFirstRecurring: subscriptionFields.is_first_recurring === true,
+				telegramSubscriptionExpirationDate:
+					subscriptionFields.subscription_expiration_date,
+			},
 		);
-
-		// Update subscription status on user
-		// On renewal: extend from current expiry, not from now
-		const isRenewal =
-			"is_recurring" in payment &&
-			(payment as { is_recurring?: boolean }).is_recurring === true;
-		const currentExpiry = ctx.dbUser.subscriptionExpiresAt;
-		const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-		const newExpiry =
-			isRenewal && currentExpiry && currentExpiry > new Date()
-				? new Date(currentExpiry.getTime() + thirtyDays)
-				: new Date(Date.now() + thirtyDays);
-
-		const { eq } = await import("drizzle-orm");
-		const { users } = await import("../db/schema");
-		await ctx.db
-			.update(users)
-			.set({
-				subscriptionTier: plan.id,
-				subscriptionExpiresAt: newExpiry,
-			})
-			.where(eq(users.id, ctx.dbUser.id));
+		if (!result.applied) return;
 
 		const msg = isRenewal
 			? `${plan.label} subscription renewed! ${plan.credits} credits added.`
 			: `Subscribed to ${plan.label}! ${plan.credits} credits added. Your subscription renews monthly.`;
-		await ctx.reply(msg, { message_effect_id: MESSAGE_EFFECTS.party });
+		await replyWithPaymentEffect(ctx, msg);
 
 		await notifyAdmins(
 			formatPaymentNotification({
@@ -296,15 +438,12 @@ creditsComposer.on("message:successful_payment", async (ctx) => {
 
 		derpMetrics.creditRevenue.add(plan.stars, { source: "subscription" });
 		derpMetrics.creditTransactions.add(1, { type: "subscription" });
-	} else if (type === "pack") {
-		const packId = parts[1];
-		const target = parts[2]; // "user" or "chat"
-		if (!packId) return;
-		const pack = getTopUpPack(packId);
+	} else if (payload.type === "pack") {
+		const pack = getTopUpPack(payload.packId);
 		if (!pack) return;
 
-		if (target === "chat") {
-			await addChatCredits(
+		if (payload.target === "chat") {
+			const result = await addChatCreditsWithResult(
 				ctx.db,
 				ctx.dbChat.id,
 				ctx.dbUser.id,
@@ -314,9 +453,11 @@ creditsComposer.on("message:successful_payment", async (ctx) => {
 				`pack:${chargeId}`,
 				{ packId: pack.id, stars: pack.stars },
 			);
-			await ctx.reply(`${pack.credits} credits added to this chat's pool!`, {
-				message_effect_id: MESSAGE_EFFECTS.party,
-			});
+			if (!result.applied) return;
+			await replyWithPaymentEffect(
+				ctx,
+				`${pack.credits} credits added to this chat's pool!`,
+			);
 			await notifyAdmins(
 				formatPaymentNotification({
 					type: "purchase",
@@ -331,7 +472,7 @@ creditsComposer.on("message:successful_payment", async (ctx) => {
 				}),
 			);
 		} else {
-			await addUserCredits(
+			const result = await addUserCreditsWithResult(
 				ctx.db,
 				ctx.dbUser.id,
 				pack.credits,
@@ -340,9 +481,11 @@ creditsComposer.on("message:successful_payment", async (ctx) => {
 				`pack:${chargeId}`,
 				{ packId: pack.id, stars: pack.stars },
 			);
-			await ctx.reply(`${pack.credits} credits added to your balance!`, {
-				message_effect_id: MESSAGE_EFFECTS.party,
-			});
+			if (!result.applied) return;
+			await replyWithPaymentEffect(
+				ctx,
+				`${pack.credits} credits added to your balance!`,
+			);
 			await notifyAdmins(
 				formatPaymentNotification({
 					type: "purchase",
@@ -356,6 +499,36 @@ creditsComposer.on("message:successful_payment", async (ctx) => {
 				}),
 			);
 		}
+	}
+});
+
+// ── Refunded payment ───────────────────────────────────────────────────────
+
+creditsComposer.on("message:refunded_payment", async (ctx) => {
+	const refund = ctx.message?.refunded_payment;
+	if (!refund) return;
+
+	try {
+		const reconciliation = await reconcileStarRefund(
+			ctx.db,
+			refund.telegram_payment_charge_id,
+			{
+				source: "telegram_refunded_payment",
+				invoicePayload: refund.invoice_payload,
+				currency: refund.currency,
+				totalAmount: refund.total_amount,
+			},
+		);
+		if (!reconciliation.applied) return;
+
+		await notifyAdmins(
+			`↩️ <b>Refund reconciled</b>\n\nCharge: <code>${escapeHtml(refund.telegram_payment_charge_id)}</code>\nTarget: ${reconciliation.target}\nRecovered: ${reconciliation.recoveredAmount}/${reconciliation.originalAmount}\nUnrecovered: ${reconciliation.unrecoveredAmount}`,
+		);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		await notifyAdmins(
+			`⚠️ <b>Refund reconciliation failed</b>\n\nCharge: <code>${escapeHtml(refund.telegram_payment_charge_id)}</code>\nReason: ${escapeHtml(reason)}`,
+		);
 	}
 });
 

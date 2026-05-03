@@ -3,8 +3,14 @@
 import { Composer } from "grammy";
 import type { DerpContext } from "../bot/context";
 import { formatRefundNotification, notifyAdmins } from "../common/admin-notify";
+import { escapeHtml } from "../common/sanitize";
 import { config } from "../config";
-import { addUserCredits, getBalances } from "../db/queries/credits";
+import {
+	addUserCredits,
+	getBalances,
+	getTransactionByIdempotencyKey,
+	reconcileStarRefund,
+} from "../db/queries/credits";
 import { getUserByTelegramId } from "../db/queries/users";
 import { toolRegistry } from "../tools/registry";
 
@@ -18,6 +24,8 @@ function isAdmin(ctx: DerpContext): boolean {
 
 adminComposer.command("refund", async (ctx) => {
 	if (!isAdmin(ctx)) return;
+	const adminId = ctx.from?.id;
+	if (!adminId) return;
 
 	const parts = (ctx.match ?? "").split(" ").filter(Boolean);
 	if (parts.length < 2) {
@@ -25,11 +33,24 @@ adminComposer.command("refund", async (ctx) => {
 		return;
 	}
 
-	const targetUserId = Number.parseInt(parts[0]!, 10);
-	const chargeId = parts[1]!;
+	const [targetUserIdArg, chargeId] = parts;
+	if (!targetUserIdArg || !chargeId) return;
+	const targetUserId = Number.parseInt(targetUserIdArg, 10);
 
 	if (Number.isNaN(targetUserId)) {
 		await ctx.reply("Invalid user ID");
+		return;
+	}
+
+	const existingRefund = await getTransactionByIdempotencyKey(
+		ctx.db,
+		`refund:${chargeId}`,
+	);
+	if (existingRefund) {
+		await ctx.reply(
+			`Refund already reconciled locally.\nUser: <code>${targetUserId}</code>\nCharge: <code>${chargeId}</code>`,
+			{ parse_mode: "HTML" },
+		);
 		return;
 	}
 
@@ -38,15 +59,39 @@ adminComposer.command("refund", async (ctx) => {
 			user_id: targetUserId,
 			telegram_payment_charge_id: chargeId,
 		});
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		await ctx.reply(`Refund failed: ${msg}`);
 
+		await notifyAdmins(
+			formatRefundNotification({
+				adminId,
+				targetUserId,
+				chargeId,
+				success: false,
+				error: msg,
+			}),
+		);
+		return;
+	}
+
+	try {
+		const reconciliation = await reconcileStarRefund(ctx.db, chargeId, {
+			adminId,
+			targetUserId,
+		});
+		const unrecovered =
+			reconciliation.unrecoveredAmount > 0
+				? `\nUnrecovered credits: ${reconciliation.unrecoveredAmount}`
+				: "";
 		await ctx.reply(
-			`Refund processed.\nUser: <code>${targetUserId}</code>\nCharge: <code>${chargeId}</code>`,
+			`Refund processed.\nUser: <code>${targetUserId}</code>\nCharge: <code>${chargeId}</code>\nReversed: ${reconciliation.recoveredAmount}/${reconciliation.originalAmount} ${reconciliation.target} credits${unrecovered}\nBalance after: ${reconciliation.balanceAfter}`,
 			{ parse_mode: "HTML" },
 		);
 
 		await notifyAdmins(
 			formatRefundNotification({
-				adminId: ctx.from!.id,
+				adminId,
 				targetUserId,
 				chargeId,
 				success: true,
@@ -54,11 +99,13 @@ adminComposer.command("refund", async (ctx) => {
 		);
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		await ctx.reply(`Refund failed: ${msg}`);
+		await ctx.reply(
+			`Refund processed in Telegram, but local reconciliation failed: ${msg}`,
+		);
 
 		await notifyAdmins(
 			formatRefundNotification({
-				adminId: ctx.from!.id,
+				adminId,
 				targetUserId,
 				chargeId,
 				success: false,
@@ -73,6 +120,8 @@ adminComposer.command("refund", async (ctx) => {
 adminComposer.command("admin", async (ctx) => {
 	if (!isAdmin(ctx)) return;
 	if (!ctx.dbUser) return;
+	const adminId = ctx.from?.id;
+	if (!adminId) return;
 
 	const parts = (ctx.match ?? "").split(" ");
 	const subcommand = parts[0];
@@ -109,7 +158,7 @@ adminComposer.command("admin", async (ctx) => {
 
 			const targetTgId = creditParts[1]
 				? Number.parseInt(creditParts[1], 10)
-				: ctx.from!.id;
+				: adminId;
 
 			const targetUser = await getUserByTelegramId(ctx.db, targetTgId);
 			if (!targetUser) {
@@ -124,7 +173,7 @@ adminComposer.command("admin", async (ctx) => {
 				"grant",
 				undefined,
 				`admin:grant:${Date.now()}`,
-				{ grantedBy: ctx.from!.id },
+				{ grantedBy: adminId },
 			);
 
 			await ctx.reply(
@@ -138,7 +187,7 @@ adminComposer.command("admin", async (ctx) => {
 			// /admin reset [userId] — reset user credits to 0
 			const targetTgId = args.trim()
 				? Number.parseInt(args.trim(), 10)
-				: ctx.from!.id;
+				: adminId;
 			const targetUser = await getUserByTelegramId(ctx.db, targetTgId);
 			if (!targetUser) {
 				await ctx.reply("User not found");
@@ -179,7 +228,7 @@ adminComposer.command("admin", async (ctx) => {
 			// /admin user [userId] — inspect user's DB state
 			const targetTgId = args.trim()
 				? Number.parseInt(args.trim(), 10)
-				: ctx.from!.id;
+				: adminId;
 			const targetUser = await getUserByTelegramId(ctx.db, targetTgId);
 			if (!targetUser) {
 				await ctx.reply("User not found");
@@ -193,13 +242,18 @@ adminComposer.command("admin", async (ctx) => {
 			);
 
 			const subInfo = targetUser.subscriptionTier
-				? `${targetUser.subscriptionTier} (expires ${targetUser.subscriptionExpiresAt?.toISOString() ?? "?"})`
+				? `${escapeHtml(targetUser.subscriptionTier)} (expires ${targetUser.subscriptionExpiresAt?.toISOString() ?? "?"})`
 				: "none";
+			const name =
+				`${targetUser.firstName} ${targetUser.lastName ?? ""}`.trim();
+			const username = targetUser.username
+				? `@${escapeHtml(targetUser.username)}`
+				: "-";
 
 			await ctx.reply(
 				`<b>User</b> <code>${targetUser.telegramId}</code>\n` +
-					`Name: ${targetUser.firstName} ${targetUser.lastName ?? ""}\n` +
-					`Username: ${targetUser.username ? `@${targetUser.username}` : "-"}\n` +
+					`Name: ${escapeHtml(name)}\n` +
+					`Username: ${username}\n` +
 					`DB ID: <code>${targetUser.id}</code>\n` +
 					`Credits: ${userCredits}\n` +
 					`Chat pool: ${chatCredits}\n` +
@@ -215,7 +269,7 @@ adminComposer.command("admin", async (ctx) => {
 			// /admin ledger [userId] — last 10 transactions
 			const targetTgId = args.trim()
 				? Number.parseInt(args.trim(), 10)
-				: ctx.from!.id;
+				: adminId;
 			const targetUser = await getUserByTelegramId(ctx.db, targetTgId);
 			if (!targetUser) {
 				await ctx.reply("User not found");
@@ -239,11 +293,11 @@ adminComposer.command("admin", async (ctx) => {
 
 			const lines = rows.map((r) => {
 				const sign = r.amount >= 0 ? "+" : "";
-				const tool = r.toolName ? ` (${r.toolName})` : "";
+				const tool = r.toolName ? ` (${escapeHtml(r.toolName)})` : "";
 				const charge = r.telegramChargeId
-					? `\n   charge: <code>${r.telegramChargeId}</code>`
+					? `\n   charge: <code>${escapeHtml(r.telegramChargeId)}</code>`
 					: "";
-				return `${sign}${r.amount} ${r.type}${tool} → bal:${r.balanceAfter}${charge}`;
+				return `${sign}${r.amount} ${escapeHtml(r.type)}${tool} → bal:${r.balanceAfter}${charge}`;
 			});
 
 			await ctx.reply(

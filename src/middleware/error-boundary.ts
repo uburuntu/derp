@@ -3,6 +3,7 @@
 import type { NextFunction } from "grammy";
 import type { DerpContext } from "../bot/context";
 import { logger } from "../common/observability";
+import { replyHtml } from "../common/reply";
 
 export async function errorBoundary(
 	ctx: DerpContext,
@@ -21,7 +22,7 @@ export async function errorBoundary(
 
 		try {
 			if (ctx.chat) {
-				await ctx.reply("Something went wrong. Please try again.", {
+				await replyHtml(ctx, "Something went wrong. Please try again.", {
 					reply_to_message_id: ctx.msg?.message_id,
 				});
 			}

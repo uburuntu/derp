@@ -45,23 +45,23 @@ export function createBot(db: Database): Bot<DerpContext> {
 	// ── Middleware Stack (incoming, order matters) ───────────────────
 	// 1. Error boundary — catch all errors
 	bot.use(errorBoundary);
-	// 2. Sequentialize — prevent race conditions per chat
+	// 2. Rate limiter — cheap per-user guard before DB work
+	bot.use(createRateLimiter());
+	// 3. Sequentialize — prevent race conditions per chat
 	bot.use(
 		sequentialize((ctx: DerpContext) => {
 			const chatId = ctx.chat?.id;
 			return chatId ? [String(chatId)] : undefined;
 		}),
 	);
-	// 3. Logger — structured logging
+	// 4. Logger — structured logging
 	bot.use(loggerMiddleware);
-	// 4. Hydrator — upsert user/chat/member/message
+	// 5. Hydrator — upsert user/chat/member/message
 	bot.use(createHydrator(db));
-	// 5. Session — load credit balances, determine tier
+	// 6. Session — load credit balances, determine tier
 	bot.use(sessionMiddleware);
-	// 6. Auto chat action — "typing..." indicators
+	// 7. Auto chat action — "typing..." indicators
 	bot.use(autoChatAction());
-	// 7. Rate limiter — per-user incoming rate limiting
-	bot.use(createRateLimiter());
 	// 8. i18n — locale detection
 	bot.use(i18n);
 

@@ -3,15 +3,15 @@ services:
     image: postgres:17
     container_name: derp-db
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     environment:
-      POSTGRES_USER: derp
-      POSTGRES_PASSWORD: derp
-      POSTGRES_DB: derp
+      POSTGRES_USER: ${POSTGRES_USER:-derp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-derp}
+      POSTGRES_DB: ${POSTGRES_DB:-derp}
     volumes:
       - derp-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U derp -d derp"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-derp} -d ${POSTGRES_DB:-derp}"]
       interval: 2s
       timeout: 3s
       retries: 15
@@ -22,13 +22,13 @@ services:
     image: postgres:17
     container_name: derp-db-test
     ports:
-      - "5434:5432"
+      - "${POSTGRES_TEST_PORT:-5434}:5432"
     environment:
-      POSTGRES_USER: derp
-      POSTGRES_PASSWORD: derp
-      POSTGRES_DB: derp_test
+      POSTGRES_USER: ${POSTGRES_USER:-derp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-derp}
+      POSTGRES_DB: ${POSTGRES_TEST_DB:-derp_test}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U derp -d derp_test"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-derp} -d ${POSTGRES_TEST_DB:-derp_test}"]
       interval: 2s
       timeout: 3s
       retries: 15
@@ -42,7 +42,12 @@ services:
       dockerfile: Dockerfile
     container_name: derp-bot
     env_file:
-      - .env.example
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-derp}:${POSTGRES_PASSWORD:-derp}@db:5432/${POSTGRES_DB:-derp}
+      HEALTH_PORT: 8080
+    ports:
+      - "127.0.0.1:${HEALTH_PORT:-8080}:8080"
     depends_on:
       db:
         condition: service_healthy

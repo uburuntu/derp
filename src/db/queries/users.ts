@@ -31,7 +31,10 @@ export async function upsertUser(
 		})
 		.returning();
 
-	return row!;
+	if (!row) {
+		throw new Error(`Failed to upsert user ${tgUser.id}`);
+	}
+	return row;
 }
 
 /** Get a user by Telegram ID */

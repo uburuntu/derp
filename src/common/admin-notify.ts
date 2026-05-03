@@ -3,6 +3,7 @@
 import type { Api } from "grammy";
 import { config } from "../config";
 import { logger } from "./observability";
+import { escapeHtml } from "./sanitize";
 
 let botApi: Api | null = null;
 
@@ -40,19 +41,20 @@ export function formatPaymentNotification(params: {
 	isRenewal?: boolean;
 }): string {
 	const userLink = params.username
-		? `@${params.username}`
-		: `<a href="tg://user?id=${params.userId}">${params.firstName}</a>`;
+		? `@${escapeHtml(params.username)}`
+		: `<a href="tg://user?id=${params.userId}">${escapeHtml(params.firstName)}</a>`;
 
 	const label = params.isRenewal ? "RENEWAL" : params.type.toUpperCase();
 	const chatLine = params.chatId ? `\nChat: <code>${params.chatId}</code>` : "";
+	const chargeId = escapeHtml(params.chargeId);
 
 	return (
 		`<b>${label}</b>\n` +
 		`User: ${userLink} (<code>${params.userId}</code>)\n` +
-		`Plan: ${params.planOrPack}\n` +
+		`Plan: ${escapeHtml(params.planOrPack)}\n` +
 		`Amount: ${params.stars}⭐ → ${params.credits} credits${chatLine}\n` +
-		`Charge: <code>${params.chargeId}</code>\n` +
-		`\nRefund: <code>/refund ${params.userId} ${params.chargeId}</code>`
+		`Charge: <code>${chargeId}</code>\n` +
+		`\nRefund: <code>/refund ${params.userId} ${chargeId}</code>`
 	);
 }
 
@@ -64,11 +66,13 @@ export function formatRefundNotification(params: {
 	success: boolean;
 	error?: string;
 }): string {
-	const status = params.success ? "SUCCESS" : `FAILED: ${params.error}`;
+	const status = params.success
+		? "SUCCESS"
+		: `FAILED: ${escapeHtml(params.error ?? "unknown")}`;
 	return (
 		`<b>REFUND ${status}</b>\n` +
 		`Admin: <code>${params.adminId}</code>\n` +
 		`User: <code>${params.targetUserId}</code>\n` +
-		`Charge: <code>${params.chargeId}</code>`
+		`Charge: <code>${escapeHtml(params.chargeId)}</code>`
 	);
 }

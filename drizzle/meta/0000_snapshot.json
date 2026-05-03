@@ -1,0 +1,1111 @@
+{
+	"id": "ef26e647-85af-4007-bdd6-7ef1d22a392c",
+	"prevId": "00000000-0000-0000-0000-000000000000",
+	"version": "7",
+	"dialect": "postgresql",
+	"tables": {
+		"public.chat_members": {
+			"name": "chat_members",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"chat_id": {
+					"name": "chat_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"user_id": {
+					"name": "user_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"role": {
+					"name": "role",
+					"type": "varchar(20)",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'member'"
+				},
+				"custom_title": {
+					"name": "custom_title",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"bio": {
+					"name": "bio",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"is_active": {
+					"name": "is_active",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"default": true
+				},
+				"cached_at": {
+					"name": "cached_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"last_seen_at": {
+					"name": "last_seen_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"chat_members_chat_id_idx": {
+					"name": "chat_members_chat_id_idx",
+					"columns": [
+						{
+							"expression": "chat_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"chat_members_user_id_idx": {
+					"name": "chat_members_user_id_idx",
+					"columns": [
+						{
+							"expression": "user_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"chat_members_chat_id_chats_id_fk": {
+					"name": "chat_members_chat_id_chats_id_fk",
+					"tableFrom": "chat_members",
+					"tableTo": "chats",
+					"columnsFrom": ["chat_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"chat_members_user_id_users_id_fk": {
+					"name": "chat_members_user_id_users_id_fk",
+					"tableFrom": "chat_members",
+					"tableTo": "users",
+					"columnsFrom": ["user_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"chat_members_chat_user_unique": {
+					"name": "chat_members_chat_user_unique",
+					"nullsNotDistinct": false,
+					"columns": ["chat_id", "user_id"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": false
+		},
+		"public.chats": {
+			"name": "chats",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"telegram_id": {
+					"name": "telegram_id",
+					"type": "bigint",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"type": {
+					"name": "type",
+					"type": "varchar(20)",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"title": {
+					"name": "title",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"username": {
+					"name": "username",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"first_name": {
+					"name": "first_name",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"last_name": {
+					"name": "last_name",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"is_forum": {
+					"name": "is_forum",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"default": false
+				},
+				"description": {
+					"name": "description",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"memory": {
+					"name": "memory",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"personality": {
+					"name": "personality",
+					"type": "varchar(20)",
+					"primaryKey": false,
+					"notNull": false,
+					"default": "'default'"
+				},
+				"custom_prompt": {
+					"name": "custom_prompt",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"settings": {
+					"name": "settings",
+					"type": "jsonb",
+					"primaryKey": false,
+					"notNull": false,
+					"default": "'{\"memoryAccess\":\"admins\",\"remindersAccess\":\"admins\"}'::jsonb"
+				},
+				"credits": {
+					"name": "credits",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"default": 0
+				},
+				"language_code": {
+					"name": "language_code",
+					"type": "varchar(10)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"cached_at": {
+					"name": "cached_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"chats_telegram_id_idx": {
+					"name": "chats_telegram_id_idx",
+					"columns": [
+						{
+							"expression": "telegram_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"chats_telegram_id_unique": {
+					"name": "chats_telegram_id_unique",
+					"nullsNotDistinct": false,
+					"columns": ["telegram_id"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {
+				"chats_credits_check": {
+					"name": "chats_credits_check",
+					"value": "\"chats\".\"credits\" >= 0"
+				}
+			},
+			"isRLSEnabled": false
+		},
+		"public.ledger": {
+			"name": "ledger",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"user_id": {
+					"name": "user_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"chat_id": {
+					"name": "chat_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"type": {
+					"name": "type",
+					"type": "varchar(20)",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"amount": {
+					"name": "amount",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"balance_after": {
+					"name": "balance_after",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"tool_name": {
+					"name": "tool_name",
+					"type": "varchar(50)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"model_id": {
+					"name": "model_id",
+					"type": "varchar(100)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"telegram_charge_id": {
+					"name": "telegram_charge_id",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"description": {
+					"name": "description",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"idempotency_key": {
+					"name": "idempotency_key",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"meta": {
+					"name": "meta",
+					"type": "jsonb",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"ledger_user_id_idx": {
+					"name": "ledger_user_id_idx",
+					"columns": [
+						{
+							"expression": "user_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"ledger_chat_id_idx": {
+					"name": "ledger_chat_id_idx",
+					"columns": [
+						{
+							"expression": "chat_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"ledger_user_id_users_id_fk": {
+					"name": "ledger_user_id_users_id_fk",
+					"tableFrom": "ledger",
+					"tableTo": "users",
+					"columnsFrom": ["user_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"ledger_chat_id_chats_id_fk": {
+					"name": "ledger_chat_id_chats_id_fk",
+					"tableFrom": "ledger",
+					"tableTo": "chats",
+					"columnsFrom": ["chat_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"ledger_idempotency_key_unique": {
+					"name": "ledger_idempotency_key_unique",
+					"nullsNotDistinct": false,
+					"columns": ["idempotency_key"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": false
+		},
+		"public.messages": {
+			"name": "messages",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"chat_id": {
+					"name": "chat_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"user_id": {
+					"name": "user_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"telegram_message_id": {
+					"name": "telegram_message_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"thread_id": {
+					"name": "thread_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"direction": {
+					"name": "direction",
+					"type": "varchar(3)",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"content_type": {
+					"name": "content_type",
+					"type": "varchar(20)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"text": {
+					"name": "text",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"media_group_id": {
+					"name": "media_group_id",
+					"type": "varchar(50)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"attachment_type": {
+					"name": "attachment_type",
+					"type": "varchar(20)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"attachment_file_id": {
+					"name": "attachment_file_id",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"reply_to_message_id": {
+					"name": "reply_to_message_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"metadata": {
+					"name": "metadata",
+					"type": "jsonb",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"telegram_date": {
+					"name": "telegram_date",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"edited_at": {
+					"name": "edited_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"deleted_at": {
+					"name": "deleted_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"messages_chat_id_idx": {
+					"name": "messages_chat_id_idx",
+					"columns": [
+						{
+							"expression": "chat_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"messages_chat_date_idx": {
+					"name": "messages_chat_date_idx",
+					"columns": [
+						{
+							"expression": "chat_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						},
+						{
+							"expression": "telegram_date",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"messages_chat_id_chats_id_fk": {
+					"name": "messages_chat_id_chats_id_fk",
+					"tableFrom": "messages",
+					"tableTo": "chats",
+					"columnsFrom": ["chat_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"messages_user_id_users_id_fk": {
+					"name": "messages_user_id_users_id_fk",
+					"tableFrom": "messages",
+					"tableTo": "users",
+					"columnsFrom": ["user_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"messages_chat_msg_unique": {
+					"name": "messages_chat_msg_unique",
+					"nullsNotDistinct": false,
+					"columns": ["chat_id", "telegram_message_id"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": false
+		},
+		"public.reminders": {
+			"name": "reminders",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"chat_id": {
+					"name": "chat_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"user_id": {
+					"name": "user_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"description": {
+					"name": "description",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"message": {
+					"name": "message",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"prompt": {
+					"name": "prompt",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"uses_llm": {
+					"name": "uses_llm",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"default": false
+				},
+				"fire_at": {
+					"name": "fire_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"cron_expression": {
+					"name": "cron_expression",
+					"type": "varchar(100)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"is_recurring": {
+					"name": "is_recurring",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"default": false
+				},
+				"thread_id": {
+					"name": "thread_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"reply_to_message_id": {
+					"name": "reply_to_message_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"status": {
+					"name": "status",
+					"type": "varchar(20)",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'active'"
+				},
+				"last_fired_at": {
+					"name": "last_fired_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"fire_count": {
+					"name": "fire_count",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"default": 0
+				},
+				"meta": {
+					"name": "meta",
+					"type": "jsonb",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"reminders_fire_at_idx": {
+					"name": "reminders_fire_at_idx",
+					"columns": [
+						{
+							"expression": "fire_at",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"reminders_chat_id_idx": {
+					"name": "reminders_chat_id_idx",
+					"columns": [
+						{
+							"expression": "chat_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"reminders_user_id_idx": {
+					"name": "reminders_user_id_idx",
+					"columns": [
+						{
+							"expression": "user_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"reminders_status_idx": {
+					"name": "reminders_status_idx",
+					"columns": [
+						{
+							"expression": "status",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"reminders_chat_id_chats_id_fk": {
+					"name": "reminders_chat_id_chats_id_fk",
+					"tableFrom": "reminders",
+					"tableTo": "chats",
+					"columnsFrom": ["chat_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"reminders_user_id_users_id_fk": {
+					"name": "reminders_user_id_users_id_fk",
+					"tableFrom": "reminders",
+					"tableTo": "users",
+					"columnsFrom": ["user_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": false
+		},
+		"public.usage_quotas": {
+			"name": "usage_quotas",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"user_id": {
+					"name": "user_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"chat_id": {
+					"name": "chat_id",
+					"type": "uuid",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"usage_date": {
+					"name": "usage_date",
+					"type": "date",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"usage": {
+					"name": "usage",
+					"type": "jsonb",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'{}'::jsonb"
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"usage_quotas_user_id_idx": {
+					"name": "usage_quotas_user_id_idx",
+					"columns": [
+						{
+							"expression": "user_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"usage_quotas_chat_id_idx": {
+					"name": "usage_quotas_chat_id_idx",
+					"columns": [
+						{
+							"expression": "chat_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"usage_quotas_date_idx": {
+					"name": "usage_quotas_date_idx",
+					"columns": [
+						{
+							"expression": "usage_date",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"usage_quotas_user_id_users_id_fk": {
+					"name": "usage_quotas_user_id_users_id_fk",
+					"tableFrom": "usage_quotas",
+					"tableTo": "users",
+					"columnsFrom": ["user_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				},
+				"usage_quotas_chat_id_chats_id_fk": {
+					"name": "usage_quotas_chat_id_chats_id_fk",
+					"tableFrom": "usage_quotas",
+					"tableTo": "chats",
+					"columnsFrom": ["chat_id"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"usage_quotas_user_chat_date_unique": {
+					"name": "usage_quotas_user_chat_date_unique",
+					"nullsNotDistinct": false,
+					"columns": ["user_id", "chat_id", "usage_date"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": false
+		},
+		"public.users": {
+			"name": "users",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "uuid",
+					"primaryKey": true,
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"telegram_id": {
+					"name": "telegram_id",
+					"type": "bigint",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"is_bot": {
+					"name": "is_bot",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"default": false
+				},
+				"first_name": {
+					"name": "first_name",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"last_name": {
+					"name": "last_name",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"username": {
+					"name": "username",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"language_code": {
+					"name": "language_code",
+					"type": "varchar(10)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"is_premium": {
+					"name": "is_premium",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"default": false
+				},
+				"credits": {
+					"name": "credits",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"default": 0
+				},
+				"subscription_tier": {
+					"name": "subscription_tier",
+					"type": "varchar(10)",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"subscription_expires_at": {
+					"name": "subscription_expires_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp with time zone",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"users_telegram_id_idx": {
+					"name": "users_telegram_id_idx",
+					"columns": [
+						{
+							"expression": "telegram_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"users_telegram_id_unique": {
+					"name": "users_telegram_id_unique",
+					"nullsNotDistinct": false,
+					"columns": ["telegram_id"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {
+				"users_credits_check": {
+					"name": "users_credits_check",
+					"value": "\"users\".\"credits\" >= 0"
+				}
+			},
+			"isRLSEnabled": false
+		}
+	},
+	"enums": {},
+	"schemas": {},
+	"sequences": {},
+	"roles": {},
+	"policies": {},
+	"views": {},
+	"_meta": {
+		"columns": {},
+		"schemas": {},
+		"tables": {}
+	}
+}

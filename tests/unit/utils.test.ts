@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	escapeHtml,
 	normalizeWhitespace,
 	removeInvisible,
 	truncate,
@@ -89,5 +90,11 @@ describe("removeInvisible", () => {
 
 	test("keeps normal text", () => {
 		expect(removeInvisible("hello world")).toBe("hello world");
+	});
+});
+
+describe("escapeHtml", () => {
+	test("escapes Telegram HTML entities", () => {
+		expect(escapeHtml("<b>A&B</b>")).toBe("&lt;b&gt;A&amp;B&lt;/b&gt;");
 	});
 });

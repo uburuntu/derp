@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../connection";
 import { chatMembers, users } from "../schema";
 
@@ -22,8 +22,10 @@ export async function upsertChatMember(
 		.onConflictDoUpdate({
 			target: [chatMembers.chatId, chatMembers.userId],
 			set: {
+				role: sql`CASE WHEN ${chatMembers.role} IN ('left', 'kicked') THEN ${role} ELSE ${chatMembers.role} END`,
 				isActive: true,
 				lastSeenAt: new Date(),
+				cachedAt: new Date(),
 			},
 		});
 }
@@ -40,7 +42,11 @@ export async function getActiveChatMembers(
 		.select()
 		.from(chatMembers)
 		.where(
-			and(eq(chatMembers.chatId, chatId), inArray(chatMembers.userId, userIds)),
+			and(
+				eq(chatMembers.chatId, chatId),
+				eq(chatMembers.isActive, true),
+				inArray(chatMembers.userId, userIds),
+			),
 		);
 }
 
@@ -64,9 +70,24 @@ export async function updateMemberRole(
 	isActive: boolean,
 ): Promise<void> {
 	await db
-		.update(chatMembers)
-		.set({ role, isActive, cachedAt: new Date() })
-		.where(and(eq(chatMembers.chatId, chatId), eq(chatMembers.userId, userId)));
+		.insert(chatMembers)
+		.values({
+			chatId,
+			userId,
+			role,
+			isActive,
+			cachedAt: new Date(),
+			lastSeenAt: isActive ? new Date() : null,
+		})
+		.onConflictDoUpdate({
+			target: [chatMembers.chatId, chatMembers.userId],
+			set: {
+				role,
+				isActive,
+				cachedAt: new Date(),
+				...(isActive ? { lastSeenAt: new Date() } : {}),
+			},
+		});
 }
 
 /** Get chat members joined with user data — for context building */
@@ -98,6 +119,10 @@ export async function getMembersWithUsers(
 		.from(chatMembers)
 		.innerJoin(users, eq(chatMembers.userId, users.id))
 		.where(
-			and(eq(chatMembers.chatId, chatId), inArray(chatMembers.userId, userIds)),
+			and(
+				eq(chatMembers.chatId, chatId),
+				eq(chatMembers.isActive, true),
+				inArray(chatMembers.userId, userIds),
+			),
 		);
 }

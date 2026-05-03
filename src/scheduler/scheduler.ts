@@ -4,10 +4,17 @@ import type { Bot } from "grammy";
 import type { DerpContext } from "../bot/context";
 import { logger, withSpan } from "../common/observability";
 import type { Database } from "../db/connection";
-import { getDueReminders } from "../db/queries/reminders";
+import {
+	claimReminderForExecution,
+	getDueReminders,
+	markReminderFailed,
+	releaseStaleProcessingReminders,
+} from "../db/queries/reminders";
 import { executeReminder } from "./executor";
 
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
+let isProcessing = false;
+const PROCESSING_STALE_MS = 15 * 60 * 1000;
 
 /** Start the reminder scheduler */
 export function startScheduler(
@@ -49,31 +56,56 @@ async function processReminders(
 	bot: Bot<DerpContext>,
 	isStartup: boolean,
 ): Promise<void> {
-	const dueReminders = await getDueReminders(db);
-	if (dueReminders.length === 0) return;
+	if (isProcessing) {
+		logger.warn("scheduler_tick_skipped", { reason: "already_processing" });
+		return;
+	}
 
-	await withSpan(
-		"scheduler.process_reminders",
-		{
-			"derp.scheduler.is_startup": isStartup,
-			"derp.scheduler.due_count": dueReminders.length,
-		},
-		async () => {
-			logger.info("scheduler_due_reminders", {
-				count: dueReminders.length,
-				isStartup,
-			});
+	isProcessing = true;
+	try {
+		const released = await releaseStaleProcessingReminders(
+			db,
+			new Date(Date.now() - PROCESSING_STALE_MS),
+		);
+		if (released > 0) {
+			logger.warn("scheduler_stale_reminders_released", { count: released });
+		}
 
-			for (const reminder of dueReminders) {
-				try {
-					await executeReminder(db, bot, reminder, isStartup);
-				} catch (err) {
-					logger.error("scheduler_reminder_failed", {
-						reminderId: reminder.id,
-						error: err instanceof Error ? err.message : String(err),
-					});
+		const dueReminders = await getDueReminders(db);
+		if (dueReminders.length === 0) return;
+
+		await withSpan(
+			"scheduler.process_reminders",
+			{
+				"derp.scheduler.is_startup": isStartup,
+				"derp.scheduler.due_count": dueReminders.length,
+			},
+			async () => {
+				logger.info("scheduler_due_reminders", {
+					count: dueReminders.length,
+					isStartup,
+				});
+
+				for (const reminder of dueReminders) {
+					try {
+						const claimed = await claimReminderForExecution(db, reminder.id);
+						if (!claimed) continue;
+						await executeReminder(db, bot, claimed, isStartup);
+					} catch (err) {
+						logger.error("scheduler_reminder_failed", {
+							reminderId: reminder.id,
+							error: err instanceof Error ? err.message : String(err),
+						});
+						await markReminderFailed(
+							db,
+							reminder.id,
+							err instanceof Error ? err.message : String(err),
+						);
+					}
 				}
-			}
-		},
-	);
+			},
+		);
+	} finally {
+		isProcessing = false;
+	}
 }

@@ -36,7 +36,10 @@ export async function createReminder(
 		})
 		.returning();
 
-	return row!;
+	if (!row) {
+		throw new Error("Failed to create reminder");
+	}
+	return row;
 }
 
 /** Get all reminders that are due to fire */
@@ -49,6 +52,51 @@ export async function getDueReminders(
 		.where(
 			and(eq(reminders.status, "active"), lte(reminders.fireAt, new Date())),
 		);
+}
+
+/** Atomically claim an active due reminder for execution. */
+export async function claimReminderForExecution(
+	db: Database,
+	id: string,
+): Promise<typeof reminders.$inferSelect | null> {
+	const [row] = await db
+		.update(reminders)
+		.set({
+			status: "processing",
+			updatedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(reminders.id, id),
+				eq(reminders.status, "active"),
+				lte(reminders.fireAt, new Date()),
+			),
+		)
+		.returning();
+
+	return row ?? null;
+}
+
+/** Recover reminders left in processing by a crashed worker. */
+export async function releaseStaleProcessingReminders(
+	db: Database,
+	staleBefore: Date,
+): Promise<number> {
+	const rows = await db
+		.update(reminders)
+		.set({
+			status: "active",
+			updatedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(reminders.status, "processing"),
+				lte(reminders.updatedAt, staleBefore),
+			),
+		)
+		.returning({ id: reminders.id });
+
+	return rows.length;
 }
 
 /** Get reminders for a specific chat, optionally filtered by user */
@@ -105,6 +153,7 @@ export async function updateNextFireAt(
 		.update(reminders)
 		.set({
 			fireAt: nextFireAt,
+			status: "active",
 			lastFiredAt: new Date(),
 			fireCount: sql`${reminders.fireCount} + 1`,
 		})
@@ -139,22 +188,16 @@ export async function getReminderById(
 	return row ?? null;
 }
 
-/** Count active reminders for a user in a chat */
+/** Count active reminders in a chat */
 export async function countActiveReminders(
 	db: Database,
-	userId: string,
+	_userId: string,
 	chatId: string,
 ): Promise<number> {
 	const rows = await db
 		.select({ count: sql<number>`count(*)::int` })
 		.from(reminders)
-		.where(
-			and(
-				eq(reminders.userId, userId),
-				eq(reminders.chatId, chatId),
-				eq(reminders.status, "active"),
-			),
-		);
+		.where(and(eq(reminders.chatId, chatId), eq(reminders.status, "active")));
 	return rows[0]?.count ?? 0;
 }
 

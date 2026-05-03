@@ -12,9 +12,18 @@ import type { Config } from "../config";
 // ── Initialization ──────────────────────────────────────────────────────────
 
 let initialized = false;
+let redactionValues: string[] = [];
 
 export function initObservability(cfg: Config): void {
 	if (initialized) return;
+	redactionValues = [
+		cfg.telegramBotToken,
+		cfg.databaseUrl,
+		cfg.googleApiKey,
+		cfg.googleApiPaidKey,
+		cfg.logfireToken,
+		...cfg.googleApiKeys,
+	].filter((value): value is string => Boolean(value));
 
 	logfire.configure({
 		token: cfg.logfireToken,
@@ -33,15 +42,45 @@ export async function shutdownObservability(): Promise<void> {
 
 // ── Logger ──────────────────────────────────────────────────────────────────
 
+function redactString(value: string): string {
+	let redacted = value;
+	for (const secret of redactionValues) {
+		redacted = redacted.replaceAll(secret, "[redacted]");
+	}
+	return redacted
+		.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[redacted]")
+		.replace(/postgres(?:ql)?:\/\/\S+/g, "postgres://[redacted]");
+}
+
+function redactValue(value: unknown): unknown {
+	if (typeof value === "string") return redactString(value);
+	if (Array.isArray(value)) return value.map(redactValue);
+	if (value && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+				key,
+				redactValue(nested),
+			]),
+		);
+	}
+	return value;
+}
+
+function redactAttrs(
+	attrs: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+	return attrs ? (redactValue(attrs) as Record<string, unknown>) : undefined;
+}
+
 export const logger = {
 	debug: (message: string, attrs?: Record<string, unknown>) =>
-		logfire.debug(message, attrs),
+		logfire.debug(message, redactAttrs(attrs)),
 	info: (message: string, attrs?: Record<string, unknown>) =>
-		logfire.info(message, attrs),
+		logfire.info(message, redactAttrs(attrs)),
 	warn: (message: string, attrs?: Record<string, unknown>) =>
-		logfire.warning(message, attrs),
+		logfire.warning(message, redactAttrs(attrs)),
 	error: (message: string, attrs?: Record<string, unknown>) =>
-		logfire.error(message, attrs),
+		logfire.error(message, redactAttrs(attrs)),
 };
 
 // ── Tracer ──────────────────────────────────────────────────────────────────
@@ -104,7 +143,6 @@ interface DerpMetrics {
 	>;
 }
 
-// biome-ignore lint: initialized in initMetrics before any use
 export let derpMetrics: DerpMetrics;
 
 function initMetrics(): void {

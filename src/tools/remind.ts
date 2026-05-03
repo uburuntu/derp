@@ -9,7 +9,7 @@ import {
 	getReminderById,
 	getRemindersForChat,
 } from "../db/queries/reminders";
-import { validateCron } from "../scheduler/cron";
+import { parseCronToNextDate, validateCron } from "../scheduler/cron";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types";
 
 // ── Abuse limits ────────────────────────────────────────────────────────────
@@ -66,6 +66,74 @@ const remindParamsSchema = z.object({
 
 type RemindParams = z.infer<typeof remindParamsSchema>;
 
+type ReminderMetadataContext = ToolContext & {
+	threadId?: number | null;
+	messageThreadId?: number | null;
+	replyToMessageId?: number | null;
+	triggerMessageId?: number | null;
+	messageId?: number | null;
+};
+
+function getOptionalNumber(
+	ctx: ReminderMetadataContext,
+	keys: (keyof ReminderMetadataContext)[],
+): number | null {
+	for (const key of keys) {
+		const value = ctx[key];
+		if (typeof value === "number") return value;
+	}
+	return null;
+}
+
+function getReminderMetadata(ctx: ToolContext): {
+	threadId: number | null;
+	replyToMessageId: number | null;
+} {
+	const metadataCtx = ctx as ReminderMetadataContext;
+	return {
+		threadId: getOptionalNumber(metadataCtx, ["threadId", "messageThreadId"]),
+		replyToMessageId: getOptionalNumber(metadataCtx, [
+			"replyToMessageId",
+			"triggerMessageId",
+			"messageId",
+		]),
+	};
+}
+
+function parseRemindCommand(input: string): RemindParams {
+	const trimmed = input.trim();
+	if (!trimmed || /^list$/i.test(trimmed)) {
+		return { action: "list" };
+	}
+
+	const cancel = trimmed.match(/^cancel\s+(\S+)$/i);
+	if (cancel?.[1]) {
+		return { action: "cancel", reminderId: cancel[1] };
+	}
+
+	const at = trimmed.match(/^(?:at|create)\s+(\S+)\s+(.+)$/i);
+	if (at?.[1] && at[2]) {
+		return {
+			action: "create",
+			fireAt: at[1],
+			description: at[2],
+			message: at[2],
+		};
+	}
+
+	const cron = trimmed.match(/^cron\s+(.+?)\s*\|\s*(.+)$/i);
+	if (cron?.[1] && cron[2]) {
+		return {
+			action: "create",
+			cronExpression: cron[1].trim(),
+			description: cron[2].trim(),
+			message: cron[2].trim(),
+		};
+	}
+
+	throw new Error("Invalid reminder command");
+}
+
 async function executeRemind(
 	params: RemindParams,
 	ctx: ToolContext,
@@ -86,6 +154,13 @@ async function handleCreate(
 	params: RemindParams,
 	ctx: ToolContext,
 ): Promise<ToolResult> {
+	if (!ctx.canManageReminders) {
+		return {
+			text: "Only chat admins can create reminders in this chat.",
+			error: "Unauthorized",
+		};
+	}
+
 	if (!params.description) {
 		return {
 			text: "Description is required for creating a reminder.",
@@ -114,6 +189,7 @@ async function handleCreate(
 	}
 
 	const isRecurring = !!params.cronExpression;
+	const cronExpression = params.cronExpression ?? null;
 
 	if (isRecurring) {
 		const recurringCount = await countRecurringReminders(ctx.db, ctx.user.id);
@@ -125,37 +201,66 @@ async function handleCreate(
 		}
 
 		// Validate cron expression (enforces min 1h interval)
-		const cronError = validateCron(params.cronExpression!);
+		if (!cronExpression) {
+			return { text: "cronExpression is required.", error: "Missing cron" };
+		}
+		const cronError = validateCron(cronExpression);
 		if (cronError) {
 			return { text: cronError, error: cronError };
 		}
 	}
 
 	const usesLlm = !!params.prompt;
-	const fireAt = params.fireAt ? new Date(params.fireAt) : null;
+	if (usesLlm && isRecurring) {
+		return {
+			text: "Recurring LLM reminders are disabled. Use a plain recurring reminder or a one-time LLM reminder.",
+			error: "Recurring LLM reminders disabled",
+		};
+	}
+
+	let fireAt = params.fireAt ? new Date(params.fireAt) : null;
+
+	if (params.fireAt && (!fireAt || Number.isNaN(fireAt.getTime()))) {
+		return { text: "Invalid fireAt datetime.", error: "Invalid datetime" };
+	}
+
+	if (isRecurring && cronExpression) {
+		fireAt = parseCronToNextDate(cronExpression);
+		if (!fireAt) {
+			return {
+				text: "Could not compute the next reminder time from that cron expression.",
+				error: "Invalid cron schedule",
+			};
+		}
+	}
 
 	// Validate fire time is in the future
 	if (fireAt && fireAt <= new Date()) {
 		return { text: "Reminder time must be in the future.", error: "Past time" };
 	}
 
+	const metadata = getReminderMetadata(ctx);
 	await createReminder(ctx.db, {
 		chatId: ctx.chat.id,
 		userId: ctx.user.id,
+		threadId: metadata.threadId,
 		description: params.description,
-		message: params.message ?? null,
+		message: params.message ?? (usesLlm ? null : params.description),
 		prompt: params.prompt ?? null,
 		usesLlm,
 		fireAt,
-		cronExpression: params.cronExpression ?? null,
+		cronExpression,
 		isRecurring,
+		replyToMessageId: metadata.replyToMessageId,
 	});
 
 	const typeLabel = isRecurring ? "recurring" : "one-time";
 	const modeLabel = usesLlm ? "LLM" : "plain";
 	const timeLabel = fireAt
-		? formatDate(fireAt)
-		: `cron: ${params.cronExpression}`;
+		? isRecurring
+			? `cron: ${cronExpression} (next: ${formatDate(fireAt)})`
+			: formatDate(fireAt)
+		: `cron: ${cronExpression}`;
 
 	return {
 		text: `Reminder created (${typeLabel}, ${modeLabel}): "${params.description}" — ${timeLabel}`,
@@ -197,10 +302,14 @@ async function handleCancel(
 		return { text: "Reminder not found.", error: "Not found" };
 	}
 
+	if (reminder.chatId !== ctx.chat.id) {
+		return { text: "Reminder not found in this chat.", error: "Not found" };
+	}
+
 	// Only creator or chat admin can cancel
-	if (reminder.userId !== ctx.user.id) {
+	if (reminder.userId !== ctx.user.id && !ctx.isChatAdmin) {
 		return {
-			text: "Only the reminder creator can cancel it.",
+			text: "Only the reminder creator or a chat admin can cancel it.",
 			error: "Unauthorized",
 		};
 	}
@@ -217,6 +326,9 @@ export const remindTool: ToolDefinition<RemindParams> = {
 	helpText: "tool-remind",
 	category: "utility",
 	parameters: remindParamsSchema,
+	parseCommand: parseRemindCommand,
+	usage:
+		"/remind list | /remind cancel <id> | /remind at <ISO datetime> <message> | /remind cron <cron> | <message>",
 	execute: executeRemind,
 	credits: 0,
 	freeDaily: 5,

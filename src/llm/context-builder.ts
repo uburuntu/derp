@@ -19,6 +19,7 @@ export interface ContextParticipant {
 export interface BuiltContext {
 	participants: string;
 	messageStream: string;
+	participantRefs: Map<string, ContextParticipant>;
 }
 
 /** Build compact context from messages and member data */
@@ -35,18 +36,21 @@ export function buildContext(
 
 	// Build participant registry (only users in the current message batch)
 	const participantLines: string[] = [];
+	const participantRefs = new Map<string, ContextParticipant>();
+	let nextParticipantNumber = 1;
 	for (const userId of activeUserIds) {
 		const member = members.get(userId);
 		if (!member) continue;
 
+		const participantRef = `p${nextParticipantNumber++}`;
+		participantRefs.set(participantRef, member);
+
 		const name = member.lastName
 			? `${member.firstName} ${member.lastName}`
 			: member.firstName;
-		const handle = member.username ? `, @${member.username}` : "";
+		const handle = member.username ? ` (@${member.username})` : "";
 		const roleTag = member.role !== "member" ? ` [${member.role}]` : "";
-		participantLines.push(
-			`- ${name} (id:${member.telegramId}${handle})${roleTag}`,
-		);
+		participantLines.push(`- ${participantRef}: ${name}${handle}${roleTag}`);
 	}
 
 	// Add bot as participant
@@ -88,5 +92,5 @@ export function buildContext(
 
 	const messageStream = `# MESSAGES\n${messageLines.join("\n")}`;
 
-	return { participants, messageStream };
+	return { participants, messageStream, participantRefs };
 }

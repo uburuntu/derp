@@ -3,14 +3,23 @@
 import { run } from "@grammyjs/runner";
 import { createBot, registerCommands } from "./bot/bot";
 import { initAdminNotify, notifyAdmins } from "./common/admin-notify";
-import { markReady, startHealthServer } from "./common/health";
+import {
+	markReady,
+	setReadinessCheck,
+	startHealthServer,
+} from "./common/health";
 import {
 	initObservability,
 	logger,
 	shutdownObservability,
 } from "./common/observability";
 import { config } from "./config";
-import { closeDb, getDb } from "./db/connection";
+import {
+	assertDatabaseReady,
+	checkDatabaseReady,
+	closeDb,
+	getDb,
+} from "./db/connection";
 import { startScheduler, stopScheduler } from "./scheduler/scheduler";
 
 // ── Startup ─────────────────────────────────────────────────────────────────
@@ -29,23 +38,11 @@ async function main() {
 
 	// Initialize database
 	const db = getDb(config.databaseUrl);
-	logger.info("database_connected");
+	setReadinessCheck(() => checkDatabaseReady(db));
+	await assertDatabaseReady(db);
+	logger.info("database_ready");
 	markReady("db");
-
-	// Push schema to database
-	try {
-		const { execSync } = await import("node:child_process");
-		execSync("bunx drizzle-kit push --force", {
-			cwd: import.meta.dir,
-			stdio: "pipe",
-			env: { ...process.env, DATABASE_URL: config.databaseUrl },
-		});
-		logger.info("schema_synced");
-	} catch (err) {
-		logger.warn("schema_push_skipped", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-	}
+	markReady("schema");
 
 	// Create bot
 	const bot = createBot(db);

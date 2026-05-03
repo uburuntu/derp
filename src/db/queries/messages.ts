@@ -27,7 +27,24 @@ export async function insertMessage(
 		.onConflictDoNothing()
 		.returning();
 
-	return row!;
+	if (row) return row;
+
+	const [existing] = await db
+		.select()
+		.from(messages)
+		.where(
+			and(
+				eq(messages.chatId, msg.chatId),
+				eq(messages.telegramMessageId, msg.telegramMessageId),
+			),
+		)
+		.limit(1);
+	if (!existing) {
+		throw new Error(
+			`Failed to insert or fetch message ${msg.telegramMessageId} in chat ${msg.chatId}`,
+		);
+	}
+	return existing;
 }
 
 /** Get recent messages for context building */
@@ -41,6 +58,8 @@ export async function getRecentMessages(
 
 	if (threadId != null) {
 		conditions.push(eq(messages.threadId, threadId));
+	} else {
+		conditions.push(isNull(messages.threadId));
 	}
 
 	const rows = await db

@@ -160,6 +160,11 @@ export const messages = pgTable(
 		unique("messages_chat_msg_unique").on(t.chatId, t.telegramMessageId),
 		index("messages_chat_id_idx").on(t.chatId),
 		index("messages_chat_date_idx").on(t.chatId, t.telegramDate),
+		index("messages_chat_thread_date_idx").on(
+			t.chatId,
+			t.threadId,
+			t.telegramDate,
+		),
 	],
 );
 
@@ -277,6 +282,13 @@ export const reminders = pgTable(
 		index("reminders_chat_id_idx").on(t.chatId),
 		index("reminders_user_id_idx").on(t.userId),
 		index("reminders_status_idx").on(t.status),
+		index("reminders_status_fire_at_idx").on(t.status, t.fireAt),
+		index("reminders_chat_status_idx").on(t.chatId, t.status),
+		index("reminders_user_status_recurring_idx").on(
+			t.userId,
+			t.status,
+			t.isRecurring,
+		),
 	],
 );
 

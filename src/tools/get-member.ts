@@ -4,9 +4,12 @@ import { z } from "zod";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types";
 
 const getMemberParamsSchema = z.object({
-	userId: z
-		.number()
-		.describe("Telegram user ID of the member whose profile photo to retrieve"),
+	participantRef: z
+		.string()
+		.regex(/^p\d+$/i)
+		.describe(
+			"Scoped participant reference from the PARTICIPANTS block, such as p1 or p2",
+		),
 });
 
 type GetMemberParams = z.infer<typeof getMemberParamsSchema>;
@@ -16,11 +19,27 @@ async function executeGetMember(
 	_ctx: ToolContext,
 ): Promise<ToolResult> {
 	try {
-		// Note: This tool is agent-only. The userId comes from the LLM parsing
-		// a user mention in the conversation. The LLM derives it from the
-		// participant registry in the context window.
+		const participantRef = params.participantRef.trim().toLowerCase();
+		const participant = _ctx.participants?.get(participantRef);
+		if (!participant) {
+			return {
+				text: `Unknown participant reference: ${params.participantRef}`,
+				error: "Unknown participant",
+			};
+		}
+
+		const photo = await _ctx.getParticipantProfilePhoto?.(participantRef);
+		if (!photo) {
+			return {
+				text: `${participant.firstName} has no accessible profile photo.`,
+				error: "No profile photo",
+			};
+		}
+
+		_ctx.replyMedia = [photo, ...(_ctx.replyMedia ?? [])];
+
 		return {
-			text: `Profile photo request for user ${params.userId}. Use the imagine or editImage tool with this user's photo as a reference.`,
+			text: `Loaded ${participant.firstName}'s profile photo as the active image reference. Use editImage next to transform it.`,
 		};
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
@@ -31,11 +50,13 @@ async function executeGetMember(
 export const getMemberTool: ToolDefinition<GetMemberParams> = {
 	name: "getMember",
 	commands: [], // Agent-only
-	description: "Get a chat member's profile photo for use in image editing",
+	description:
+		"Load a chat member's profile photo into the current tool context for image editing. Use participantRef from the PARTICIPANTS block, never raw Telegram IDs.",
 	helpText: "tool-get-member",
 	category: "utility",
 	parameters: getMemberParamsSchema,
 	execute: executeGetMember,
 	credits: 0,
 	freeDaily: Number.POSITIVE_INFINITY,
+	allowAutoCall: true,
 };

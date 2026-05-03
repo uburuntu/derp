@@ -1,6 +1,6 @@
 /** Inline mode — deferred generation with placeholder → edit pattern */
 
-import { Composer, InlineQueryResultBuilder } from "grammy";
+import { Composer, InlineKeyboard, InlineQueryResultBuilder } from "grammy";
 import type { DerpContext } from "../bot/context";
 import { logger } from "../common/observability";
 import { config, getGoogleApiKeys } from "../config";
@@ -22,6 +22,7 @@ inlineComposer.on("inline_query", async (ctx) => {
 		`derp:${ctx.inlineQuery.id}`,
 		ctx.t("inline-title"),
 	).text(ctx.t("inline-placeholder"));
+	result.reply_markup = new InlineKeyboard().text("Derp", "inline_noop");
 
 	await ctx.answerInlineQuery([result], {
 		cache_time: 5,
@@ -39,11 +40,9 @@ inlineComposer.on("chosen_inline_result", async (ctx) => {
 	const inlineMessageId = chosen.inline_message_id;
 	if (!inlineMessageId) return;
 
-	// Determine tier from user (simplified — we don't have full DB context in inline)
-	const tier = ctx.dbUser?.subscriptionTier
-		? ModelTier.STANDARD
-		: ModelTier.FREE;
-	const model = getDefaultModel(ModelCapability.TEXT, tier);
+	// Inline mode has no chat-scoped CreditService, so keep it on the free model
+	// until a dedicated inline credit policy exists.
+	const model = getDefaultModel(ModelCapability.TEXT, ModelTier.FREE);
 
 	const provider = new GoogleLLMProvider(
 		getGoogleApiKeys(config),
@@ -76,6 +75,10 @@ inlineComposer.on("chosen_inline_result", async (ctx) => {
 			// If editing fails, nothing we can do
 		}
 	}
+});
+
+inlineComposer.callbackQuery("inline_noop", async (ctx) => {
+	await ctx.answerCallbackQuery();
 });
 
 export { inlineComposer };

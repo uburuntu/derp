@@ -135,7 +135,7 @@ jobs:
             docker run --rm \
               --env-file /opt/derp/.env.prod \
               "$IMAGE" \
-              bunx drizzle-kit push --force
+              bunx drizzle-kit migrate
 
             # Start new container
             echo "=== Starting new container ==="

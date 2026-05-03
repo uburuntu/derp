@@ -4,36 +4,56 @@ import { InlineKeyboard } from "grammy";
 import { TOPUP_PACKS } from "./packs";
 import { SUBSCRIPTION_PLANS } from "./subscriptions";
 
+type Translator = (
+	key: string,
+	args?: Record<string, string | number>,
+) => string;
+
 /** Build the /buy inline keyboard with subscriptions first, then packs */
-export function buildBuyKeyboard(isGroup: boolean): InlineKeyboard {
+export function buildBuyKeyboard(
+	isGroup: boolean,
+	t: Translator,
+): InlineKeyboard {
 	const kb = new InlineKeyboard();
 
 	// Subscriptions section
 	for (const plan of SUBSCRIPTION_PLANS) {
 		const tag = plan.tag ? ` [${plan.tag}]` : "";
-		const label = `⭐ ${plan.label} — ${plan.stars}⭐/mo → ${plan.credits} credits (${plan.savings} off)${tag}`;
+		const label = t("buy-plan-button", {
+			plan: plan.label,
+			stars: plan.stars,
+			credits: plan.credits,
+			savings: plan.savings,
+			tag,
+		});
 		kb.text(label, `sub:${plan.id}`).row();
 	}
-
-	// Separator
-	kb.text("── Credit Packs (one-time) ──", "noop").row();
 
 	// Top-up packs
 	for (const pack of TOPUP_PACKS) {
 		const bonus = pack.bonus ? ` ${pack.bonus}` : "";
-		const label = `${pack.label} — ${pack.stars}⭐ → ${pack.credits} credits${bonus}`;
+		const label = t("buy-pack-button", {
+			pack: pack.label,
+			stars: pack.stars,
+			credits: pack.credits,
+			bonus,
+		});
 		kb.text(label, `pack:${pack.id}`).row();
 	}
 
 	// Group-specific: fund the group pool
 	if (isGroup) {
-		kb.text("── Fund this group ──", "noop").row();
 		for (const pack of TOPUP_PACKS) {
 			const bonus = pack.bonus ? ` ${pack.bonus}` : "";
-			const label = `Group: ${pack.label} — ${pack.stars}⭐ → ${pack.credits}${bonus}`;
+			const label = t("buy-group-pack-button", {
+				pack: pack.label,
+				stars: pack.stars,
+				credits: pack.credits,
+				bonus,
+			});
 			kb.text(label, `group_pack:${pack.id}`).row();
 		}
-		kb.text("Transfer from my balance (min 100)", "transfer").row();
+		kb.text(t("buy-transfer-button"), "transfer").row();
 	}
 
 	return kb;
@@ -45,13 +65,14 @@ export function formatBalanceMessage(
 	chatCredits: number,
 	subscriptionTier: string | null,
 	subscriptionExpiresAt: Date | null,
+	t: Translator,
 ): string {
-	const lines: string[] = ["💰 <b>Balance</b>\n"];
+	const lines: string[] = [`💰 <b>${t("credits-title")}</b>\n`];
 
-	lines.push(`<b>Credits:</b> ${userCredits}`);
+	lines.push(`<b>${t("credits-balance", { userCredits })}</b>`);
 
 	if (chatCredits > 0) {
-		lines.push(`<b>Chat pool:</b> ${chatCredits}`);
+		lines.push(`<b>${t("credits-chat-pool", { chatCredits })}</b>`);
 	}
 
 	if (subscriptionTier && subscriptionExpiresAt) {
@@ -61,10 +82,13 @@ export function formatBalanceMessage(
 			const d = subscriptionExpiresAt;
 			const expiry = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 			lines.push(
-				`<b>Plan:</b> ${subscriptionTier.toUpperCase()} (renews ${expiry})`,
+				`<b>${t("credits-subscription", {
+					tier: subscriptionTier.toUpperCase(),
+					expiry,
+				})}</b>`,
 			);
 		} else {
-			lines.push("<b>Plan:</b> expired");
+			lines.push(`<b>${t("credits-subscription-expired")}</b>`);
 		}
 	}
 

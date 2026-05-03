@@ -41,6 +41,13 @@ async function executeMemory(
 				};
 			}
 
+			if (!ctx.canManageMemory) {
+				return {
+					text: "Only chat admins can update memory in this chat.",
+					error: "Unauthorized",
+				};
+			}
+
 			// Enforce max length
 			const content = params.content.slice(0, MAX_MEMORY_LENGTH);
 
@@ -55,6 +62,12 @@ async function executeMemory(
 		}
 
 		case "clear": {
+			if (!ctx.canManageMemory) {
+				return {
+					text: "Only chat admins can clear memory in this chat.",
+					error: "Unauthorized",
+				};
+			}
 			await updateChatMemory(ctx.db, ctx.chat.id, null);
 			return { text: "Chat memory cleared." };
 		}

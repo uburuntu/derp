@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Chat as TelegramChat } from "grammy/types";
 import type { Database } from "../connection";
 import { type ChatSettings, chats } from "../schema";
@@ -39,7 +39,10 @@ export async function upsertChat(
 		})
 		.returning();
 
-	return row!;
+	if (!row) {
+		throw new Error(`Failed to upsert chat ${tgChat.id}`);
+	}
+	return row;
 }
 
 /** Get a chat by Telegram ID */
@@ -70,14 +73,13 @@ export async function updateChatSettings(
 	chatId: string,
 	settings: Partial<ChatSettings>,
 ): Promise<void> {
-	const [current] = await db
-		.select({ settings: chats.settings })
-		.from(chats)
-		.where(eq(chats.id, chatId))
-		.limit(1);
-
-	const merged = { ...(current?.settings ?? {}), ...settings } as ChatSettings;
-	await db.update(chats).set({ settings: merged }).where(eq(chats.id, chatId));
+	const patch = JSON.stringify(settings);
+	await db
+		.update(chats)
+		.set({
+			settings: sql`COALESCE(${chats.settings}, '{}'::jsonb) || ${patch}::jsonb`,
+		})
+		.where(eq(chats.id, chatId));
 }
 
 /** Update chat personality */

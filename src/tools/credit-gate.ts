@@ -2,7 +2,22 @@
 
 import { derpMetrics, logger, withSpan } from "../common/observability";
 import type { CreditCheckResult } from "../credits/types";
+import { ModelTier } from "../llm/registry";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types";
+
+const TIER_RANK: Record<ModelTier, number> = {
+	[ModelTier.FREE]: 0,
+	[ModelTier.STANDARD]: 1,
+	[ModelTier.PREMIUM]: 2,
+};
+
+function zeroCostResult(result: CreditCheckResult): CreditCheckResult {
+	return {
+		...result,
+		creditsToDeduct: 0,
+		creditsRemaining: null,
+	};
+}
 
 /**
  * Execute a tool with credit gating.
@@ -35,6 +50,26 @@ export async function executeWithCreditGate(
 				return { ...result };
 			}
 
+			if (tool.chatAdminOnly && !ctx.isChatAdmin) {
+				const rejectReason = "Only chat admins can use this tool";
+				span.setAttribute("derp.tool.outcome", "rejected");
+				span.setAttribute("derp.tool.reject_reason", rejectReason);
+				return {
+					text: rejectReason,
+					error: rejectReason,
+				};
+			}
+
+			if (tool.minTier && TIER_RANK[ctx.tier] < TIER_RANK[tool.minTier]) {
+				const rejectReason = `This tool requires ${tool.minTier} access`;
+				span.setAttribute("derp.tool.outcome", "rejected");
+				span.setAttribute("derp.tool.reject_reason", rejectReason);
+				return {
+					text: `${rejectReason}. Use /buy to upgrade.`,
+					error: rejectReason,
+				};
+			}
+
 			// Check access
 			const creditResult = await ctx.creditService.checkToolAccess(tool.name);
 
@@ -60,13 +95,62 @@ export async function executeWithCreditGate(
 				};
 			}
 
-			// Execute the tool
-			const result = await tool.execute(params, ctx);
+			const idempotencyKey = ctx.idempotencyKey;
+			try {
+				const reserved = await ctx.creditService.deduct(
+					creditResult,
+					tool.name,
+					idempotencyKey,
+				);
+				if (!reserved) {
+					span.setAttribute("derp.tool.outcome", "duplicate");
+					return {
+						text: "This request was already processed.",
+						error: "Duplicate request",
+						creditResult: zeroCostResult(creditResult),
+					};
+				}
+			} catch (err) {
+				const error = err instanceof Error ? err.message : String(err);
+				span.setAttribute("derp.tool.outcome", "rejected");
+				span.setAttribute("derp.tool.reject_reason", error);
+				derpMetrics.toolCalls.add(1, {
+					tool: tool.name,
+					outcome: "rejected",
+				});
+				return {
+					text: `Tool unavailable: ${error}`,
+					error,
+					creditResult: zeroCostResult(creditResult),
+				};
+			}
 
-			// Deduct credits only on success (no error)
+			let result: ToolResult;
+			try {
+				result = await tool.execute(params, ctx);
+			} catch (err) {
+				const error = err instanceof Error ? err.message : String(err);
+				await ctx.creditService.refundDeduction(
+					creditResult,
+					tool.name,
+					idempotencyKey,
+					{
+						error,
+					},
+				);
+				span.setAttribute("derp.tool.outcome", "error");
+				derpMetrics.toolCalls.add(1, {
+					tool: tool.name,
+					outcome: "error",
+				});
+				return {
+					text: `${tool.name} failed: ${error}`,
+					error,
+					creditResult: zeroCostResult(creditResult),
+				};
+			}
+
 			if (!result.error) {
-				const idempotencyKey = `tool:${tool.name}:${Date.now()}`;
-				await ctx.creditService.deduct(creditResult, tool.name, idempotencyKey);
 				span.setAttribute("derp.tool.outcome", "success");
 				span.setAttribute(
 					"derp.credits.deducted",
@@ -81,6 +165,14 @@ export async function executeWithCreditGate(
 					derpMetrics.creditTransactions.add(1, { type: "spend" });
 				}
 			} else {
+				await ctx.creditService.refundDeduction(
+					creditResult,
+					tool.name,
+					idempotencyKey,
+					{
+						error: result.error,
+					},
+				);
 				span.setAttribute("derp.tool.outcome", "error");
 				derpMetrics.toolCalls.add(1, {
 					tool: tool.name,
@@ -95,7 +187,12 @@ export async function executeWithCreditGate(
 				outcome: result.error ? "error" : "success",
 			});
 
-			return { ...result, creditResult };
+			return {
+				...result,
+				creditResult: result.error
+					? zeroCostResult(creditResult)
+					: creditResult,
+			};
 		},
 	);
 }

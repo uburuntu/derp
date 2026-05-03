@@ -4,9 +4,9 @@ WORKDIR /app
 # Install system dependencies (ffmpeg for media conversion)
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
+# Install dependencies, including drizzle-kit for deploy-time migrations
 COPY package.json bun.lock* ./
-RUN bun install --frozen-lockfile --production
+RUN bun install --frozen-lockfile
 
 # Copy source
 COPY . .

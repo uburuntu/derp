@@ -12,8 +12,49 @@ interface CronFields {
 	daysOfWeek: Set<number>;
 }
 
+function parseCronNumber(value: string): number | null {
+	if (!/^\d+$/.test(value)) return null;
+	const parsed = Number.parseInt(value, 10);
+	return Number.isInteger(parsed) ? parsed : null;
+}
+
+function parseRange(
+	range: string,
+	min: number,
+	max: number,
+): [number, number] | null {
+	if (range === "*") return [min, max];
+	if (range.includes("-")) {
+		const [startStr, endStr] = range.split("-");
+		if (!startStr || !endStr) return null;
+		const start = parseCronNumber(startStr);
+		const end = parseCronNumber(endStr);
+		if (start == null || end == null || start > end) return null;
+		return [start, end];
+	}
+
+	const start = parseCronNumber(range);
+	if (start == null) return null;
+	return [start, max];
+}
+
+function addCronValue(
+	values: Set<number>,
+	value: number,
+	min: number,
+	max: number,
+): boolean {
+	if (!Number.isInteger(value) || value < min || value > max) return false;
+	values.add(value);
+	return true;
+}
+
 /** Parse a single cron field into a set of valid values */
-function parseField(field: string, min: number, max: number): Set<number> {
+function parseField(
+	field: string,
+	min: number,
+	max: number,
+): Set<number> | null {
 	const values = new Set<number>();
 
 	for (const part of field.split(",")) {
@@ -21,34 +62,57 @@ function parseField(field: string, min: number, max: number): Set<number> {
 			for (let i = min; i <= max; i++) values.add(i);
 		} else if (part.includes("/")) {
 			const [range, stepStr] = part.split("/");
-			const step = Number.parseInt(stepStr!, 10);
-			const start = range === "*" ? min : Number.parseInt(range!, 10);
-			for (let i = start; i <= max; i += step) values.add(i);
+			if (!range || !stepStr) return null;
+			const step = parseCronNumber(stepStr);
+			const parsedRange = parseRange(range, min, max);
+			if (step == null || step <= 0 || !parsedRange) return null;
+			const [start, end] = parsedRange;
+			for (let i = start; i <= end; i += step) {
+				if (!addCronValue(values, i, min, max)) return null;
+			}
 		} else if (part.includes("-")) {
-			const [startStr, endStr] = part.split("-");
-			const start = Number.parseInt(startStr!, 10);
-			const end = Number.parseInt(endStr!, 10);
-			for (let i = start; i <= end; i++) values.add(i);
+			const parsedRange = parseRange(part, min, max);
+			if (!parsedRange) return null;
+			const [start, end] = parsedRange;
+			for (let i = start; i <= end; i++) {
+				if (!addCronValue(values, i, min, max)) return null;
+			}
 		} else {
-			values.add(Number.parseInt(part, 10));
+			const value = parseCronNumber(part);
+			if (value == null || !addCronValue(values, value, min, max)) {
+				return null;
+			}
 		}
 	}
 
-	return values;
+	return values.size > 0 ? values : null;
 }
 
 /** Parse a 5-field cron expression */
 function parseCron(expression: string): CronFields | null {
 	const parts = expression.trim().split(/\s+/);
 	if (parts.length !== 5) return null;
+	const [minutes, hours, daysOfMonth, months, daysOfWeek] = parts;
+	if (!minutes || !hours || !daysOfMonth || !months || !daysOfWeek) return null;
 
-	return {
-		minutes: parseField(parts[0]!, 0, 59),
-		hours: parseField(parts[1]!, 0, 23),
-		daysOfMonth: parseField(parts[2]!, 1, 31),
-		months: parseField(parts[3]!, 1, 12),
-		daysOfWeek: parseField(parts[4]!, 0, 6), // 0 = Sunday
+	const parsed = {
+		minutes: parseField(minutes, 0, 59),
+		hours: parseField(hours, 0, 23),
+		daysOfMonth: parseField(daysOfMonth, 1, 31),
+		months: parseField(months, 1, 12),
+		daysOfWeek: parseField(daysOfWeek, 0, 6), // 0 = Sunday
 	};
+	if (
+		!parsed.minutes ||
+		!parsed.hours ||
+		!parsed.daysOfMonth ||
+		!parsed.months ||
+		!parsed.daysOfWeek
+	) {
+		return null;
+	}
+
+	return parsed as CronFields;
 }
 
 /** Compute the next fire date from a cron expression, starting from now */

@@ -2,6 +2,8 @@
 
 import { Composer, InlineKeyboard } from "grammy";
 import type { DerpContext } from "../bot/context";
+import { replyHtml } from "../common/reply";
+import { escapeHtml } from "../common/sanitize";
 import {
 	cancelReminder,
 	getReminderById,
@@ -22,7 +24,7 @@ remindersComposer.command("reminders", async (ctx) => {
 	const reminders = await getRemindersForChat(ctx.db, ctx.dbChat.id);
 
 	if (reminders.length === 0) {
-		await ctx.reply(ctx.t("reminder-none"), {
+		await replyHtml(ctx, ctx.t("reminder-none"), {
 			reply_to_message_id: ctx.message?.message_id,
 		});
 		return;
@@ -31,21 +33,22 @@ remindersComposer.command("reminders", async (ctx) => {
 	const lines: string[] = [];
 	const kb = new InlineKeyboard();
 
-	for (let i = 0; i < reminders.length; i++) {
-		const r = reminders[i]!;
+	for (const [i, r] of reminders.entries()) {
 		const schedule = r.isRecurring
 			? `cron: ${r.cronExpression}`
 			: r.fireAt
 				? formatDate(r.fireAt)
 				: "—";
-		lines.push(`${i + 1}. ${r.description} — ${schedule}`);
+		lines.push(
+			`${i + 1}. ${escapeHtml(r.description)} — ${escapeHtml(schedule)}`,
+		);
 		kb.text(
 			`${ctx.t("reminder-cancel-button")} #${i + 1}`,
 			`cancel_reminder:${r.id}`,
 		).row();
 	}
 
-	await ctx.reply(`${lines.join("\n")}`, {
+	await replyHtml(ctx, lines.join("\n"), {
 		reply_markup: kb,
 		reply_to_message_id: ctx.message?.message_id,
 	});
@@ -56,7 +59,7 @@ remindersComposer.callbackQuery(/^cancel_reminder:(.+)$/, async (ctx) => {
 	if (!reminderId) return;
 
 	const reminder = await getReminderById(ctx.db, reminderId);
-	if (!reminder) {
+	if (!reminder || reminder.chatId !== ctx.dbChat?.id) {
 		await ctx.answerCallbackQuery(ctx.t("reminder-not-found"));
 		return;
 	}
@@ -75,7 +78,10 @@ remindersComposer.callbackQuery(/^cancel_reminder:(.+)$/, async (ctx) => {
 	await cancelReminder(ctx.db, reminderId);
 	await ctx.answerCallbackQuery("OK");
 	await ctx.editMessageText(
-		ctx.t("reminder-cancelled", { description: reminder.description }),
+		ctx.t("reminder-cancelled", {
+			description: escapeHtml(reminder.description),
+		}),
+		{ parse_mode: "HTML" },
 	);
 });
 

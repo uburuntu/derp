@@ -7,12 +7,12 @@ import { toolRegistry } from "../tools/registry";
 const helpComposer = new Composer<DerpContext>();
 
 helpComposer.command("help", async (ctx) => {
-	const helpText = toolRegistry.getHelpText();
+	const helpText = toolRegistry.getHelpText((key, args) => ctx.t(key, args));
 	// Help text is already Telegram HTML from the registry
 	const html =
 		`🤖 <b>Derp</b>\n\n${helpText}\n\n` +
-		`<i>Just describe what you need — I'll pick the right tool automatically.</i>\n\n` +
-		`⚙️ <b>Other</b>\n` +
+		`<i>${ctx.t("help-footer")}</i>\n\n` +
+		`⚙️ <b>${ctx.t("help-other")}</b>\n` +
 		`  /credits — ${ctx.t("cmd-credits-desc")}\n` +
 		`  /buy — ${ctx.t("cmd-buy-desc")}\n` +
 		`  /settings — ${ctx.t("cmd-settings-desc")}\n` +

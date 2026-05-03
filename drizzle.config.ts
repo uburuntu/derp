@@ -1,10 +1,15 @@
-import type { defineConfig } from "drizzle-kit";
+import { defineConfig } from "drizzle-kit";
 
-export default {
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+	throw new Error("DATABASE_URL is required for Drizzle migrations");
+}
+
+export default defineConfig({
 	schema: "./src/db/schema.ts",
-	out: "./src/db/migrations",
+	out: "./drizzle",
 	dialect: "postgresql",
 	dbCredentials: {
-		url: process.env.DATABASE_URL || "postgresql://derp:derp@localhost:5433/derp",
+		url: databaseUrl,
 	},
-} satisfies ReturnType<typeof defineConfig>;
+});

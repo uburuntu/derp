@@ -1,6 +1,7 @@
 /** Video generation tool — generates short videos from text prompts */
 
 import { z } from "zod";
+import { captionPartsForMedia } from "../common/reply";
 import { config, getGoogleApiKeys } from "../config";
 import { GoogleLLMProvider } from "../llm/providers/google";
 import { ModelCapability } from "../llm/registry";
@@ -35,7 +36,11 @@ async function executeVideo(
 			timeoutMs: 180_000,
 		});
 
-		await ctx.sendVideo(result.video.data, params.prompt);
+		const caption = captionPartsForMedia(params.prompt);
+		await ctx.sendVideo(result.video.data, caption.caption);
+		for (const chunk of caption.followUpChunks) {
+			await ctx.sendMessage(chunk);
+		}
 		return { handled: true };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
@@ -45,7 +50,7 @@ async function executeVideo(
 
 export const videoTool: ToolDefinition<VideoParams> = {
 	name: "video",
-	commands: ["/video", "/v"],
+	commands: ["/video", "/v", "/vid", "/veo"],
 	description: "Generate a short 5-second video from a text description",
 	helpText: "tool-video",
 	category: "media",

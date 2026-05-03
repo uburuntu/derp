@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	appendFooterToChunks,
+	captionPartsForMedia,
 	formatBalanceFooter,
 	needsCaptionOverflow,
 	splitCaption,
@@ -14,14 +15,14 @@ describe("splitMessage", () => {
 	});
 
 	test("splits on paragraph boundary", () => {
-		const text = "A".repeat(3000) + "\n\n" + "B".repeat(2000);
+		const text = `${"A".repeat(3000)}\n\n${"B".repeat(2000)}`;
 		const result = splitMessage(text);
 		expect(result.length).toBe(2);
-		expect(result[0]!.endsWith("\n\n")).toBe(true);
+		expect(result.at(0)?.endsWith("\n\n")).toBe(true);
 	});
 
 	test("splits on sentence boundary when no paragraph break", () => {
-		const text = "A".repeat(3000) + ". " + "B".repeat(2000);
+		const text = `${"A".repeat(3000)}. ${"B".repeat(2000)}`;
 		const result = splitMessage(text);
 		expect(result.length).toBe(2);
 	});
@@ -30,7 +31,7 @@ describe("splitMessage", () => {
 		const text = "A".repeat(5000);
 		const result = splitMessage(text);
 		expect(result.length).toBe(2);
-		expect(result[0]!.length).toBe(4096);
+		expect(result.at(0)?.length).toBe(4096);
 	});
 
 	test("respects custom max length", () => {
@@ -91,6 +92,18 @@ describe("splitCaption", () => {
 		const longCaption = "A".repeat(2000);
 		const result = splitCaption(longCaption);
 		expect(result.mediaCaption.length).toBeLessThanOrEqual(1024);
-		expect(result.followUp).toBe(longCaption);
+		expect(`${result.mediaCaption.slice(0, -1)}${result.followUp}`).toBe(
+			longCaption,
+		);
+	});
+
+	test("returns follow-up chunks for media delivery", () => {
+		const caption = "A".repeat(5000);
+		const result = captionPartsForMedia(caption);
+		expect(result.caption?.length).toBeLessThanOrEqual(1024);
+		expect(result.followUpChunks.length).toBeGreaterThan(0);
+		for (const chunk of result.followUpChunks) {
+			expect(chunk.length).toBeLessThanOrEqual(4096);
+		}
 	});
 });
