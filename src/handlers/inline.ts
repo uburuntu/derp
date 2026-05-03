@@ -8,6 +8,14 @@ import { GoogleLLMProvider } from "../llm/providers/google";
 import { getDefaultModel, ModelCapability, ModelTier } from "../llm/registry";
 
 const inlineComposer = new Composer<DerpContext>();
+const INLINE_MIN_QUERY_LENGTH = 8;
+const INLINE_THROTTLE_MS = 8_000;
+const INLINE_CACHE_MS = 10 * 60 * 1000;
+
+const inlineCache = new Map<
+	string,
+	{ text: string; generatedAt: number; lastRequestedAt: number }
+>();
 
 // ── Inline query ────────────────────────────────────────────────────────────
 
@@ -18,7 +26,7 @@ inlineComposer.on("inline_query", async (ctx) => {
 		return;
 	}
 
-	const responseText = await generateInlineAnswer(query, ctx);
+	const responseText = await getInlineAnswer(query, ctx);
 	const result = InlineQueryResultBuilder.article(
 		`derp:${ctx.inlineQuery.id}`,
 		ctx.t("inline-title"),
@@ -29,6 +37,43 @@ inlineComposer.on("inline_query", async (ctx) => {
 		is_personal: true,
 	});
 });
+
+async function getInlineAnswer(
+	query: string,
+	ctx: DerpContext,
+): Promise<string> {
+	if (query.length < INLINE_MIN_QUERY_LENGTH) {
+		return ctx.t("inline-placeholder");
+	}
+
+	const userId = ctx.from?.id ?? 0;
+	const cacheKey = `${userId}:${query}`;
+	const cached = inlineCache.get(cacheKey);
+	if (cached && Date.now() - cached.generatedAt < INLINE_CACHE_MS) {
+		cached.lastRequestedAt = Date.now();
+		return cached.text;
+	}
+
+	const userEntries = [...inlineCache.entries()].filter(([key]) =>
+		key.startsWith(`${userId}:`),
+	);
+	const lastRequestAt = Math.max(
+		0,
+		...userEntries.map(([, entry]) => entry.lastRequestedAt),
+	);
+	if (Date.now() - lastRequestAt < INLINE_THROTTLE_MS) {
+		return ctx.t("inline-wait");
+	}
+
+	const text = await generateInlineAnswer(query, ctx);
+	inlineCache.set(cacheKey, {
+		text,
+		generatedAt: Date.now(),
+		lastRequestedAt: Date.now(),
+	});
+	pruneInlineCache();
+	return text;
+}
 
 async function generateInlineAnswer(
 	query: string,
@@ -59,6 +104,15 @@ async function generateInlineAnswer(
 			query: query.slice(0, 100),
 		});
 		return ctx.t("inline-error");
+	}
+}
+
+function pruneInlineCache(): void {
+	const cutoff = Date.now() - INLINE_CACHE_MS;
+	for (const [key, value] of inlineCache.entries()) {
+		if (value.generatedAt < cutoff) {
+			inlineCache.delete(key);
+		}
 	}
 }
 

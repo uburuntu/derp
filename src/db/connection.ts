@@ -22,6 +22,8 @@ const SCHEMA_CHECKS = [
 	"SELECT id, chat_id, user_id, description, status, fire_at, cron_expression FROM reminders LIMIT 0",
 ];
 
+const CRITICAL_INDEXES = ["ledger_payment_receipt_charge_unique"];
+
 function createDb(databaseUrl: string) {
 	const client = postgres(databaseUrl, {
 		max: 10,
@@ -57,6 +59,18 @@ export async function checkDatabaseReady(
 	try {
 		for (const check of SCHEMA_CHECKS) {
 			await database.execute(drizzleSql.raw(check));
+		}
+		for (const indexName of CRITICAL_INDEXES) {
+			const rows = await database.execute(drizzleSql`
+				SELECT 1
+				FROM pg_indexes
+				WHERE schemaname = current_schema()
+					AND indexname = ${indexName}
+				LIMIT 1
+			`);
+			if (rows.length === 0) {
+				throw new Error(`missing critical index: ${indexName}`);
+			}
 		}
 	} catch (error) {
 		return {

@@ -198,14 +198,14 @@ export class CreditService {
 		};
 	}
 
-	/** Deduct credits after successful tool execution */
+	/** Check whether an idempotent tool request already has a ledger entry. */
 	async hasProcessed(idempotencyKey: string): Promise<boolean> {
 		return (
 			(await getTransactionByIdempotencyKey(this.db, idempotencyKey)) != null
 		);
 	}
 
-	/** Deduct credits after successful tool execution */
+	/** Reserve or record tool credits before provider work. */
 	async deduct(
 		result: CreditCheckResult,
 		toolName: string,

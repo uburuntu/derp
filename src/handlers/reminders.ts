@@ -18,10 +18,22 @@ function formatDate(date: Date): string {
 	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function callbackThreadId(ctx: DerpContext): number | null {
+	const message = ctx.callbackQuery?.message;
+	if (!message || !("message_id" in message)) return null;
+	return (message as { message_thread_id?: number }).message_thread_id ?? null;
+}
+
 remindersComposer.command("reminders", async (ctx) => {
 	if (!ctx.dbChat) return;
 
-	const reminders = await getRemindersForChat(ctx.db, ctx.dbChat.id);
+	const threadId = ctx.message?.message_thread_id ?? null;
+	const reminders = await getRemindersForChat(
+		ctx.db,
+		ctx.dbChat.id,
+		undefined,
+		threadId,
+	);
 
 	if (reminders.length === 0) {
 		await replyHtml(ctx, ctx.t("reminder-none"), {
@@ -62,6 +74,10 @@ remindersComposer.callbackQuery(/^cancel_reminder:(.+)$/, async (ctx) => {
 
 	const reminder = await getReminderById(ctx.db, reminderId);
 	if (!reminder || reminder.chatId !== ctx.dbChat?.id) {
+		await ctx.answerCallbackQuery(ctx.t("reminder-not-found"));
+		return;
+	}
+	if ((reminder.threadId ?? null) !== callbackThreadId(ctx)) {
 		await ctx.answerCallbackQuery(ctx.t("reminder-not-found"));
 		return;
 	}

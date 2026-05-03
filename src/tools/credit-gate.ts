@@ -154,13 +154,42 @@ export async function executeWithCreditGate(
 						creditResult: zeroCostResult(creditResult),
 					};
 				}
-			} else if (idempotencyKey) {
-				const existing = await ctx.creditService.hasProcessed(idempotencyKey);
-				if (existing) {
-					span.setAttribute("derp.tool.outcome", "duplicate");
+			} else {
+				try {
+					const reserved = await ctx.creditService.deduct(
+						creditResult,
+						tool.name,
+						idempotencyKey,
+						{ phase: "reservation" },
+					);
+					if (reserved === "duplicate") {
+						span.setAttribute("derp.tool.outcome", "duplicate");
+						return {
+							text: "This request was already processed.",
+							error: "Duplicate request",
+							creditResult: zeroCostResult(creditResult),
+						};
+					}
+				} catch (err) {
+					const error = err instanceof Error ? err.message : String(err);
+					span.setAttribute("derp.tool.outcome", "rejected");
+					span.setAttribute("derp.tool.reject_reason", error);
+					derpMetrics.toolCalls.add(1, {
+						tool: tool.name,
+						outcome: "rejected",
+					});
+					recordHandledFailure("tool_billing", error, { tool: tool.name });
+					logger.error("tool_paid_reservation_failed", {
+						tool: tool.name,
+						error,
+					});
 					return {
-						text: "This request was already processed.",
-						error: "Duplicate request",
+						text: buildUnavailableMessage(
+							tool,
+							error,
+							buildUpsellMessage(tool),
+						),
+						error,
 						creditResult: zeroCostResult(creditResult),
 					};
 				}
@@ -171,6 +200,12 @@ export async function executeWithCreditGate(
 				result = await tool.execute(params, ctx);
 			} catch (err) {
 				const error = err instanceof Error ? err.message : String(err);
+				await ctx.creditService.refundDeduction(
+					creditResult,
+					tool.name,
+					idempotencyKey,
+					{ error },
+				);
 				span.setAttribute("derp.tool.outcome", "error");
 				derpMetrics.toolCalls.add(1, {
 					tool: tool.name,
@@ -186,42 +221,6 @@ export async function executeWithCreditGate(
 			}
 
 			if (!result.error) {
-				if (creditResult.source !== "free") {
-					try {
-						const charged = await ctx.creditService.deduct(
-							creditResult,
-							tool.name,
-							idempotencyKey,
-						);
-						if (charged === "duplicate") {
-							span.setAttribute("derp.tool.outcome", "duplicate");
-							return {
-								text: "This request was already processed.",
-								error: "Duplicate request",
-								creditResult: zeroCostResult(creditResult),
-							};
-						}
-					} catch (err) {
-						const error = err instanceof Error ? err.message : String(err);
-						span.setAttribute("derp.tool.outcome", "billing_error");
-						span.setAttribute("derp.tool.billing_error", error);
-						derpMetrics.toolCalls.add(1, {
-							tool: tool.name,
-							outcome: "billing_error",
-						});
-						recordHandledFailure("tool_billing", error, { tool: tool.name });
-						logger.error("tool_billing_failed_after_success", {
-							tool: tool.name,
-							error,
-						});
-						return {
-							text: "The result was generated, but billing could not be finalized. No extra action is needed.",
-							error,
-							creditResult: zeroCostResult(creditResult),
-						};
-					}
-				}
-
 				span.setAttribute("derp.tool.outcome", "success");
 				span.setAttribute(
 					"derp.credits.deducted",
@@ -241,6 +240,12 @@ export async function executeWithCreditGate(
 					tool: tool.name,
 					outcome: "error",
 				});
+				await ctx.creditService.refundDeduction(
+					creditResult,
+					tool.name,
+					idempotencyKey,
+					{ error: result.error },
+				);
 				recordHandledFailure("tool", result.error, { tool: tool.name });
 				logger.error("tool_returned_error", {
 					tool: tool.name,

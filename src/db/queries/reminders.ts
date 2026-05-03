@@ -1,4 +1,4 @@
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, eq, isNull, lte, sql } from "drizzle-orm";
 import type { Database } from "../connection";
 import { reminders } from "../schema";
 
@@ -104,6 +104,7 @@ export async function getRemindersForChat(
 	db: Database,
 	chatId: string,
 	userId?: string,
+	threadId?: number | null,
 ): Promise<(typeof reminders.$inferSelect)[]> {
 	const conditions = [
 		eq(reminders.chatId, chatId),
@@ -112,6 +113,13 @@ export async function getRemindersForChat(
 
 	if (userId) {
 		conditions.push(eq(reminders.userId, userId));
+	}
+	if (threadId !== undefined) {
+		conditions.push(
+			threadId == null
+				? isNull(reminders.threadId)
+				: eq(reminders.threadId, threadId),
+		);
 	}
 
 	return db
@@ -193,11 +201,24 @@ export async function countActiveReminders(
 	db: Database,
 	_userId: string,
 	chatId: string,
+	threadId?: number | null,
 ): Promise<number> {
+	const conditions = [
+		eq(reminders.chatId, chatId),
+		eq(reminders.status, "active"),
+	];
+	if (threadId !== undefined) {
+		conditions.push(
+			threadId == null
+				? isNull(reminders.threadId)
+				: eq(reminders.threadId, threadId),
+		);
+	}
+
 	const rows = await db
 		.select({ count: sql<number>`count(*)::int` })
 		.from(reminders)
-		.where(and(eq(reminders.chatId, chatId), eq(reminders.status, "active")));
+		.where(and(...conditions));
 	return rows[0]?.count ?? 0;
 }
 

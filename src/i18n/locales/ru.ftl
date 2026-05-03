@@ -163,7 +163,8 @@ info-header = Информация о сообщении:
 
 ## Inline
 inline-title = Спросить Derp
-inline-placeholder = Думаю...
+inline-placeholder = Продолжай писать вопрос.
+inline-wait = Сделай короткую паузу и повтори этот запрос.
 inline-error = Не удалось сгенерировать ответ. Попробуй ещё раз.
 
 ## Chat

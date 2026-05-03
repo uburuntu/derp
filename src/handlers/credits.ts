@@ -585,6 +585,9 @@ creditsComposer.on("message:refunded_payment", async (ctx) => {
 		);
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
+		recordHandledFailure("refund", reason, {
+			chargeId: refund.telegram_payment_charge_id,
+		});
 		await notifyAdmins(
 			`⚠️ <b>Refund reconciliation failed</b>\n\nCharge: <code>${escapeHtml(refund.telegram_payment_charge_id)}</code>\nReason: ${escapeHtml(reason)}`,
 		);

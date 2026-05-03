@@ -2,7 +2,7 @@
 
 import { and, lt, sql } from "drizzle-orm";
 import type { Database } from "../connection";
-import { ledger, messages } from "../schema";
+import { ledger, messages, reminders } from "../schema";
 
 const MESSAGE_RETENTION_DAYS = 30;
 const LEDGER_META_RETENTION_DAYS = 400;
@@ -10,6 +10,7 @@ const LEDGER_META_RETENTION_DAYS = 400;
 export interface RetentionResult {
 	messagesScrubbed: number;
 	ledgerRowsScrubbed: number;
+	remindersScrubbed: number;
 	messageCutoff: string;
 	ledgerCutoff: string;
 }
@@ -45,9 +46,28 @@ export async function scrubRetention(
 		)
 		.returning({ id: ledger.id });
 
+	const reminderRows = await db
+		.update(reminders)
+		.set({
+			description: "[scrubbed]",
+			message: null,
+			prompt: null,
+			meta: null,
+			updatedAt: now,
+		})
+		.where(
+			and(
+				lt(reminders.updatedAt, messageCutoff),
+				sql`${reminders.status} IN ('completed', 'cancelled', 'failed')`,
+				sql`(${reminders.description} <> '[scrubbed]' OR ${reminders.message} IS NOT NULL OR ${reminders.prompt} IS NOT NULL OR ${reminders.meta} IS NOT NULL)`,
+			),
+		)
+		.returning({ id: reminders.id });
+
 	return {
 		messagesScrubbed: messageRows.length,
 		ledgerRowsScrubbed: ledgerRows.length,
+		remindersScrubbed: reminderRows.length,
 		messageCutoff: messageCutoff.toISOString(),
 		ledgerCutoff: ledgerCutoff.toISOString(),
 	};

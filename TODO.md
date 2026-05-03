@@ -44,16 +44,16 @@ Items below are added by reviewer loop. Keep P0/P1 only here; P2+ notes can stay
 - [x] P1 L1-PRICE-1: Remove welcome credit permanent `STANDARD` unlock or split promo credits from paid unlock credits.
 - [x] P1 L1-PRICE-2: Wrap successful payment processing in local failure handling with admin reconciliation details.
 - [x] P1 L1-PRICE-3: Add refund reconciliation path for already-refunded Telegram charges.
-- [ ] P1 L2-DATA-1: Paid tools must atomically reserve/debit credits before provider work or return unsent media until billing succeeds; current post-success debit can deliver media after concurrent balance races.
+- [x] P1 L2-DATA-1: Paid tools must atomically reserve/debit credits before provider work or return unsent media until billing succeeds; current post-success debit can deliver media after concurrent balance races.
 - [ ] P1 L2-DATA-2: Subscription state must survive refunding a later subscription; replace single user subscription fields as source-of-truth with durable subscription/payment rows or recompute from non-refunded periods.
 - [ ] P1 L2-DATA-3: Stars payments need durable accounting beyond scrubbed ledger meta: currency, Stars amount, product type/id, target, charge IDs, refund status, and revenue metrics for packs/subscriptions/donations.
-- [ ] P1 L2-UX-1: Inline mode must not call the LLM on every keystroke while inline updates are rate-limit exempt; restore chosen-result generation or add per-user throttling/cache and credit policy.
-- [ ] P1 L2-UX-2: Forum-topic reminders must be listed and canceled only within the current topic/general topic.
-- [ ] P1 L2-OPS-1: Handled failures still become OK spans because `withSpan`/logger middleware overwrite error status; chat/scheduler/refund handled failures need explicit failure recording.
-- [ ] P1 L2-OPS-2: Scheduler health must fail when processing is wedged; skipped ticks should not refresh successful health.
-- [ ] P1 L2-OPS-3: CD can leave production stopped if migrations fail after the old container is stopped; migrate before stop or trap rollback.
-- [ ] P1 L2-OPS-4: Retention must scrub inactive reminder user text/prompt/meta, not only messages and ledger metadata.
-- [ ] P1 L2-OPS-5: Readiness must verify critical migration/index state, including `ledger_payment_receipt_charge_unique`.
+- [x] P1 L2-UX-1: Inline mode must not call the LLM on every keystroke while inline updates are rate-limit exempt; restore chosen-result generation or add per-user throttling/cache and credit policy.
+- [x] P1 L2-UX-2: Forum-topic reminders must be listed and canceled only within the current topic/general topic.
+- [x] P1 L2-OPS-1: Handled failures still become OK spans because `withSpan`/logger middleware overwrite error status; chat/scheduler/refund handled failures need explicit failure recording.
+- [x] P1 L2-OPS-2: Scheduler health must fail when processing is wedged; skipped ticks should not refresh successful health.
+- [x] P1 L2-OPS-3: CD can leave production stopped if migrations fail after the old container is stopped; migrate before stop or trap rollback.
+- [x] P1 L2-OPS-4: Retention must scrub inactive reminder user text/prompt/meta, not only messages and ledger metadata.
+- [x] P1 L2-OPS-5: Readiness must verify critical migration/index state, including `ledger_payment_receipt_charge_unique`.
 
 ## Loop 1
 
@@ -118,7 +118,16 @@ Status: in progress.
 ### Execution
 
 - Audited old Python `origin/main` functionality and restored `/donate` and `/support` Stars donation flow in TypeScript with Telegram invoices, callbacks, localized copy, topic-aware invoice replies, and admin notifications.
+- Restored atomic paid tool reservations before provider work and refund-on-tool-failure to close concurrent paid media delivery races.
+- Added inline answer throttling/cache and non-placeholder copy so inline mode does not call the model for every keystroke.
+- Scoped `/reminders`, `/remind list`, and reminder cancellation to the current forum topic or general topic.
+- Made handled failure status sticky for tool spans, stopped forcing root update spans to OK, and recorded handled chat/refund/scheduler failures.
+- Made scheduler health fail on stale processing and stopped skipped ticks from refreshing success health.
+- Moved CD migrations before stopping the running container.
+- Extended retention scrubbing to inactive reminder text, prompt, and metadata.
+- Added readiness validation for the critical Telegram charge unique index.
 
 ### Verification
 
 - 2026-05-03: `bun run check` passed after donation parity work.
+- 2026-05-03: `bun run check` passed after Loop 2 operational hardening.

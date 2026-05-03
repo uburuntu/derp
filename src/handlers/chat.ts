@@ -8,7 +8,11 @@ import {
 	extractMedia,
 } from "../common/extractor";
 import { markdownToHtml, stripHtmlTags } from "../common/markdown";
-import { derpMetrics, logger } from "../common/observability";
+import {
+	derpMetrics,
+	logger,
+	recordHandledFailure,
+} from "../common/observability";
 import {
 	appendFooterToChunks,
 	captionPartsForMedia,
@@ -549,8 +553,13 @@ chatComposer.on("message", async (ctx) => {
 
 		derpMetrics.contextTokens.record(recentMessages.length, { tier });
 	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		recordHandledFailure("chat", error, {
+			chatId: ctx.dbChat.telegramId,
+			userId: ctx.dbUser.telegramId,
+		});
 		logger.error("chat_llm_failed", {
-			error: err instanceof Error ? err.message : String(err),
+			error,
 			chatId: ctx.dbChat.telegramId,
 			userId: ctx.dbUser.telegramId,
 		});

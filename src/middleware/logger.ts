@@ -39,7 +39,6 @@ export async function loggerMiddleware(
 
 			try {
 				await next();
-				span.setStatus({ code: SpanStatusCode.OK });
 			} catch (err) {
 				span.setStatus({
 					code: SpanStatusCode.ERROR,

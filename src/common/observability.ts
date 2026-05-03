@@ -13,6 +13,7 @@ import type { Config } from "../config";
 
 let initialized = false;
 let redactionValues: string[] = [];
+const handledFailureSpans = new WeakSet<Span>();
 
 export function initObservability(cfg: Config): void {
 	if (initialized) return;
@@ -96,7 +97,9 @@ export async function withSpan<T>(
 	return tracer.startActiveSpan(name, { attributes: attrs }, async (span) => {
 		try {
 			const result = await fn(span);
-			span.setStatus({ code: SpanStatusCode.OK });
+			if (!handledFailureSpans.has(span)) {
+				span.setStatus({ code: SpanStatusCode.OK });
+			}
 			return result;
 		} catch (err) {
 			span.setStatus({
@@ -192,9 +195,14 @@ export function recordHandledFailure(
 ): void {
 	const span = trace.getActiveSpan();
 	if (span) {
+		handledFailureSpans.add(span);
 		span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
 		span.setAttribute("derp.failure.subsystem", subsystem);
 		span.setAttribute("derp.failure.reason", reason);
 	}
 	derpMetrics?.handledFailures.add(1, { subsystem, ...attrs });
+}
+
+export function spanHasHandledFailure(span: Span): boolean {
+	return handledFailureSpans.has(span);
 }

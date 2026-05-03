@@ -180,6 +180,7 @@ async function handleCreate(
 		ctx.db,
 		ctx.user.id,
 		ctx.chat.id,
+		ctx.threadId ?? null,
 	);
 	if (activeCount >= MAX_ACTIVE_PER_CHAT) {
 		return {
@@ -268,7 +269,12 @@ async function handleCreate(
 }
 
 async function handleList(ctx: ToolContext): Promise<ToolResult> {
-	const reminders = await getRemindersForChat(ctx.db, ctx.chat.id);
+	const reminders = await getRemindersForChat(
+		ctx.db,
+		ctx.chat.id,
+		undefined,
+		ctx.threadId ?? null,
+	);
 
 	if (reminders.length === 0) {
 		return { text: "No active reminders in this chat." };
@@ -304,6 +310,9 @@ async function handleCancel(
 
 	if (reminder.chatId !== ctx.chat.id) {
 		return { text: "Reminder not found in this chat.", error: "Not found" };
+	}
+	if ((reminder.threadId ?? null) !== (ctx.threadId ?? null)) {
+		return { text: "Reminder not found in this topic.", error: "Not found" };
 	}
 
 	// Only creator or chat admin can cancel

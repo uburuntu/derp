@@ -163,7 +163,8 @@ info-header = Message Info:
 
 ## Inline
 inline-title = Ask Derp
-inline-placeholder = Thinking...
+inline-placeholder = Keep typing your question.
+inline-wait = Pause for a moment, then try this query again.
 inline-error = Sorry, I couldn't generate a response. Try again.
 
 ## Chat
