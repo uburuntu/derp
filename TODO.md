@@ -24,6 +24,29 @@ This file is the persistent harness for the five-loop hardening pass. If the ses
 
 - 2026-05-03 before loop start: `bun run check` passed locally and GitHub CI passed on PR #28.
 - 2026-05-03 after loop 5: `bun run check` passed locally with DB integration tests gated by `DERP_RUN_DB_TESTS=1`.
+- 2026-05-04 after GitHub issue essence pass: `bun run check` passed locally with 126 pass / 7 DB integration skips.
+
+## GitHub Issue Essence Pass
+
+Status: implemented most TS-applicable launch foundations from open Python-era issues.
+
+### Addressed
+
+- [x] #24 Structured chat memory: TS now stores typed JSON memory with facts, preferences, and topics; legacy raw memory is tolerated; old/low-importance items are trimmed first.
+- [x] #23 Health/readiness: `/health` and `/ready` are both available and include DB/schema/bot/scheduler state.
+- [x] #22 Video timeout: TS video generation already has bounded generation, polling, and download timeouts; credits are reserved/debited through the credit gate rather than charged on failed provider work.
+- [x] #21 Unified credit lifecycle: TS uses request-scoped `ctx.creditService` through handlers/tools and the shared credit gate.
+- [x] #20 Premium command duplication: TS uses tool-command duality and `executeWithCreditGate()` instead of separate premium decorators.
+- [x] #19 Tier-agnostic agent cache: TS does not cache a single tier-bound Python agent; model/tier are resolved per request.
+- [x] #18 Usage analytics: added `/admin metrics [days]` for users, active users, message volume, credits spent, Stars revenue, top tools, and payment mix.
+- [x] #17 User preferences: added persistent response style and personal instructions; added user tool toggles that affect settings UI, slash commands, and LLM auto-call tool schemas.
+- [x] #16 Agent specialization: added cheap intent routing into specialist prompt guidance for code, research, creative, and general tasks.
+- [x] #15 Tool/plugin architecture: tool definitions are now discovered from exported `ToolDefinition` objects in `src/tools/*.ts`; bot startup no longer manually imports/registers every tool.
+
+### Still Open
+
+- [ ] #13 Streaming responses: requires a Telegram edit loop with debounce, final clean formatting, message persistence, and fallback behavior. Google GenAI supports `generateContentStream`, but this should land as a dedicated, testable change.
+- [ ] #12 Multi-provider fallback: current TS has Google key rotation/retries/timeouts, not a true backup provider chain. Needs provider health state, config, no-duplicate-charge semantics, and admin visibility before launch.
 
 ## P0/P1 Queue
 
