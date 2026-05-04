@@ -2,9 +2,12 @@
 
 import { z } from "zod";
 import { updateChatMemory } from "../db/queries/chats";
+import {
+	addChatMemoryItem,
+	type ChatMemoryKind,
+	formatChatMemoryForDisplay,
+} from "../memory/structured";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types";
-
-const MAX_MEMORY_LENGTH = 4096;
 
 const memoryParamsSchema = z.object({
 	action: z
@@ -12,6 +15,10 @@ const memoryParamsSchema = z.object({
 		.describe(
 			"Action: read the current memory, update it with new content, or clear it",
 		),
+	kind: z
+		.enum(["fact", "preference", "topic"])
+		.optional()
+		.describe("Type of memory item to add when action is update"),
 	content: z
 		.string()
 		.optional()
@@ -20,13 +27,26 @@ const memoryParamsSchema = z.object({
 
 type MemoryParams = z.infer<typeof memoryParamsSchema>;
 
+function parseKindPrefix(input: string): {
+	kind: ChatMemoryKind;
+	content: string;
+} {
+	const match = input.match(/^(fact|preference|topic)\s*:\s*(.+)$/i);
+	if (!match?.[1] || !match[2]) return { kind: "fact", content: input };
+	return {
+		kind: match[1].toLowerCase() as ChatMemoryKind,
+		content: match[2],
+	};
+}
+
 function parseMemoryCommand(input: string, command?: string): MemoryParams {
 	const normalized = command?.replace(/^\//, "");
 	if (normalized === "memory_clear" || normalized === "clear_memory") {
 		return { action: "clear" };
 	}
 	if (normalized === "memory_set" || normalized === "set_memory") {
-		return { action: "update", content: input.trim() };
+		const parsed = parseKindPrefix(input.trim());
+		return { action: "update", ...parsed };
 	}
 	return { action: "read" };
 }
@@ -37,11 +57,9 @@ async function executeMemory(
 ): Promise<ToolResult> {
 	switch (params.action) {
 		case "read": {
-			const memory = ctx.chat.memory;
-			if (!memory) {
-				return { text: "No memory stored for this chat yet." };
-			}
-			return { text: `Current chat memory:\n${memory}` };
+			return {
+				text: `Current chat memory:\n${formatChatMemoryForDisplay(ctx.chat.memory)}`,
+			};
 		}
 
 		case "update": {
@@ -59,11 +77,11 @@ async function executeMemory(
 				};
 			}
 
-			// Enforce max length
-			const content = params.content.slice(0, MAX_MEMORY_LENGTH);
-
-			await updateChatMemory(ctx.db, ctx.chat.id, content);
-			return { text: "Memory updated." };
+			const kind = params.kind ?? "fact";
+			const memory = addChatMemoryItem(ctx.chat.memory, kind, params.content);
+			await updateChatMemory(ctx.db, ctx.chat.id, memory);
+			ctx.chat.memory = memory;
+			return { text: `Memory updated (${kind}).` };
 		}
 
 		case "clear": {
@@ -74,6 +92,7 @@ async function executeMemory(
 				};
 			}
 			await updateChatMemory(ctx.db, ctx.chat.id, null);
+			ctx.chat.memory = null;
 			return { text: "Chat memory cleared." };
 		}
 
@@ -97,7 +116,8 @@ export const memoryTool: ToolDefinition<MemoryParams> = {
 	category: "utility",
 	parameters: memoryParamsSchema,
 	parseCommand: parseMemoryCommand,
-	usage: "/memory | /memory_set <text> | /memory_clear",
+	usage:
+		"/memory | /memory_set [fact|preference|topic]: <text> | /memory_clear",
 	execute: executeMemory,
 	credits: 0,
 	freeDaily: Number.POSITIVE_INFINITY,

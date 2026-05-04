@@ -18,6 +18,7 @@ import {
 	type SupportedLocale,
 	toSupportedLocale,
 } from "../i18n/index";
+import { formatChatMemoryForDisplay } from "../memory/structured";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -478,7 +479,7 @@ const memoryMenu = new Menu<DerpContext>("memory-menu")
 			}
 			await ctx.answerCallbackQuery();
 			await ctx.reply(
-				`📝 <b>${ctx.t("settings-memory-title")}</b>\n\n${escapeHtml(memory)}`,
+				`📝 <b>${ctx.t("settings-memory-title")}</b>\n\n${escapeHtml(formatChatMemoryForDisplay(memory))}`,
 				{ parse_mode: "HTML", message_thread_id: messageThreadId(ctx) },
 			);
 		},

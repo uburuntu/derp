@@ -1,5 +1,7 @@
 /** System prompt templates — personality presets + memory injection */
 
+import { formatChatMemoryForPrompt } from "../memory/structured";
+
 const PERSONALITY_PRESETS: Record<string, string> = {
 	default: `You are Derp, a helpful AI assistant in a Telegram chat. You are conversational, naturally opinionated, adaptable, and concise. You adapt your tone to match the user's energy. You have a personality — you're not a sycophant.`,
 
@@ -44,9 +46,10 @@ export function buildSystemPrompt(
 	parts.push(CORE_RULES);
 
 	// Chat memory (fixed position at the end for cache stability)
-	if (memory) {
+	const formattedMemory = formatChatMemoryForPrompt(memory);
+	if (formattedMemory) {
 		parts.push(
-			`## Chat Memory\nThe following is persistent context for this chat:\n${memory}`,
+			`## Chat Memory\nThe following is persistent context for this chat:\n${formattedMemory}`,
 		);
 	}
 
