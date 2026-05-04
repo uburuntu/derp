@@ -385,6 +385,100 @@ adminComposer.command("admin", async (ctx) => {
 			break;
 		}
 
+		case "metrics": {
+			const daysArg = Number.parseInt(args.trim() || "30", 10);
+			const days = Number.isFinite(daysArg)
+				? Math.max(1, Math.min(365, daysArg))
+				: 30;
+			const { sql } = await import("drizzle-orm");
+
+			const [overview] = await ctx.db.execute(sql`
+				SELECT
+					(SELECT count(*)::int FROM users) AS users,
+					(SELECT count(DISTINCT user_id)::int FROM messages WHERE telegram_date >= now() - make_interval(days => ${days}) AND user_id IS NOT NULL) AS active_users,
+					(SELECT count(*)::int FROM messages WHERE telegram_date >= now() - make_interval(days => ${days}) AND direction = 'in') AS inbound_messages,
+					(SELECT count(*)::int FROM messages WHERE telegram_date >= now() - make_interval(days => ${days}) AND direction = 'out') AS outbound_messages,
+					(SELECT COALESCE(sum(-amount), 0)::int FROM ledger WHERE created_at >= now() - make_interval(days => ${days}) AND type = 'spend') AS credits_spent,
+					(SELECT COALESCE(sum(stars), 0)::int FROM payment_receipts WHERE created_at >= now() - make_interval(days => ${days}) AND status = 'paid') AS stars_received
+			`);
+
+			const toolRows = await ctx.db.execute(sql`
+				SELECT
+					COALESCE(tool_name, 'unknown') AS tool,
+					count(*)::int AS uses,
+					COALESCE(sum(-amount), 0)::int AS credits
+				FROM ledger
+				WHERE created_at >= now() - make_interval(days => ${days})
+					AND type = 'spend'
+				GROUP BY tool_name
+				ORDER BY uses DESC, credits DESC
+				LIMIT 8
+			`);
+
+			const paymentRows = await ctx.db.execute(sql`
+				SELECT
+					product_type AS product,
+					count(*)::int AS payments,
+					COALESCE(sum(stars), 0)::int AS stars
+				FROM payment_receipts
+				WHERE created_at >= now() - make_interval(days => ${days})
+					AND status = 'paid'
+				GROUP BY product_type
+				ORDER BY stars DESC
+			`);
+
+			const overviewRow = overview as {
+				users?: number;
+				active_users?: number;
+				inbound_messages?: number;
+				outbound_messages?: number;
+				credits_spent?: number;
+				stars_received?: number;
+			};
+			const tools = toolRows as unknown as Array<{
+				tool: string;
+				uses: number;
+				credits: number;
+			}>;
+			const payments = paymentRows as unknown as Array<{
+				product: string;
+				payments: number;
+				stars: number;
+			}>;
+
+			const toolLines =
+				tools.length > 0
+					? tools
+							.map(
+								(row) =>
+									`${escapeHtml(row.tool)}: ${row.uses} uses, ${row.credits} cr`,
+							)
+							.join("\n")
+					: "No tool spend yet.";
+			const paymentLines =
+				payments.length > 0
+					? payments
+							.map(
+								(row) =>
+									`${escapeHtml(row.product)}: ${row.payments} payments, ${row.stars}⭐`,
+							)
+							.join("\n")
+					: "No Stars payments yet.";
+
+			await ctx.reply(
+				`📈 <b>Usage Metrics</b> (${days}d)\n\n` +
+					`Users: ${overviewRow.users ?? 0}\n` +
+					`Active users: ${overviewRow.active_users ?? 0}\n` +
+					`Messages: ${overviewRow.inbound_messages ?? 0} in / ${overviewRow.outbound_messages ?? 0} out\n` +
+					`Credits spent: ${overviewRow.credits_spent ?? 0}\n` +
+					`Stars received: ${overviewRow.stars_received ?? 0}⭐\n\n` +
+					`<b>Top tools</b>\n${toolLines}\n\n` +
+					`<b>Payments</b>\n${paymentLines}`,
+				{ parse_mode: "HTML" },
+			);
+			break;
+		}
+
 		case "reconcile_refund": {
 			const chargeId = args.trim();
 			if (!chargeId) {
@@ -549,6 +643,7 @@ adminComposer.command("admin", async (ctx) => {
 					"/admin user [userId] — Inspect user DB state\n" +
 					"/admin ledger [userId] — Last 10 transactions\n" +
 					"/admin tools — List registered tools with pricing\n" +
+					"/admin metrics [days] — Usage, credit, and payment rollup\n" +
 					"/admin stars — Bot Stars balance\n" +
 					"/admin reconcile_refund &lt;chargeId&gt; — Reconcile an already-refunded charge\n" +
 					"/admin db — Table row counts\n" +
