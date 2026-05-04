@@ -83,11 +83,12 @@ export function startHealthServer(): void {
 		async fetch(req) {
 			const url = new URL(req.url);
 
-			if (url.pathname === "/health") {
+			if (url.pathname === "/health" || url.pathname === "/ready") {
 				const healthy = await isHealthy();
 				return Response.json(
 					{
 						status: healthy ? "ok" : "starting",
+						endpoint: url.pathname,
 						uptime: process.uptime(),
 						...status,
 					},

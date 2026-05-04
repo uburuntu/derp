@@ -163,7 +163,7 @@ Existing databases that were previously managed with `drizzle-kit push` need a o
 docker compose up -d
 ```
 
-The Dockerfile uses `oven/bun:1` with ffmpeg for audio conversion and includes `drizzle-kit`. Run `bunx drizzle-kit migrate` from the built image before starting the bot. The `/health` endpoint returns 200 only after the bot, scheduler, database connection, and expected schema are ready.
+The Dockerfile uses `oven/bun:1` with ffmpeg for audio conversion and includes `drizzle-kit`. Run `bunx drizzle-kit migrate` from the built image before starting the bot. The `/health` and `/ready` endpoints return 200 only after the bot, scheduler, database connection, and expected schema are ready.
 
 ## License
 
