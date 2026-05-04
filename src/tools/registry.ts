@@ -14,6 +14,7 @@ import { registerToolPricing } from "../credits/service";
 import { insertMessage } from "../db/queries/messages";
 import type { MessageMetadata } from "../db/schema";
 import type { LLMToolSchema, MediaAttachment } from "../llm/types";
+import { isToolDisabled } from "../preferences/user";
 import { executeWithCreditGate } from "./credit-gate";
 import type { ToolCategory, ToolContext, ToolDefinition } from "./types";
 
@@ -281,10 +282,13 @@ class ToolRegistry {
 	}
 
 	/** Generate LLM function-calling schemas for all tools */
-	getLLMToolSchemas(): LLMToolSchema[] {
+	getLLMToolSchemas(disabledTools: Iterable<string> = []): LLMToolSchema[] {
 		const schemas: LLMToolSchema[] = [];
+		const disabled = new Set(disabledTools);
 
 		for (const tool of this.tools.values()) {
+			if (disabled.has(tool.name)) continue;
+
 			// Convert Zod schema to JSON Schema for the LLM
 			const zodSchema = tool.parameters;
 			const jsonSchema = zodToJsonSchema(zodSchema);
@@ -300,11 +304,15 @@ class ToolRegistry {
 	}
 
 	/** Generate LLM function schemas for tools safe to call without explicit command intent. */
-	getAutoCallableLLMToolSchemas(): LLMToolSchema[] {
+	getAutoCallableLLMToolSchemas(
+		disabledTools: Iterable<string> = [],
+	): LLMToolSchema[] {
 		const schemas: LLMToolSchema[] = [];
+		const disabled = new Set(disabledTools);
 
 		for (const tool of this.tools.values()) {
 			if (!tool.allowAutoCall) continue;
+			if (disabled.has(tool.name)) continue;
 			schemas.push({
 				name: tool.name,
 				description: tool.description,
@@ -381,6 +389,22 @@ class ToolRegistry {
 				if (!ctx.dbUser || !ctx.dbChat || !ctx.creditService) return;
 
 				const commandStart = Date.now();
+				if (isToolDisabled(ctx.dbUser.preferences, tool.name)) {
+					const primaryCmd = tool.commands[0] ?? tool.name;
+					const text = ctx.t("tool-disabled", { tool: primaryCmd });
+					await replyMarkdownAndPersist(
+						ctx,
+						[text],
+						{
+							message_thread_id: ctx.message?.message_thread_id,
+							reply_to_message_id: ctx.message?.message_id,
+						},
+						buildCommandMetadata(tool, ctx, commandStart),
+						[text],
+					);
+					return;
+				}
+
 				const input = ctx.match ?? "";
 				const command = ctx.message?.text
 					?.match(/^\/([^\s@]+)/)?.[1]

@@ -1,6 +1,6 @@
 /** Settings handler — interactive menu for bot configuration */
 
-import { Menu, type MenuFlavor } from "@grammyjs/menu";
+import { Menu, type MenuFlavor, MenuRange } from "@grammyjs/menu";
 import { eq } from "drizzle-orm";
 import { Composer, type NextFunction } from "grammy";
 import type { DerpContext } from "../bot/context";
@@ -24,7 +24,9 @@ import {
 	nextResponseStyle,
 	normalizeUserPreferences,
 	type ResponseStyle,
+	toggleDisabledTool,
 } from "../preferences/user";
+import { toolRegistry } from "../tools/registry";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -165,10 +167,12 @@ function settingsSummary(ctx: DerpContext): string {
 		ctx,
 		ctx.dbChat?.personality ?? "default",
 	);
-	const userStyle = responseStyleLabel(
-		ctx,
-		normalizeUserPreferences(ctx.dbUser?.preferences).responseStyle,
-	);
+	const userPreferences = normalizeUserPreferences(ctx.dbUser?.preferences);
+	const userStyle = responseStyleLabel(ctx, userPreferences.responseStyle);
+	const disabledTools =
+		userPreferences.disabledTools.length === 0
+			? ctx.t("settings-tools-none")
+			: String(userPreferences.disabledTools.length);
 	const lang = languageLabel(ctx, ctx.dbChat?.languageCode ?? null);
 	const access = getAccessSettings(ctx);
 
@@ -176,6 +180,7 @@ function settingsSummary(ctx: DerpContext): string {
 		`⚙️ <b>${ctx.t("settings-title")}</b>\n\n` +
 		`${ctx.t("settings-personality", { personality })}\n` +
 		`${ctx.t("settings-user-style", { style: userStyle })}\n` +
+		`${ctx.t("settings-disabled-tools", { count: disabledTools })}\n` +
 		`${ctx.t("settings-language", { lang })}\n` +
 		`${ctx.t("settings-memory-access", {
 			access: accessLabel(ctx, access.memoryAccess),
@@ -265,6 +270,31 @@ async function cycleUserResponseStyle(ctx: SettingsMenuContext): Promise<void> {
 		ctx.dbUser?.preferences,
 	).responseStyle;
 	await setUserResponseStyle(ctx, nextResponseStyle(current));
+}
+
+async function toggleUserTool(
+	ctx: SettingsMenuContext,
+	toolName: string,
+): Promise<void> {
+	if (!ctx.dbUser) return;
+
+	const next = toggleDisabledTool(ctx.dbUser.preferences, toolName);
+	await updateUserPreferences(ctx.db, ctx.dbUser.id, {
+		disabledTools: next.disabledTools,
+	});
+	ctx.dbUser.preferences = {
+		...(ctx.dbUser.preferences ?? {}),
+		disabledTools: next.disabledTools,
+	};
+	ctx.menu.update();
+
+	const tool = toolRegistry.getTool(toolName);
+	const label = tool?.commands[0] ?? toolName;
+	await ctx.answerCallbackQuery(
+		ctx.t(next.disabled ? "settings-tool-disabled" : "settings-tool-enabled", {
+			tool: label,
+		}),
+	);
 }
 
 async function startUserInstructionsFlow(ctx: DerpContext): Promise<void> {
@@ -484,6 +514,11 @@ const settingsMenu = new Menu<DerpContext>("settings")
 	)
 	.row()
 	.text(
+		(ctx) => ctx.t("settings-menu-tools"),
+		(ctx) => ctx.menu.nav("tool-toggles"),
+	)
+	.row()
+	.text(
 		(ctx) => ctx.t("settings-menu-permissions"),
 		(ctx) => ctx.menu.nav("permissions"),
 	)
@@ -580,6 +615,35 @@ const userStyleMenu = new Menu<DerpContext>("user-style")
 		(ctx) => ctx.menu.nav("settings"),
 	);
 
+// ── User tool toggle submenu ────────────────────────────────────────────────
+
+const toolTogglesMenu = new Menu<DerpContext>("tool-toggles")
+	.dynamic((ctx) => {
+		const range = new MenuRange<DerpContext>();
+		const disabled = new Set(
+			normalizeUserPreferences(ctx.dbUser?.preferences).disabledTools,
+		);
+		const tools = toolRegistry
+			.getTools()
+			.filter((tool) => tool.commands.length > 0);
+
+		for (const tool of tools) {
+			const label = tool.commands[0] ?? tool.name;
+			const state = disabled.has(tool.name)
+				? ctx.t("settings-tool-state-off")
+				: ctx.t("settings-tool-state-on");
+			range
+				.text(`${state} ${label}`, (ctx) => toggleUserTool(ctx, tool.name))
+				.row();
+		}
+
+		return range;
+	})
+	.text(
+		(ctx) => ctx.t("settings-back"),
+		(ctx) => ctx.menu.nav("settings"),
+	);
+
 // ── Language submenu ────────────────────────────────────────────────────────
 
 const languageMenu = new Menu<DerpContext>("language")
@@ -666,6 +730,7 @@ const memoryMenu = new Menu<DerpContext>("memory-menu")
 // Register submenus
 settingsMenu.register(personalityMenu);
 settingsMenu.register(userStyleMenu);
+settingsMenu.register(toolTogglesMenu);
 settingsMenu.register(languageMenu);
 settingsMenu.register(permissionsMenu);
 settingsMenu.register(memoryMenu);

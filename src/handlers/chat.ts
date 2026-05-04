@@ -29,6 +29,7 @@ import { buildContext, type ContextParticipant } from "../llm/context-builder";
 import { buildSystemPrompt, detectTaskSpecialist } from "../llm/prompt";
 import { GoogleLLMProvider } from "../llm/providers/google";
 import type { ConversationMessage, MediaAttachment } from "../llm/types";
+import { normalizeUserPreferences } from "../preferences/user";
 import { executeWithCreditGate } from "../tools/credit-gate";
 import { toolRegistry } from "../tools/registry";
 import type { ToolContext } from "../tools/types";
@@ -303,7 +304,10 @@ chatComposer.on("message", async (ctx) => {
 	}
 
 	// Get tool schemas for the LLM
-	const toolSchemas = toolRegistry.getAutoCallableLLMToolSchemas();
+	const userPreferences = normalizeUserPreferences(ctx.dbUser.preferences);
+	const toolSchemas = toolRegistry.getAutoCallableLLMToolSchemas(
+		userPreferences.disabledTools,
+	);
 	const toolContext = await buildToolContext(
 		ctx,
 		builtContext.participantRefs,
@@ -329,6 +333,12 @@ chatComposer.on("message", async (ctx) => {
 				media: mediaAttachments.length > 0 ? mediaAttachments : undefined,
 			},
 			async (toolName, args) => {
+				if (userPreferences.disabledTools.includes(toolName)) {
+					return {
+						error: `Tool disabled by user settings: ${toolName}`,
+					};
+				}
+
 				const tool = toolRegistry.getTool(toolName);
 				if (!tool) {
 					return { error: `Unknown tool: ${toolName}` };

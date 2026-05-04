@@ -5,6 +5,10 @@ export type ResponseStyle = "concise" | "balanced" | "detailed";
 const RESPONSE_STYLES: ResponseStyle[] = ["concise", "balanced", "detailed"];
 const DEFAULT_RESPONSE_STYLE: ResponseStyle = "balanced";
 
+function uniqueSortedTools(tools: string[] | undefined): string[] {
+	return [...new Set(tools ?? [])].filter(Boolean).sort();
+}
+
 export function normalizeUserPreferences(
 	preferences: UserPreferences | null | undefined,
 ): Required<UserPreferences> {
@@ -17,13 +21,34 @@ export function normalizeUserPreferences(
 	return {
 		responseStyle,
 		customInstructions: preferences?.customInstructions?.trim() || null,
-		disabledTools: preferences?.disabledTools ?? [],
+		disabledTools: uniqueSortedTools(preferences?.disabledTools),
 	};
 }
 
 export function nextResponseStyle(current: ResponseStyle): ResponseStyle {
 	const index = RESPONSE_STYLES.indexOf(current);
 	return RESPONSE_STYLES[(index + 1) % RESPONSE_STYLES.length] ?? "balanced";
+}
+
+export function isToolDisabled(
+	preferences: UserPreferences | null | undefined,
+	toolName: string,
+): boolean {
+	return normalizeUserPreferences(preferences).disabledTools.includes(toolName);
+}
+
+export function toggleDisabledTool(
+	preferences: UserPreferences | null | undefined,
+	toolName: string,
+): { disabledTools: string[]; disabled: boolean } {
+	const disabled = new Set(normalizeUserPreferences(preferences).disabledTools);
+	const wasDisabled = disabled.delete(toolName);
+	if (!wasDisabled) disabled.add(toolName);
+
+	return {
+		disabledTools: uniqueSortedTools([...disabled]),
+		disabled: !wasDisabled,
+	};
 }
 
 export function formatUserPreferencesForPrompt(
