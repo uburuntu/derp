@@ -26,7 +26,7 @@ import { getMembersWithUsers } from "../db/queries/members";
 import { getRecentMessages, insertMessage } from "../db/queries/messages";
 import type { MessageMetadata } from "../db/schema";
 import { buildContext, type ContextParticipant } from "../llm/context-builder";
-import { buildSystemPrompt } from "../llm/prompt";
+import { buildSystemPrompt, detectTaskSpecialist } from "../llm/prompt";
 import { GoogleLLMProvider } from "../llm/providers/google";
 import type { ConversationMessage, MediaAttachment } from "../llm/types";
 import { executeWithCreditGate } from "../tools/credit-gate";
@@ -246,6 +246,8 @@ chatComposer.on("message", async (ctx) => {
 		ctx.dbChat.personality ?? "default",
 		hasActiveSubscription(ctx.dbUser) ? ctx.dbChat.customPrompt : null,
 		ctx.dbChat.memory,
+		ctx.dbUser.preferences,
+		detectTaskSpecialist(message.text ?? message.caption ?? ""),
 	);
 
 	const fullSystemPrompt = `${systemPrompt}\n\n${builtContext.participants}`;

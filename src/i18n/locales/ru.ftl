@@ -84,11 +84,14 @@ tool-cost-credits-with-quota = { $credits } кр., { $freeDaily } бесплат
 ## Settings
 settings-title = Настройки
 settings-personality = <b>Стиль ответов:</b> { $personality }
+settings-user-style = <b>Моя детализация:</b> { $style }
 settings-language = <b>Язык:</b> { $lang }
 settings-memory-access = <b>Обновление памяти:</b> { $access }
 settings-reminders-access = <b>Управление напоминаниями:</b> { $access }
 settings-menu-personality = Стиль
 settings-menu-language = Язык
+settings-menu-user-style = Мой стиль
+settings-menu-user-style-cycle = Детализация: { $style }
 settings-menu-permissions = Доступ
 settings-menu-memory = Память
 settings-menu-balance = Баланс
@@ -110,6 +113,16 @@ settings-custom-prompt = Отправь инструкцию, которой Der
 settings-custom-too-long = Инструкция слишком длинная. Максимум: { $max } символов.
 settings-custom-saved = Свои инструкции сохранены.
 settings-custom-cancelled = Настройка своих инструкций отменена.
+settings-user-style-concise = Кратко
+settings-user-style-balanced = Сбалансировано
+settings-user-style-detailed = Подробно
+settings-user-style-set = Детализация: { $style }
+settings-user-instructions-button = Мои инструкции
+settings-user-instructions-placeholder = Личные инструкции
+settings-user-instructions-prompt = Отправь личные инструкции, которые Derp должен помнить во всех чатах. До { $max } символов.
+    Сейчас: { $current }
+    Напиши /cancel, чтобы остановить настройку.
+settings-user-instructions-saved = Личные инструкции сохранены.
 settings-language-en = Английский
 settings-language-ru = Русский
 settings-language-auto = Авто

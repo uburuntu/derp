@@ -18,6 +18,12 @@ import {
 
 // ── Users ────────────────────────────────────────────────────────────────────
 
+export interface UserPreferences {
+	responseStyle?: "concise" | "balanced" | "detailed";
+	customInstructions?: string | null;
+	disabledTools?: string[];
+}
+
 export const users = pgTable(
 	"users",
 	{
@@ -29,6 +35,9 @@ export const users = pgTable(
 		username: varchar("username", { length: 255 }),
 		languageCode: varchar("language_code", { length: 10 }),
 		isPremium: boolean("is_premium").notNull().default(false),
+		preferences: jsonb("preferences")
+			.$type<UserPreferences>()
+			.default({ responseStyle: "balanced" }),
 		credits: integer("credits").notNull().default(0),
 		subscriptionTier: varchar("subscription_tier", { length: 10 }), // 'lite', 'pro', 'ultra', or null
 		subscriptionExpiresAt: timestamp("subscription_expires_at", {

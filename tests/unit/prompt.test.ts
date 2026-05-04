@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildSystemPrompt } from "../../src/llm/prompt";
+import { buildSystemPrompt, detectTaskSpecialist } from "../../src/llm/prompt";
 
 describe("buildSystemPrompt", () => {
 	test("uses default personality when no override", () => {
@@ -52,5 +52,24 @@ describe("buildSystemPrompt", () => {
 	test("does not include memory section when null", () => {
 		const prompt = buildSystemPrompt("default", null, null);
 		expect(prompt).not.toContain("Chat Memory");
+	});
+
+	test("includes user preferences when provided", () => {
+		const prompt = buildSystemPrompt("default", null, null, {
+			responseStyle: "concise",
+			customInstructions: "I prefer TypeScript examples.",
+		});
+		expect(prompt).toContain("## User Preferences");
+		expect(prompt).toContain("Prefer concise answers");
+		expect(prompt).toContain("I prefer TypeScript examples.");
+	});
+
+	test("detects task specialists", () => {
+		expect(detectTaskSpecialist("This TypeScript test fails")).toBe("code");
+		expect(detectTaskSpecialist("research the latest market evidence")).toBe(
+			"research",
+		);
+		expect(detectTaskSpecialist("rewrite this brand slogan")).toBe("creative");
+		expect(detectTaskSpecialist("hello there")).toBe("general");
 	});
 });

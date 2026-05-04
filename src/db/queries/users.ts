@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { User as TelegramUser } from "grammy/types";
 import type { Database } from "../connection";
-import { users } from "../schema";
+import { type UserPreferences, users } from "../schema";
 
 /** Upsert a Telegram user → DB user, returns the DB row */
 export async function upsertUser(
@@ -48,4 +48,18 @@ export async function getUserByTelegramId(
 		.where(eq(users.telegramId, telegramId))
 		.limit(1);
 	return row ?? null;
+}
+
+export async function updateUserPreferences(
+	db: Database,
+	userId: string,
+	preferences: Partial<UserPreferences>,
+): Promise<void> {
+	const patch = JSON.stringify(preferences);
+	await db
+		.update(users)
+		.set({
+			preferences: sql`COALESCE(${users.preferences}, '{}'::jsonb) || ${patch}::jsonb`,
+		})
+		.where(eq(users.id, userId));
 }

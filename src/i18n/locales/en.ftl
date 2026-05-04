@@ -84,11 +84,14 @@ tool-cost-credits-with-quota = { $credits } cr, { $freeDaily } free per user/cha
 ## Settings
 settings-title = Settings
 settings-personality = <b>Response style:</b> { $personality }
+settings-user-style = <b>My default detail:</b> { $style }
 settings-language = <b>Language:</b> { $lang }
 settings-memory-access = <b>Memory updates:</b> { $access }
 settings-reminders-access = <b>Reminder controls:</b> { $access }
 settings-menu-personality = Style
 settings-menu-language = Language
+settings-menu-user-style = My style
+settings-menu-user-style-cycle = Detail: { $style }
 settings-menu-permissions = Permissions
 settings-menu-memory = Memory
 settings-menu-balance = Balance
@@ -110,6 +113,16 @@ settings-custom-prompt = Send the instructions Derp should follow in this chat. 
 settings-custom-too-long = Custom instructions are too long. Max { $max } characters.
 settings-custom-saved = Custom instructions saved.
 settings-custom-cancelled = Custom instruction setup cancelled.
+settings-user-style-concise = Concise
+settings-user-style-balanced = Balanced
+settings-user-style-detailed = Detailed
+settings-user-style-set = Default detail set to { $style }
+settings-user-instructions-button = My instructions
+settings-user-instructions-placeholder = Personal instructions
+settings-user-instructions-prompt = Send personal instructions Derp should remember across chats. Max { $max } characters.
+    Current: { $current }
+    Reply /cancel to stop.
+settings-user-instructions-saved = Personal instructions saved.
 settings-language-en = English
 settings-language-ru = Russian
 settings-language-auto = Auto-detect

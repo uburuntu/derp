@@ -12,6 +12,7 @@ import {
 	updateChatSettings,
 } from "../db/queries/chats";
 import { getBalances } from "../db/queries/credits";
+import { updateUserPreferences } from "../db/queries/users";
 import { chats } from "../db/schema";
 import {
 	getLocaleForContext,
@@ -19,10 +20,16 @@ import {
 	toSupportedLocale,
 } from "../i18n/index";
 import { formatChatMemoryForDisplay } from "../memory/structured";
+import {
+	nextResponseStyle,
+	normalizeUserPreferences,
+	type ResponseStyle,
+} from "../preferences/user";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 const CUSTOM_PROMPT_MAX_LENGTH = 2000;
+const USER_INSTRUCTIONS_MAX_LENGTH = 1200;
 const CUSTOM_PROMPT_TTL_MS = 10 * 60 * 1000;
 
 type AccessSetting = "admins" | "everyone";
@@ -40,6 +47,7 @@ interface PendingCustomPrompt {
 }
 
 const pendingCustomPrompts = new Map<string, PendingCustomPrompt>();
+const pendingUserInstructions = new Map<string, PendingCustomPrompt>();
 
 function pendingKey(ctx: DerpContext): string | null {
 	const chatId = ctx.chat?.id ?? ctx.dbChat?.telegramId;
@@ -69,11 +77,14 @@ function replyOptions(ctx: DerpContext) {
 	};
 }
 
-function getPendingCustomPrompt(key: string): PendingCustomPrompt | null {
-	const pending = pendingCustomPrompts.get(key);
+function getPendingTextFlow(
+	map: Map<string, PendingCustomPrompt>,
+	key: string,
+): PendingCustomPrompt | null {
+	const pending = map.get(key);
 	if (!pending) return null;
 	if (pending.expiresAt < Date.now()) {
-		pendingCustomPrompts.delete(key);
+		map.delete(key);
 		return null;
 	}
 	return pending;
@@ -145,10 +156,18 @@ function languageLabel(ctx: DerpContext, languageCode: string | null): string {
 	return supported ? localeLabel(ctx, supported) : languageCode;
 }
 
+function responseStyleLabel(ctx: DerpContext, style: ResponseStyle): string {
+	return ctx.t(`settings-user-style-${style}`);
+}
+
 function settingsSummary(ctx: DerpContext): string {
 	const personality = personalityLabel(
 		ctx,
 		ctx.dbChat?.personality ?? "default",
+	);
+	const userStyle = responseStyleLabel(
+		ctx,
+		normalizeUserPreferences(ctx.dbUser?.preferences).responseStyle,
 	);
 	const lang = languageLabel(ctx, ctx.dbChat?.languageCode ?? null);
 	const access = getAccessSettings(ctx);
@@ -156,6 +175,7 @@ function settingsSummary(ctx: DerpContext): string {
 	return (
 		`⚙️ <b>${ctx.t("settings-title")}</b>\n\n` +
 		`${ctx.t("settings-personality", { personality })}\n` +
+		`${ctx.t("settings-user-style", { style: userStyle })}\n` +
 		`${ctx.t("settings-language", { lang })}\n` +
 		`${ctx.t("settings-memory-access", {
 			access: accessLabel(ctx, access.memoryAccess),
@@ -221,6 +241,66 @@ async function startCustomPromptFlow(ctx: DerpContext): Promise<void> {
 	}
 }
 
+async function setUserResponseStyle(
+	ctx: SettingsMenuContext,
+	style: ResponseStyle,
+): Promise<void> {
+	if (!ctx.dbUser) return;
+
+	await updateUserPreferences(ctx.db, ctx.dbUser.id, { responseStyle: style });
+	ctx.dbUser.preferences = {
+		...(ctx.dbUser.preferences ?? {}),
+		responseStyle: style,
+	};
+	ctx.menu.update();
+	await ctx.answerCallbackQuery(
+		ctx.t("settings-user-style-set", {
+			style: responseStyleLabel(ctx, style),
+		}),
+	);
+}
+
+async function cycleUserResponseStyle(ctx: SettingsMenuContext): Promise<void> {
+	const current = normalizeUserPreferences(
+		ctx.dbUser?.preferences,
+	).responseStyle;
+	await setUserResponseStyle(ctx, nextResponseStyle(current));
+}
+
+async function startUserInstructionsFlow(ctx: DerpContext): Promise<void> {
+	if (!ctx.dbUser) return;
+
+	await ctx.answerCallbackQuery();
+	const current = escapeHtml(
+		normalizeUserPreferences(ctx.dbUser.preferences).customInstructions ??
+			ctx.t("settings-custom-current-none"),
+	);
+	const sent = await ctx.reply(
+		ctx.t("settings-user-instructions-prompt", {
+			current,
+			max: USER_INSTRUCTIONS_MAX_LENGTH,
+		}),
+		{
+			parse_mode: "HTML",
+			message_thread_id: messageThreadId(ctx),
+			reply_markup: {
+				force_reply: true,
+				selective: true,
+				input_field_placeholder: ctx.t(
+					"settings-user-instructions-placeholder",
+				),
+			},
+		},
+	);
+	const key = pendingKey(ctx);
+	if (key) {
+		pendingUserInstructions.set(key, {
+			messageId: sent.message_id,
+			expiresAt: Date.now() + CUSTOM_PROMPT_TTL_MS,
+		});
+	}
+}
+
 async function setChatLanguage(
 	ctx: SettingsMenuContext,
 	languageCode: SupportedLocale | null,
@@ -278,7 +358,59 @@ async function handleCustomPromptReply(
 	const key = pendingKey(ctx);
 	if (!key) return next();
 
-	const pending = getPendingCustomPrompt(key);
+	const pendingUserInstruction = getPendingTextFlow(
+		pendingUserInstructions,
+		key,
+	);
+	if (pendingUserInstruction) {
+		const isReplyToPrompt =
+			ctx.message?.reply_to_message?.message_id ===
+			pendingUserInstruction.messageId;
+		const isPrivateChat = ctx.chat?.type === "private";
+		if (!isReplyToPrompt && !isPrivateChat) return next();
+
+		const text = ctx.message?.text?.trim();
+		if (!text) return next();
+
+		if (text === "/cancel") {
+			pendingUserInstructions.delete(key);
+			await ctx.reply(ctx.t("settings-custom-cancelled"), {
+				parse_mode: "HTML",
+				...replyOptions(ctx),
+			});
+			return;
+		}
+
+		if (!ctx.dbUser) return next();
+		if (text.length > USER_INSTRUCTIONS_MAX_LENGTH) {
+			await ctx.reply(
+				ctx.t("settings-custom-too-long", {
+					max: USER_INSTRUCTIONS_MAX_LENGTH,
+				}),
+				{
+					parse_mode: "HTML",
+					...replyOptions(ctx),
+				},
+			);
+			return;
+		}
+
+		await updateUserPreferences(ctx.db, ctx.dbUser.id, {
+			customInstructions: text,
+		});
+		ctx.dbUser.preferences = {
+			...(ctx.dbUser.preferences ?? {}),
+			customInstructions: text,
+		};
+		pendingUserInstructions.delete(key);
+		await ctx.reply(ctx.t("settings-user-instructions-saved"), {
+			parse_mode: "HTML",
+			...replyOptions(ctx),
+		});
+		return;
+	}
+
+	const pending = getPendingTextFlow(pendingCustomPrompts, key);
 	if (!pending) return next();
 
 	const isReplyToPrompt =
@@ -347,6 +479,11 @@ const settingsMenu = new Menu<DerpContext>("settings")
 	)
 	.row()
 	.text(
+		(ctx) => ctx.t("settings-menu-user-style"),
+		(ctx) => ctx.menu.nav("user-style"),
+	)
+	.row()
+	.text(
 		(ctx) => ctx.t("settings-menu-permissions"),
 		(ctx) => ctx.menu.nav("permissions"),
 	)
@@ -412,6 +549,30 @@ const personalityMenu = new Menu<DerpContext>("personality")
 	.text(
 		(ctx) => ctx.t("settings-personality-custom-button"),
 		startCustomPromptFlow,
+	)
+	.row()
+	.text(
+		(ctx) => ctx.t("settings-back"),
+		(ctx) => ctx.menu.nav("settings"),
+	);
+
+// ── User style submenu ──────────────────────────────────────────────────────
+
+const userStyleMenu = new Menu<DerpContext>("user-style")
+	.text(
+		(ctx) =>
+			ctx.t("settings-menu-user-style-cycle", {
+				style: responseStyleLabel(
+					ctx,
+					normalizeUserPreferences(ctx.dbUser?.preferences).responseStyle,
+				),
+			}),
+		cycleUserResponseStyle,
+	)
+	.row()
+	.text(
+		(ctx) => ctx.t("settings-user-instructions-button"),
+		startUserInstructionsFlow,
 	)
 	.row()
 	.text(
@@ -504,6 +665,7 @@ const memoryMenu = new Menu<DerpContext>("memory-menu")
 
 // Register submenus
 settingsMenu.register(personalityMenu);
+settingsMenu.register(userStyleMenu);
 settingsMenu.register(languageMenu);
 settingsMenu.register(permissionsMenu);
 settingsMenu.register(memoryMenu);
