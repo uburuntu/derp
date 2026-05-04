@@ -24,16 +24,8 @@ import { createHydrator } from "../middleware/hydrator";
 import { loggerMiddleware } from "../middleware/logger";
 import { createRateLimiter } from "../middleware/rate-limiter";
 import { sessionMiddleware } from "../middleware/session";
-import { editImageTool } from "../tools/edit-image";
-import { getMemberTool } from "../tools/get-member";
-import { imagineTool } from "../tools/imagine";
-import { memoryTool } from "../tools/memory";
+import { loadToolDefinitions } from "../tools/loader";
 import { toolRegistry } from "../tools/registry";
-import { remindTool } from "../tools/remind";
-import { thinkTool } from "../tools/think";
-import { ttsTool } from "../tools/tts";
-import { videoTool } from "../tools/video";
-import { webSearchTool } from "../tools/web-search";
 import type { DerpContext } from "./context";
 
 function sequentializeKeys(ctx: DerpContext): string[] | undefined {
@@ -56,7 +48,7 @@ function sequentializeKeys(ctx: DerpContext): string[] | undefined {
 	return [`chat:${chatId}:thread:${threadId}`];
 }
 
-export function createBot(db: Database): Bot<DerpContext> {
+export async function createBot(db: Database): Promise<Bot<DerpContext>> {
 	const bot = new Bot<DerpContext>(config.telegramBotToken);
 
 	// ── API Transformers (outgoing) ──────────────────────────────────
@@ -82,15 +74,9 @@ export function createBot(db: Database): Bot<DerpContext> {
 	bot.use(i18n);
 
 	// ── Register Tools ──────────────────────────────────────────────
-	toolRegistry.register(webSearchTool);
-	toolRegistry.register(memoryTool);
-	toolRegistry.register(imagineTool);
-	toolRegistry.register(editImageTool);
-	toolRegistry.register(videoTool);
-	toolRegistry.register(ttsTool);
-	toolRegistry.register(thinkTool);
-	toolRegistry.register(getMemberTool);
-	toolRegistry.register(remindTool);
+	for (const tool of await loadToolDefinitions()) {
+		toolRegistry.register(tool);
+	}
 
 	// ── Auto-generate slash command handlers for tools ──────────────
 	toolRegistry.registerCommandHandlers(bot);

@@ -57,7 +57,7 @@ async function main() {
 	markReady("schema");
 
 	// Create bot
-	const bot = createBot(db);
+	const bot = await createBot(db);
 
 	// Initialize admin notifications
 	initAdminNotify(bot.api);
