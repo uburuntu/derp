@@ -2,7 +2,6 @@ import type { z } from "zod";
 import type { CreditService } from "../credits/service";
 import type { CreditCheckResult } from "../credits/types";
 import type { Database } from "../db/connection";
-import type { Chat, User } from "../db/schema";
 import type { ContextParticipant } from "../llm/context-builder";
 import type { ModelCapability, ModelTier } from "../llm/registry";
 import type {
@@ -53,6 +52,19 @@ export interface ToolReminderStore {
     cancel(id: string): Promise<void>;
 }
 
+export interface ToolUser {
+    id: string;
+    telegramId: number;
+    firstName?: string | null;
+    username?: string | null;
+}
+
+export interface ToolChat {
+    id: string;
+    telegramId: number;
+    memory?: string | null;
+}
+
 // ── Tool Definition ──────────────────────────────────────────────────────────
 
 export interface ToolDefinition<TParams = unknown> {
@@ -82,8 +94,8 @@ export interface ToolDefinition<TParams = unknown> {
 // ── Tool Context ─────────────────────────────────────────────────────────────
 
 export interface ToolContext {
-    user: User;
-    chat: Chat;
+    user: ToolUser;
+    chat: ToolChat;
     memoryStore: ToolMemoryStore;
     reminderStore: ToolReminderStore;
     providerRecorder: ProviderCallRecorder;

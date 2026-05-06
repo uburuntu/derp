@@ -9,6 +9,7 @@ Derp is layered around explicit product instruments. Each layer owns one boundar
 - `src/tools/<instrument>.ts` files are product instruments. A tool owns its parameter schema, command parsing, help/pricing metadata, and execution logic. It never imports grammY, bot context, handlers, the registry, or credit gate internals.
 - `ToolDefinition.execute` receives `ToolContext`, not the credit service. Spend checks, reservations, refunds, and receipts belong to `src/tools/credit-gate.ts`.
 - `ToolContext` exposes narrow stores such as `memoryStore` and `reminderStore`, not a raw database handle. Instruments can mutate their own product surface but cannot make arbitrary persistence calls.
+- Tool-facing `user` and `chat` objects are narrow identities, not full database rows. Add fields deliberately when an instrument genuinely needs them.
 - `src/tools/registry.ts` is the Telegram/LLM adapter for instruments. It registers slash commands, confirmation callbacks, help sections, persistence of outgoing messages, and command delivery.
 - `src/tools/credit-gate.ts` is the application spend boundary. Instruments do not charge directly.
 - `src/credits`, `src/preferences`, `src/memory`, `src/scheduler/cron.ts`, and `src/llm/registry.ts` hold product policy and domain rules.
