@@ -1,14 +1,14 @@
 # Derp Finance Hardening Harness
 
 Loop: 1 / 5
-Status: reviewer findings captured; remediation in progress
+Status: reviewer findings remediated; preparing loop 2
 
 ## P0
 
 - [x] Durable provider-call cost accounting for chat, inline, reminders, and media.
 - [x] Paid routes must use paid/stable provider credentials; free routes cannot satisfy paid promises.
 - [x] Refund debt must be enforceable, visible, and settled by future payments before spendable credits.
-- [ ] Payment receipt settlement must be durable and retryable after Telegram payment succeeds.
+- [x] Payment receipt settlement must be durable and retryable after Telegram payment succeeds.
 - [x] Free usage must have global user quotas and promo-burn visibility.
 - [x] Standard chat must have context/output caps so 2 credits is launch-safe.
 

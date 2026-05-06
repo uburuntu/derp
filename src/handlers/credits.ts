@@ -34,6 +34,7 @@ import {
 	applySubscriptionPayment,
 	applyUserPackPayment,
 	getBalances,
+	markPaymentSettlementFailed,
 	reconcileStarRefund,
 } from "../db/queries/credits";
 import { getOpenDebtAmount } from "../db/queries/finance";
@@ -162,6 +163,15 @@ async function applyPaymentOrReport<T extends { applied: boolean }>(
 				...commandReplyOptions(ctx),
 			},
 		);
+		await markPaymentSettlementFailed(
+			ctx.db,
+			payment.telegram_payment_charge_id,
+		).catch((markErr) => {
+			logger.error("payment_mark_settlement_failed_failed", {
+				chargeId: payment.telegram_payment_charge_id,
+				error: markErr instanceof Error ? markErr.message : String(markErr),
+			});
+		});
 		await notifyAdmins(
 			`⚠️ <b>Payment processing failed</b>\n\nUser: <code>${ctx.dbUser?.telegramId ?? "unknown"}</code>\nChat: <code>${ctx.dbChat?.telegramId ?? "unknown"}</code>\nCharge: <code>${escapeHtml(payment.telegram_payment_charge_id)}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nAmount: ${payment.total_amount} ${escapeHtml(payment.currency)}\nReason: ${escapeHtml(reason)}`,
 			{ critical: true },

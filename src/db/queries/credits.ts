@@ -99,6 +99,7 @@ async function recordPaymentReceiptIn(
 		.select({ id: paymentReceipts.id, status: paymentReceipts.status })
 		.from(paymentReceipts)
 		.where(eq(paymentReceipts.telegramChargeId, record.telegramChargeId))
+		.for("update")
 		.limit(1);
 
 	if (!existing) throw new Error("Payment receipt conflict without row");
@@ -109,6 +110,30 @@ async function recordPaymentReceiptIn(
 	};
 }
 
+async function ensurePaymentReceiptReceived(
+	db: Database,
+	record: StarsPaymentRecord,
+): Promise<void> {
+	await db
+		.insert(paymentReceipts)
+		.values({
+			userId: record.userId,
+			chatId: record.chatId ?? null,
+			telegramChargeId: record.telegramChargeId,
+			providerChargeId: record.providerChargeId ?? null,
+			invoicePayload: record.invoicePayload ?? null,
+			currency: record.currency,
+			stars: record.stars,
+			productType: record.productType,
+			productId: record.productId ?? null,
+			creditTarget: record.creditTarget,
+			credits: record.credits,
+			status: "received",
+			meta: record.meta,
+		})
+		.onConflictDoNothing({ target: paymentReceipts.telegramChargeId });
+}
+
 async function markPaymentSettledIn(
 	tx: CreditTransaction,
 	receiptId: string,
@@ -117,6 +142,16 @@ async function markPaymentSettledIn(
 		.update(paymentReceipts)
 		.set({ status: "settled", settledAt: new Date() })
 		.where(eq(paymentReceipts.id, receiptId));
+}
+
+export async function markPaymentSettlementFailed(
+	db: Database,
+	telegramChargeId: string,
+): Promise<void> {
+	await db
+		.update(paymentReceipts)
+		.set({ status: "settlement_failed", updatedAt: new Date() })
+		.where(eq(paymentReceipts.telegramChargeId, telegramChargeId));
 }
 
 function numberFromMeta(
@@ -131,6 +166,7 @@ export async function recordDonationPayment(
 	db: Database,
 	record: StarsPaymentRecord,
 ): Promise<IdempotentCreditResult> {
+	await ensurePaymentReceiptReceived(db, record);
 	return db.transaction(async (tx) => {
 		const receipt = await recordPaymentReceiptIn(tx, record);
 		const refundKey = `donation:${record.telegramChargeId}`;
@@ -644,6 +680,7 @@ export async function applyUserPackPayment(
 	db: Database,
 	record: StarsPaymentRecord,
 ): Promise<IdempotentCreditResult> {
+	await ensurePaymentReceiptReceived(db, record);
 	const idempotencyKey = `pack:${record.telegramChargeId}`;
 
 	return db.transaction(async (tx) => {
@@ -703,6 +740,7 @@ export async function applyChatPackPayment(
 	record: StarsPaymentRecord,
 ): Promise<IdempotentCreditResult> {
 	if (!record.chatId) throw new Error("Chat payment missing chat ID");
+	await ensurePaymentReceiptReceived(db, record);
 	const chatId = record.chatId;
 	const idempotencyKey = `pack:${record.telegramChargeId}`;
 
@@ -846,6 +884,16 @@ export async function applySubscriptionPayment(
 		planId,
 		subscriptionExpiresAt: subscriptionExpiresAt.toISOString(),
 	};
+	await ensurePaymentReceiptReceived(db, {
+		...payment,
+		userId,
+		telegramChargeId,
+		productType: "subscription",
+		productId: planId,
+		creditTarget: "user",
+		credits: amount,
+		meta: paymentMeta,
+	});
 
 	return db.transaction(async (tx) => {
 		const receipt = await recordPaymentReceiptIn(tx, {
@@ -943,6 +991,103 @@ export async function applySubscriptionPayment(
 			creditedAmount: spendableCredits,
 		};
 	});
+}
+
+function paymentRecordFromReceipt(
+	receipt: typeof paymentReceipts.$inferSelect,
+): StarsPaymentRecord {
+	if (
+		receipt.productType !== "subscription" &&
+		receipt.productType !== "pack" &&
+		receipt.productType !== "donation"
+	) {
+		throw new Error(`Unsupported payment product type: ${receipt.productType}`);
+	}
+	if (
+		receipt.creditTarget !== "user" &&
+		receipt.creditTarget !== "chat" &&
+		receipt.creditTarget !== "none"
+	) {
+		throw new Error(`Unsupported credit target: ${receipt.creditTarget}`);
+	}
+
+	return {
+		userId: receipt.userId,
+		chatId: receipt.chatId,
+		telegramChargeId: receipt.telegramChargeId,
+		providerChargeId: receipt.providerChargeId,
+		invoicePayload: receipt.invoicePayload,
+		currency: receipt.currency,
+		stars: receipt.stars,
+		productType: receipt.productType,
+		productId: receipt.productId,
+		creditTarget: receipt.creditTarget,
+		credits: receipt.credits,
+		meta: receipt.meta ?? undefined,
+	};
+}
+
+function subscriptionExpiryFromReceipt(
+	receipt: typeof paymentReceipts.$inferSelect,
+): Date {
+	const raw = receipt.meta?.subscriptionExpiresAt;
+	if (typeof raw !== "string") {
+		throw new Error("Subscription receipt missing expiration metadata");
+	}
+	const expiresAt = new Date(raw);
+	if (Number.isNaN(expiresAt.getTime())) {
+		throw new Error("Subscription receipt has invalid expiration metadata");
+	}
+	return expiresAt;
+}
+
+export async function retryPaymentSettlement(
+	db: Database,
+	telegramChargeId: string,
+): Promise<IdempotentCreditResult> {
+	const [receipt] = await db
+		.select()
+		.from(paymentReceipts)
+		.where(eq(paymentReceipts.telegramChargeId, telegramChargeId))
+		.limit(1);
+	if (!receipt) throw new Error("Payment receipt not found");
+	if (receipt.status !== "received" && receipt.status !== "settlement_failed") {
+		return { balanceAfter: 0, applied: false };
+	}
+
+	const record = paymentRecordFromReceipt(receipt);
+	if (record.productType === "donation") {
+		return recordDonationPayment(db, record);
+	}
+
+	if (record.productType === "pack") {
+		if (record.creditTarget === "chat") {
+			return applyChatPackPayment(db, record);
+		}
+		if (record.creditTarget === "user") {
+			return applyUserPackPayment(db, record);
+		}
+		throw new Error("Pack receipt has unsupported credit target");
+	}
+
+	if (!receipt.productId)
+		throw new Error("Subscription receipt missing plan ID");
+	return applySubscriptionPayment(
+		db,
+		receipt.userId,
+		receipt.credits,
+		receipt.productId,
+		receipt.telegramChargeId,
+		subscriptionExpiryFromReceipt(receipt),
+		{
+			chatId: receipt.chatId,
+			providerChargeId: receipt.providerChargeId,
+			invoicePayload: receipt.invoicePayload,
+			currency: receipt.currency,
+			stars: receipt.stars,
+		},
+		receipt.meta ?? undefined,
+	);
 }
 
 async function recomputeActiveSubscriptionIn(

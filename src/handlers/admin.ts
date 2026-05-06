@@ -12,6 +12,7 @@ import {
 	getTransactionByIdempotencyKey,
 	type RefundReconciliationResult,
 	reconcileStarRefund,
+	retryPaymentSettlement,
 } from "../db/queries/credits";
 import { waiveCreditDebt } from "../db/queries/finance";
 import { getUserByTelegramId } from "../db/queries/users";
@@ -672,6 +673,34 @@ adminComposer.command("admin", async (ctx) => {
 			break;
 		}
 
+		case "settle_payment": {
+			const chargeId = args.trim();
+			if (!chargeId) {
+				await ctx.reply("Usage: /admin settle_payment <telegram_charge_id>");
+				return;
+			}
+
+			try {
+				const result = await retryPaymentSettlement(ctx.db, chargeId);
+				await ctx.reply(
+					result.applied
+						? `Payment settled.\nCharge: <code>${escapeHtml(chargeId)}</code>\nCredited: ${result.creditedAmount ?? "n/a"}\nDebt recovered: ${result.debtRecovered ?? 0}\nBalance after: ${result.balanceAfter}`
+						: `Payment is not pending settlement or was already settled.\nCharge: <code>${escapeHtml(chargeId)}</code>`,
+					{ parse_mode: "HTML" },
+				);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				await ctx.reply(`Payment settlement retry failed: ${escapeHtml(msg)}`, {
+					parse_mode: "HTML",
+				});
+				await notifyAdmins(
+					`⚠️ <b>Payment settlement retry failed</b>\n\nAdmin: <code>${adminId}</code>\nCharge: <code>${escapeHtml(chargeId)}</code>\nReason: ${escapeHtml(msg)}`,
+					{ critical: true },
+				);
+			}
+			break;
+		}
+
 		case "db": {
 			// /admin db — table row counts
 			const { sql } = await import("drizzle-orm");
@@ -814,6 +843,7 @@ adminComposer.command("admin", async (ctx) => {
 					"/admin waive_debt &lt;debtId&gt; — Waive open refund debt\n" +
 					"/admin stars — Bot Stars balance\n" +
 					"/admin reconcile_refund &lt;chargeId&gt; — Reconcile an already-refunded charge\n" +
+					"/admin settle_payment &lt;chargeId&gt; — Retry a pending payment settlement\n" +
 					"/admin db — Table row counts\n" +
 					"/admin test — E2E smoke test (grants 100 credits)\n\n" +
 					"/refund &lt;userId&gt; &lt;chargeId&gt; — Refund a payment",
