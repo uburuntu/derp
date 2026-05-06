@@ -181,21 +181,17 @@ async function refundLlmReminderCredit(
 	}
 }
 
-async function sendReminderMessage(
-	bot: Bot<DerpContext>,
+async function buildReminderMessageText(
+	db: Database,
 	chat: Chat,
 	reminder: Reminder,
 	delayNote: string,
-): Promise<number> {
-	const text = await buildReminderMessageText(reminder, delayNote);
-	return sendTelegramMessageWithFallback(bot, chat, reminder, text);
-}
-
-async function buildReminderMessageText(
-	reminder: Reminder,
-	delayNote: string,
+	reservation: LlmReminderReservation | null,
 ): Promise<string> {
 	if (reminder.usesLlm && reminder.prompt) {
+		if (!reservation?.ok) {
+			throw new Error("LLM reminder missing credit reservation");
+		}
 		const provider = new GoogleLLMProvider(
 			getGoogleApiKeys(config),
 			config.googleApiPaidKey,
@@ -208,6 +204,21 @@ async function buildReminderMessageText(
 				"Follow the prompt instructions. Be concise and helpful.",
 			messages: [{ role: "user", content: reminder.prompt }],
 			timeoutMs: 30_000,
+			tracking: {
+				db,
+				logicalRequestKey: reservation.idempotencyKey,
+				operation: "reminder",
+				keyClass: "paid",
+				userId: reservation.userId,
+				chatId: chat.id,
+				toolName: "reminder_llm",
+				creditsCharged: LLM_REMINDER_COST,
+				creditSource: reservation.source,
+				meta: {
+					reminderId: reminder.id,
+					fireCount: reminder.fireCount + 1,
+				},
+			},
 		});
 
 		const responseText = result.text?.trim();
@@ -367,8 +378,23 @@ export async function executeReminder(
 	const delayNote = isStartup ? "\n(delayed — bot was restarting)" : "";
 
 	let sentMessageId: number;
+	let reminderText: string | null = null;
+	let billableReminderFailure = false;
 	try {
-		sentMessageId = await sendReminderMessage(bot, chat, reminder, delayNote);
+		reminderText = await buildReminderMessageText(
+			db,
+			chat,
+			reminder,
+			delayNote,
+			llmReservation,
+		);
+		billableReminderFailure = reminder.usesLlm;
+		sentMessageId = await sendTelegramMessageWithFallback(
+			bot,
+			chat,
+			reminder,
+			reminderText,
+		);
 	} catch (err) {
 		const errorMsg = errorText(err);
 		logger.error("reminder_execution_failed", {
@@ -378,15 +404,37 @@ export async function executeReminder(
 
 		// Retry once
 		try {
-			sentMessageId = await sendReminderMessage(bot, chat, reminder, delayNote);
+			if (!reminderText) {
+				reminderText = await buildReminderMessageText(
+					db,
+					chat,
+					reminder,
+					delayNote,
+					llmReservation,
+				);
+				billableReminderFailure = reminder.usesLlm;
+			}
+			sentMessageId = await sendTelegramMessageWithFallback(
+				bot,
+				chat,
+				reminder,
+				reminderText,
+			);
 		} catch (retryErr) {
 			const retryMsg = errorText(retryErr);
-			await refundLlmReminderCredit(
-				db,
-				llmReservation,
-				reminder,
-				`${errorMsg}; retry: ${retryMsg}`,
-			);
+			if (billableReminderFailure) {
+				logger.warn("reminder_billable_failure_not_refunded", {
+					reminderId: reminder.id,
+					error: `${errorMsg}; retry: ${retryMsg}`,
+				});
+			} else {
+				await refundLlmReminderCredit(
+					db,
+					llmReservation,
+					reminder,
+					`${errorMsg}; retry: ${retryMsg}`,
+				);
+			}
 			await markReminderFailed(
 				db,
 				reminder.id,

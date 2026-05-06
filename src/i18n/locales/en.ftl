@@ -36,6 +36,44 @@ credits-subscribed = Subscribed to { $plan }! { $credits } credits added. Your s
 credits-renewed = { $plan } subscription renewed! { $credits } credits added.
 credits-insufficient = Need { $cost } credits for { $tool }. Use /buy to get credits.
 chat-free-quota-reached = Free chat limit reached for today. Use /buy for standard replies, or try again tomorrow.
+payment-sub-new = ✅ <b>Subscribed to { $plan }</b>
+
+    { $credits } credits added. Subscription renews monthly.
+payment-sub-renewed = ✅ <b>{ $plan } renewed</b>
+
+    { $credits } credits added.
+payment-sub-new-debt = ✅ <b>Subscribed to { $plan }</b>
+
+    { $debt } credits settled refund debt.
+    { $credits } credits added. Subscription renews monthly.
+payment-sub-renewed-debt = ✅ <b>{ $plan } renewed</b>
+
+    { $debt } credits settled refund debt.
+    { $credits } credits added.
+payment-pack-user = ✅ <b>Credits added</b>
+
+    { $credits } credits added to your balance.
+payment-pack-user-debt = ✅ <b>Credits settled</b>
+
+    { $debt } credits settled personal refund debt.
+    { $credits } credits added to your balance.
+payment-pack-chat = ✅ <b>Group credits added</b>
+
+    { $credits } shared credits added to this chat.
+payment-pack-chat-debt = ✅ <b>Group credits settled</b>
+
+    { $debt } credits settled group refund debt.
+    { $credits } shared credits added.
+refund-target-user = your personal balance
+refund-target-chat = this group's shared pool
+refund-processed = ↩️ <b>Refund processed</b>
+
+    Recovered { $recovered }/{ $original } credits from { $target }.
+refund-processed-debt = ↩️ <b>Refund processed</b>
+
+    Recovered { $recovered }/{ $original } credits from { $target }.
+
+    { $debt } credits were already used and must be settled before paid usage continues.
 
 ## Buy
 buy-choose = 💰 <b>Add credits</b>
@@ -121,6 +159,7 @@ tool-confirm-failed = ⚠️ <b>Could not finish this request</b>
 tool-confirm-cancelled = Cancelled.
 tool-confirm-expired = This confirmation expired. Send the command again.
 tool-confirm-invalid = This saved request is no longer valid. Send the command again.
+tool-confirm-owner-only = Only the person who requested this can confirm or cancel it.
 
 ## Settings
 settings-title = Settings

@@ -119,6 +119,14 @@ async function markPaymentSettledIn(
 		.where(eq(paymentReceipts.id, receiptId));
 }
 
+function numberFromMeta(
+	meta: Record<string, unknown> | null | undefined,
+	key: string,
+): number | null {
+	const value = meta?.[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 export async function recordDonationPayment(
 	db: Database,
 	record: StarsPaymentRecord,
@@ -1034,35 +1042,48 @@ export async function reconcileStarRefund(
 	const refundKey = `refund:${telegramChargeId}`;
 
 	return db.transaction(async (tx) => {
+		const [receipt] = await tx
+			.select()
+			.from(paymentReceipts)
+			.where(eq(paymentReceipts.telegramChargeId, telegramChargeId))
+			.limit(1);
+
 		const [original] = await tx
 			.select()
 			.from(ledger)
 			.where(
 				and(
 					eq(ledger.telegramChargeId, telegramChargeId),
-					sql`${ledger.amount} > 0`,
 					sql`${ledger.type} IN ('purchase', 'subscription')`,
 				),
 			)
 			.orderBy(desc(ledger.createdAt))
 			.limit(1);
 
+		if (!original && !receipt) {
+			throw new Error("No local payment found for charge");
+		}
+
+		const userId = receipt?.userId ?? original?.userId;
+		if (!userId) throw new Error("Refund target user missing");
+		const chatId = receipt?.chatId ?? original?.chatId ?? null;
+		const receiptType =
+			receipt?.productType === "pack" ? "purchase" : receipt?.productType;
+		const originalType = original?.type ?? receiptType ?? "purchase";
+		const originalAmount =
+			receipt?.credits ??
+			numberFromMeta(original?.meta, "purchasedCredits") ??
+			original?.amount ??
+			0;
+		const originalStars =
+			receipt?.stars ?? numberFromMeta(original?.meta, "stars") ?? null;
+
 		if (!original) {
-			const [receipt] = await tx
-				.select()
-				.from(paymentReceipts)
-				.where(eq(paymentReceipts.telegramChargeId, telegramChargeId))
-				.limit(1);
-
-			if (!receipt) {
-				throw new Error("No local payment found for charge");
-			}
-
 			const [inserted] = await tx
 				.insert(ledger)
 				.values({
-					userId: receipt.userId,
-					chatId: receipt.chatId,
+					userId,
+					chatId,
 					type: "refund",
 					amount: 0,
 					balanceAfter: 0,
@@ -1070,34 +1091,44 @@ export async function reconcileStarRefund(
 					idempotencyKey: refundKey,
 					meta: {
 						...meta,
-						paymentReceiptId: receipt.id,
-						originalType: receipt.productType,
-						originalAmount: receipt.credits,
-						originalStars: receipt.stars,
+						paymentReceiptId: receipt?.id ?? null,
+						originalType,
+						originalAmount,
+						originalStars,
 						recoveredAmount: 0,
-						unrecoveredAmount: receipt.credits,
+						unrecoveredAmount: originalAmount,
 					},
 				})
 				.onConflictDoNothing({ target: ledger.idempotencyKey })
 				.returning({ id: ledger.id });
 
 			if (inserted) {
-				await tx
-					.update(paymentReceipts)
-					.set({ status: "refunded", refundedAt: new Date() })
-					.where(eq(paymentReceipts.id, receipt.id));
-				if (receipt.credits > 0) {
+				if (receipt) {
+					await tx
+						.update(paymentReceipts)
+						.set({ status: "refunded", refundedAt: new Date() })
+						.where(eq(paymentReceipts.id, receipt.id));
+				}
+				if (receipt?.productType === "subscription") {
+					await tx
+						.update(subscriptionPeriods)
+						.set({ status: "refunded", refundedAt: new Date() })
+						.where(eq(subscriptionPeriods.telegramChargeId, telegramChargeId));
+					await recomputeActiveSubscriptionIn(tx, userId);
+				}
+				if (originalAmount > 0) {
 					await createCreditDebt(tx, {
-						userId: receipt.userId,
-						chatId: receipt.chatId,
-						paymentReceiptId: receipt.id,
+						userId,
+						chatId,
+						paymentReceiptId: receipt?.id ?? null,
 						telegramChargeId,
-						target: receipt.chatId ? "chat" : "user",
-						amount: receipt.credits,
+						target: chatId ? "chat" : "user",
+						amount: originalAmount,
 						meta: {
 							...meta,
 							source: "refund_unrecovered",
-							originalType: receipt.productType,
+							originalType,
+							originalAmount,
 						},
 					});
 				}
@@ -1105,11 +1136,11 @@ export async function reconcileStarRefund(
 
 			return {
 				applied: Boolean(inserted),
-				target: receipt.chatId ? "chat" : "user",
-				originalType: receipt.productType,
-				originalAmount: receipt.credits,
+				target: chatId ? "chat" : "user",
+				originalType,
+				originalAmount,
 				recoveredAmount: 0,
-				unrecoveredAmount: receipt.credits,
+				unrecoveredAmount: originalAmount,
 				balanceAfter: 0,
 			};
 		}
@@ -1127,8 +1158,11 @@ export async function reconcileStarRefund(
 				meta: {
 					...meta,
 					originalLedgerId: original.id,
-					originalType: original.type,
-					originalAmount: original.amount,
+					paymentReceiptId: receipt?.id ?? null,
+					originalType,
+					originalAmount,
+					originalLedgerAmount: original.amount,
+					debtRecovered: numberFromMeta(original.meta, "debtRecovered") ?? 0,
 				},
 			})
 			.onConflictDoNothing({ target: ledger.idempotencyKey })
@@ -1152,12 +1186,12 @@ export async function reconcileStarRefund(
 			const originalAmount =
 				typeof existing?.meta?.originalAmount === "number"
 					? existing.meta.originalAmount
-					: original.amount;
+					: (receipt?.credits ?? original.amount);
 
 			return {
 				applied: false,
-				target: original.chatId ? "chat" : "user",
-				originalType: original.type,
+				target: chatId ? "chat" : "user",
+				originalType,
 				originalAmount,
 				recoveredAmount,
 				unrecoveredAmount: Math.max(0, originalAmount - recoveredAmount),
@@ -1165,12 +1199,12 @@ export async function reconcileStarRefund(
 			};
 		}
 
-		const debit = original.chatId
-			? await debitChatCreditsForRefund(tx, original.chatId, original.amount)
-			: await debitUserCreditsForRefund(tx, original.userId, original.amount);
+		const debit = chatId
+			? await debitChatCreditsForRefund(tx, chatId, originalAmount)
+			: await debitUserCreditsForRefund(tx, userId, originalAmount);
 		const unrecoveredAmount = Math.max(
 			0,
-			original.amount - debit.recoveredAmount,
+			originalAmount - debit.recoveredAmount,
 		);
 
 		await tx
@@ -1181,55 +1215,58 @@ export async function reconcileStarRefund(
 				meta: {
 					...meta,
 					originalLedgerId: original.id,
-					originalType: original.type,
-					originalAmount: original.amount,
+					paymentReceiptId: receipt?.id ?? null,
+					originalType,
+					originalAmount,
+					originalLedgerAmount: original.amount,
+					debtRecovered: numberFromMeta(original.meta, "debtRecovered") ?? 0,
 					recoveredAmount: debit.recoveredAmount,
 					unrecoveredAmount,
 				},
 			})
 			.where(eq(ledger.id, inserted.id));
 
-		await tx
-			.update(paymentReceipts)
-			.set({ status: "refunded", refundedAt: new Date() })
-			.where(eq(paymentReceipts.telegramChargeId, telegramChargeId));
+		if (receipt) {
+			await tx
+				.update(paymentReceipts)
+				.set({ status: "refunded", refundedAt: new Date() })
+				.where(eq(paymentReceipts.id, receipt.id));
+		}
 
-		if (original.type === "subscription") {
+		if (
+			originalType === "subscription" ||
+			receipt?.productType === "subscription"
+		) {
 			await tx
 				.update(subscriptionPeriods)
 				.set({ status: "refunded", refundedAt: new Date() })
 				.where(eq(subscriptionPeriods.telegramChargeId, telegramChargeId));
-			await recomputeActiveSubscriptionIn(tx, original.userId);
+			await recomputeActiveSubscriptionIn(tx, userId);
 		}
 
 		if (unrecoveredAmount > 0) {
-			const [receipt] = await tx
-				.select({ id: paymentReceipts.id })
-				.from(paymentReceipts)
-				.where(eq(paymentReceipts.telegramChargeId, telegramChargeId))
-				.limit(1);
 			await createCreditDebt(tx, {
-				userId: original.userId,
-				chatId: original.chatId,
+				userId,
+				chatId,
 				paymentReceiptId: receipt?.id ?? null,
 				telegramChargeId,
-				target: original.chatId ? "chat" : "user",
+				target: chatId ? "chat" : "user",
 				amount: unrecoveredAmount,
 				meta: {
 					...meta,
 					source: "refund_unrecovered",
 					originalLedgerId: original.id,
-					originalType: original.type,
-					originalAmount: original.amount,
+					originalType,
+					originalAmount,
 				},
 			});
 		}
 
 		return {
 			applied: true,
-			target: original.chatId ? "chat" : "user",
-			originalType: original.type,
-			originalAmount: original.amount,
+			target: chatId ? "chat" : "user",
+			originalType,
+			originalAmount,
 			recoveredAmount: debit.recoveredAmount,
 			unrecoveredAmount,
 			balanceAfter: debit.balanceAfter,

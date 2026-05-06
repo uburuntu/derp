@@ -106,6 +106,28 @@ export async function executeWithCreditGate(
 					creditResult,
 				};
 			}
+			if (
+				(ctx.expectedCreditSource &&
+					creditResult.source !== ctx.expectedCreditSource) ||
+				(ctx.expectedCreditsToDeduct != null &&
+					creditResult.creditsToDeduct !== ctx.expectedCreditsToDeduct)
+			) {
+				const rejectReason = "Credit source or cost changed";
+				span.setAttribute("derp.tool.outcome", "rejected");
+				span.setAttribute("derp.tool.reject_reason", rejectReason);
+				logger.info("tool_confirmed_spend_changed", {
+					tool: tool.name,
+					expectedSource: ctx.expectedCreditSource,
+					actualSource: creditResult.source,
+					expectedCredits: ctx.expectedCreditsToDeduct,
+					actualCredits: creditResult.creditsToDeduct,
+				});
+				return {
+					text: "The available balance changed before the tool started. Send the command again to confirm the current spend.",
+					error: rejectReason,
+					creditResult: zeroCostResult(creditResult),
+				};
+			}
 
 			const idempotencyKey = ctx.idempotencyKey;
 			if (creditResult.source === "free") {
@@ -249,9 +271,19 @@ export async function executeWithCreditGate(
 					tool: tool.name,
 					outcome: "error",
 				});
-				await refundToolDeduction(ctx, creditResult, tool, idempotencyKey, {
-					error: result.error,
-				});
+				if (result.billableFailure) {
+					span.setAttribute("derp.tool.billable_failure", true);
+					logger.warn("tool_billable_failure_not_refunded", {
+						tool: tool.name,
+						error: result.error,
+						creditsDeducted: creditResult.creditsToDeduct,
+						source: creditResult.source,
+					});
+				} else {
+					await refundToolDeduction(ctx, creditResult, tool, idempotencyKey, {
+						error: result.error,
+					});
+				}
 				recordHandledFailure("tool", result.error, { tool: tool.name });
 				logger.error("tool_returned_error", {
 					tool: tool.name,
@@ -275,7 +307,9 @@ export async function executeWithCreditGate(
 						}
 					: result),
 				creditResult: result.error
-					? zeroCostResult(creditResult)
+					? result.billableFailure
+						? creditResult
+						: zeroCostResult(creditResult)
 					: creditResult,
 			};
 		},

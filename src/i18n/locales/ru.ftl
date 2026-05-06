@@ -36,6 +36,44 @@ credits-subscribed = Подписка { $plan } оформлена! { $credits }
 credits-renewed = Подписка { $plan } продлена! { $credits } кредитов начислено.
 credits-insufficient = Нужно { $cost } кредитов для { $tool }. Используй /buy для покупки.
 chat-free-quota-reached = Бесплатный лимит чата на сегодня закончился. Используй /buy для стандартных ответов или попробуй завтра.
+payment-sub-new = ✅ <b>Подписка { $plan } оформлена</b>
+
+    { $credits } кредитов добавлено. Подписка продлевается ежемесячно.
+payment-sub-renewed = ✅ <b>{ $plan } продлена</b>
+
+    { $credits } кредитов добавлено.
+payment-sub-new-debt = ✅ <b>Подписка { $plan } оформлена</b>
+
+    { $debt } кредитов погасили долг после возврата.
+    { $credits } кредитов добавлено. Подписка продлевается ежемесячно.
+payment-sub-renewed-debt = ✅ <b>{ $plan } продлена</b>
+
+    { $debt } кредитов погасили долг после возврата.
+    { $credits } кредитов добавлено.
+payment-pack-user = ✅ <b>Кредиты добавлены</b>
+
+    { $credits } кредитов добавлено на твой баланс.
+payment-pack-user-debt = ✅ <b>Долг погашен</b>
+
+    { $debt } кредитов погасили личный долг после возврата.
+    { $credits } кредитов добавлено на твой баланс.
+payment-pack-chat = ✅ <b>Кредиты группы добавлены</b>
+
+    { $credits } общих кредитов добавлено в этот чат.
+payment-pack-chat-debt = ✅ <b>Долг группы погашен</b>
+
+    { $debt } кредитов погасили долг группы после возврата.
+    { $credits } общих кредитов добавлено.
+refund-target-user = твоего личного баланса
+refund-target-chat = общего пула этой группы
+refund-processed = ↩️ <b>Возврат обработан</b>
+
+    Возвращено { $recovered }/{ $original } кредитов с { $target }.
+refund-processed-debt = ↩️ <b>Возврат обработан</b>
+
+    Возвращено { $recovered }/{ $original } кредитов с { $target }.
+
+    { $debt } кредитов уже были потрачены; долг нужно погасить перед платным использованием.
 
 ## Buy
 buy-choose = 💰 <b>Пополнить кредиты</b>
@@ -121,6 +159,7 @@ tool-confirm-failed = ⚠️ <b>Не удалось завершить запр�
 tool-confirm-cancelled = Отменено.
 tool-confirm-expired = Подтверждение устарело. Отправь команду заново.
 tool-confirm-invalid = Сохранённый запрос больше не подходит. Отправь команду заново.
+tool-confirm-owner-only = Подтвердить или отменить может только тот, кто отправил запрос.
 
 ## Settings
 settings-title = Настройки

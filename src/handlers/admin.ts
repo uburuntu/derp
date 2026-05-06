@@ -415,6 +415,7 @@ adminComposer.command("admin", async (ctx) => {
 					(SELECT count(*)::int FROM payment_receipts WHERE status IN ('received', 'settlement_failed', 'refund_pending')) AS unsettled_payments,
 					(SELECT COALESCE(sum(actual_cost_micros), 0)::bigint FROM provider_calls WHERE created_at >= now() - make_interval(days => ${days})) AS provider_cost_micros,
 					(SELECT COALESCE(sum(actual_cost_micros), 0)::bigint FROM provider_calls WHERE created_at >= now() - make_interval(days => ${days}) AND credits_charged = 0) AS free_provider_cost_micros,
+					(SELECT count(*)::int FROM provider_calls WHERE status = 'started' AND created_at < now() - interval '10 minutes') AS stale_provider_calls,
 					(SELECT COALESCE(sum(credits), 0)::int FROM users) AS user_credit_liability,
 					(SELECT COALESCE(sum(credits), 0)::int FROM chats) AS chat_credit_liability,
 					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE created_at >= now() - make_interval(days => ${days})) AS free_quota_uses
@@ -445,6 +446,21 @@ adminComposer.command("admin", async (ctx) => {
 				ORDER BY stars DESC
 			`);
 
+			const providerRows = await ctx.db.execute(sql`
+				SELECT
+					provider,
+					COALESCE(route, 'primary') AS route,
+					status,
+					COALESCE(error_code, '') AS error_code,
+					count(*)::int AS calls,
+					COALESCE(sum(actual_cost_micros), 0)::bigint AS cost_micros
+				FROM provider_calls
+				WHERE created_at >= now() - make_interval(days => ${days})
+				GROUP BY provider, route, status, error_code
+				ORDER BY calls DESC, cost_micros DESC
+				LIMIT 10
+			`);
+
 			const overviewRow = overview as {
 				users?: number;
 				active_users?: number;
@@ -460,6 +476,7 @@ adminComposer.command("admin", async (ctx) => {
 				unsettled_payments?: number;
 				provider_cost_micros?: number;
 				free_provider_cost_micros?: number;
+				stale_provider_calls?: number;
 				user_credit_liability?: number;
 				chat_credit_liability?: number;
 				free_quota_uses?: number;
@@ -473,6 +490,14 @@ adminComposer.command("admin", async (ctx) => {
 				product: string;
 				payments: number;
 				stars: number;
+			}>;
+			const providerHealth = providerRows as unknown as Array<{
+				provider: string;
+				route: string;
+				status: string;
+				error_code: string;
+				calls: number;
+				cost_micros: bigint | number;
 			}>;
 
 			const toolLines =
@@ -493,6 +518,18 @@ adminComposer.command("admin", async (ctx) => {
 							)
 							.join("\n")
 					: "No Stars payments yet.";
+			const providerHealthLines =
+				providerHealth.length > 0
+					? providerHealth
+							.map((row) => {
+								const cost = Number(row.cost_micros ?? 0) / 1_000_000;
+								const error = row.error_code
+									? `/${escapeHtml(row.error_code)}`
+									: "";
+								return `${escapeHtml(row.provider)} ${escapeHtml(row.route)} ${escapeHtml(row.status)}${error}: ${row.calls} calls, ${formatUsd(cost)}`;
+							})
+							.join("\n")
+					: "No provider calls yet.";
 			const outstandingCredits =
 				(overviewRow.user_credit_liability ?? 0) +
 				(overviewRow.chat_credit_liability ?? 0);
@@ -522,8 +559,10 @@ adminComposer.command("admin", async (ctx) => {
 					`<b>Provider Cost</b>\n` +
 					`Provider cost: ${formatUsd(providerCostUsd)}\n` +
 					`Free/promo burn: ${formatUsd(freeProviderCostUsd)}\n` +
+					`Stale provider calls: ${overviewRow.stale_provider_calls ?? 0}\n` +
 					`Net revenue estimate: ${formatUsd(netRevenueUsd)}\n` +
 					`Gross margin estimate: ${formatUsd(grossMarginUsd)}\n\n` +
+					`<b>Provider health</b>\n${providerHealthLines}\n\n` +
 					`<b>Liability</b>\n` +
 					`Outstanding credits: ${outstandingCredits} cr (${formatUsd(outstandingUsd)} floor value)\n` +
 					`User/chat split: ${overviewRow.user_credit_liability ?? 0} / ${overviewRow.chat_credit_liability ?? 0} cr\n` +

@@ -26,8 +26,9 @@ async function executeTTS(
 		config.googleApiPaidKey,
 	);
 
+	let result: Awaited<ReturnType<GoogleLLMProvider["synthesizeSpeech"]>>;
 	try {
-		const result = await provider.synthesizeSpeech({
+		result = await provider.synthesizeSpeech({
 			model: "gemini-2.5-flash-preview-tts",
 			text: params.text,
 			voice: params.voice,
@@ -44,14 +45,23 @@ async function executeTTS(
 				creditSource: ctx.creditResult?.source,
 			},
 		});
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return { text: `TTS failed: ${msg}`, error: msg };
+	}
 
+	try {
 		// Convert WAV to OGG Opus for Telegram voice messages
 		const oggBuffer = await convertToOggOpus(result.audio);
 		await ctx.sendVoice(oggBuffer);
 		return { handled: true };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		return { text: `TTS failed: ${msg}`, error: msg };
+		return {
+			text: `Speech was generated, but I couldn't deliver it to Telegram: ${msg}`,
+			error: msg,
+			billableFailure: true,
+		};
 	}
 }
 

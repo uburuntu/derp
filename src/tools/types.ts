@@ -69,6 +69,8 @@ export interface ToolContext {
 	replyToMessageId?: number | null;
 	idempotencyKey?: string;
 	creditResult?: CreditCheckResult;
+	expectedCreditSource?: CreditCheckResult["source"];
+	expectedCreditsToDeduct?: number;
 }
 
 // ── Tool Result ──────────────────────────────────────────────────────────────
@@ -82,4 +84,6 @@ export interface ToolResult {
 	handled?: boolean;
 	/** Error message (tool failed but gracefully) */
 	error?: string;
+	/** Provider work succeeded, so paid credits should not be auto-refunded. */
+	billableFailure?: boolean;
 }

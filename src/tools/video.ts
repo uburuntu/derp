@@ -29,8 +29,9 @@ async function executeVideo(
 		config.googleApiPaidKey,
 	);
 
+	let result: Awaited<ReturnType<GoogleLLMProvider["generateVideo"]>>;
 	try {
-		const result = await provider.generateVideo({
+		result = await provider.generateVideo({
 			model: "veo-3.1-fast-generate-preview",
 			prompt: params.prompt,
 			timeoutMs: 180_000,
@@ -46,7 +47,12 @@ async function executeVideo(
 				creditSource: ctx.creditResult?.source,
 			},
 		});
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return { text: `Video generation failed: ${msg}`, error: msg };
+	}
 
+	try {
 		const caption = captionPartsForMedia(params.prompt);
 		await ctx.sendVideo(result.video.data, caption.caption);
 		for (const chunk of caption.followUpChunks) {
@@ -55,7 +61,11 @@ async function executeVideo(
 		return { handled: true };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		return { text: `Video generation failed: ${msg}`, error: msg };
+		return {
+			text: `Video generated, but I couldn't deliver it to Telegram: ${msg}`,
+			error: msg,
+			billableFailure: true,
+		};
 	}
 }
 

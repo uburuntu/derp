@@ -601,13 +601,20 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 		);
 		if (!result?.applied) return;
 
-		const msgBase = isRenewal
-			? `${plan.label} subscription renewed!`
-			: `Subscribed to ${plan.label}! Your subscription renews monthly.`;
 		const msg =
 			result.debtRecovered && result.debtRecovered > 0
-				? `${msgBase} ${result.debtRecovered} credits settled refund debt; ${result.creditedAmount ?? 0} credits added.`
-				: `${msgBase} ${plan.credits} credits added.`;
+				? ctx.t(
+						isRenewal ? "payment-sub-renewed-debt" : "payment-sub-new-debt",
+						{
+							plan: plan.label,
+							debt: result.debtRecovered,
+							credits: result.creditedAmount ?? 0,
+						},
+					)
+				: ctx.t(isRenewal ? "payment-sub-renewed" : "payment-sub-new", {
+						plan: plan.label,
+						credits: plan.credits,
+					});
 		await runAppliedPaymentSideEffects(ctx, payment, {
 			replyText: msg,
 			adminText: formatPaymentNotification({
@@ -656,8 +663,11 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 			await runAppliedPaymentSideEffects(ctx, payment, {
 				replyText:
 					result.debtRecovered && result.debtRecovered > 0
-						? `${result.debtRecovered} credits settled group refund debt; ${result.creditedAmount ?? 0} shared credits added.`
-						: `${pack.credits} credits added to this chat's pool!`,
+						? ctx.t("payment-pack-chat-debt", {
+								debt: result.debtRecovered,
+								credits: result.creditedAmount ?? 0,
+							})
+						: ctx.t("payment-pack-chat", { credits: pack.credits }),
 				adminText: formatPaymentNotification({
 					type: "purchase",
 					userId: ctx.dbUser.telegramId,
@@ -696,8 +706,11 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 			await runAppliedPaymentSideEffects(ctx, payment, {
 				replyText:
 					result.debtRecovered && result.debtRecovered > 0
-						? `${result.debtRecovered} credits settled personal refund debt; ${result.creditedAmount ?? 0} credits added.`
-						: `${pack.credits} credits added to your balance!`,
+						? ctx.t("payment-pack-user-debt", {
+								debt: result.debtRecovered,
+								credits: result.creditedAmount ?? 0,
+							})
+						: ctx.t("payment-pack-user", { credits: pack.credits }),
 				adminText: formatPaymentNotification({
 					type: "purchase",
 					userId: ctx.dbUser.telegramId,
@@ -735,14 +748,29 @@ creditsComposer.on("message:refunded_payment", async (ctx) => {
 				totalAmount: refund.total_amount,
 			},
 		);
-		if (!reconciliation.applied) return;
-
-		await notifyAdmins(
-			`↩️ <b>Refund reconciled</b>\n\nCharge: <code>${escapeHtml(refund.telegram_payment_charge_id)}</code>\nTarget: ${reconciliation.target}\nRecovered: ${reconciliation.recoveredAmount}/${reconciliation.originalAmount}\nUnrecovered: ${reconciliation.unrecoveredAmount}`,
-			{ critical: true },
+		if (reconciliation.applied) {
+			await notifyAdmins(
+				`↩️ <b>Refund reconciled</b>\n\nCharge: <code>${escapeHtml(refund.telegram_payment_charge_id)}</code>\nTarget: ${reconciliation.target}\nRecovered: ${reconciliation.recoveredAmount}/${reconciliation.originalAmount}\nUnrecovered: ${reconciliation.unrecoveredAmount}`,
+				{ critical: true },
+			);
+		}
+		const target = ctx.t(
+			reconciliation.target === "chat"
+				? "refund-target-chat"
+				: "refund-target-user",
 		);
 		await ctx.reply(
-			`↩️ <b>Refund processed</b>\n\nRecovered ${reconciliation.recoveredAmount}/${reconciliation.originalAmount} credits from ${reconciliation.target === "chat" ? "this group's shared pool" : "your personal balance"}.${reconciliation.unrecoveredAmount > 0 ? `\n\n${reconciliation.unrecoveredAmount} credits were already used and must be settled before paid usage continues.` : ""}`,
+			ctx.t(
+				reconciliation.unrecoveredAmount > 0
+					? "refund-processed-debt"
+					: "refund-processed",
+				{
+					recovered: reconciliation.recoveredAmount,
+					original: reconciliation.originalAmount,
+					target,
+					debt: reconciliation.unrecoveredAmount,
+				},
+			),
 			{
 				parse_mode: "HTML",
 				...commandReplyOptions(ctx),

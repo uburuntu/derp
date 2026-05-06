@@ -381,6 +381,9 @@ chatComposer.on("message", async (ctx) => {
 			? chatCreditResult.source
 			: undefined;
 	let creditsRemaining = chatCreditResult?.creditsRemaining ?? null;
+	let providerCompleted = false;
+	let providerRoute: "primary" | "fallback" = "primary";
+	let fallbackFrom: string | undefined;
 
 	try {
 		const tracking = {
@@ -479,6 +482,8 @@ chatComposer.on("message", async (ctx) => {
 					model: modelId,
 				});
 				const fallback = new OpenRouterProvider(config.openrouterApiKey);
+				providerRoute = "fallback";
+				fallbackFrom = modelId;
 				result = await fallback.chat({
 					model: config.openrouterPaidFallbackModel,
 					systemPrompt: fullSystemPrompt,
@@ -494,6 +499,7 @@ chatComposer.on("message", async (ctx) => {
 				throw primaryErr;
 			}
 		}
+		providerCompleted = true;
 
 		// Get remaining balance for footer if not set by tool calls
 		if (creditsRemaining == null && creditsSpent > 0) {
@@ -507,8 +513,9 @@ chatComposer.on("message", async (ctx) => {
 		}
 
 		const durationMs = Date.now() - startTime;
+		const actualModel = result.actualModel ?? modelId;
 		const metadata: MessageMetadata = {
-			model: modelId,
+			model: actualModel,
 			tier,
 			inputTokens: result.usage.inputTokens,
 			outputTokens: result.usage.outputTokens,
@@ -517,6 +524,8 @@ chatComposer.on("message", async (ctx) => {
 			creditsSpent: creditsSpent > 0 ? creditsSpent : undefined,
 			creditSource,
 			providerCallIds: result.providerCallIds,
+			providerRoute,
+			fallbackFrom,
 			durationMs,
 		};
 
@@ -592,7 +601,10 @@ chatComposer.on("message", async (ctx) => {
 		}
 
 		logger.info("chat_response", {
-			model: modelId,
+			model: actualModel,
+			requestedModel: modelId,
+			providerRoute,
+			fallbackFrom,
 			tier,
 			inputTokens: result.usage.inputTokens,
 			outputTokens: result.usage.outputTokens,
@@ -608,7 +620,7 @@ chatComposer.on("message", async (ctx) => {
 		derpMetrics.contextTokens.record(recentMessages.length, { tier });
 	} catch (err) {
 		const error = err instanceof Error ? err.message : String(err);
-		if (chatCreditResult) {
+		if (chatCreditResult && !providerCompleted) {
 			await ctx.creditService
 				.refundDeduction(
 					chatCreditResult,
@@ -624,6 +636,14 @@ chatComposer.on("message", async (ctx) => {
 								: String(refundErr),
 					});
 				});
+		} else if (chatCreditResult && providerCompleted) {
+			logger.warn("chat_billable_failure_not_refunded", {
+				error,
+				creditsDeducted: chatCreditResult.creditsToDeduct,
+				source: chatCreditResult.source,
+				chatId: ctx.dbChat.telegramId,
+				userId: ctx.dbUser.telegramId,
+			});
 		}
 		recordHandledFailure("chat", error, {
 			chatId: ctx.dbChat.telegramId,

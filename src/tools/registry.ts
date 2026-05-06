@@ -17,6 +17,7 @@ import {
 	cancelPendingToolConfirmation,
 	claimPendingToolConfirmation,
 	createPendingToolConfirmation,
+	getPendingToolConfirmation,
 } from "../db/queries/finance";
 import { insertMessage } from "../db/queries/messages";
 import type { MessageMetadata } from "../db/schema";
@@ -92,6 +93,8 @@ interface ToolExecutionContextInput {
 	triggerReplyToMessageId?: number | null;
 	replyMedia: MediaAttachment[];
 	idempotencyKey?: string;
+	expectedCreditSource?: CreditCheckResult["source"];
+	expectedCreditsToDeduct?: number;
 }
 
 interface PersistableSentMessage {
@@ -486,6 +489,8 @@ async function buildToolContext(
 		threadId: input.threadId ?? null,
 		replyToMessageId: input.triggerReplyToMessageId ?? null,
 		idempotencyKey: input.idempotencyKey,
+		expectedCreditSource: input.expectedCreditSource,
+		expectedCreditsToDeduct: input.expectedCreditsToDeduct,
 	};
 }
 
@@ -837,6 +842,12 @@ class ToolRegistry {
 				return;
 			}
 
+			const existing = await getPendingToolConfirmation(ctx.db, id);
+			if (existing && existing.userId !== ctx.dbUser.id) {
+				await ctx.answerCallbackQuery(ctx.t("tool-confirm-owner-only"));
+				return;
+			}
+
 			const pending = await claimPendingToolConfirmation(ctx.db, {
 				id,
 				userId: ctx.dbUser.id,
@@ -893,6 +904,11 @@ class ToolRegistry {
 				triggerReplyToMessageId: readTriggerReplyToMessageId(pending.meta),
 				replyMedia: media,
 				idempotencyKey: pending.idempotencyKey,
+				expectedCreditSource:
+					pending.source === "chat" || pending.source === "user"
+						? pending.source
+						: undefined,
+				expectedCreditsToDeduct: pending.cost,
 			});
 			const result = await executeWithCreditGate(tool, parsed.data, toolCtx);
 			await sendToolResult(ctx, tool, commandStart, result, replyOptions);
@@ -908,6 +924,12 @@ class ToolRegistry {
 			const id = ctx.match[1];
 			if (!id || !ctx.dbUser) {
 				await ctx.answerCallbackQuery(ctx.t("error-generic"));
+				return;
+			}
+
+			const existing = await getPendingToolConfirmation(ctx.db, id);
+			if (existing && existing.userId !== ctx.dbUser.id) {
+				await ctx.answerCallbackQuery(ctx.t("tool-confirm-owner-only"));
 				return;
 			}
 

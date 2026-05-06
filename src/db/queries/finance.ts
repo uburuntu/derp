@@ -560,6 +560,18 @@ export async function claimPendingToolConfirmation(
 	});
 }
 
+export async function getPendingToolConfirmation(
+	db: Database,
+	id: string,
+): Promise<typeof pendingToolConfirmations.$inferSelect | null> {
+	const [row] = await db
+		.select()
+		.from(pendingToolConfirmations)
+		.where(eq(pendingToolConfirmations.id, id))
+		.limit(1);
+	return row ?? null;
+}
+
 export async function cancelPendingToolConfirmation(
 	db: Database,
 	input: { id: string; userId: string },

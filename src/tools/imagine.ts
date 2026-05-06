@@ -24,8 +24,9 @@ async function executeImagine(
 		config.googleApiPaidKey,
 	);
 
+	let result: Awaited<ReturnType<GoogleLLMProvider["generateImage"]>>;
 	try {
-		const result = await provider.generateImage({
+		result = await provider.generateImage({
 			model: "gemini-2.5-flash-preview-image",
 			prompt: params.prompt,
 			timeoutMs: 60_000,
@@ -41,7 +42,12 @@ async function executeImagine(
 				creditSource: ctx.creditResult?.source,
 			},
 		});
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return { text: `Image generation failed: ${msg}`, error: msg };
+	}
 
+	try {
 		const caption = captionPartsForMedia(params.prompt);
 		await ctx.sendPhoto(result.image.data, caption.caption);
 		for (const chunk of caption.followUpChunks) {
@@ -50,7 +56,11 @@ async function executeImagine(
 		return { handled: true };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		return { text: `Image generation failed: ${msg}`, error: msg };
+		return {
+			text: `Image generated, but I couldn't deliver it to Telegram: ${msg}`,
+			error: msg,
+			billableFailure: true,
+		};
 	}
 }
 
