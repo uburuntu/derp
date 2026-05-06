@@ -89,6 +89,16 @@ Status: loop 5 remediation complete
 
 - [ ] A future schema migration should promote spend lifecycle metadata into typed columns/table if this becomes an operator workflow.
 
+## Platformization Debt
+
+- [x] Split tool execution-context construction and delivery persistence out of `src/tools/registry.ts`.
+- [ ] Split `src/db/queries/credits.ts` into ledger, payments, subscriptions, free-quota, and metrics repositories.
+- [ ] Split `src/handlers/admin.ts` into command registration, finance operations, observability dashboards, and maintenance actions.
+- [ ] Split `src/handlers/credits.ts` into balance view, purchase flows, receipts, refunds, and group-pool UX.
+- [ ] Continue shrinking provider adapters by moving shared Google media-operation orchestration out of `src/llm/providers/google.ts`.
+
+Current largest files after the tool runtime split: `src/db/queries/credits.ts` (1696), `src/handlers/admin.ts` (1113), `src/llm/providers/google.ts` (1073), `src/handlers/credits.ts` (1068), `src/handlers/chat.ts` (838), `src/handlers/settings.ts` (755), `src/db/queries/finance.ts` (747).
+
 ## Loop Notes
 
 - Reviewer roles: finance data model, Telegram commerce UX, provider observability, product economy.

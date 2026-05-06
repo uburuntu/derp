@@ -2,42 +2,19 @@
 
 import { type Bot, InlineKeyboard } from "grammy";
 import type { DerpContext } from "../bot/context";
-import { notifyAdmins } from "../common/admin-notify";
 import { downloadTelegramFile, extractMedia } from "../common/extractor";
 import { logger } from "../common/observability";
-import {
-    appendFooterToChunks,
-    replyHtml,
-    replyMarkdown,
-    splitMessage,
-} from "../common/reply";
+import { replyHtml } from "../common/reply";
 import { registerToolPricing } from "../credits/service";
 import type { CreditCheckResult } from "../credits/types";
-import { markLedgerSpendStatus } from "../db/queries/credits";
 import {
     cancelPendingToolConfirmation,
     claimPendingToolConfirmation,
     createPendingToolConfirmation,
     getPendingToolConfirmation,
 } from "../db/queries/finance";
-import { insertMessage } from "../db/queries/messages";
-import type { MessageMetadata } from "../db/schema";
-import {
-    hasProviderResultMetadata,
-    mergeProviderResultMetadata,
-    type ProviderResultMetadata,
-} from "../llm/provider-result";
 import type { LLMToolSchema, MediaAttachment } from "../llm/types";
-import { createDbProviderCallRecorder } from "../platform/provider-call-recorder";
-import {
-    canUseAdminGatedSetting,
-    isChatAdmin,
-    isGroupChat,
-} from "../platform/telegram-access";
-import {
-    createDbToolMemoryStore,
-    createDbToolReminderStore,
-} from "../platform/tool-stores";
+import { isGroupChat } from "../platform/telegram-access";
 import { isToolDisabled } from "../preferences/user";
 import {
     CATEGORY_EMOJI,
@@ -49,54 +26,25 @@ import {
     type Translator,
 } from "./catalog";
 import { executeWithCreditGate } from "./credit-gate";
+import { createToolExecutionContext } from "./runtime/context";
+import {
+    buildCommandMetadata,
+    editCallbackMessageHtml,
+    type ReplyOptions,
+    replyMarkdownAndPersist,
+    replyOptionsFor,
+    sendToolResult,
+} from "./runtime/output";
 import { parseToolParams, zodToJsonSchema } from "./schema";
-import type {
-    ToolCategory,
-    ToolDefinition,
-    ToolExecutionContext,
-    ToolResult,
-} from "./types";
+import type { ToolCategory, ToolDefinition } from "./types";
 
 const TOOL_CONFIRM_COST_THRESHOLD = 20;
 const TOOL_CONFIRM_TTL_MS = 5 * 60 * 1000;
-
-type ReplyOptions = Parameters<DerpContext["reply"]>[1];
 
 interface PendingMediaInfo {
     type: MediaAttachment["type"];
     fileId: string;
     mimeType: string;
-}
-
-interface ToolExecutionContextInput {
-    commandStart: number;
-    threadId?: number | null;
-    replyToMessageId?: number | null;
-    triggerReplyToMessageId?: number | null;
-    replyMedia: MediaAttachment[];
-    idempotencyKey?: string;
-    expectedCreditSource?: CreditCheckResult["source"];
-    expectedCreditsToDeduct?: number;
-}
-
-interface PersistableSentMessage {
-    message_id: number;
-    date: number;
-    message_thread_id?: number;
-    caption?: string;
-    photo?: Array<{ file_id: string }>;
-    voice?: { file_id: string };
-    video?: { file_id: string };
-}
-
-interface OutgoingMessageRecord {
-    contentType: string;
-    text?: string | null;
-    attachmentType?: string | null;
-    attachmentFileId?: string | null;
-    threadId?: number | null;
-    replyToMessageId?: number | null;
-    metadata?: MessageMetadata | null;
 }
 
 function escapeHtml(text: string): string {
@@ -108,16 +56,6 @@ function escapeHtml(text: string): string {
 
 function callbackData(action: "run" | "cancel", id: string): string {
     return `tool_confirm:${action}:${id}`;
-}
-
-function replyOptionsFor(
-    threadId?: number | null,
-    replyToMessageId?: number | null,
-): ReplyOptions {
-    return {
-        message_thread_id: threadId ?? undefined,
-        reply_to_message_id: replyToMessageId ?? undefined,
-    };
 }
 
 function shouldConfirmToolSpend(result: CreditCheckResult): boolean {
@@ -196,343 +134,6 @@ async function extractTriggerMedia(
         }
     }
     return attachments;
-}
-
-async function persistOutgoingMessage(
-    ctx: DerpContext,
-    sent: PersistableSentMessage,
-    record: OutgoingMessageRecord,
-): Promise<void> {
-    if (!ctx.dbChat) return;
-
-    try {
-        await insertMessage(ctx.db, {
-            chatId: ctx.dbChat.id,
-            userId: null,
-            telegramMessageId: sent.message_id,
-            threadId: sent.message_thread_id ?? record.threadId ?? null,
-            direction: "out",
-            contentType: record.contentType,
-            text: record.text ?? null,
-            attachmentType: record.attachmentType ?? null,
-            attachmentFileId: record.attachmentFileId ?? null,
-            replyToMessageId: record.replyToMessageId ?? null,
-            metadata: record.metadata ?? null,
-            telegramDate: new Date(sent.date * 1000),
-        });
-    } catch (err) {
-        logger.warn("tool_command_output_persist_failed", {
-            messageId: sent.message_id,
-            error: err instanceof Error ? err.message : String(err),
-        });
-    }
-}
-
-async function replyMarkdownAndPersist(
-    ctx: DerpContext,
-    chunks: string[],
-    options: ReplyOptions,
-    metadata: MessageMetadata,
-    storedChunks: Array<string | null | undefined> = chunks,
-): Promise<void> {
-    for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        if (!chunk) continue;
-        const chunkOptions =
-            i === 0
-                ? options
-                : {
-                      ...options,
-                      reply_to_message_id: undefined,
-                  };
-        const sentMessages = await replyMarkdown(ctx, chunk, chunkOptions);
-        for (const [sentIndex, sent] of sentMessages.entries()) {
-            await persistOutgoingMessage(ctx, sent, {
-                contentType: "text",
-                text: sentIndex === 0 ? (storedChunks[i] ?? null) : null,
-                threadId: options?.message_thread_id ?? null,
-                replyToMessageId:
-                    sentIndex === 0
-                        ? (chunkOptions?.reply_to_message_id ?? null)
-                        : null,
-                metadata,
-            });
-        }
-    }
-}
-
-function buildCommandMetadata(
-    tool: ToolDefinition,
-    ctx: DerpContext,
-    startedAt: number,
-    creditResult?: Awaited<
-        ReturnType<typeof executeWithCreditGate>
-    >["creditResult"],
-    providerMeta?: ProviderResultMetadata,
-): MessageMetadata {
-    return {
-        model: creditResult?.modelId,
-        tier: ctx.tier,
-        toolsUsed: [tool.name],
-        creditsSpent:
-            creditResult && creditResult.creditsToDeduct > 0
-                ? creditResult.creditsToDeduct
-                : undefined,
-        creditSource:
-            creditResult && creditResult.source !== "rejected"
-                ? creditResult.source
-                : undefined,
-        providerCallIds: providerMeta?.providerCallIds,
-        costMicros: providerMeta?.costMicros,
-        durationMs: Date.now() - startedAt,
-    };
-}
-
-function publicCreditSource(
-    ctx: DerpContext,
-    source?: string,
-): string | undefined {
-    return source === "user" && isGroupChat(ctx) ? "user_private" : source;
-}
-
-function largestPhotoFileId(
-    sent: PersistableSentMessage,
-): string | null | undefined {
-    return sent.photo?.at(-1)?.file_id;
-}
-
-async function buildToolContext(
-    ctx: DerpContext,
-    tool: ToolDefinition,
-    input: ToolExecutionContextInput,
-): Promise<ToolExecutionContext> {
-    if (!ctx.dbUser || !ctx.dbChat || !ctx.creditService) {
-        throw new Error("Missing hydrated tool context");
-    }
-
-    const admin = await isChatAdmin(ctx);
-    const replyOptions = replyOptionsFor(
-        input.threadId,
-        input.replyToMessageId,
-    );
-    const providerMeta: ProviderResultMetadata = {};
-
-    const toolCtx: ToolExecutionContext = {
-        db: ctx.db,
-        user: ctx.dbUser,
-        chat: ctx.dbChat,
-        creditService: ctx.creditService,
-        memoryStore: createDbToolMemoryStore(ctx.db, ctx.dbChat),
-        reminderStore: createDbToolReminderStore(
-            ctx.db,
-            ctx.dbUser,
-            ctx.dbChat,
-        ),
-        providerRecorder: createDbProviderCallRecorder(ctx.db),
-        tier: ctx.tier,
-        isChatAdmin: admin,
-        isGroupChat: isGroupChat(ctx),
-        canManageMemory: canUseAdminGatedSetting(
-            ctx.dbChat.settings?.memoryAccess,
-            admin,
-        ),
-        canManageReminders: canUseAdminGatedSetting(
-            ctx.dbChat.settings?.remindersAccess,
-            admin,
-        ),
-        recordProviderResult: (result) =>
-            mergeProviderResultMetadata(providerMeta, result),
-        sendMessage: async (text: string) => {
-            const sent = await ctx.reply(text, replyOptions);
-            await persistOutgoingMessage(ctx, sent, {
-                contentType: "text",
-                text,
-                threadId: input.threadId ?? null,
-                replyToMessageId: input.replyToMessageId ?? null,
-                metadata: buildCommandMetadata(
-                    tool,
-                    ctx,
-                    input.commandStart,
-                    hasProviderResultMetadata(providerMeta)
-                        ? toolCtx.creditResult
-                        : undefined,
-                    providerMeta,
-                ),
-            });
-        },
-        sendPhoto: async (photo: Buffer, caption?: string) => {
-            const { InputFile } = await import("grammy");
-            const sent = await ctx.replyWithPhoto(new InputFile(photo), {
-                caption,
-                ...replyOptions,
-            });
-            await persistOutgoingMessage(ctx, sent, {
-                contentType: "photo",
-                text: caption ?? sent.caption ?? null,
-                attachmentType: "image",
-                attachmentFileId: largestPhotoFileId(sent) ?? null,
-                threadId: input.threadId ?? null,
-                replyToMessageId: input.replyToMessageId ?? null,
-                metadata: buildCommandMetadata(
-                    tool,
-                    ctx,
-                    input.commandStart,
-                    toolCtx.creditResult,
-                    providerMeta,
-                ),
-            });
-        },
-        sendVoice: async (audio: Buffer) => {
-            const { InputFile } = await import("grammy");
-            const sent = await ctx.replyWithVoice(
-                new InputFile(audio),
-                replyOptions,
-            );
-            await persistOutgoingMessage(ctx, sent, {
-                contentType: "voice",
-                attachmentType: "voice",
-                attachmentFileId: sent.voice?.file_id ?? null,
-                threadId: input.threadId ?? null,
-                replyToMessageId: input.replyToMessageId ?? null,
-                metadata: buildCommandMetadata(
-                    tool,
-                    ctx,
-                    input.commandStart,
-                    toolCtx.creditResult,
-                    providerMeta,
-                ),
-            });
-        },
-        sendVideo: async (video: Buffer, caption?: string) => {
-            const { InputFile } = await import("grammy");
-            const sent = await ctx.replyWithVideo(new InputFile(video), {
-                caption,
-                ...replyOptions,
-            });
-            await persistOutgoingMessage(ctx, sent, {
-                contentType: "video",
-                text: caption ?? sent.caption ?? null,
-                attachmentType: "video",
-                attachmentFileId: sent.video?.file_id ?? null,
-                threadId: input.threadId ?? null,
-                replyToMessageId: input.replyToMessageId ?? null,
-                metadata: buildCommandMetadata(
-                    tool,
-                    ctx,
-                    input.commandStart,
-                    toolCtx.creditResult,
-                    providerMeta,
-                ),
-            });
-        },
-        editMessage: async (messageId: number, text: string) => {
-            const chatId = ctx.chat?.id;
-            if (chatId == null) throw new Error("No chat for editMessage");
-            await ctx.api.editMessageText(chatId, messageId, text);
-        },
-        deleteMessage: async (messageId: number) => {
-            const chatId = ctx.chat?.id;
-            if (chatId == null) throw new Error("No chat for deleteMessage");
-            await ctx.api.deleteMessage(chatId, messageId);
-        },
-        replyMedia: input.replyMedia,
-        threadId: input.threadId ?? null,
-        replyToMessageId: input.triggerReplyToMessageId ?? null,
-        idempotencyKey: input.idempotencyKey,
-        expectedCreditSource: input.expectedCreditSource,
-        expectedCreditsToDeduct: input.expectedCreditsToDeduct,
-    };
-    return toolCtx;
-}
-
-async function sendToolResult(
-    ctx: DerpContext,
-    tool: ToolDefinition,
-    commandStart: number,
-    result: ToolResult & { creditResult?: CreditCheckResult },
-    replyOptions: ReplyOptions,
-): Promise<void> {
-    if (result.handled || !result.text) return;
-
-    const cost =
-        result.creditResult &&
-        result.creditResult.creditsToDeduct > 0 &&
-        result.creditResult.creditsRemaining != null
-            ? result.creditResult.creditsToDeduct
-            : 0;
-    const remaining = result.creditResult?.creditsRemaining ?? 0;
-    const storedChunks = splitMessage(result.text);
-    const chunksWithFooter = appendFooterToChunks(
-        storedChunks,
-        cost,
-        remaining,
-        publicCreditSource(ctx, result.creditResult?.source),
-    );
-    try {
-        await replyMarkdownAndPersist(
-            ctx,
-            chunksWithFooter,
-            replyOptions,
-            buildCommandMetadata(tool, ctx, commandStart, result.creditResult, {
-                providerCallIds: result.providerCallIds,
-                costMicros: result.costMicros,
-            }),
-            storedChunks,
-        );
-        await markLedgerSpendStatus(
-            ctx.db,
-            result.creditResult?.ledgerId,
-            "delivered",
-            { toolName: tool.name },
-        );
-    } catch (err) {
-        const error = err instanceof Error ? err.message : String(err);
-        if (result.creditResult && result.creditResult.creditsToDeduct > 0) {
-            await markLedgerSpendStatus(
-                ctx.db,
-                result.creditResult.ledgerId,
-                "delivery_failed",
-                {
-                    error,
-                    toolName: tool.name,
-                    providerCallIds: result.providerCallIds,
-                    costMicros: result.costMicros,
-                },
-            );
-            logger.warn("tool_text_delivery_failed_after_spend", {
-                tool: tool.name,
-                error,
-                creditsDeducted: result.creditResult.creditsToDeduct,
-                source: result.creditResult.source,
-                providerCallIds: result.providerCallIds,
-                costMicros: result.costMicros,
-            });
-            await notifyAdmins(
-                `⚠️ <b>Billable tool text delivery failure</b>\n\nTool: <code>${escapeHtml(tool.name)}</code>\nCredits kept: ${result.creditResult.creditsToDeduct}\nSource: <code>${escapeHtml(result.creditResult.source)}</code>\nProvider calls: <code>${escapeHtml(result.providerCallIds?.join(", ") ?? "n/a")}</code>\nProvider cost: $${((result.costMicros ?? 0) / 1_000_000).toFixed(4)}\nReason: ${escapeHtml(error)}`,
-                { critical: true },
-            ).catch((notifyErr) => {
-                logger.error("tool_text_delivery_admin_notify_failed", {
-                    tool: tool.name,
-                    error:
-                        notifyErr instanceof Error
-                            ? notifyErr.message
-                            : String(notifyErr),
-                });
-            });
-        }
-        throw err;
-    }
-}
-
-async function editCallbackMessageHtml(
-    ctx: DerpContext,
-    html: string,
-): Promise<void> {
-    try {
-        await ctx.editMessageText(html, { parse_mode: "HTML" });
-    } catch {
-        await ctx.editMessageText(html.replace(/<[^>]*>/g, ""));
-    }
 }
 
 class ToolRegistry {
@@ -761,7 +362,7 @@ class ToolRegistry {
                     return;
                 }
 
-                const toolCtx = await buildToolContext(ctx, tool, {
+                const toolCtx = await createToolExecutionContext(ctx, tool, {
                     commandStart,
                     threadId,
                     replyToMessageId,
@@ -931,7 +532,7 @@ class ToolRegistry {
                 return;
             }
 
-            const toolCtx = await buildToolContext(ctx, tool, {
+            const toolCtx = await createToolExecutionContext(ctx, tool, {
                 commandStart,
                 threadId: pending.threadId,
                 replyToMessageId: pending.messageId,
