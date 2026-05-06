@@ -1,7 +1,7 @@
 # Derp Finance Hardening Harness
 
-Loop: 1 / 5
-Status: reviewer findings remediated; preparing loop 2
+Loop: 2 / 5
+Status: reviewer loop 2 running
 
 ## P0
 
