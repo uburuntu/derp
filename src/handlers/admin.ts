@@ -5,6 +5,7 @@ import type { DerpContext } from "../bot/context";
 import { formatRefundNotification, notifyAdmins } from "../common/admin-notify";
 import { escapeHtml } from "../common/sanitize";
 import { config } from "../config";
+import { creditUsdFloor } from "../credits/economy";
 import {
 	addUserCredits,
 	getBalances,
@@ -25,6 +26,10 @@ function looksAlreadyRefunded(error: string): boolean {
 	return /payment_already_refunded|already.*refund|refund.*already/i.test(
 		error,
 	);
+}
+
+function formatUsd(value: number): string {
+	return `$${value.toFixed(2)}`;
 }
 
 function formatReconciliation(
@@ -391,6 +396,7 @@ adminComposer.command("admin", async (ctx) => {
 				? Math.max(1, Math.min(365, daysArg))
 				: 30;
 			const { sql } = await import("drizzle-orm");
+			const creditFloorUsd = creditUsdFloor();
 
 			const [overview] = await ctx.db.execute(sql`
 				SELECT
@@ -399,7 +405,14 @@ adminComposer.command("admin", async (ctx) => {
 					(SELECT count(*)::int FROM messages WHERE telegram_date >= now() - make_interval(days => ${days}) AND direction = 'in') AS inbound_messages,
 					(SELECT count(*)::int FROM messages WHERE telegram_date >= now() - make_interval(days => ${days}) AND direction = 'out') AS outbound_messages,
 					(SELECT COALESCE(sum(-amount), 0)::int FROM ledger WHERE created_at >= now() - make_interval(days => ${days}) AND type = 'spend') AS credits_spent,
-					(SELECT COALESCE(sum(stars), 0)::int FROM payment_receipts WHERE created_at >= now() - make_interval(days => ${days}) AND status = 'paid') AS stars_received
+					(SELECT COALESCE(sum(amount), 0)::int FROM ledger WHERE created_at >= now() - make_interval(days => ${days}) AND type = 'grant') AS credits_granted,
+					(SELECT COALESCE(sum(-amount), 0)::int FROM ledger WHERE created_at >= now() - make_interval(days => ${days}) AND type = 'refund') AS credits_refunded,
+					(SELECT COALESCE(sum(((meta->>'unrecoveredAmount')::int)), 0)::int FROM ledger WHERE created_at >= now() - make_interval(days => ${days}) AND type = 'refund' AND meta ? 'unrecoveredAmount') AS refund_debt_credits,
+					(SELECT COALESCE(sum(stars), 0)::int FROM payment_receipts WHERE created_at >= now() - make_interval(days => ${days})) AS gross_stars,
+					(SELECT COALESCE(sum(stars), 0)::int FROM payment_receipts WHERE refunded_at >= now() - make_interval(days => ${days}) AND status = 'refunded') AS refunded_stars,
+					(SELECT COALESCE(sum(credits), 0)::int FROM users) AS user_credit_liability,
+					(SELECT COALESCE(sum(credits), 0)::int FROM chats) AS chat_credit_liability,
+					(SELECT COALESCE(sum(value::int), 0)::int FROM usage_quotas, jsonb_each_text(usage) WHERE usage_date >= current_date - make_interval(days => ${days})) AS free_quota_uses
 			`);
 
 			const toolRows = await ctx.db.execute(sql`
@@ -433,7 +446,14 @@ adminComposer.command("admin", async (ctx) => {
 				inbound_messages?: number;
 				outbound_messages?: number;
 				credits_spent?: number;
-				stars_received?: number;
+				credits_granted?: number;
+				credits_refunded?: number;
+				refund_debt_credits?: number;
+				gross_stars?: number;
+				refunded_stars?: number;
+				user_credit_liability?: number;
+				chat_credit_liability?: number;
+				free_quota_uses?: number;
 			};
 			const tools = toolRows as unknown as Array<{
 				tool: string;
@@ -464,6 +484,12 @@ adminComposer.command("admin", async (ctx) => {
 							)
 							.join("\n")
 					: "No Stars payments yet.";
+			const outstandingCredits =
+				(overviewRow.user_credit_liability ?? 0) +
+				(overviewRow.chat_credit_liability ?? 0);
+			const outstandingUsd = outstandingCredits * creditFloorUsd;
+			const grossStars = overviewRow.gross_stars ?? 0;
+			const refundedStars = overviewRow.refunded_stars ?? 0;
 
 			await ctx.reply(
 				`📈 <b>Usage Metrics</b> (${days}d)\n\n` +
@@ -471,7 +497,15 @@ adminComposer.command("admin", async (ctx) => {
 					`Active users: ${overviewRow.active_users ?? 0}\n` +
 					`Messages: ${overviewRow.inbound_messages ?? 0} in / ${overviewRow.outbound_messages ?? 0} out\n` +
 					`Credits spent: ${overviewRow.credits_spent ?? 0}\n` +
-					`Stars received: ${overviewRow.stars_received ?? 0}⭐\n\n` +
+					`Credits granted: ${overviewRow.credits_granted ?? 0}\n` +
+					`Credits refunded/recovered: ${overviewRow.credits_refunded ?? 0}\n` +
+					`Refund debt: ${overviewRow.refund_debt_credits ?? 0} cr\n` +
+					`Free quota uses: ${overviewRow.free_quota_uses ?? 0}\n` +
+					`Stars gross/refunded/net: ${grossStars}⭐ / ${refundedStars}⭐ / ${grossStars - refundedStars}⭐\n\n` +
+					`<b>Liability</b>\n` +
+					`Outstanding credits: ${outstandingCredits} cr (${formatUsd(outstandingUsd)} floor value)\n` +
+					`User/chat split: ${overviewRow.user_credit_liability ?? 0} / ${overviewRow.chat_credit_liability ?? 0} cr\n` +
+					`Credit floor: ${formatUsd(creditFloorUsd)}/cr\n\n` +
 					`<b>Top tools</b>\n${toolLines}\n\n` +
 					`<b>Payments</b>\n${paymentLines}`,
 				{ parse_mode: "HTML" },
@@ -522,6 +556,8 @@ adminComposer.command("admin", async (ctx) => {
 				"chat_members",
 				"messages",
 				"ledger",
+				"payment_receipts",
+				"subscription_periods",
 				"usage_quotas",
 				"reminders",
 			];
