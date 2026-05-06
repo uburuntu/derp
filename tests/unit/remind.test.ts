@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { CreditService } from "../../src/credits/service";
 import type { Database } from "../../src/db/connection";
 import type { Chat, User } from "../../src/db/schema";
 import { ModelTier } from "../../src/llm/registry";
@@ -47,7 +46,6 @@ function makeToolContext(
             telegramId: 222,
             settings: { memoryAccess: "admins", remindersAccess: "admins" },
         } as Chat,
-        creditService: {} as CreditService,
         providerRecorder: {
             start: async () => null,
             finish: async () => {},

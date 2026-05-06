@@ -7,6 +7,7 @@ Derp is layered around explicit product instruments. Each layer owns one boundar
 - `src/index.ts` composes runtime startup: config, database, bot, health, scheduler, shutdown.
 - `src/bot`, `src/middleware`, and `src/handlers` are Telegram interface code. They translate grammY updates into application calls and user-facing replies.
 - `src/tools/<instrument>.ts` files are product instruments. A tool owns its parameter schema, command parsing, help/pricing metadata, and execution logic. It never imports grammY, bot context, handlers, the registry, or credit gate internals.
+- `ToolDefinition.execute` receives `ToolContext`, not the credit service. Spend checks, reservations, refunds, and receipts belong to `src/tools/credit-gate.ts`.
 - `src/tools/registry.ts` is the Telegram/LLM adapter for instruments. It registers slash commands, confirmation callbacks, help sections, persistence of outgoing messages, and command delivery.
 - `src/tools/credit-gate.ts` is the application spend boundary. Instruments do not charge directly.
 - `src/credits`, `src/preferences`, `src/memory`, `src/scheduler/cron.ts`, and `src/llm/registry.ts` hold product policy and domain rules.

@@ -48,7 +48,7 @@ import { createDbProviderCallRecorder } from "../platform/provider-call-recorder
 import { normalizeUserPreferences } from "../preferences/user";
 import { executeWithCreditGate } from "../tools/credit-gate";
 import { toolRegistry } from "../tools/registry";
-import type { ToolContext } from "../tools/types";
+import type { ToolExecutionContext } from "../tools/types";
 
 const chatComposer = new Composer<DerpContext>();
 const FREE_CHAT_DAILY_LIMIT = 25;
@@ -188,7 +188,7 @@ async function buildToolContext(
     participantRefs: Map<string, ContextParticipant>,
     replyMedia: MediaAttachment[],
     providerMeta: ProviderResultMetadata,
-): Promise<ToolContext> {
+): Promise<ToolExecutionContext> {
     const admin = await isChatAdmin(ctx);
     const replyOptions = {
         message_thread_id: ctx.message?.message_thread_id,

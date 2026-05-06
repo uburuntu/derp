@@ -11,7 +11,7 @@ import { escapeHtml } from "../common/sanitize";
 import type { CreditCheckResult } from "../credits/types";
 import { markLedgerSpendStatus } from "../db/queries/credits";
 import { ModelTier } from "../llm/registry";
-import type { ToolContext, ToolDefinition, ToolResult } from "./types";
+import type { ToolDefinition, ToolExecutionContext, ToolResult } from "./types";
 
 const TIER_RANK: Record<ModelTier, number> = {
     [ModelTier.FREE]: 0,
@@ -38,7 +38,7 @@ function zeroCostResult(result: CreditCheckResult): CreditCheckResult {
 export async function executeWithCreditGate(
     tool: ToolDefinition,
     params: unknown,
-    ctx: ToolContext,
+    ctx: ToolExecutionContext,
 ): Promise<ToolResult & { creditResult?: CreditCheckResult }> {
     return withSpan(
         `tool.${tool.name}`,
@@ -409,7 +409,7 @@ export async function executeWithCreditGate(
 }
 
 async function refundToolDeduction(
-    ctx: ToolContext,
+    ctx: ToolExecutionContext,
     creditResult: CreditCheckResult,
     tool: ToolDefinition,
     idempotencyKey: string | undefined,

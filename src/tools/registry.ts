@@ -29,8 +29,8 @@ import { isToolDisabled } from "../preferences/user";
 import { executeWithCreditGate } from "./credit-gate";
 import type {
     ToolCategory,
-    ToolContext,
     ToolDefinition,
+    ToolExecutionContext,
     ToolResult,
 } from "./types";
 
@@ -443,7 +443,7 @@ async function buildToolContext(
     ctx: DerpContext,
     tool: ToolDefinition,
     input: ToolExecutionContextInput,
-): Promise<ToolContext> {
+): Promise<ToolExecutionContext> {
     if (!ctx.dbUser || !ctx.dbChat || !ctx.creditService) {
         throw new Error("Missing hydrated tool context");
     }
@@ -455,7 +455,7 @@ async function buildToolContext(
     );
     const providerMeta: ProviderResultMetadata = {};
 
-    const toolCtx: ToolContext = {
+    const toolCtx: ToolExecutionContext = {
         db: ctx.db,
         user: ctx.dbUser,
         chat: ctx.dbChat,

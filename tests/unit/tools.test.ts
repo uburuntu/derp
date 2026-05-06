@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { CreditService } from "../../src/credits/service";
 import type { Database } from "../../src/db/connection";
 import type { Chat, User } from "../../src/db/schema";
 import type { ContextParticipant } from "../../src/llm/context-builder";
@@ -20,7 +19,6 @@ function makeToolContext(overrides: Partial<ToolContext> = {}): ToolContext {
             memory: "existing memory",
             settings: { memoryAccess: "admins", remindersAccess: "admins" },
         } as Chat,
-        creditService: {} as CreditService,
         providerRecorder: {
             start: async () => null,
             finish: async () => {},

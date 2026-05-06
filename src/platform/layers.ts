@@ -24,6 +24,7 @@ export const IMPORT_BOUNDARY_RULES: ImportBoundaryRule[] = [
             /^src\/bot\//,
             /^src\/handlers\//,
             /^src\/middleware\//,
+            /^src\/credits\/service\.ts$/,
             /^src\/tools\/credit-gate\.ts$/,
             /^src\/tools\/registry\.ts$/,
         ],

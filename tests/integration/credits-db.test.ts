@@ -19,7 +19,10 @@ import { upsertUser } from "../../src/db/queries/users";
 import { ledger, paymentReceipts, users } from "../../src/db/schema";
 import { ModelTier } from "../../src/llm/registry";
 import { executeWithCreditGate } from "../../src/tools/credit-gate";
-import type { ToolContext, ToolDefinition } from "../../src/tools/types";
+import type {
+    ToolDefinition,
+    ToolExecutionContext,
+} from "../../src/tools/types";
 
 const databaseUrl =
     process.env.DERP_RUN_DB_TESTS === "1"
@@ -265,7 +268,7 @@ describe.skipIf(!databaseUrl)("credits database invariants", () => {
             freeDaily: 0,
         };
 
-        const toolCtx: ToolContext = {
+        const toolCtx: ToolExecutionContext = {
             db,
             user,
             chat,

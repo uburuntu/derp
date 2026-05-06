@@ -47,7 +47,6 @@ export interface ToolContext {
     db: Database;
     user: User;
     chat: Chat;
-    creditService: CreditService;
     providerRecorder: ProviderCallRecorder;
     tier: ModelTier;
     isChatAdmin: boolean;
@@ -81,6 +80,10 @@ export interface ToolContext {
         providerCallIds?: string[];
         costMicros?: number;
     }) => void;
+}
+
+export interface ToolExecutionContext extends ToolContext {
+    creditService: CreditService;
 }
 
 // ── Tool Result ──────────────────────────────────────────────────────────────
