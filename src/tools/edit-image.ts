@@ -58,7 +58,7 @@ export const editImageTool: ToolDefinition<EditImageParams> = {
 	parameters: editImageParamsSchema,
 	execute: executeEditImage,
 	credits: 10,
-	freeDaily: 1,
+	freeDaily: 0,
 	capability: ModelCapability.IMAGE,
 	defaultModel: "gemini-2.5-flash-preview-image",
 };

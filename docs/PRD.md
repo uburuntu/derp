@@ -29,11 +29,11 @@ Users need Derp to be:
 
 ## Tiers
 
-- `FREE`: default tier for users and chats without paid balance or active subscription.
-- `STANDARD`: available when the user or chat has a positive credit balance, or the user has an active non-expired subscription.
+- `FREE`: default tier for users and chats without enough credits to pay the chat-turn price.
+- `STANDARD`: used for a normal chat turn only when the user or chat can pay the chat-turn credit price.
 - `PREMIUM`: model registry/catalogue only. The orchestrator must not return it.
 
-Normal chat turns currently do not spend credits. A positive balance unlocks `STANDARD` chat while the balance remains positive.
+Normal `STANDARD` chat turns spend 2 credits. If the user and chat pool cannot pay that turn, Derp falls back to the `FREE` model. A subscription grants monthly credits; it does not unlock unlimited paid-model chat after those credits are spent.
 
 ## Credits And Packs
 
@@ -51,6 +51,8 @@ Top-up packs:
 - Large: 1500 Stars, 1800 credits.
 
 Free daily tool quotas are currently tracked per user, per chat, per day.
+
+Pricing uses the cheapest sold credit as the floor. With current subscription discounts, that is the Ultra plan at 1500 Stars for 2500 credits. Tool prices must be checked against that floor, not against the best-case one-Star-per-credit packs.
 
 ## Tool Policy
 
@@ -81,6 +83,5 @@ Current automatic tools:
 
 ## Open Decisions
 
-- Chat turn metering: if normal chat turns should spend credits, define the per-turn cost here before implementation.
 - Free quota scope: if quotas should become global per user per day, add a migration and update help copy in the same change.
 - LLM reminders: define creation UX, lifetime limits, retry/refund behavior, and cancellation rules before exposing them to users.

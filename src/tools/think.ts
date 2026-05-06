@@ -9,6 +9,7 @@ import type { ToolContext, ToolDefinition, ToolResult } from "./types";
 const thinkParamsSchema = z.object({
 	question: z
 		.string()
+		.max(12_000)
 		.describe(
 			"The question or problem to think deeply about. Provide full context.",
 		),
@@ -27,11 +28,11 @@ async function executeThink(
 
 	try {
 		const result = await provider.chat({
-			model: "gemini-3-pro-preview",
+			model: "gemini-3.1-pro-preview",
 			systemPrompt:
 				"You are a deep reasoning assistant. Think step by step. Be thorough and precise.",
 			messages: [{ role: "user", content: params.question }],
-			maxOutputTokens: 8192,
+			maxOutputTokens: 4096,
 			timeoutMs: 60_000,
 		});
 
@@ -51,8 +52,8 @@ export const thinkTool: ToolDefinition<ThinkParams> = {
 	category: "reasoning",
 	parameters: thinkParamsSchema,
 	execute: executeThink,
-	credits: 5,
+	credits: 20,
 	freeDaily: 0,
 	capability: ModelCapability.TEXT,
-	defaultModel: "gemini-3-pro-preview",
+	defaultModel: "gemini-3.1-pro-preview",
 };

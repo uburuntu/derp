@@ -121,8 +121,8 @@ Tools that spend credits, generate media, write memory, or create reminders must
 
 | Tier | Model | Context | Condition |
 |------|-------|---------|-----------|
-| FREE | Gemini Flash Lite | 15 messages | No credits, no subscription |
-| STANDARD | Gemini Flash | 100 messages | Has credits or active subscription |
+| FREE | Gemini Flash Lite | 15 messages | Cannot pay the chat-turn price |
+| STANDARD | Gemini Flash | 100 messages | Pays 2 credits per normal chat turn |
 
 ## Development
 

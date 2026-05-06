@@ -8,7 +8,7 @@ import { ModelCapability } from "../llm/registry";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types";
 
 const ttsParamsSchema = z.object({
-	text: z.string().describe("The text to convert to speech"),
+	text: z.string().max(2_000).describe("The text to convert to speech"),
 	voice: z
 		.string()
 		.optional()
@@ -28,7 +28,7 @@ async function executeTTS(
 
 	try {
 		const result = await provider.synthesizeSpeech({
-			model: "gemini-2.5-pro-preview-tts",
+			model: "gemini-2.5-flash-preview-tts",
 			text: params.text,
 			voice: params.voice,
 			timeoutMs: 30_000,
@@ -53,8 +53,8 @@ export const ttsTool: ToolDefinition<TTSParams> = {
 	category: "media",
 	parameters: ttsParamsSchema,
 	execute: executeTTS,
-	credits: 5,
+	credits: 10,
 	freeDaily: 0,
 	capability: ModelCapability.VOICE,
-	defaultModel: "gemini-2.5-pro-preview-tts",
+	defaultModel: "gemini-2.5-flash-preview-tts",
 };

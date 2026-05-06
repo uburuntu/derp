@@ -52,7 +52,7 @@ export const imagineTool: ToolDefinition<ImagineParams> = {
 	parameters: imagineParamsSchema,
 	execute: executeImagine,
 	credits: 10,
-	freeDaily: 1,
+	freeDaily: 0,
 	capability: ModelCapability.IMAGE,
 	defaultModel: "gemini-2.5-flash-preview-image",
 };

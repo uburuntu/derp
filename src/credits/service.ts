@@ -30,6 +30,14 @@ interface ToolPricing {
 }
 
 const toolPricingMap = new Map<string, ToolPricing>();
+export const STANDARD_CHAT_TOOL_NAME = "chat";
+export const STANDARD_CHAT_CREDITS = 2;
+
+toolPricingMap.set(STANDARD_CHAT_TOOL_NAME, {
+	credits: STANDARD_CHAT_CREDITS,
+	freeDaily: 0,
+	capability: ModelCapability.TEXT,
+});
 
 /** Register a tool's pricing (called by ToolRegistry on startup) */
 export function registerToolPricing(name: string, pricing: ToolPricing): void {
@@ -68,7 +76,8 @@ export class CreditService {
 		);
 
 		const hasPaid =
-			chatCredits > 0 || userCredits > 0 || hasActiveSubscription(this.user);
+			chatCredits >= STANDARD_CHAT_CREDITS ||
+			userCredits >= STANDARD_CHAT_CREDITS;
 		const tier = hasPaid ? ModelTier.STANDARD : ModelTier.FREE;
 		const model = getDefaultModel(ModelCapability.TEXT, tier);
 		const contextLimit = CONTEXT_LIMITS[tier];

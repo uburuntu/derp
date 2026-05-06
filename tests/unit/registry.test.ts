@@ -52,17 +52,17 @@ describe("ModelRegistry", () => {
 		expect(model.id).toBe("veo-3.1-fast-generate-preview");
 	});
 
-	test("TTS model ID is gemini-2.5-pro-preview-tts", () => {
+	test("TTS model ID is gemini-2.5-flash-preview-tts", () => {
 		const model = getDefaultModel(ModelCapability.VOICE, ModelTier.STANDARD);
-		expect(model.id).toBe("gemini-2.5-pro-preview-tts");
+		expect(model.id).toBe("gemini-2.5-flash-preview-tts");
 	});
 
 	test("getAllModels returns 6 models", () => {
 		expect(getAllModels().length).toBe(6);
 	});
 
-	test("gemini-3-pro-preview is registered under PREMIUM", () => {
-		const model = getModel("gemini-3-pro-preview");
+	test("gemini-3.1-pro-preview is registered under PREMIUM", () => {
+		const model = getModel("gemini-3.1-pro-preview");
 		expect(model.tier).toBe(ModelTier.PREMIUM);
 	});
 });

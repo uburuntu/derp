@@ -40,6 +40,7 @@ credits-insufficient = Need { $cost } credits for { $tool }. Use /buy to get cre
 buy-choose = 💰 <b>Add credits</b>
 
     Subscriptions add monthly personal credits. Packs are one-time.
+    Standard chat replies spend 2 credits; paid tools show their own cost.
     In groups, group packs add shared credits everyone can use here.
 buy-plan-not-found = Plan not found
 buy-pack-not-found = Pack not found

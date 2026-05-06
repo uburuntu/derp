@@ -20,7 +20,10 @@ import {
 	splitMessage,
 } from "../common/reply";
 import { config, getBotId, getGoogleApiKeys } from "../config";
-import { hasActiveSubscription } from "../credits/service";
+import {
+	hasActiveSubscription,
+	STANDARD_CHAT_TOOL_NAME,
+} from "../credits/service";
 import { getBalances } from "../db/queries/credits";
 import { getMembersWithUsers } from "../db/queries/members";
 import { getRecentMessages, insertMessage } from "../db/queries/messages";
@@ -28,6 +31,12 @@ import type { MessageMetadata } from "../db/schema";
 import { buildContext, type ContextParticipant } from "../llm/context-builder";
 import { buildSystemPrompt, detectTaskSpecialist } from "../llm/prompt";
 import { GoogleLLMProvider } from "../llm/providers/google";
+import {
+	CONTEXT_LIMITS,
+	getDefaultModel,
+	ModelCapability,
+	ModelTier,
+} from "../llm/registry";
 import type { ConversationMessage, MediaAttachment } from "../llm/types";
 import { normalizeUserPreferences } from "../preferences/user";
 import { executeWithCreditGate } from "../tools/credit-gate";
@@ -196,7 +205,35 @@ chatComposer.on("message", async (ctx) => {
 
 	// Get orchestrator config (tier, model, context limit)
 	const orchestratorConfig = await ctx.creditService.getOrchestratorConfig();
-	const { tier, modelId, contextLimit } = orchestratorConfig;
+	let { tier, modelId, contextLimit } = orchestratorConfig;
+	let chatCreditResult: Awaited<
+		ReturnType<typeof ctx.creditService.checkToolAccess>
+	> | null = null;
+	const chatTurnIdempotencyKey = ctx.chat
+		? `chat:${ctx.chat.id}:${message.message_id}`
+		: undefined;
+
+	if (tier === ModelTier.STANDARD) {
+		chatCreditResult = await ctx.creditService.checkToolAccess(
+			STANDARD_CHAT_TOOL_NAME,
+		);
+
+		if (chatCreditResult.allowed) {
+			const reserved = await ctx.creditService.deduct(
+				chatCreditResult,
+				STANDARD_CHAT_TOOL_NAME,
+				chatTurnIdempotencyKey,
+				{ phase: "chat_turn" },
+			);
+			if (reserved === "duplicate") return;
+		} else {
+			const freeModel = getDefaultModel(ModelCapability.TEXT, ModelTier.FREE);
+			tier = ModelTier.FREE;
+			modelId = freeModel.id;
+			contextLimit = CONTEXT_LIMITS[ModelTier.FREE];
+			chatCreditResult = null;
+		}
+	}
 
 	// Fetch recent messages from DB
 	const threadId = ctx.message?.message_thread_id ?? null;
@@ -319,9 +356,12 @@ chatComposer.on("message", async (ctx) => {
 	const provider = new GoogleLLMProvider(apiKeys, config.googleApiPaidKey);
 
 	const toolsUsed: string[] = [];
-	let creditsSpent = 0;
-	let creditSource: string | undefined;
-	let creditsRemaining: number | null = null;
+	let creditsSpent = chatCreditResult?.creditsToDeduct ?? 0;
+	let creditSource =
+		chatCreditResult && chatCreditResult.source !== "rejected"
+			? chatCreditResult.source
+			: undefined;
+	let creditsRemaining = chatCreditResult?.creditsRemaining ?? null;
 
 	try {
 		const result = await provider.chatWithTools(
@@ -493,6 +533,23 @@ chatComposer.on("message", async (ctx) => {
 		derpMetrics.contextTokens.record(recentMessages.length, { tier });
 	} catch (err) {
 		const error = err instanceof Error ? err.message : String(err);
+		if (chatCreditResult) {
+			await ctx.creditService
+				.refundDeduction(
+					chatCreditResult,
+					STANDARD_CHAT_TOOL_NAME,
+					chatTurnIdempotencyKey,
+					{ error },
+				)
+				.catch((refundErr) => {
+					logger.error("chat_credit_refund_failed", {
+						error:
+							refundErr instanceof Error
+								? refundErr.message
+								: String(refundErr),
+					});
+				});
+		}
 		recordHandledFailure("chat", error, {
 			chatId: ctx.dbChat.telegramId,
 			userId: ctx.dbUser.telegramId,

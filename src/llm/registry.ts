@@ -1,5 +1,7 @@
 /** Model registry — tier-based model selection with pricing */
 
+import { providerCostToCredits } from "../credits/economy";
+
 export enum ModelCapability {
 	TEXT = "text",
 	IMAGE = "image",
@@ -38,9 +40,6 @@ export interface ModelConfig {
 	creditCost: number;
 }
 
-// 1 credit ≈ $0.013 (1 Star developer payout)
-const CREDIT_BASE_USD = 0.013;
-const DEFAULT_MARGIN = 0.3;
 const AVG_TOKENS_PER_REQUEST = 900; // ~650 in + ~250 out
 
 function computeCreditCost(
@@ -51,9 +50,7 @@ function computeCreditCost(
 	const tokenCost =
 		((inputCostPer1M + outputCostPer1M) * AVG_TOKENS_PER_REQUEST) / 1_000_000;
 	const totalCost = tokenCost + perRequestCost;
-	if (totalCost === 0) return 1;
-	const withMargin = totalCost / (1 - DEFAULT_MARGIN);
-	return Math.max(1, Math.ceil(withMargin / CREDIT_BASE_USD));
+	return providerCostToCredits(totalCost);
 }
 
 function defineModel(m: Omit<ModelConfig, "creditCost">): ModelConfig {
@@ -106,9 +103,9 @@ const MODELS: ModelConfig[] = [
 
 	// Text — PREMIUM tier
 	defineModel({
-		id: "gemini-3-pro-preview",
+		id: "gemini-3.1-pro-preview",
 		provider: "google",
-		displayName: "Gemini 3 Pro",
+		displayName: "Gemini 3.1 Pro",
 		capability: ModelCapability.TEXT,
 		tier: ModelTier.PREMIUM,
 		inputCostPer1M: 2.0,
@@ -155,15 +152,15 @@ const MODELS: ModelConfig[] = [
 		isDeprecated: false,
 	}),
 
-	// Voice — STANDARD tier (Gemini TTS)
+	// Voice — STANDARD tier (Gemini Flash TTS)
 	defineModel({
-		id: "gemini-2.5-pro-preview-tts",
+		id: "gemini-2.5-flash-preview-tts",
 		provider: "google",
-		displayName: "Gemini TTS",
+		displayName: "Gemini Flash TTS",
 		capability: ModelCapability.VOICE,
 		tier: ModelTier.STANDARD,
-		inputCostPer1M: 1.0,
-		outputCostPer1M: 20.0,
+		inputCostPer1M: 0.5,
+		outputCostPer1M: 10.0,
 		perRequestCost: 0,
 		maxContextTokens: 0,
 		supportsTools: false,
