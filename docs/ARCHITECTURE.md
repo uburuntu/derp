@@ -11,6 +11,7 @@ Derp is layered around explicit product instruments. Each layer owns one boundar
 - `ToolContext` exposes narrow stores such as `memoryStore` and `reminderStore`, not a raw database handle. Instruments can mutate their own product surface but cannot make arbitrary persistence calls.
 - Tool-facing `user` and `chat` objects are narrow identities, not full database rows. Add fields deliberately when an instrument genuinely needs them.
 - `src/tools/registry.ts` is the Telegram/LLM adapter for instruments. It registers slash commands, confirmation callbacks, help sections, persistence of outgoing messages, and command delivery.
+- `src/tools/catalog.ts` and `src/tools/schema.ts` own tool presentation metadata and Zod-to-LLM schema/command parsing. The registry consumes these helpers instead of owning catalog rules.
 - `src/tools/credit-gate.ts` is the application spend boundary. Instruments do not charge directly.
 - `src/credits`, `src/preferences`, `src/memory`, `src/scheduler/cron.ts`, and `src/llm/registry.ts` hold product policy and domain rules.
 - `src/db` owns persistence: schema and query modules only.

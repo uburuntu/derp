@@ -1,7 +1,6 @@
 /** Tool registry — auto-discovers tools, generates commands, LLM schemas, and help text */
 
 import { type Bot, InlineKeyboard } from "grammy";
-import { toJSONSchema, type z } from "zod";
 import type { DerpContext } from "../bot/context";
 import { notifyAdmins } from "../common/admin-notify";
 import { downloadTelegramFile, extractMedia } from "../common/extractor";
@@ -40,7 +39,17 @@ import {
     createDbToolReminderStore,
 } from "../platform/tool-stores";
 import { isToolDisabled } from "../preferences/user";
+import {
+    CATEGORY_EMOJI,
+    CATEGORY_LABEL_KEYS,
+    CATEGORY_LABELS,
+    CATEGORY_ORDER,
+    formatToolCost,
+    primaryCommand,
+    type Translator,
+} from "./catalog";
 import { executeWithCreditGate } from "./credit-gate";
+import { parseToolParams, zodToJsonSchema } from "./schema";
 import type {
     ToolCategory,
     ToolDefinition,
@@ -48,54 +57,10 @@ import type {
     ToolResult,
 } from "./types";
 
-const CATEGORY_ORDER: ToolCategory[] = [
-    "search",
-    "reasoning",
-    "media",
-    "utility",
-];
-
-const CATEGORY_LABELS: Record<ToolCategory, string> = {
-    search: "Search & Research",
-    reasoning: "Reasoning",
-    media: "Media",
-    utility: "Utilities",
-};
-
-const CATEGORY_LABEL_KEYS: Record<ToolCategory, string> = {
-    search: "tool-category-search",
-    reasoning: "tool-category-reasoning",
-    media: "tool-category-media",
-    utility: "tool-category-utility",
-};
-
-const CATEGORY_EMOJI: Record<ToolCategory, string> = {
-    search: "🔍",
-    reasoning: "🧠",
-    media: "🎨",
-    utility: "🛠",
-};
-
 const TOOL_CONFIRM_COST_THRESHOLD = 20;
 const TOOL_CONFIRM_TTL_MS = 5 * 60 * 1000;
 
-type Translator = (
-    key: string,
-    args?: Record<string, string | number>,
-) => string;
 type ReplyOptions = Parameters<DerpContext["reply"]>[1];
-
-interface ParsedToolParams {
-    ok: true;
-    params: unknown;
-}
-
-interface ToolUsageError {
-    ok: false;
-    usage: string;
-}
-
-type ToolParseResult = ParsedToolParams | ToolUsageError;
 
 interface PendingMediaInfo {
     type: MediaAttachment["type"];
@@ -155,51 +120,6 @@ function replyOptionsFor(
     };
 }
 
-function primaryCommand(tool: ToolDefinition): string {
-    return tool.commands[0] ?? tool.name;
-}
-
-function parseToolParams(
-    tool: ToolDefinition,
-    input: string,
-    command?: string,
-): ToolParseResult {
-    const schemaShape = tool.parameters;
-
-    try {
-        const jsonSchema = zodToJsonSchema(schemaShape);
-        const properties = (jsonSchema as Record<string, unknown>).properties as
-            | Record<string, unknown>
-            | undefined;
-        const required = (jsonSchema as Record<string, unknown>).required as
-            | string[]
-            | undefined;
-
-        let params: unknown;
-        if (tool.parseCommand) {
-            params = tool.parseCommand(input, command);
-        } else if (properties && required && required.length > 0) {
-            const firstField = required[0];
-            params = firstField ? { [firstField]: input } : {};
-        } else {
-            params = { query: input };
-        }
-
-        const parsed = schemaShape.safeParse(params);
-        if (!parsed.success) {
-            const usage = `Usage: ${tool.usage ?? `${primaryCommand(tool)} <${required?.[0] ?? "input"}>`}`;
-            return { ok: false, usage };
-        }
-
-        return { ok: true, params: parsed.data };
-    } catch {
-        return {
-            ok: false,
-            usage: `Usage: ${tool.usage ?? `${primaryCommand(tool)} <input>`}`,
-        };
-    }
-}
-
 function shouldConfirmToolSpend(result: CreditCheckResult): boolean {
     if (!result.allowed || result.creditsToDeduct <= 0) return false;
     return (
@@ -256,30 +176,6 @@ async function downloadPendingMedia(
         });
     }
     return media;
-}
-
-function formatToolCost(tool: ToolDefinition, t?: Translator): string {
-    const hasFiniteQuota =
-        Number.isFinite(tool.freeDaily) && tool.freeDaily > 0;
-    if (tool.credits === 0) {
-        if (!hasFiniteQuota) return t ? t("tool-cost-free") : "free";
-        return t
-            ? t("tool-cost-free-daily", { freeDaily: tool.freeDaily })
-            : `${tool.freeDaily} free per user/chat/day`;
-    }
-
-    if (!hasFiniteQuota) {
-        return t
-            ? t("tool-cost-credits", { credits: tool.credits })
-            : `${tool.credits} cr`;
-    }
-
-    return t
-        ? t("tool-cost-credits-with-quota", {
-              credits: tool.credits,
-              freeDaily: tool.freeDaily,
-          })
-        : `${tool.credits} cr, ${tool.freeDaily} free per user/chat/day`;
 }
 
 async function extractTriggerMedia(
@@ -1100,11 +996,6 @@ class ToolRegistry {
             },
         );
     }
-}
-
-/** Convert a Zod schema to a JSON Schema object for Gemini function calling */
-function zodToJsonSchema(schema: z.ZodSchema): Record<string, unknown> {
-    return toJSONSchema(schema) as Record<string, unknown>;
 }
 
 /** Singleton registry */

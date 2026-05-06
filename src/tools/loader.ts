@@ -7,9 +7,11 @@ import { logger } from "../common/observability";
 import type { ToolDefinition } from "./types";
 
 const NON_TOOL_MODULES = new Set([
+    "catalog.ts",
     "credit-gate.ts",
     "loader.ts",
     "registry.ts",
+    "schema.ts",
     "types.ts",
 ]);
 
