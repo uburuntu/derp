@@ -15,7 +15,7 @@ Derp is layered around explicit product instruments. Each layer owns one boundar
 - `src/credits`, `src/preferences`, `src/memory`, `src/scheduler/cron.ts`, and `src/llm/registry.ts` hold product policy and domain rules.
 - `src/db` owns persistence: schema and query modules only.
 - `src/llm/providers` owns external AI API adapters. Providers report accounting through `ProviderCallRecorder`; they do not import the database.
-- `src/platform` wires infrastructure ports to implementations. `createDbProviderCallRecorder` is the DB-backed provider accounting adapter.
+- `src/platform` wires infrastructure ports and cross-cutting Telegram policy to implementations. `createDbProviderCallRecorder` is the DB-backed provider accounting adapter; `telegram-access` owns reusable chat-admin and group-chat decisions.
 - `src/common` contains context-free utilities: formatting, sanitization, money helpers, health, observability, media helpers.
 
 ## Instrument Boundaries

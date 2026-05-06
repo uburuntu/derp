@@ -35,6 +35,10 @@ import { getRecentMessages, insertMessage } from "../db/queries/messages";
 import type { MessageMetadata } from "../db/schema";
 import { buildContext, type ContextParticipant } from "../llm/context-builder";
 import { buildSystemPrompt, detectTaskSpecialist } from "../llm/prompt";
+import {
+    mergeProviderResultMetadata,
+    type ProviderResultMetadata,
+} from "../llm/provider-result";
 import { GoogleLLMProvider } from "../llm/providers/google";
 import { OpenRouterProvider } from "../llm/providers/openrouter";
 import {
@@ -45,6 +49,11 @@ import {
 } from "../llm/registry";
 import type { ConversationMessage, MediaAttachment } from "../llm/types";
 import { createDbProviderCallRecorder } from "../platform/provider-call-recorder";
+import {
+    canUseAdminGatedSetting,
+    isChatAdmin,
+    isGroupChat,
+} from "../platform/telegram-access";
 import {
     createDbToolMemoryStore,
     createDbToolReminderStore,
@@ -98,25 +107,6 @@ function shouldTrigger(ctx: DerpContext): boolean {
     return false;
 }
 
-async function isChatAdmin(ctx: DerpContext): Promise<boolean> {
-    if (ctx.chat?.type === "private") return true;
-    if (!ctx.from) return false;
-
-    try {
-        const member = await ctx.getChatMember(ctx.from.id);
-        return member.status === "administrator" || member.status === "creator";
-    } catch {
-        return false;
-    }
-}
-
-function canUseAdminGatedSetting(
-    setting: "admins" | "everyone" | undefined,
-    admin: boolean,
-): boolean {
-    return setting !== "admins" || admin;
-}
-
 async function getParticipantProfilePhoto(
     ctx: DerpContext,
     participantRefs: Map<string, ContextParticipant>,
@@ -156,34 +146,11 @@ async function sendCaptionFollowUps(
     }
 }
 
-type ProviderResultMetadata = {
-    providerCallIds?: string[];
-    costMicros?: number;
-};
-
-function mergeProviderResultMetadata(
-    target: ProviderResultMetadata,
-    result: ProviderResultMetadata,
-): void {
-    if (result.providerCallIds?.length) {
-        const ids = new Set([
-            ...(target.providerCallIds ?? []),
-            ...result.providerCallIds,
-        ]);
-        target.providerCallIds = [...ids];
-    }
-    if (result.costMicros && result.costMicros > 0) {
-        target.costMicros = (target.costMicros ?? 0) + result.costMicros;
-    }
-}
-
 function publicCreditSource(
     ctx: DerpContext,
     source?: string,
 ): string | undefined {
-    const groupChat =
-        ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
-    return source === "user" && groupChat ? "user_private" : source;
+    return source === "user" && isGroupChat(ctx) ? "user_private" : source;
 }
 
 /** Build a ToolContext from DerpContext */
@@ -212,8 +179,7 @@ async function buildToolContext(
         providerRecorder: createDbProviderCallRecorder(ctx.db),
         tier: ctx.tier,
         isChatAdmin: admin,
-        isGroupChat:
-            ctx.chat?.type === "group" || ctx.chat?.type === "supergroup",
+        isGroupChat: isGroupChat(ctx),
         canManageMemory: canUseAdminGatedSetting(
             ctx.dbChat.settings?.memoryAccess,
             admin,

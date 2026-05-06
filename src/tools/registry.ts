@@ -23,8 +23,18 @@ import {
 } from "../db/queries/finance";
 import { insertMessage } from "../db/queries/messages";
 import type { MessageMetadata } from "../db/schema";
+import {
+    hasProviderResultMetadata,
+    mergeProviderResultMetadata,
+    type ProviderResultMetadata,
+} from "../llm/provider-result";
 import type { LLMToolSchema, MediaAttachment } from "../llm/types";
 import { createDbProviderCallRecorder } from "../platform/provider-call-recorder";
+import {
+    canUseAdminGatedSetting,
+    isChatAdmin,
+    isGroupChat,
+} from "../platform/telegram-access";
 import {
     createDbToolMemoryStore,
     createDbToolReminderStore,
@@ -122,11 +132,6 @@ interface OutgoingMessageRecord {
     threadId?: number | null;
     replyToMessageId?: number | null;
     metadata?: MessageMetadata | null;
-}
-
-interface ProviderResultMetadata {
-    providerCallIds?: string[];
-    costMicros?: number;
 }
 
 function escapeHtml(text: string): string {
@@ -277,25 +282,6 @@ function formatToolCost(tool: ToolDefinition, t?: Translator): string {
         : `${tool.credits} cr, ${tool.freeDaily} free per user/chat/day`;
 }
 
-async function isChatAdmin(ctx: DerpContext): Promise<boolean> {
-    if (ctx.chat?.type === "private") return true;
-    if (!ctx.from) return false;
-
-    try {
-        const member = await ctx.getChatMember(ctx.from.id);
-        return member.status === "administrator" || member.status === "creator";
-    } catch {
-        return false;
-    }
-}
-
-function canUseAdminGatedSetting(
-    setting: "admins" | "everyone" | undefined,
-    isAdmin: boolean,
-): boolean {
-    return setting !== "admins" || isAdmin;
-}
-
 async function extractTriggerMedia(
     ctx: DerpContext,
 ): Promise<MediaAttachment[]> {
@@ -404,30 +390,6 @@ function buildCommandMetadata(
         costMicros: providerMeta?.costMicros,
         durationMs: Date.now() - startedAt,
     };
-}
-
-function mergeProviderResultMetadata(
-    target: ProviderResultMetadata,
-    result: ProviderResultMetadata,
-): void {
-    if (result.providerCallIds?.length) {
-        const ids = new Set([
-            ...(target.providerCallIds ?? []),
-            ...result.providerCallIds,
-        ]);
-        target.providerCallIds = [...ids];
-    }
-    if (result.costMicros && result.costMicros > 0) {
-        target.costMicros = (target.costMicros ?? 0) + result.costMicros;
-    }
-}
-
-function hasProviderResultMetadata(meta: ProviderResultMetadata): boolean {
-    return Boolean(meta.providerCallIds?.length || (meta.costMicros ?? 0) > 0);
-}
-
-function isGroupChat(ctx: DerpContext): boolean {
-    return ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
 }
 
 function publicCreditSource(

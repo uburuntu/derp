@@ -39,6 +39,7 @@ import {
     recordFailedPaymentReceipt,
 } from "../db/queries/credits";
 import { getOpenDebtAmount } from "../db/queries/finance";
+import { isGroupChat } from "../platform/telegram-access";
 
 const creditsComposer = new Composer<DerpContext>();
 
@@ -345,10 +346,6 @@ function commandReplyOptions(ctx: DerpContext) {
         message_thread_id: messageThreadId(ctx),
         reply_to_message_id: ctx.message?.message_id,
     };
-}
-
-function isGroupChat(ctx: DerpContext): boolean {
-    return ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
 }
 
 function privatePaymentChatId(ctx: DerpContext): number | null {

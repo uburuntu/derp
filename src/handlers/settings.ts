@@ -20,6 +20,7 @@ import {
     toSupportedLocale,
 } from "../i18n/index";
 import { formatChatMemoryForDisplay } from "../memory/structured";
+import { isChatAdmin } from "../platform/telegram-access";
 import {
     nextResponseStyle,
     normalizeUserPreferences,
@@ -90,18 +91,6 @@ function getPendingTextFlow(
         return null;
     }
     return pending;
-}
-
-async function isChatAdmin(ctx: DerpContext): Promise<boolean> {
-    if (ctx.chat?.type === "private") return true;
-    if (!ctx.from) return false;
-
-    try {
-        const member = await ctx.getChatMember(ctx.from.id);
-        return member.status === "administrator" || member.status === "creator";
-    } catch {
-        return false;
-    }
 }
 
 async function ensureCanMutateSettings(ctx: DerpContext): Promise<boolean> {
