@@ -47,19 +47,30 @@ async function executeImagine(
 		return { text: `Image generation failed: ${msg}`, error: msg };
 	}
 
+	ctx.recordProviderResult?.({
+		providerCallIds: result.providerCallIds,
+		costMicros: result.costMicros,
+	});
+
 	try {
 		const caption = captionPartsForMedia(params.prompt);
 		await ctx.sendPhoto(result.image.data, caption.caption);
 		for (const chunk of caption.followUpChunks) {
 			await ctx.sendMessage(chunk);
 		}
-		return { handled: true };
+		return {
+			handled: true,
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
+		};
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		return {
 			text: `Image generated, but I couldn't deliver it to Telegram: ${msg}`,
 			error: msg,
 			billableFailure: true,
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
 		};
 	}
 }

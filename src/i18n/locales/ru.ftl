@@ -35,6 +35,11 @@ credits-added-chat = { $credits } общих кредитов добавлено
 credits-subscribed = Подписка { $plan } оформлена! { $credits } кредитов начислено. Подписка продлевается ежемесячно.
 credits-renewed = Подписка { $plan } продлена! { $credits } кредитов начислено.
 credits-insufficient = Нужно { $cost } кредитов для { $tool }. Используй /buy для покупки.
+credits-refund-debt-title = Долг после возврата
+credits-personal-debt = Личный долг: { $credits } кредитов
+credits-group-debt = Долг группы: { $credits } кредитов
+credits-debt-hint = Новые платежи сначала гасят долг; платное использование заблокировано до погашения.
+credits-spend-order-group = В этом чате сначала тратится общий пул группы, затем личные кредиты.
 chat-free-quota-reached = Бесплатный лимит чата на сегодня закончился. Используй /buy для стандартных ответов или попробуй завтра.
 payment-sub-new = ✅ <b>Подписка { $plan } оформлена</b>
 
@@ -74,6 +79,14 @@ refund-processed-debt = ↩️ <b>Возврат обработан</b>
     Возвращено { $recovered }/{ $original } кредитов с { $target }.
 
     { $debt } кредитов уже были потрачены; долг нужно погасить перед платным использованием.
+refund-review-needed = ⚠️ <b>Возврат требует проверки</b>
+
+    Telegram сообщил о возврате, но локальная сверка не прошла.
+    Платёж: <code>{ $chargeId }</code>
+payment-settlement-failed = ⚠️ <b>Платёж получен</b>
+
+    Не удалось автоматически обновить баланс кредитов.
+    Платёж: <code>{ $chargeId }</code>
 
 ## Buy
 buy-choose = 💰 <b>Пополнить кредиты</b>
@@ -96,6 +109,12 @@ buy-choose-subscriptions = 💰 <b>Ежемесячные подписки</b>
 buy-target-personal = Мои личные кредиты
 buy-target-group = Общий пул этой группы
 buy-target-subscriptions = Ежемесячные подписки
+buy-private-required = 💬 <b>Открой Derp в личном чате</b>
+
+    Личные кредиты и подписки оплачиваются в личном чате.
+    Открой профиль Derp, нажми Start и используй /buy там.
+buy-private-sent = Я отправил ссылку на оплату в личный чат.
+buy-private-open-bot = Открой Derp в личном чате и нажми Start, затем попробуй снова.
 buy-plan-not-found = План не найден
 buy-pack-not-found = Пакет не найден
 buy-subscribe = Подписка { $plan }:
@@ -114,6 +133,10 @@ buy-invoice-group-pack-description = { $credits } кредитов для это
 buy-invoice-group-pack-label = Пакет группы { $pack }
 buy-chat-groups-only = Эта команда работает в группах. Для личных кредитов используй /buy.
 buy-invoice-error = Не удалось создать ссылку на оплату. Попробуй ещё раз.
+payment-error-unknown-payload = Неизвестные данные счёта
+payment-error-currency = Неподдерживаемая валюта платежа
+payment-error-product = Неизвестный план или пакет
+payment-error-amount = Сумма счёта не совпадает
 payment-validation-error = Платёж отклонён: { $reason }
 
 ## Donations

@@ -50,17 +50,28 @@ async function executeTTS(
 		return { text: `TTS failed: ${msg}`, error: msg };
 	}
 
+	ctx.recordProviderResult?.({
+		providerCallIds: result.providerCallIds,
+		costMicros: result.costMicros,
+	});
+
 	try {
 		// Convert WAV to OGG Opus for Telegram voice messages
 		const oggBuffer = await convertToOggOpus(result.audio);
 		await ctx.sendVoice(oggBuffer);
-		return { handled: true };
+		return {
+			handled: true,
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
+		};
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		return {
 			text: `Speech was generated, but I couldn't deliver it to Telegram: ${msg}`,
 			error: msg,
 			billableFailure: true,
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
 		};
 	}
 }

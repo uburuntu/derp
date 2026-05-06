@@ -165,7 +165,12 @@ export async function markPaymentSettlementFailed(
 				COALESCE((${paymentReceipts.meta}->>'settlementAttemptCount')::int, 0) + 1
 			)`,
 		})
-		.where(eq(paymentReceipts.telegramChargeId, telegramChargeId));
+		.where(
+			and(
+				eq(paymentReceipts.telegramChargeId, telegramChargeId),
+				sql`${paymentReceipts.status} IN ('received', 'settlement_failed')`,
+			),
+		);
 }
 
 function numberFromMeta(

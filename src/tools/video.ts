@@ -15,6 +15,30 @@ const videoParamsSchema = z.object({
 
 type VideoParams = z.infer<typeof videoParamsSchema>;
 
+function isBillableProviderFailure(err: unknown): boolean {
+	return (
+		typeof err === "object" &&
+		err !== null &&
+		"billableFailure" in err &&
+		(err as { billableFailure?: boolean }).billableFailure === true
+	);
+}
+
+function providerMetaFromError(err: unknown): {
+	providerCallIds?: string[];
+	costMicros?: number;
+} {
+	if (typeof err !== "object" || err === null) return {};
+	const providerError = err as {
+		providerCallIds?: string[];
+		costMicros?: number;
+	};
+	return {
+		providerCallIds: providerError.providerCallIds,
+		costMicros: providerError.costMicros,
+	};
+}
+
 async function executeVideo(
 	params: VideoParams,
 	ctx: ToolContext,
@@ -49,8 +73,25 @@ async function executeVideo(
 		});
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		return { text: `Video generation failed: ${msg}`, error: msg };
+		const providerMeta = providerMetaFromError(err);
+		if (isBillableProviderFailure(err)) {
+			ctx.recordProviderResult?.(providerMeta);
+		}
+		return {
+			text: isBillableProviderFailure(err)
+				? `Video generated, but I couldn't retrieve it: ${msg}`
+				: `Video generation failed: ${msg}`,
+			error: msg,
+			billableFailure: isBillableProviderFailure(err),
+			providerCallIds: providerMeta.providerCallIds,
+			costMicros: providerMeta.costMicros,
+		};
 	}
+
+	ctx.recordProviderResult?.({
+		providerCallIds: result.providerCallIds,
+		costMicros: result.costMicros,
+	});
 
 	try {
 		const caption = captionPartsForMedia(params.prompt);
@@ -58,13 +99,19 @@ async function executeVideo(
 		for (const chunk of caption.followUpChunks) {
 			await ctx.sendMessage(chunk);
 		}
-		return { handled: true };
+		return {
+			handled: true,
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
+		};
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		return {
 			text: `Video generated, but I couldn't deliver it to Telegram: ${msg}`,
 			error: msg,
 			billableFailure: true,
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
 		};
 	}
 }

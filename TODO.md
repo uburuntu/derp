@@ -1,7 +1,7 @@
 # Derp Finance Hardening Harness
 
 Loop: 3 / 5
-Status: reviewer loop 3 running
+Status: loop 3 remediation in progress
 
 ## P0
 
@@ -46,6 +46,19 @@ Status: reviewer loop 3 running
 - [x] Unsettled payment visibility must include charge IDs and retry commands.
 - [x] Provider metrics must include media/fallback paths.
 - [x] Google video calls must persist operation IDs.
+
+## Loop 3 Reviewer P1 Findings
+
+- [x] Generated-video provider success must stay billable if Telegram download fails.
+- [x] High-cost tool outputs must link persisted messages to provider-call rows and cost.
+- [x] `/info` must expose provider route, call IDs, and provider cost for debugging.
+- [x] Admin metrics must show fallback health outside the top-provider rollup.
+- [x] Admins need a stale-provider-call view with user/chat/request IDs.
+- [x] Personal pack/subscription payments must not be exposed in group chats.
+- [x] Payment validation, debt, and refund-reconciliation user copy must use i18n.
+- [x] Payment settlement failure must not overwrite refunded/settled terminal state.
+- [x] Chat context must be capped enough that flat Standard pricing cannot explode on large history.
+- [x] Failed multi-turn chat provider calls must preserve partial usage/cost in provider accounting.
 
 ## Loop Notes
 

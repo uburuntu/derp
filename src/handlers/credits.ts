@@ -48,18 +48,26 @@ function expectedStars(payload: SignedCreditPaymentPayload): number | null {
 	return getTopUpPack(payload.packId)?.stars ?? null;
 }
 
+type PaymentValidationErrorKey =
+	| "payment-error-unknown-payload"
+	| "payment-error-currency"
+	| "payment-error-product"
+	| "payment-error-amount";
+
 function validateStarsPayment(
 	payloadText: string,
 	currency: string,
 	totalAmount: number,
-): { payload: SignedCreditPaymentPayload; stars: number } | { error: string } {
+):
+	| { payload: SignedCreditPaymentPayload; stars: number }
+	| { errorKey: PaymentValidationErrorKey } {
 	const payload = parseCreditPaymentPayload(payloadText);
-	if (!payload) return { error: "Unknown invoice payload" };
-	if (currency !== "XTR") return { error: "Unsupported payment currency" };
+	if (!payload) return { errorKey: "payment-error-unknown-payload" };
+	if (currency !== "XTR") return { errorKey: "payment-error-currency" };
 
 	const stars = expectedStars(payload);
-	if (stars == null) return { error: "Unknown plan or pack" };
-	if (totalAmount !== stars) return { error: "Invoice amount mismatch" };
+	if (stars == null) return { errorKey: "payment-error-product" };
+	if (totalAmount !== stars) return { errorKey: "payment-error-amount" };
 
 	return { payload, stars };
 }
@@ -157,7 +165,9 @@ async function applyPaymentOrReport<T extends { applied: boolean }>(
 			error: reason,
 		});
 		await ctx.reply(
-			`⚠️ <b>Payment received</b>\n\nI could not update the credit balance automatically. Charge: <code>${escapeHtml(payment.telegram_payment_charge_id)}</code>.`,
+			ctx.t("payment-settlement-failed", {
+				chargeId: escapeHtml(payment.telegram_payment_charge_id),
+			}),
 			{
 				parse_mode: "HTML",
 				...commandReplyOptions(ctx),
@@ -261,6 +271,15 @@ function commandReplyOptions(ctx: DerpContext) {
 	};
 }
 
+function isGroupChat(ctx: DerpContext): boolean {
+	return ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+}
+
+function privatePaymentChatId(ctx: DerpContext): number | null {
+	if (!isGroupChat(ctx)) return ctx.chat?.id ?? null;
+	return ctx.from?.id ?? null;
+}
+
 // ── /credits, /balance, /bal ────────────────────────────────────────────────
 
 creditsComposer.command(["credits", "balance", "bal"], async (ctx) => {
@@ -287,17 +306,17 @@ creditsComposer.command(["credits", "balance", "bal"], async (ctx) => {
 		(key, args) => ctx.t(key, args),
 	);
 	if (userDebt > 0 || chatDebt > 0) {
-		message += `\n\n⚠️ <b>Refund debt</b>`;
+		message += `\n\n⚠️ <b>${ctx.t("credits-refund-debt-title")}</b>`;
 		if (userDebt > 0) {
-			message += `\nPersonal debt: ${userDebt} credits`;
+			message += `\n${ctx.t("credits-personal-debt", { credits: userDebt })}`;
 		}
 		if (chatDebt > 0) {
-			message += `\nGroup debt: ${chatDebt} credits`;
+			message += `\n${ctx.t("credits-group-debt", { credits: chatDebt })}`;
 		}
-		message += `\n<i>New payments settle debt first; paid usage is blocked until it is settled.</i>`;
+		message += `\n<i>${ctx.t("credits-debt-hint")}</i>`;
 	}
 	if (ctx.chat?.type === "group" || ctx.chat?.type === "supergroup") {
-		message += `\n\n<i>Spend order here: group pool first, then personal credits.</i>`;
+		message += `\n\n<i>${ctx.t("credits-spend-order-group")}</i>`;
 	}
 
 	await ctx.reply(message, {
@@ -362,6 +381,13 @@ creditsComposer.callbackQuery(
 		}
 
 		if (action === "personal") {
+			if (isGroup) {
+				await ctx.editMessageText(ctx.t("buy-private-required"), {
+					parse_mode: "HTML",
+					reply_markup: buildBuyTargetKeyboard((key, args) => ctx.t(key, args)),
+				});
+				return;
+			}
 			await ctx.editMessageText(ctx.t("buy-choose-personal"), {
 				parse_mode: "HTML",
 				reply_markup: buildPersonalPackKeyboard((key, args) =>
@@ -385,6 +411,13 @@ creditsComposer.callbackQuery(
 			return;
 		}
 
+		if (isGroup) {
+			await ctx.editMessageText(ctx.t("buy-private-required"), {
+				parse_mode: "HTML",
+				reply_markup: buildBuyTargetKeyboard((key, args) => ctx.t(key, args)),
+			});
+			return;
+		}
 		await ctx.editMessageText(ctx.t("buy-choose-subscriptions"), {
 			parse_mode: "HTML",
 			reply_markup: buildSubscriptionKeyboard((key, args) => ctx.t(key, args)),
@@ -406,7 +439,11 @@ creditsComposer.callbackQuery(/^sub:(.+)$/, async (ctx) => {
 		await ctx.answerCallbackQuery(ctx.t("error-generic"));
 		return;
 	}
-	await ctx.answerCallbackQuery();
+	const paymentChatId = privatePaymentChatId(ctx);
+	if (paymentChatId == null) {
+		await ctx.answerCallbackQuery(ctx.t("error-generic"));
+		return;
+	}
 
 	// Create subscription invoice link
 	let link: string;
@@ -449,15 +486,44 @@ creditsComposer.callbackQuery(/^sub:(.+)$/, async (ctx) => {
 		return;
 	}
 
-	await ctx.reply(ctx.t("buy-subscribe", { plan: escapeHtml(plan.label) }), {
-		parse_mode: "HTML",
-		message_thread_id: messageThreadId(ctx),
-		reply_markup: {
-			inline_keyboard: [
-				[{ text: ctx.t("buy-pay-button", { stars: plan.stars }), url: link }],
-			],
-		},
-	});
+	try {
+		await ctx.api.sendMessage(
+			paymentChatId,
+			ctx.t("buy-subscribe", { plan: escapeHtml(plan.label) }),
+			{
+				parse_mode: "HTML",
+				message_thread_id: isGroupChat(ctx) ? undefined : messageThreadId(ctx),
+				reply_markup: {
+					inline_keyboard: [
+						[
+							{
+								text: ctx.t("buy-pay-button", { stars: plan.stars }),
+								url: link,
+							},
+						],
+					],
+				},
+			},
+		);
+		if (isGroupChat(ctx)) {
+			await ctx.answerCallbackQuery(ctx.t("buy-private-sent"));
+		} else {
+			await ctx.answerCallbackQuery();
+		}
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		recordHandledFailure("payment_invoice", reason, {
+			reason_code: "private_subscription",
+		});
+		logger.error("subscription_private_message_failed", {
+			planId: plan.id,
+			error: reason,
+		});
+		await ctx.answerCallbackQuery({
+			text: ctx.t("buy-private-open-bot"),
+			show_alert: true,
+		});
+	}
 });
 
 // ── Callback: top-up pack selection (personal) ──────────────────────────────
@@ -474,19 +540,25 @@ creditsComposer.callbackQuery(/^pack:(.+)$/, async (ctx) => {
 		await ctx.answerCallbackQuery(ctx.t("error-generic"));
 		return;
 	}
+	const paymentChatId = privatePaymentChatId(ctx);
+	if (paymentChatId == null) {
+		await ctx.answerCallbackQuery(ctx.t("error-generic"));
+		return;
+	}
 
-	await ctx.answerCallbackQuery();
 	try {
 		await ctx.api.sendInvoice(
-			ctx.chat.id,
+			paymentChatId,
 			ctx.t("buy-invoice-pack-title", { pack: pack.label }),
 			ctx.t("buy-invoice-pack-description", { credits: pack.credits }),
 			buildCreditPaymentPayload({
 				type: "pack",
 				packId: pack.id,
 				target: "user",
-				targetChatId: ctx.chat.id,
-				targetThreadId: messageThreadId(ctx) ?? null,
+				targetChatId: paymentChatId,
+				targetThreadId: isGroupChat(ctx)
+					? null
+					: (messageThreadId(ctx) ?? null),
 			}),
 			"XTR",
 			[
@@ -495,18 +567,34 @@ creditsComposer.callbackQuery(/^pack:(.+)$/, async (ctx) => {
 					amount: pack.stars,
 				},
 			],
-			{ provider_token: "", message_thread_id: messageThreadId(ctx) },
+			{
+				provider_token: "",
+				message_thread_id: isGroupChat(ctx) ? undefined : messageThreadId(ctx),
+			},
 		);
+		if (isGroupChat(ctx)) {
+			await ctx.answerCallbackQuery(ctx.t("buy-private-sent"));
+		} else {
+			await ctx.answerCallbackQuery();
+		}
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
 		recordHandledFailure("payment_invoice", reason, {
 			reason_code: "pack_invoice",
 		});
 		logger.error("pack_invoice_failed", { packId: pack.id, error: reason });
-		await ctx.reply(ctx.t("buy-invoice-error"), {
-			parse_mode: "HTML",
-			message_thread_id: messageThreadId(ctx),
-		});
+		if (isGroupChat(ctx)) {
+			await ctx.answerCallbackQuery({
+				text: ctx.t("buy-private-open-bot"),
+				show_alert: true,
+			});
+		} else {
+			await ctx.answerCallbackQuery();
+			await ctx.reply(ctx.t("buy-invoice-error"), {
+				parse_mode: "HTML",
+				message_thread_id: messageThreadId(ctx),
+			});
+		}
 	}
 });
 
@@ -576,10 +664,10 @@ creditsComposer.on("pre_checkout_query", async (ctx, next) => {
 		query.currency,
 		query.total_amount,
 	);
-	if ("error" in validation) {
+	if ("errorKey" in validation) {
 		await ctx.answerPreCheckoutQuery(
 			false,
-			ctx.t("payment-validation-error", { reason: validation.error }),
+			ctx.t("payment-validation-error", { reason: ctx.t(validation.errorKey) }),
 		);
 		return;
 	}
@@ -601,10 +689,10 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 		payment.currency,
 		payment.total_amount,
 	);
-	if ("error" in validation) {
+	if ("errorKey" in validation) {
 		await ctx.reply(
 			ctx.t("payment-validation-error", {
-				reason: escapeHtml(validation.error),
+				reason: escapeHtml(ctx.t(validation.errorKey)),
 			}),
 			{
 				parse_mode: "HTML",
@@ -612,7 +700,7 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 			},
 		);
 		await notifyAdmins(
-			`⚠️ <b>Payment validation failed</b>\n\nUser: <code>${ctx.dbUser.telegramId}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nReason: ${escapeHtml(validation.error)}`,
+			`⚠️ <b>Payment validation failed</b>\n\nUser: <code>${ctx.dbUser.telegramId}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nReason: ${escapeHtml(validation.errorKey)}`,
 		);
 		return;
 	}
@@ -840,6 +928,15 @@ creditsComposer.on("message:refunded_payment", async (ctx) => {
 		recordHandledFailure("refund", reason, {
 			chargeId: refund.telegram_payment_charge_id,
 		});
+		await ctx.reply(
+			ctx.t("refund-review-needed", {
+				chargeId: escapeHtml(refund.telegram_payment_charge_id),
+			}),
+			{
+				parse_mode: "HTML",
+				...commandReplyOptions(ctx),
+			},
+		);
 		await notifyAdmins(
 			`⚠️ <b>Refund reconciliation failed</b>\n\nCharge: <code>${escapeHtml(refund.telegram_payment_charge_id)}</code>\nReason: ${escapeHtml(reason)}`,
 			{ critical: true },

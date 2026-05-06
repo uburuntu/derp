@@ -462,6 +462,20 @@ adminComposer.command("admin", async (ctx) => {
 				LIMIT 10
 			`);
 
+			const fallbackRows = await ctx.db.execute(sql`
+				SELECT
+					provider,
+					status,
+					COALESCE(error_code, '') AS error_code,
+					count(*)::int AS calls,
+					COALESCE(sum(actual_cost_micros), 0)::bigint AS cost_micros
+				FROM provider_calls
+				WHERE created_at >= now() - make_interval(days => ${days})
+					AND route = 'fallback'
+				GROUP BY provider, status, error_code
+				ORDER BY calls DESC, cost_micros DESC
+			`);
+
 			const overviewRow = overview as {
 				users?: number;
 				active_users?: number;
@@ -500,6 +514,13 @@ adminComposer.command("admin", async (ctx) => {
 				calls: number;
 				cost_micros: bigint | number;
 			}>;
+			const fallbackHealth = fallbackRows as unknown as Array<{
+				provider: string;
+				status: string;
+				error_code: string;
+				calls: number;
+				cost_micros: bigint | number;
+			}>;
 
 			const toolLines =
 				tools.length > 0
@@ -531,6 +552,18 @@ adminComposer.command("admin", async (ctx) => {
 							})
 							.join("\n")
 					: "No provider calls yet.";
+			const fallbackHealthLines =
+				fallbackHealth.length > 0
+					? fallbackHealth
+							.map((row) => {
+								const cost = Number(row.cost_micros ?? 0) / 1_000_000;
+								const error = row.error_code
+									? `/${escapeHtml(row.error_code)}`
+									: "";
+								return `${escapeHtml(row.provider)} ${escapeHtml(row.status)}${error}: ${row.calls} calls, ${formatUsd(cost)}`;
+							})
+							.join("\n")
+					: "No fallback calls.";
 			const outstandingCredits =
 				(overviewRow.user_credit_liability ?? 0) +
 				(overviewRow.chat_credit_liability ?? 0);
@@ -564,6 +597,7 @@ adminComposer.command("admin", async (ctx) => {
 					`Net revenue estimate: ${formatUsd(netRevenueUsd)}\n` +
 					`Gross margin estimate: ${formatUsd(grossMarginUsd)}\n\n` +
 					`<b>Provider health</b>\n${providerHealthLines}\n\n` +
+					`<b>Fallback health</b>\n${fallbackHealthLines}\n\n` +
 					`<b>Liability</b>\n` +
 					`Outstanding credits: ${outstandingCredits} cr (${formatUsd(outstandingUsd)} floor value)\n` +
 					`User/chat split: ${overviewRow.user_credit_liability ?? 0} / ${overviewRow.chat_credit_liability ?? 0} cr\n` +
@@ -773,6 +807,102 @@ adminComposer.command("admin", async (ctx) => {
 			break;
 		}
 
+		case "stale_provider_calls": {
+			const limitArg = Number.parseInt(args.trim() || "10", 10);
+			const limit = Number.isFinite(limitArg)
+				? Math.max(1, Math.min(25, limitArg))
+				: 10;
+			const { sql } = await import("drizzle-orm");
+			const rows = await ctx.db.execute(sql`
+				SELECT
+					p.id,
+					p.logical_request_key,
+					p.provider,
+					p.operation,
+					p.route,
+					p.key_class,
+					p.model_id,
+					p.tool_name,
+					p.status,
+					p.provider_request_id,
+					p.error_code,
+					p.error_message,
+					p.actual_cost_micros,
+					p.credits_charged,
+					p.created_at,
+					u.telegram_id AS user_telegram_id,
+					c.telegram_id AS chat_telegram_id
+				FROM provider_calls p
+				LEFT JOIN users u ON u.id = p.user_id
+				LEFT JOIN chats c ON c.id = p.chat_id
+				WHERE p.status = 'started'
+					AND p.created_at < now() - interval '10 minutes'
+				ORDER BY p.created_at ASC
+				LIMIT ${limit}
+			`);
+			const calls = rows as unknown as Array<{
+				id: string;
+				logical_request_key: string | null;
+				provider: string;
+				operation: string;
+				route: string;
+				key_class: string;
+				model_id: string;
+				tool_name: string | null;
+				status: string;
+				provider_request_id: string | null;
+				error_code: string | null;
+				error_message: string | null;
+				actual_cost_micros: number | bigint | null;
+				credits_charged: number;
+				created_at: Date;
+				user_telegram_id: number | null;
+				chat_telegram_id: number | null;
+			}>;
+			if (calls.length === 0) {
+				await ctx.reply("No stale provider calls.");
+				break;
+			}
+			const lines = calls.map((call) => {
+				const ageMinutes = Math.max(
+					0,
+					Math.round(
+						(Date.now() - new Date(call.created_at).getTime()) / 60000,
+					),
+				);
+				const cost = Number(call.actual_cost_micros ?? 0) / 1_000_000;
+				const tool = call.tool_name
+					? ` · tool ${escapeHtml(call.tool_name)}`
+					: "";
+				const request = call.provider_request_id
+					? `\nrequest: <code>${escapeHtml(call.provider_request_id)}</code>`
+					: "";
+				const logical = call.logical_request_key
+					? `\nlogical: <code>${escapeHtml(call.logical_request_key)}</code>`
+					: "";
+				const error = call.error_code
+					? `\nerror: ${escapeHtml(call.error_code)} ${escapeHtml(call.error_message ?? "")}`.slice(
+							0,
+							260,
+						)
+					: "";
+				return (
+					`<code>${escapeHtml(call.id)}</code>\n` +
+					`${escapeHtml(call.provider)} ${escapeHtml(call.route)} ${escapeHtml(call.operation)}${tool}\n` +
+					`Model: ${escapeHtml(call.model_id)} · ${escapeHtml(call.key_class)} · age ${ageMinutes}m\n` +
+					`User/chat: <code>${call.user_telegram_id ?? "n/a"}</code> / <code>${call.chat_telegram_id ?? "n/a"}</code>\n` +
+					`Credits/cost: ${call.credits_charged} cr / ${formatUsd(cost)}` +
+					request +
+					logical +
+					error
+				);
+			});
+			await ctx.reply(`<b>Stale Provider Calls</b>\n\n${lines.join("\n\n")}`, {
+				parse_mode: "HTML",
+			});
+			break;
+		}
+
 		case "db": {
 			// /admin db — table row counts
 			const { sql } = await import("drizzle-orm");
@@ -917,6 +1047,7 @@ adminComposer.command("admin", async (ctx) => {
 					"/admin reconcile_refund &lt;chargeId&gt; — Reconcile an already-refunded charge\n" +
 					"/admin settle_payment &lt;chargeId&gt; — Retry a pending payment settlement\n" +
 					"/admin unsettled_payments [limit] — List payments needing settlement\n" +
+					"/admin stale_provider_calls [limit] — List provider calls stuck in started\n" +
 					"/admin db — Table row counts\n" +
 					"/admin test — E2E smoke test (grants 100 credits)\n\n" +
 					"/refund &lt;userId&gt; &lt;chargeId&gt; — Refund a payment",

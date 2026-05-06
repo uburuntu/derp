@@ -190,6 +190,7 @@ export interface MessageMetadata {
 	creditsSpent?: number;
 	creditSource?: string; // "user" | "chat" | "personal" | "group" | "free"
 	providerCallIds?: string[];
+	costMicros?: number;
 	providerRoute?: "primary" | "fallback";
 	fallbackFrom?: string;
 	durationMs?: number;

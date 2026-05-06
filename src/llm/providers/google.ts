@@ -109,6 +109,42 @@ function operationNameFrom(operation: unknown): string | null {
 	return typeof maybeName === "string" && maybeName ? maybeName : null;
 }
 
+function attachPartialUsage(error: unknown, usage: TokenUsage): void {
+	if (!(error instanceof Error)) return;
+	if (usage.inputTokens <= 0 && usage.outputTokens <= 0) return;
+	(
+		error as Error & {
+			partialUsage?: TokenUsage;
+		}
+	).partialUsage = { ...usage };
+}
+
+function partialUsageFrom(error: unknown): TokenUsage | null {
+	if (!(error instanceof Error)) return null;
+	const usage = (
+		error as Error & {
+			partialUsage?: TokenUsage;
+		}
+	).partialUsage;
+	return usage ?? null;
+}
+
+class BillableProviderOutputError extends Error {
+	billableFailure = true;
+	providerCallIds?: string[];
+	costMicros?: number;
+
+	constructor(
+		message: string,
+		meta: { providerCallIds?: string[]; costMicros?: number } = {},
+	) {
+		super(message);
+		this.name = "BillableProviderOutputError";
+		this.providerCallIds = meta.providerCallIds;
+		this.costMicros = meta.costMicros;
+	}
+}
+
 async function withAbortTimeout<T>(
 	timeoutMs: number,
 	label: string,
@@ -348,6 +384,8 @@ export class GoogleLLMProvider implements LLMProvider {
 		input: {
 			providerRequestId?: string | null;
 			meta?: Record<string, unknown>;
+			estimatedCostMicros?: number;
+			actualCostMicros?: number;
 		} = {},
 	): Promise<void> {
 		if (!db || !callId) return;
@@ -356,6 +394,8 @@ export class GoogleLLMProvider implements LLMProvider {
 			errorCode: isTransientError(error) ? "transient" : "provider_error",
 			errorMessage: message,
 			providerRequestId: input.providerRequestId,
+			estimatedCostMicros: input.estimatedCostMicros,
+			actualCostMicros: input.actualCostMicros,
 			meta: input.meta,
 		});
 	}
@@ -516,7 +556,15 @@ export class GoogleLLMProvider implements LLMProvider {
 				costMicros,
 			};
 		} catch (err) {
-			await this.failTracking(params.tracking?.db, callId, err);
+			const partialUsage = partialUsageFrom(err);
+			const partialCostMicros = partialUsage
+				? estimateUsageCostMicros(params.model, partialUsage)
+				: undefined;
+			await this.failTracking(params.tracking?.db, callId, err, {
+				estimatedCostMicros: partialCostMicros,
+				actualCostMicros: partialCostMicros,
+				meta: partialUsage ? { partialUsage } : undefined,
+			});
 			throw err;
 		}
 	}
@@ -570,7 +618,15 @@ export class GoogleLLMProvider implements LLMProvider {
 				},
 			);
 		} catch (err) {
-			await this.failTracking(params.tracking?.db, callId, err);
+			const partialUsage = partialUsageFrom(err);
+			const partialCostMicros = partialUsage
+				? estimateUsageCostMicros(params.model, partialUsage)
+				: undefined;
+			await this.failTracking(params.tracking?.db, callId, err, {
+				estimatedCostMicros: partialCostMicros,
+				actualCostMicros: partialCostMicros,
+				meta: partialUsage ? { partialUsage } : undefined,
+			});
 			throw err;
 		}
 	}
@@ -617,130 +673,135 @@ export class GoogleLLMProvider implements LLMProvider {
 		const allImages: BinaryMedia[] = [];
 		let iteration = 0;
 
-		while (allToolCalls.length < MAX_TOOL_CALLS) {
-			iteration++;
+		try {
+			while (allToolCalls.length < MAX_TOOL_CALLS) {
+				iteration++;
 
-			const response = await this.callWithRetries(
-				"generateContent",
-				{
-					deadlineMs,
-					usePaidKey: params.tracking?.keyClass === "paid",
-				},
-				(ai, signal) =>
-					ai.models.generateContent({
-						model: params.model,
-						contents,
-						config: {
-							systemInstruction: params.systemPrompt,
-							safetySettings: SAFETY_SETTINGS,
-							maxOutputTokens: params.maxOutputTokens,
-							temperature: params.temperature,
-							tools: toolDeclarations
-								? [{ functionDeclarations: toolDeclarations }]
-								: undefined,
-							abortSignal: signal,
-						},
-					}),
-			);
+				const response = await this.callWithRetries(
+					"generateContent",
+					{
+						deadlineMs,
+						usePaidKey: params.tracking?.keyClass === "paid",
+					},
+					(ai, signal) =>
+						ai.models.generateContent({
+							model: params.model,
+							contents,
+							config: {
+								systemInstruction: params.systemPrompt,
+								safetySettings: SAFETY_SETTINGS,
+								maxOutputTokens: params.maxOutputTokens,
+								temperature: params.temperature,
+								tools: toolDeclarations
+									? [{ functionDeclarations: toolDeclarations }]
+									: undefined,
+								abortSignal: signal,
+							},
+						}),
+				);
 
-			// Accumulate usage
-			const usage = extractUsage(response);
-			totalUsage.inputTokens += usage.inputTokens;
-			totalUsage.outputTokens += usage.outputTokens;
-			totalUsage.cacheHitTokens =
-				(totalUsage.cacheHitTokens ?? 0) + (usage.cacheHitTokens ?? 0);
+				// Accumulate usage
+				const usage = extractUsage(response);
+				totalUsage.inputTokens += usage.inputTokens;
+				totalUsage.outputTokens += usage.outputTokens;
+				totalUsage.cacheHitTokens =
+					(totalUsage.cacheHitTokens ?? 0) + (usage.cacheHitTokens ?? 0);
 
-			// Extract images
-			for (const candidate of response.candidates ?? []) {
-				for (const part of candidate.content?.parts ?? []) {
-					if (part.inlineData?.data) {
-						allImages.push({
-							data: Buffer.from(part.inlineData.data, "base64"),
-							mimeType: part.inlineData.mimeType ?? "image/png",
-						});
+				// Extract images
+				for (const candidate of response.candidates ?? []) {
+					for (const part of candidate.content?.parts ?? []) {
+						if (part.inlineData?.data) {
+							allImages.push({
+								data: Buffer.from(part.inlineData.data, "base64"),
+								mimeType: part.inlineData.mimeType ?? "image/png",
+							});
+						}
 					}
 				}
-			}
 
-			const functionCalls = response.functionCalls;
-			if (!functionCalls || functionCalls.length === 0) {
-				// No more tool calls — record metrics and return
-				this.recordLlmMetrics(params.model, totalUsage);
-				parentSpan.setAttribute(
-					"gen_ai.usage.input_tokens",
-					totalUsage.inputTokens,
-				);
-				parentSpan.setAttribute(
-					"gen_ai.usage.output_tokens",
-					totalUsage.outputTokens,
-				);
-				parentSpan.setAttribute("derp.tool_calls.count", allToolCalls.length);
-				parentSpan.setAttribute("derp.iterations", iteration);
-				const text = extractText(response);
-				const responseText = text
-					? text
-					: allImages.length > 0
-						? ""
-						: fallbackTextForEmptyResponse(response);
-				return {
-					text: responseText,
-					images: allImages.length > 0 ? allImages : undefined,
-					usage: totalUsage,
-					toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-					finishReason: response.candidates?.[0]?.finishReason ?? undefined,
-				};
-			}
-
-			// Add the model's response (with function calls) to the conversation
-			const modelParts: Part[] = [];
-			const responseText = extractText(response);
-			if (responseText) {
-				modelParts.push({ text: responseText });
-			}
-			for (const fc of functionCalls) {
-				modelParts.push({
-					functionCall: {
-						name: fc.name ?? "",
-						args: (fc.args as Record<string, unknown>) ?? {},
-					},
-				});
-			}
-			contents.push({ role: "model", parts: modelParts });
-
-			// Execute each function call and collect results
-			const responseParts: Part[] = [];
-			const remainingToolCalls = MAX_TOOL_CALLS - allToolCalls.length;
-			for (const fc of functionCalls.slice(0, remainingToolCalls)) {
-				const name = fc.name ?? "";
-				const args = (fc.args as Record<string, unknown>) ?? {};
-
-				let result: unknown;
-				try {
-					result = await executeTool(name, args);
-				} catch (err) {
-					result = {
-						error: err instanceof Error ? err.message : String(err),
+				const functionCalls = response.functionCalls;
+				if (!functionCalls || functionCalls.length === 0) {
+					// No more tool calls — record metrics and return
+					this.recordLlmMetrics(params.model, totalUsage);
+					parentSpan.setAttribute(
+						"gen_ai.usage.input_tokens",
+						totalUsage.inputTokens,
+					);
+					parentSpan.setAttribute(
+						"gen_ai.usage.output_tokens",
+						totalUsage.outputTokens,
+					);
+					parentSpan.setAttribute("derp.tool_calls.count", allToolCalls.length);
+					parentSpan.setAttribute("derp.iterations", iteration);
+					const text = extractText(response);
+					const responseText = text
+						? text
+						: allImages.length > 0
+							? ""
+							: fallbackTextForEmptyResponse(response);
+					return {
+						text: responseText,
+						images: allImages.length > 0 ? allImages : undefined,
+						usage: totalUsage,
+						toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+						finishReason: response.candidates?.[0]?.finishReason ?? undefined,
 					};
 				}
 
-				allToolCalls.push({ name, args, result });
-				responseParts.push(
-					createPartFromFunctionResponse(
-						fc.id ?? name,
-						name,
-						typeof result === "object" && result !== null
-							? (result as Record<string, unknown>)
-							: { result: String(result) },
-					),
-				);
-			}
+				// Add the model's response (with function calls) to the conversation
+				const modelParts: Part[] = [];
+				const responseText = extractText(response);
+				if (responseText) {
+					modelParts.push({ text: responseText });
+				}
+				for (const fc of functionCalls) {
+					modelParts.push({
+						functionCall: {
+							name: fc.name ?? "",
+							args: (fc.args as Record<string, unknown>) ?? {},
+						},
+					});
+				}
+				contents.push({ role: "model", parts: modelParts });
 
-			if (functionCalls.length > remainingToolCalls) {
-				break;
-			}
+				// Execute each function call and collect results
+				const responseParts: Part[] = [];
+				const remainingToolCalls = MAX_TOOL_CALLS - allToolCalls.length;
+				for (const fc of functionCalls.slice(0, remainingToolCalls)) {
+					const name = fc.name ?? "";
+					const args = (fc.args as Record<string, unknown>) ?? {};
 
-			// Add function responses to the conversation
-			contents.push({ role: "user", parts: responseParts });
+					let result: unknown;
+					try {
+						result = await executeTool(name, args);
+					} catch (err) {
+						result = {
+							error: err instanceof Error ? err.message : String(err),
+						};
+					}
+
+					allToolCalls.push({ name, args, result });
+					responseParts.push(
+						createPartFromFunctionResponse(
+							fc.id ?? name,
+							name,
+							typeof result === "object" && result !== null
+								? (result as Record<string, unknown>)
+								: { result: String(result) },
+						),
+					);
+				}
+
+				if (functionCalls.length > remainingToolCalls) {
+					break;
+				}
+
+				// Add function responses to the conversation
+				contents.push({ role: "user", parts: responseParts });
+			}
+		} catch (err) {
+			attachPartialUsage(err, totalUsage);
+			throw err;
 		}
 
 		// Max iterations reached — record metrics and return
@@ -854,6 +915,7 @@ export class GoogleLLMProvider implements LLMProvider {
 			params.referenceImage ? 1 : 0,
 		);
 		let operationName: string | null = null;
+		let trackingFinished = false;
 
 		try {
 			let operation = await this.callWithRetries(
@@ -922,21 +984,6 @@ export class GoogleLLMProvider implements LLMProvider {
 					reasons ? `No video generated: ${reasons}` : "No video generated",
 				);
 			}
-
-			// Download the video from the URI
-			const videoResponse = await withAbortTimeout(
-				Math.min(DEFAULT_REQUEST_TIMEOUT, remainingMs(deadlineMs)),
-				"downloadGeneratedVideo",
-				(signal) => fetch(generatedVideo.uri as string, { signal }),
-			);
-			if (!videoResponse.ok) {
-				throw new Error(`Failed to download video: ${videoResponse.status}`);
-			}
-			const videoData = await readResponseLimited(
-				videoResponse,
-				MAX_GENERATED_VIDEO_BYTES,
-				"Generated video",
-			);
 			const usage = { inputTokens: 0, outputTokens: 0, cacheHitTokens: 0 };
 			const costMicros = await this.finishTracking(
 				params.tracking?.db,
@@ -953,6 +1000,35 @@ export class GoogleLLMProvider implements LLMProvider {
 						: undefined,
 				},
 			);
+			trackingFinished = true;
+
+			// Download the video from the URI
+			let videoData: Buffer;
+			try {
+				const videoResponse = await withAbortTimeout(
+					Math.min(DEFAULT_REQUEST_TIMEOUT, remainingMs(deadlineMs)),
+					"downloadGeneratedVideo",
+					(signal) => fetch(generatedVideo.uri as string, { signal }),
+				);
+				if (!videoResponse.ok) {
+					throw new Error(`Failed to download video: ${videoResponse.status}`);
+				}
+				videoData = await readResponseLimited(
+					videoResponse,
+					MAX_GENERATED_VIDEO_BYTES,
+					"Generated video",
+				);
+			} catch (err) {
+				throw new BillableProviderOutputError(
+					`Video generated, but download failed: ${
+						err instanceof Error ? err.message : String(err)
+					}`,
+					{
+						providerCallIds: callId ? [callId] : undefined,
+						costMicros,
+					},
+				);
+			}
 
 			return {
 				video: {
@@ -964,12 +1040,14 @@ export class GoogleLLMProvider implements LLMProvider {
 				costMicros,
 			};
 		} catch (err) {
-			await this.failTracking(params.tracking?.db, callId, err, {
-				providerRequestId: operationName,
-				meta: operationName
-					? { googleOperationName: operationName }
-					: undefined,
-			});
+			if (!trackingFinished) {
+				await this.failTracking(params.tracking?.db, callId, err, {
+					providerRequestId: operationName,
+					meta: operationName
+						? { googleOperationName: operationName }
+						: undefined,
+				});
+			}
 			throw err;
 		}
 	}

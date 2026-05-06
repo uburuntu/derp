@@ -22,11 +22,17 @@ export interface BuiltContext {
 	participantRefs: Map<string, ContextParticipant>;
 }
 
+interface BuildContextOptions {
+	maxMessageChars?: number;
+	maxStreamChars?: number;
+}
+
 /** Build compact context from messages and member data */
 export function buildContext(
 	msgs: Message[],
 	members: Map<string, ContextParticipant>,
 	botUsername: string,
+	options: BuildContextOptions = {},
 ): BuiltContext {
 	// Collect participant IDs that appear in messages
 	const activeUserIds = new Set<string>();
@@ -81,7 +87,7 @@ export function buildContext(
 
 		// Text content
 		if (msg.text) {
-			parts.push(msg.text);
+			parts.push(truncateText(msg.text, options.maxMessageChars));
 		}
 
 		const content = parts.join(" ") || "[empty]";
@@ -90,7 +96,35 @@ export function buildContext(
 		);
 	}
 
-	const messageStream = `# MESSAGES\n${messageLines.join("\n")}`;
+	const messageStream = `# MESSAGES\n${fitNewestLines(
+		messageLines,
+		options.maxStreamChars,
+	)}`;
 
 	return { participants, messageStream, participantRefs };
+}
+
+function truncateText(text: string, maxChars: number | undefined): string {
+	if (!maxChars || text.length <= maxChars) return text;
+	return `${text.slice(0, Math.max(0, maxChars - 24)).trimEnd()} [truncated]`;
+}
+
+function fitNewestLines(lines: string[], maxChars: number | undefined): string {
+	const joined = lines.join("\n");
+	if (!maxChars || joined.length <= maxChars) return joined;
+
+	const kept: string[] = [];
+	let total = 0;
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const line = lines[i];
+		if (!line) continue;
+		const nextTotal = total + line.length + (kept.length > 0 ? 1 : 0);
+		if (nextTotal > maxChars) break;
+		kept.unshift(line);
+		total = nextTotal;
+	}
+	return [
+		`[older context truncated to keep this turn within budget]`,
+		...kept,
+	].join("\n");
 }

@@ -35,6 +35,11 @@ credits-added-chat = { $credits } shared credits added to this chat!
 credits-subscribed = Subscribed to { $plan }! { $credits } credits added. Your subscription renews monthly.
 credits-renewed = { $plan } subscription renewed! { $credits } credits added.
 credits-insufficient = Need { $cost } credits for { $tool }. Use /buy to get credits.
+credits-refund-debt-title = Refund debt
+credits-personal-debt = Personal debt: { $credits } credits
+credits-group-debt = Group debt: { $credits } credits
+credits-debt-hint = New payments settle debt first; paid usage is blocked until it is settled.
+credits-spend-order-group = Spend order here: group pool first, then personal credits.
 chat-free-quota-reached = Free chat limit reached for today. Use /buy for standard replies, or try again tomorrow.
 payment-sub-new = ✅ <b>Subscribed to { $plan }</b>
 
@@ -74,6 +79,14 @@ refund-processed-debt = ↩️ <b>Refund processed</b>
     Recovered { $recovered }/{ $original } credits from { $target }.
 
     { $debt } credits were already used and must be settled before paid usage continues.
+refund-review-needed = ⚠️ <b>Refund needs review</b>
+
+    Telegram reported a refund, but local reconciliation failed.
+    Charge: <code>{ $chargeId }</code>
+payment-settlement-failed = ⚠️ <b>Payment received</b>
+
+    I could not update the credit balance automatically.
+    Charge: <code>{ $chargeId }</code>
 
 ## Buy
 buy-choose = 💰 <b>Add credits</b>
@@ -96,6 +109,12 @@ buy-choose-subscriptions = 💰 <b>Monthly subscriptions</b>
 buy-target-personal = My personal credits
 buy-target-group = This group's shared pool
 buy-target-subscriptions = Monthly subscriptions
+buy-private-required = 💬 <b>Open Derp privately</b>
+
+    Personal credits and subscriptions are paid in a private chat.
+    Tap Derp's profile, press Start, then use /buy there.
+buy-private-sent = I sent the payment link privately.
+buy-private-open-bot = Open Derp privately and press Start first, then try again.
 buy-plan-not-found = Plan not found
 buy-pack-not-found = Pack not found
 buy-subscribe = Subscribe to { $plan }:
@@ -114,6 +133,10 @@ buy-invoice-group-pack-description = { $credits } credits for this chat
 buy-invoice-group-pack-label = { $pack } Group Pack
 buy-chat-groups-only = This command is for groups. Use /buy for personal credits.
 buy-invoice-error = Could not create the payment link. Please try again.
+payment-error-unknown-payload = Unknown invoice payload
+payment-error-currency = Unsupported payment currency
+payment-error-product = Unknown plan or pack
+payment-error-amount = Invoice amount mismatch
 payment-validation-error = Payment rejected: { $reason }
 
 ## Donations

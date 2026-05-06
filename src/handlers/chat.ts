@@ -47,6 +47,12 @@ import type { ToolContext } from "../tools/types";
 
 const chatComposer = new Composer<DerpContext>();
 const FREE_CHAT_DAILY_LIMIT = 25;
+const CHAT_CONTEXT_BUDGET: Record<ModelTier.FREE | ModelTier.STANDARD, number> =
+	{
+		[ModelTier.FREE]: 8_000,
+		[ModelTier.STANDARD]: 12_000,
+	};
+const CHAT_MESSAGE_CHAR_BUDGET = 1_200;
 
 /** Check if a message should trigger the bot */
 function shouldTrigger(ctx: DerpContext): boolean {
@@ -130,11 +136,33 @@ async function sendCaptionFollowUps(
 	}
 }
 
+type ProviderResultMetadata = {
+	providerCallIds?: string[];
+	costMicros?: number;
+};
+
+function mergeProviderResultMetadata(
+	target: ProviderResultMetadata,
+	result: ProviderResultMetadata,
+): void {
+	if (result.providerCallIds?.length) {
+		const ids = new Set([
+			...(target.providerCallIds ?? []),
+			...result.providerCallIds,
+		]);
+		target.providerCallIds = [...ids];
+	}
+	if (result.costMicros && result.costMicros > 0) {
+		target.costMicros = (target.costMicros ?? 0) + result.costMicros;
+	}
+}
+
 /** Build a ToolContext from DerpContext */
 async function buildToolContext(
 	ctx: DerpContext,
 	participantRefs: Map<string, ContextParticipant>,
 	replyMedia: MediaAttachment[],
+	providerMeta: ProviderResultMetadata,
 ): Promise<ToolContext> {
 	const admin = await isChatAdmin(ctx);
 	const replyOptions = {
@@ -159,6 +187,8 @@ async function buildToolContext(
 		participants: participantRefs,
 		getParticipantProfilePhoto: (participantRef) =>
 			getParticipantProfilePhoto(ctx, participantRefs, participantRef),
+		recordProviderResult: (result) =>
+			mergeProviderResultMetadata(providerMeta, result),
 		sendMessage: async (text: string) => {
 			await ctx.reply(text, replyOptions);
 		},
@@ -294,6 +324,13 @@ chatComposer.on("message", async (ctx) => {
 		recentMessages,
 		members,
 		config.botUsername,
+		{
+			maxMessageChars: CHAT_MESSAGE_CHAR_BUDGET,
+			maxStreamChars:
+				tier === ModelTier.STANDARD
+					? CHAT_CONTEXT_BUDGET[ModelTier.STANDARD]
+					: CHAT_CONTEXT_BUDGET[ModelTier.FREE],
+		},
 	);
 
 	// Build system prompt
@@ -362,10 +399,12 @@ chatComposer.on("message", async (ctx) => {
 	const toolSchemas = toolRegistry.getAutoCallableLLMToolSchemas(
 		userPreferences.disabledTools,
 	);
+	const toolProviderMeta: ProviderResultMetadata = {};
 	const toolContext = await buildToolContext(
 		ctx,
 		builtContext.participantRefs,
 		mediaAttachments,
+		toolProviderMeta,
 	);
 
 	// Create LLM provider
@@ -523,6 +562,15 @@ chatComposer.on("message", async (ctx) => {
 
 		const durationMs = Date.now() - startTime;
 		const actualModel = result.actualModel ?? modelId;
+		const providerCallIds =
+			result.providerCallIds || toolProviderMeta.providerCallIds
+				? [
+						...(result.providerCallIds ?? []),
+						...(toolProviderMeta.providerCallIds ?? []),
+					]
+				: undefined;
+		const totalCostMicros =
+			(result.costMicros ?? 0) + (toolProviderMeta.costMicros ?? 0);
 		const metadata: MessageMetadata = {
 			model: actualModel,
 			tier,
@@ -532,7 +580,8 @@ chatComposer.on("message", async (ctx) => {
 			toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
 			creditsSpent: creditsSpent > 0 ? creditsSpent : undefined,
 			creditSource,
-			providerCallIds: result.providerCallIds,
+			providerCallIds,
+			costMicros: totalCostMicros > 0 ? totalCostMicros : undefined,
 			providerRoute,
 			fallbackFrom,
 			durationMs,

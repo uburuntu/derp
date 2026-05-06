@@ -32,8 +32,9 @@ async function executeEditImage(
 		config.googleApiPaidKey,
 	);
 
+	let result: Awaited<ReturnType<GoogleLLMProvider["generateImage"]>>;
 	try {
-		const result = await provider.generateImage({
+		result = await provider.generateImage({
 			model: "gemini-2.5-flash-preview-image",
 			prompt: params.prompt,
 			sourceImage: sourceImage.data,
@@ -52,12 +53,32 @@ async function executeEditImage(
 				mediaInputCount: 1,
 			},
 		});
-
-		await ctx.sendPhoto(result.image.data, params.prompt.slice(0, 1024));
-		return { handled: true };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		return { text: `Image editing failed: ${msg}`, error: msg };
+	}
+
+	ctx.recordProviderResult?.({
+		providerCallIds: result.providerCallIds,
+		costMicros: result.costMicros,
+	});
+
+	try {
+		await ctx.sendPhoto(result.image.data, params.prompt.slice(0, 1024));
+		return {
+			handled: true,
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
+		};
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return {
+			text: `Image edited, but I couldn't deliver it to Telegram: ${msg}`,
+			error: msg,
+			billableFailure: true,
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
+		};
 	}
 }
 

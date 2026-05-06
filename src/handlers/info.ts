@@ -65,6 +65,24 @@ infoComposer.command("info", async (ctx) => {
 		lines.push(
 			`<b>Credits:</b> ${meta.creditsSpent} (${meta.creditSource ?? "unknown"})`,
 		);
+	if (meta.costMicros != null && meta.costMicros > 0) {
+		lines.push(
+			`<b>Provider cost:</b> $${(meta.costMicros / 1_000_000).toFixed(4)}`,
+		);
+	}
+	if (meta.providerRoute) {
+		const fallback = meta.fallbackFrom
+			? ` from ${escapeHtml(meta.fallbackFrom)}`
+			: "";
+		lines.push(
+			`<b>Provider route:</b> ${escapeHtml(meta.providerRoute)}${fallback}`,
+		);
+	}
+	if (meta.providerCallIds && meta.providerCallIds.length > 0) {
+		lines.push(
+			`<b>Provider calls:</b> ${escapeHtml(meta.providerCallIds.join(", "))}`,
+		);
+	}
 	if (meta.durationMs != null)
 		lines.push(`<b>Duration:</b> ${meta.durationMs}ms`);
 

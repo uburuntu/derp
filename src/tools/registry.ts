@@ -117,6 +117,11 @@ interface OutgoingMessageRecord {
 	metadata?: MessageMetadata | null;
 }
 
+interface ProviderResultMetadata {
+	providerCallIds?: string[];
+	costMicros?: number;
+}
+
 function escapeHtml(text: string): string {
 	return text
 		.replace(/&/g, "&amp;")
@@ -371,6 +376,7 @@ function buildCommandMetadata(
 	creditResult?: Awaited<
 		ReturnType<typeof executeWithCreditGate>
 	>["creditResult"],
+	providerMeta?: ProviderResultMetadata,
 ): MessageMetadata {
 	return {
 		model: creditResult?.modelId,
@@ -384,8 +390,26 @@ function buildCommandMetadata(
 			creditResult && creditResult.source !== "rejected"
 				? creditResult.source
 				: undefined,
+		providerCallIds: providerMeta?.providerCallIds,
+		costMicros: providerMeta?.costMicros,
 		durationMs: Date.now() - startedAt,
 	};
+}
+
+function mergeProviderResultMetadata(
+	target: ProviderResultMetadata,
+	result: ProviderResultMetadata,
+): void {
+	if (result.providerCallIds?.length) {
+		const ids = new Set([
+			...(target.providerCallIds ?? []),
+			...result.providerCallIds,
+		]);
+		target.providerCallIds = [...ids];
+	}
+	if (result.costMicros && result.costMicros > 0) {
+		target.costMicros = (target.costMicros ?? 0) + result.costMicros;
+	}
 }
 
 function largestPhotoFileId(
@@ -405,8 +429,9 @@ async function buildToolContext(
 
 	const admin = await isChatAdmin(ctx);
 	const replyOptions = replyOptionsFor(input.threadId, input.replyToMessageId);
+	const providerMeta: ProviderResultMetadata = {};
 
-	return {
+	const toolCtx: ToolContext = {
 		db: ctx.db,
 		user: ctx.dbUser,
 		chat: ctx.dbChat,
@@ -421,6 +446,8 @@ async function buildToolContext(
 			ctx.dbChat.settings?.remindersAccess,
 			admin,
 		),
+		recordProviderResult: (result) =>
+			mergeProviderResultMetadata(providerMeta, result),
 		sendMessage: async (text: string) => {
 			const sent = await ctx.reply(text, replyOptions);
 			await persistOutgoingMessage(ctx, sent, {
@@ -428,7 +455,13 @@ async function buildToolContext(
 				text,
 				threadId: input.threadId ?? null,
 				replyToMessageId: input.replyToMessageId ?? null,
-				metadata: buildCommandMetadata(tool, ctx, input.commandStart),
+				metadata: buildCommandMetadata(
+					tool,
+					ctx,
+					input.commandStart,
+					toolCtx.creditResult,
+					providerMeta,
+				),
 			});
 		},
 		sendPhoto: async (photo: Buffer, caption?: string) => {
@@ -444,7 +477,13 @@ async function buildToolContext(
 				attachmentFileId: largestPhotoFileId(sent) ?? null,
 				threadId: input.threadId ?? null,
 				replyToMessageId: input.replyToMessageId ?? null,
-				metadata: buildCommandMetadata(tool, ctx, input.commandStart),
+				metadata: buildCommandMetadata(
+					tool,
+					ctx,
+					input.commandStart,
+					toolCtx.creditResult,
+					providerMeta,
+				),
 			});
 		},
 		sendVoice: async (audio: Buffer) => {
@@ -456,7 +495,13 @@ async function buildToolContext(
 				attachmentFileId: sent.voice?.file_id ?? null,
 				threadId: input.threadId ?? null,
 				replyToMessageId: input.replyToMessageId ?? null,
-				metadata: buildCommandMetadata(tool, ctx, input.commandStart),
+				metadata: buildCommandMetadata(
+					tool,
+					ctx,
+					input.commandStart,
+					toolCtx.creditResult,
+					providerMeta,
+				),
 			});
 		},
 		sendVideo: async (video: Buffer, caption?: string) => {
@@ -472,7 +517,13 @@ async function buildToolContext(
 				attachmentFileId: sent.video?.file_id ?? null,
 				threadId: input.threadId ?? null,
 				replyToMessageId: input.replyToMessageId ?? null,
-				metadata: buildCommandMetadata(tool, ctx, input.commandStart),
+				metadata: buildCommandMetadata(
+					tool,
+					ctx,
+					input.commandStart,
+					toolCtx.creditResult,
+					providerMeta,
+				),
 			});
 		},
 		editMessage: async (messageId: number, text: string) => {
@@ -492,6 +543,7 @@ async function buildToolContext(
 		expectedCreditSource: input.expectedCreditSource,
 		expectedCreditsToDeduct: input.expectedCreditsToDeduct,
 	};
+	return toolCtx;
 }
 
 async function sendToolResult(
@@ -521,7 +573,10 @@ async function sendToolResult(
 		ctx,
 		chunksWithFooter,
 		replyOptions,
-		buildCommandMetadata(tool, ctx, commandStart, result.creditResult),
+		buildCommandMetadata(tool, ctx, commandStart, result.creditResult, {
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
+		}),
 		storedChunks,
 	);
 }

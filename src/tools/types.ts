@@ -71,6 +71,10 @@ export interface ToolContext {
 	creditResult?: CreditCheckResult;
 	expectedCreditSource?: CreditCheckResult["source"];
 	expectedCreditsToDeduct?: number;
+	recordProviderResult?: (result: {
+		providerCallIds?: string[];
+		costMicros?: number;
+	}) => void;
 }
 
 // ── Tool Result ──────────────────────────────────────────────────────────────
@@ -86,4 +90,8 @@ export interface ToolResult {
 	error?: string;
 	/** Provider work succeeded, so paid credits should not be auto-refunded. */
 	billableFailure?: boolean;
+	/** Provider accounting rows created while producing this result. */
+	providerCallIds?: string[];
+	/** Provider-side cost in USD micros for this result. */
+	costMicros?: number;
 }

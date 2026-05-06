@@ -47,7 +47,16 @@ async function executeThink(
 			},
 		});
 
-		return { text: result.text };
+		ctx.recordProviderResult?.({
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
+		});
+
+		return {
+			text: result.text,
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
+		};
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		return { text: `Deep reasoning failed: ${msg}`, error: msg };
