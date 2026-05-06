@@ -9,173 +9,23 @@ import { config } from "../config";
 import {
     addUserCredits,
     getBalances,
-    getTransactionByIdempotencyKey,
     markPaymentSettlementFailed,
-    type RefundReconciliationResult,
     reconcileStarRefund,
     retryPaymentSettlement,
 } from "../db/queries/credits";
 import { waiveCreditDebt } from "../db/queries/finance";
 import { getUserByTelegramId } from "../db/queries/users";
 import { toolRegistry } from "../tools/registry";
+import { isAdmin } from "./admin-auth";
 import { formatReconciliation, formatUsd } from "./admin-format";
 import { replyAdminMetrics } from "./admin-metrics";
+import { registerRefundCommand } from "./admin-refunds";
 
 const adminComposer = new Composer<DerpContext>();
 
-function isAdmin(ctx: DerpContext): boolean {
-    return config.botAdminIds.includes(ctx.from?.id ?? 0);
-}
-
-function looksAlreadyRefunded(error: string): boolean {
-    return /payment_already_refunded|already.*refund|refund.*already/i.test(
-        error,
-    );
-}
-
 // ── /refund <userId> <chargeId> — standalone refund command ─────────────────
 
-adminComposer.command("refund", async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const adminId = ctx.from?.id;
-    if (!adminId) return;
-
-    const parts = (ctx.match ?? "").split(" ").filter(Boolean);
-    if (parts.length < 2) {
-        await ctx.reply(
-            "Usage: /refund <user_telegram_id> <telegram_charge_id>",
-        );
-        return;
-    }
-
-    const [targetUserIdArg, chargeId] = parts;
-    if (!targetUserIdArg || !chargeId) return;
-    const targetUserId = Number.parseInt(targetUserIdArg, 10);
-
-    if (Number.isNaN(targetUserId)) {
-        await ctx.reply("Invalid user ID");
-        return;
-    }
-
-    const existingRefund = await getTransactionByIdempotencyKey(
-        ctx.db,
-        `refund:${chargeId}`,
-    );
-    if (existingRefund) {
-        await ctx.reply(
-            `Refund already reconciled locally.\nUser: <code>${targetUserId}</code>\nCharge: <code>${chargeId}</code>`,
-            { parse_mode: "HTML" },
-        );
-        return;
-    }
-
-    try {
-        await ctx.api.raw.refundStarPayment({
-            user_id: targetUserId,
-            telegram_payment_charge_id: chargeId,
-        });
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (looksAlreadyRefunded(msg)) {
-            let reconciliation: RefundReconciliationResult;
-            try {
-                reconciliation = await reconcileStarRefund(ctx.db, chargeId, {
-                    adminId,
-                    targetUserId,
-                    source: "admin_refund_already_refunded",
-                    telegramRefundError: msg,
-                });
-            } catch (reconcileErr) {
-                const reconcileMsg =
-                    reconcileErr instanceof Error
-                        ? reconcileErr.message
-                        : String(reconcileErr);
-                await ctx.reply(
-                    `Telegram says this charge is already refunded, but local reconciliation failed: ${escapeHtml(reconcileMsg)}`,
-                    { parse_mode: "HTML" },
-                );
-                await notifyAdmins(
-                    formatRefundNotification({
-                        adminId,
-                        targetUserId,
-                        chargeId,
-                        success: false,
-                        error: reconcileMsg,
-                    }),
-                    { critical: true },
-                );
-                return;
-            }
-
-            await ctx.reply(formatReconciliation(chargeId, reconciliation), {
-                parse_mode: "HTML",
-            });
-            await notifyAdmins(
-                formatRefundNotification({
-                    adminId,
-                    targetUserId,
-                    chargeId,
-                    success: true,
-                }),
-                { critical: true },
-            );
-            return;
-        }
-        await ctx.reply(`Refund failed: ${msg}`);
-
-        await notifyAdmins(
-            formatRefundNotification({
-                adminId,
-                targetUserId,
-                chargeId,
-                success: false,
-                error: msg,
-            }),
-            { critical: true },
-        );
-        return;
-    }
-
-    let reconciliation: RefundReconciliationResult;
-    try {
-        reconciliation = await reconcileStarRefund(ctx.db, chargeId, {
-            adminId,
-            targetUserId,
-        });
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await ctx.reply(
-            `Refund processed in Telegram, but local reconciliation failed: ${msg}`,
-        );
-
-        await notifyAdmins(
-            formatRefundNotification({
-                adminId,
-                targetUserId,
-                chargeId,
-                success: false,
-                error: msg,
-            }),
-            { critical: true },
-        );
-        return;
-    }
-
-    await ctx.reply(
-        `Refund processed in Telegram.\nUser: <code>${targetUserId}</code>\n${formatReconciliation(chargeId, reconciliation)}`,
-        { parse_mode: "HTML" },
-    );
-
-    await notifyAdmins(
-        formatRefundNotification({
-            adminId,
-            targetUserId,
-            chargeId,
-            success: true,
-        }),
-        { critical: true },
-    );
-});
+registerRefundCommand(adminComposer);
 
 // ── /admin <subcommand> — admin panel ───────────────────────────────────────
 
