@@ -40,6 +40,7 @@ credits-personal-debt = Personal debt: { $credits } credits
 credits-group-debt = Group debt: { $credits } credits
 credits-debt-hint = New payments settle debt first; paid usage is blocked until it is settled.
 credits-spend-order-group = Spend order here: group pool first, then personal credits.
+credits-personal-private-hint = Personal balance details are shown only in private chat. Use /credits in DM.
 chat-free-quota-reached = Free chat limit reached for today. Use /buy for standard replies, or try again tomorrow.
 payment-sub-new = ✅ <b>Subscribed to { $plan }</b>
 
@@ -175,6 +176,11 @@ tool-confirm-message = ⚠️ <b>Confirm spend</b>
 
     <code>{ $tool }</code> will use { $cost } credits { $source }.
     Remaining after this: { $remaining }.
+
+    <i>Run it when the result is worth the cost.</i>
+tool-confirm-message-private = ⚠️ <b>Confirm spend</b>
+
+    <code>{ $tool }</code> will use { $cost } credits { $source }.
 
     <i>Run it when the result is worth the cost.</i>
 tool-confirm-run = Run

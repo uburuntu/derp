@@ -83,7 +83,12 @@ export function formatBalanceFooter(
 			? " from group pool"
 			: source === "user"
 				? " from personal balance"
-				: "";
+				: source === "user_private"
+					? " from personal balance"
+					: "";
+	if (source === "user_private") {
+		return `\n\n✨ ${cost} credits used${sourceText}`;
+	}
 	if (remaining <= 20) {
 		return `\n\n⚠️ ${cost} credits used${sourceText} · ${remaining} remaining · /buy to top up`;
 	}

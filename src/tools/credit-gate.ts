@@ -258,7 +258,7 @@ export async function executeWithCreditGate(
 				}
 				if (result.handled && creditResult.creditsToDeduct > 0) {
 					await ctx
-						.sendMessage(formatSpendReceipt(creditResult))
+						.sendMessage(formatSpendReceipt(creditResult, ctx.isGroupChat))
 						.catch((err) => {
 							logger.warn("tool_spend_receipt_failed", {
 								tool: tool.name,
@@ -279,6 +279,20 @@ export async function executeWithCreditGate(
 						error: result.error,
 						creditsDeducted: creditResult.creditsToDeduct,
 						source: creditResult.source,
+						providerCallIds: result.providerCallIds,
+						costMicros: result.costMicros,
+					});
+					await notifyAdmins(
+						`⚠️ <b>Billable tool delivery failure</b>\n\nTool: <code>${escapeHtml(tool.name)}</code>\nCredits kept: ${creditResult.creditsToDeduct}\nSource: <code>${escapeHtml(creditResult.source)}</code>\nProvider calls: <code>${escapeHtml(result.providerCallIds?.join(", ") ?? "n/a")}</code>\nProvider cost: $${((result.costMicros ?? 0) / 1_000_000).toFixed(4)}\nReason: ${escapeHtml(result.error ?? "unknown")}`,
+						{ critical: true },
+					).catch((notifyErr) => {
+						logger.error("tool_billable_failure_admin_notify_failed", {
+							tool: tool.name,
+							error:
+								notifyErr instanceof Error
+									? notifyErr.message
+									: String(notifyErr),
+						});
 					});
 				} else {
 					await refundToolDeduction(ctx, creditResult, tool, idempotencyKey, {
@@ -369,13 +383,19 @@ function buildUpsellMessage(tool: ToolDefinition): string {
 	return "Use /buy to get credits or subscribe.";
 }
 
-function formatSpendReceipt(result: CreditCheckResult): string {
+function formatSpendReceipt(
+	result: CreditCheckResult,
+	hidePersonalBalance?: boolean,
+): string {
 	const source =
 		result.source === "chat"
 			? "from group pool"
 			: result.source === "user"
 				? "from personal balance"
 				: "";
+	if (result.source === "user" && hidePersonalBalance) {
+		return `✨ ${result.creditsToDeduct} credits used ${source}`;
+	}
 	return `${result.creditsRemaining != null && result.creditsRemaining <= 20 ? "⚠️" : "✨"} ${result.creditsToDeduct} credits used ${source} · ${result.creditsRemaining ?? 0} remaining`;
 }
 

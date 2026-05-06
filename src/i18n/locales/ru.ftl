@@ -40,6 +40,7 @@ credits-personal-debt = Личный долг: { $credits } кредитов
 credits-group-debt = Долг группы: { $credits } кредитов
 credits-debt-hint = Новые платежи сначала гасят долг; платное использование заблокировано до погашения.
 credits-spend-order-group = В этом чате сначала тратится общий пул группы, затем личные кредиты.
+credits-personal-private-hint = Личный баланс показывается только в личном чате. Используй /credits в DM.
 chat-free-quota-reached = Бесплатный лимит чата на сегодня закончился. Используй /buy для стандартных ответов или попробуй завтра.
 payment-sub-new = ✅ <b>Подписка { $plan } оформлена</b>
 
@@ -175,6 +176,11 @@ tool-confirm-message = ⚠️ <b>Подтверди списание</b>
 
     <code>{ $tool }</code> спишет { $cost } кр. { $source }.
     Остаток после запуска: { $remaining }.
+
+    <i>Запускай, когда результат стоит этой цены.</i>
+tool-confirm-message-private = ⚠️ <b>Подтверди списание</b>
+
+    <code>{ $tool }</code> спишет { $cost } кр. { $source }.
 
     <i>Запускай, когда результат стоит этой цены.</i>
 tool-confirm-run = Запустить

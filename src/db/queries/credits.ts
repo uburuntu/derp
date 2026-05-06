@@ -39,7 +39,7 @@ export interface StarsPaymentRecord {
 	invoicePayload?: string | null;
 	currency: string;
 	stars: number;
-	productType: "subscription" | "pack" | "donation";
+	productType: "subscription" | "pack" | "donation" | "unknown";
 	productId?: string | null;
 	creditTarget: "user" | "chat" | "none";
 	credits: number;
@@ -133,6 +133,39 @@ async function ensurePaymentReceiptReceived(
 			meta: record.meta,
 		})
 		.onConflictDoNothing({ target: paymentReceipts.telegramChargeId });
+}
+
+export async function recordFailedPaymentReceipt(
+	db: Database,
+	record: StarsPaymentRecord,
+	error: string,
+): Promise<void> {
+	const [inserted] = await db
+		.insert(paymentReceipts)
+		.values({
+			userId: record.userId,
+			chatId: record.chatId ?? null,
+			telegramChargeId: record.telegramChargeId,
+			providerChargeId: record.providerChargeId ?? null,
+			invoicePayload: record.invoicePayload ?? null,
+			currency: record.currency,
+			stars: record.stars,
+			productType: record.productType,
+			productId: record.productId ?? null,
+			creditTarget: record.creditTarget,
+			credits: record.credits,
+			status: "settlement_failed",
+			meta: {
+				...(record.meta ?? {}),
+				lastSettlementError: error,
+				lastSettlementFailedAt: new Date().toISOString(),
+				settlementAttemptCount: 1,
+			},
+		})
+		.onConflictDoNothing({ target: paymentReceipts.telegramChargeId })
+		.returning({ id: paymentReceipts.id });
+	if (inserted) return;
+	await markPaymentSettlementFailed(db, record.telegramChargeId, error);
 }
 
 async function markPaymentSettledIn(
@@ -810,6 +843,15 @@ export async function applyChatPackPayment(
 
 	return db.transaction(async (tx) => {
 		const receipt = await recordPaymentReceiptIn(tx, record);
+		await tx
+			.update(paymentReceipts)
+			.set({ chatId, updatedAt: new Date() })
+			.where(
+				and(
+					eq(paymentReceipts.id, receipt.id),
+					sql`${paymentReceipts.chatId} IS NULL`,
+				),
+			);
 		if (!receipt.needsSettlement) {
 			const [existing] = await tx
 				.select({ balanceAfter: ledger.balanceAfter })
@@ -1105,6 +1147,13 @@ function subscriptionExpiryFromReceipt(
 	return expiresAt;
 }
 
+function targetTelegramChatIdFromMeta(
+	meta: Record<string, unknown> | null | undefined,
+): number | null {
+	const raw = meta?.targetTelegramChatId;
+	return typeof raw === "number" && Number.isFinite(raw) ? raw : null;
+}
+
 export async function retryPaymentSettlement(
 	db: Database,
 	telegramChargeId: string,
@@ -1126,7 +1175,22 @@ export async function retryPaymentSettlement(
 
 	if (record.productType === "pack") {
 		if (record.creditTarget === "chat") {
-			return applyChatPackPayment(db, record);
+			let chatId = record.chatId;
+			if (!chatId) {
+				const targetTelegramChatId = targetTelegramChatIdFromMeta(receipt.meta);
+				if (targetTelegramChatId != null) {
+					const [targetChat] = await db
+						.select({ id: chats.id })
+						.from(chats)
+						.where(eq(chats.telegramId, targetTelegramChatId))
+						.limit(1);
+					chatId = targetChat?.id ?? null;
+				}
+			}
+			if (!chatId) {
+				throw new Error("Chat pack receipt target chat not found");
+			}
+			return applyChatPackPayment(db, { ...record, chatId });
 		}
 		if (record.creditTarget === "user") {
 			return applyUserPackPayment(db, record);

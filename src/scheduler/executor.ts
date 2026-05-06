@@ -13,6 +13,7 @@ import {
 	deductUserCredits,
 	getBalances,
 } from "../db/queries/credits";
+import { getOpenDebtAmount } from "../db/queries/finance";
 import {
 	markReminderCompleted,
 	markReminderFailed,
@@ -56,6 +57,10 @@ async function reserveLlmReminderCredit(
 		user.telegramId,
 		chat.telegramId,
 	);
+	const [userDebt, chatDebt] = await Promise.all([
+		getOpenDebtAmount(db, { userId: user.id }),
+		getOpenDebtAmount(db, { userId: user.id, chatId: chat.id }),
+	]);
 	const idempotencyKey = `reminder:${reminder.id}:fire:${reminder.fireCount + 1}:llm`;
 	const meta = {
 		reminderId: reminder.id,
@@ -63,7 +68,7 @@ async function reserveLlmReminderCredit(
 	};
 
 	try {
-		if (chatCredits >= LLM_REMINDER_COST) {
+		if (chatCredits >= LLM_REMINDER_COST && chatDebt === 0) {
 			const debit = await deductChatCredits(
 				db,
 				chat.id,
@@ -90,7 +95,7 @@ async function reserveLlmReminderCredit(
 			};
 		}
 
-		if (userCredits >= LLM_REMINDER_COST) {
+		if (userCredits >= LLM_REMINDER_COST && userDebt === 0) {
 			const debit = await deductUserCredits(
 				db,
 				user.id,

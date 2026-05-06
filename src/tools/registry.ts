@@ -412,6 +412,21 @@ function mergeProviderResultMetadata(
 	}
 }
 
+function hasProviderResultMetadata(meta: ProviderResultMetadata): boolean {
+	return Boolean(meta.providerCallIds?.length || (meta.costMicros ?? 0) > 0);
+}
+
+function isGroupChat(ctx: DerpContext): boolean {
+	return ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+}
+
+function publicCreditSource(
+	ctx: DerpContext,
+	source?: string,
+): string | undefined {
+	return source === "user" && isGroupChat(ctx) ? "user_private" : source;
+}
+
 function largestPhotoFileId(
 	sent: PersistableSentMessage,
 ): string | null | undefined {
@@ -438,6 +453,7 @@ async function buildToolContext(
 		creditService: ctx.creditService,
 		tier: ctx.tier,
 		isChatAdmin: admin,
+		isGroupChat: isGroupChat(ctx),
 		canManageMemory: canUseAdminGatedSetting(
 			ctx.dbChat.settings?.memoryAccess,
 			admin,
@@ -459,7 +475,9 @@ async function buildToolContext(
 					tool,
 					ctx,
 					input.commandStart,
-					toolCtx.creditResult,
+					hasProviderResultMetadata(providerMeta)
+						? toolCtx.creditResult
+						: undefined,
 					providerMeta,
 				),
 			});
@@ -567,7 +585,7 @@ async function sendToolResult(
 		storedChunks,
 		cost,
 		remaining,
-		result.creditResult?.source,
+		publicCreditSource(ctx, result.creditResult?.source),
 	);
 	await replyMarkdownAndPersist(
 		ctx,
@@ -879,12 +897,17 @@ class ToolRegistry {
 
 		await replyHtml(
 			ctx,
-			ctx.t("tool-confirm-message", {
-				tool: primaryCommand(tool),
-				cost: creditResult.creditsToDeduct,
-				source,
-				remaining: creditResult.creditsRemaining ?? 0,
-			}),
+			ctx.t(
+				isGroupChat(ctx) && pendingSource === "user"
+					? "tool-confirm-message-private"
+					: "tool-confirm-message",
+				{
+					tool: primaryCommand(tool),
+					cost: creditResult.creditsToDeduct,
+					source,
+					remaining: creditResult.creditsRemaining ?? 0,
+				},
+			),
 			{ ...options.replyOptions, reply_markup: keyboard },
 		);
 	}

@@ -2,6 +2,7 @@
 
 import { Composer, InputFile } from "grammy";
 import type { DerpContext } from "../bot/context";
+import { notifyAdmins } from "../common/admin-notify";
 import {
 	bestPhotoFileId,
 	downloadTelegramFile,
@@ -19,9 +20,12 @@ import {
 	replyHtml,
 	splitMessage,
 } from "../common/reply";
+import { escapeHtml } from "../common/sanitize";
 import { config, getBotId, getGoogleApiKeys } from "../config";
+import { creditUsdFloor, TARGET_GROSS_MARGIN } from "../credits/economy";
 import {
 	hasActiveSubscription,
+	STANDARD_CHAT_CREDITS,
 	STANDARD_CHAT_TOOL_NAME,
 } from "../credits/service";
 import { getBalances } from "../db/queries/credits";
@@ -53,6 +57,15 @@ const CHAT_CONTEXT_BUDGET: Record<ModelTier.FREE | ModelTier.STANDARD, number> =
 		[ModelTier.STANDARD]: 12_000,
 	};
 const CHAT_MESSAGE_CHAR_BUDGET = 1_200;
+
+function fallbackCostCapMicros(): number {
+	return Math.round(
+		STANDARD_CHAT_CREDITS *
+			creditUsdFloor() *
+			(1 - TARGET_GROSS_MARGIN) *
+			1_000_000,
+	);
+}
 
 /** Check if a message should trigger the bot */
 function shouldTrigger(ctx: DerpContext): boolean {
@@ -157,6 +170,15 @@ function mergeProviderResultMetadata(
 	}
 }
 
+function publicCreditSource(
+	ctx: DerpContext,
+	source?: string,
+): string | undefined {
+	const groupChat =
+		ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+	return source === "user" && groupChat ? "user_private" : source;
+}
+
 /** Build a ToolContext from DerpContext */
 async function buildToolContext(
 	ctx: DerpContext,
@@ -176,6 +198,7 @@ async function buildToolContext(
 		creditService: ctx.creditService,
 		tier: ctx.tier,
 		isChatAdmin: admin,
+		isGroupChat: ctx.chat?.type === "group" || ctx.chat?.type === "supergroup",
 		canManageMemory: canUseAdminGatedSetting(
 			ctx.dbChat.settings?.memoryAccess,
 			admin,
@@ -267,6 +290,7 @@ chatComposer.on("message", async (ctx) => {
 			chatId: ctx.dbChat.id,
 			modelId,
 			limit: FREE_CHAT_DAILY_LIMIT,
+			botWideLimit: config.freeChatDailyBotLimit,
 			idempotencyKey: chatTurnIdempotencyKey
 				? `free:${chatTurnIdempotencyKey}`
 				: undefined,
@@ -421,6 +445,8 @@ chatComposer.on("message", async (ctx) => {
 	let providerCompleted = false;
 	let providerRoute: "primary" | "fallback" = "primary";
 	let fallbackFrom: string | undefined;
+	let billableProviderCallIds: string[] | undefined;
+	let billableProviderCostMicros = 0;
 
 	try {
 		if (chatCreditResult?.allowed) {
@@ -543,11 +569,47 @@ chatComposer.on("message", async (ctx) => {
 						meta: { ...tracking.meta, primaryModel: modelId },
 					},
 				});
+				const maxFallbackCostMicros = fallbackCostCapMicros();
+				if ((result.costMicros ?? 0) > maxFallbackCostMicros) {
+					const costUsd = ((result.costMicros ?? 0) / 1_000_000).toFixed(4);
+					const capUsd = (maxFallbackCostMicros / 1_000_000).toFixed(4);
+					recordHandledFailure(
+						"openrouter_cost_guard",
+						"fallback_cost_over_cap",
+						{
+							model: result.actualModel ?? config.openrouterPaidFallbackModel,
+							costMicros: result.costMicros ?? 0,
+							maxFallbackCostMicros,
+						},
+					);
+					logger.error("openrouter_fallback_cost_over_cap", {
+						model: result.actualModel ?? config.openrouterPaidFallbackModel,
+						costMicros: result.costMicros ?? 0,
+						maxFallbackCostMicros,
+					});
+					await notifyAdmins(
+						`⚠️ <b>OpenRouter fallback cost over cap</b>\n\nModel: <code>${escapeHtml(result.actualModel ?? config.openrouterPaidFallbackModel)}</code>\nCost: $${costUsd}\nCap: $${capUsd}\nCredits charged: ${chatCreditResult?.creditsToDeduct ?? 0}`,
+						{ critical: true },
+					).catch((notifyErr) => {
+						logger.error("openrouter_cost_admin_notify_failed", {
+							error:
+								notifyErr instanceof Error
+									? notifyErr.message
+									: String(notifyErr),
+						});
+					});
+				}
 			} else {
 				throw primaryErr;
 			}
 		}
 		providerCompleted = true;
+		billableProviderCallIds = [
+			...(result.providerCallIds ?? []),
+			...(toolProviderMeta.providerCallIds ?? []),
+		];
+		billableProviderCostMicros =
+			(result.costMicros ?? 0) + (toolProviderMeta.costMicros ?? 0);
 
 		// Get remaining balance for footer if not set by tool calls
 		if (creditsRemaining == null && creditsSpent > 0) {
@@ -569,8 +631,6 @@ chatComposer.on("message", async (ctx) => {
 						...(toolProviderMeta.providerCallIds ?? []),
 					]
 				: undefined;
-		const totalCostMicros =
-			(result.costMicros ?? 0) + (toolProviderMeta.costMicros ?? 0);
 		const metadata: MessageMetadata = {
 			model: actualModel,
 			tier,
@@ -581,7 +641,8 @@ chatComposer.on("message", async (ctx) => {
 			creditsSpent: creditsSpent > 0 ? creditsSpent : undefined,
 			creditSource,
 			providerCallIds,
-			costMicros: totalCostMicros > 0 ? totalCostMicros : undefined,
+			costMicros:
+				billableProviderCostMicros > 0 ? billableProviderCostMicros : undefined,
 			providerRoute,
 			fallbackFrom,
 			durationMs,
@@ -614,7 +675,7 @@ chatComposer.on("message", async (ctx) => {
 				chunks,
 				creditsSpent,
 				creditsRemaining ?? 0,
-				creditSource,
+				publicCreditSource(ctx, creditSource),
 			);
 
 			for (let i = 0; i < withFooter.length; i++) {
@@ -701,6 +762,17 @@ chatComposer.on("message", async (ctx) => {
 				source: chatCreditResult.source,
 				chatId: ctx.dbChat.telegramId,
 				userId: ctx.dbUser.telegramId,
+				providerCallIds: billableProviderCallIds,
+				costMicros: billableProviderCostMicros,
+			});
+			await notifyAdmins(
+				`⚠️ <b>Billable chat delivery failure</b>\n\nCredits kept: ${chatCreditResult.creditsToDeduct}\nSource: <code>${chatCreditResult.source}</code>\nProvider calls: <code>${escapeHtml(billableProviderCallIds?.join(", ") || "n/a")}</code>\nProvider cost: $${(billableProviderCostMicros / 1_000_000).toFixed(4)}\nChat/user: <code>${ctx.dbChat.telegramId}</code> / <code>${ctx.dbUser.telegramId}</code>\nReason: ${escapeHtml(error)}`,
+				{ critical: true },
+			).catch((notifyErr) => {
+				logger.error("chat_billable_failure_admin_notify_failed", {
+					error:
+						notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+				});
 			});
 		}
 		recordHandledFailure("chat", error, {

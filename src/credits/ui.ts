@@ -94,16 +94,20 @@ export function formatBalanceMessage(
 	subscriptionTier: string | null,
 	subscriptionExpiresAt: Date | null,
 	t: Translator,
+	options: { showPersonal?: boolean } = {},
 ): string {
+	const showPersonal = options.showPersonal ?? true;
 	const lines: string[] = [`💰 <b>${t("credits-title")}</b>\n`];
 
-	lines.push(`<b>${t("credits-balance", { userCredits })}</b>`);
+	if (showPersonal) {
+		lines.push(`<b>${t("credits-balance", { userCredits })}</b>`);
+	}
 
-	if (chatCredits > 0) {
+	if (chatCredits > 0 || !showPersonal) {
 		lines.push(`<b>${t("credits-chat-pool", { chatCredits })}</b>`);
 	}
 
-	if (subscriptionTier && subscriptionExpiresAt) {
+	if (showPersonal && subscriptionTier && subscriptionExpiresAt) {
 		const isActive = subscriptionExpiresAt > new Date();
 		if (isActive) {
 			const pad = (n: number) => String(n).padStart(2, "0");

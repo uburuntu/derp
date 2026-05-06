@@ -14,7 +14,21 @@ const configSchema = z
 		googleApiPaidKey: z.string().optional(),
 		openrouterApiKey: z.string().optional(),
 		openrouterPaidFallbackModel: z.string().default("openai/gpt-5.4-mini"),
+		openrouterPaidFallbackAllowedModels: z
+			.string()
+			.default(
+				"openai/gpt-5.4-mini,google/gemini-2.5-flash,google/gemini-2.5-flash-lite",
+			)
+			.transform((s) =>
+				s
+					.split(",")
+					.map((part) => part.trim())
+					.filter(Boolean),
+			),
 		braveSearchApiKey: z.string().optional(),
+		freeChatDailyBotLimit: z.coerce.number().int().min(0).default(1000),
+		freeSearchDailyBotLimit: z.coerce.number().int().min(0).default(500),
+		freePromoMediaDailyBotLimit: z.coerce.number().int().min(0).default(0),
 		botAdminIds: z
 			.string()
 			.default("")
@@ -67,6 +81,19 @@ const configSchema = z
 				message: "GOOGLE_API_PAID_KEY is required when ENVIRONMENT=prod",
 			});
 		}
+		if (
+			cfg.openrouterApiKey &&
+			!cfg.openrouterPaidFallbackAllowedModels.includes(
+				cfg.openrouterPaidFallbackModel,
+			)
+		) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["openrouterPaidFallbackModel"],
+				message:
+					"OPENROUTER_PAID_FALLBACK_MODEL must be listed in OPENROUTER_PAID_FALLBACK_ALLOWED_MODELS",
+			});
+		}
 	});
 
 export type Config = z.infer<typeof configSchema>;
@@ -82,7 +109,12 @@ function loadConfig(): Config {
 		googleApiPaidKey: process.env.GOOGLE_API_PAID_KEY,
 		openrouterApiKey: process.env.OPENROUTER_API_KEY,
 		openrouterPaidFallbackModel: process.env.OPENROUTER_PAID_FALLBACK_MODEL,
+		openrouterPaidFallbackAllowedModels:
+			process.env.OPENROUTER_PAID_FALLBACK_ALLOWED_MODELS,
 		braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY,
+		freeChatDailyBotLimit: process.env.FREE_CHAT_DAILY_BOT_LIMIT,
+		freeSearchDailyBotLimit: process.env.FREE_SEARCH_DAILY_BOT_LIMIT,
+		freePromoMediaDailyBotLimit: process.env.FREE_PROMO_MEDIA_DAILY_BOT_LIMIT,
 		botAdminIds: process.env.BOT_ADMIN_IDS,
 		botAdminEventsChatId: process.env.BOT_ADMIN_EVENTS_CHAT_ID,
 		logfireToken: process.env.LOGFIRE_TOKEN,

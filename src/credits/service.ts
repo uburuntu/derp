@@ -1,3 +1,4 @@
+import { config } from "../config";
 import type { Database } from "../db/connection";
 import {
 	addChatCredits,
@@ -55,6 +56,16 @@ export function hasActiveSubscription(
 		user.subscriptionExpiresAt != null &&
 		user.subscriptionExpiresAt > new Date()
 	);
+}
+
+function quotaScopeForTool(toolName: string): "web_search" | "promo_media" {
+	return toolName === "webSearch" ? "web_search" : "promo_media";
+}
+
+function botWideLimitForTool(toolName: string): number {
+	return toolName === "webSearch"
+		? config.freeSearchDailyBotLimit
+		: config.freePromoMediaDailyBotLimit;
 }
 
 // ── Credit Service ───────────────────────────────────────────────────────────
@@ -127,11 +138,19 @@ export class CreditService {
 
 		// Check free daily limit first
 		if (hasMeteredFreeQuota) {
-			const used = await getQuotaUsage(this.db, {
-				scope: toolName === "webSearch" ? "web_search" : "promo_media",
-				userId: this.user.id,
-			});
-			if (used < pricing.freeDaily) {
+			const scope = quotaScopeForTool(toolName);
+			const [used, botWideUsed] = await Promise.all([
+				getQuotaUsage(this.db, {
+					scope,
+					userId: this.user.id,
+				}),
+				getQuotaUsage(this.db, {
+					scope,
+					botWide: true,
+				}),
+			]);
+			const botWideLimit = botWideLimitForTool(toolName);
+			if (used < pricing.freeDaily && botWideUsed < botWideLimit) {
 				return {
 					allowed: true,
 					tier: model.tier,
@@ -186,27 +205,17 @@ export class CreditService {
 
 		// Chat credits first
 		if (chatCredits >= totalCost) {
-			if (chatDebt > 0) {
+			if (chatDebt === 0) {
 				return {
-					allowed: false,
+					allowed: true,
 					tier: model.tier,
 					modelId: model.id,
-					source: "rejected",
-					creditsToDeduct: 0,
-					creditsRemaining: chatCredits,
+					source: "chat",
+					creditsToDeduct: totalCost,
+					creditsRemaining: chatCredits - totalCost,
 					freeRemaining: null,
-					rejectReason: `This group has ${chatDebt} refund-debt credits to settle before paid tools can use the shared pool`,
 				};
 			}
-			return {
-				allowed: true,
-				tier: model.tier,
-				modelId: model.id,
-				source: "chat",
-				creditsToDeduct: totalCost,
-				creditsRemaining: chatCredits - totalCost,
-				freeRemaining: null,
-			};
 		}
 
 		// User credits
@@ -282,6 +291,7 @@ export class CreditService {
 					toolName,
 					modelId: result.modelId,
 					limit: pricing.freeDaily,
+					botWideLimit: botWideLimitForTool(toolName),
 					idempotencyKey,
 					meta,
 				});

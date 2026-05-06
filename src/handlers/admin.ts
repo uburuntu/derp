@@ -419,7 +419,9 @@ adminComposer.command("admin", async (ctx) => {
 					(SELECT count(*)::int FROM provider_calls WHERE status = 'started' AND created_at < now() - interval '10 minutes') AS stale_provider_calls,
 					(SELECT COALESCE(sum(credits), 0)::int FROM users) AS user_credit_liability,
 					(SELECT COALESCE(sum(credits), 0)::int FROM chats) AS chat_credit_liability,
-					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE created_at >= now() - make_interval(days => ${days})) AS free_quota_uses
+					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE created_at >= now() - make_interval(days => ${days})) AS free_quota_uses,
+					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE scope = 'free_chat' AND subject_key = 'bot' AND created_at >= now() - make_interval(days => ${days})) AS bot_free_chat_uses,
+					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE scope = 'web_search' AND subject_key = 'bot' AND created_at >= now() - make_interval(days => ${days})) AS bot_free_search_uses
 			`);
 
 			const toolRows = await ctx.db.execute(sql`
@@ -495,6 +497,8 @@ adminComposer.command("admin", async (ctx) => {
 				user_credit_liability?: number;
 				chat_credit_liability?: number;
 				free_quota_uses?: number;
+				bot_free_chat_uses?: number;
+				bot_free_search_uses?: number;
 			};
 			const tools = toolRows as unknown as Array<{
 				tool: string;
@@ -588,6 +592,7 @@ adminComposer.command("admin", async (ctx) => {
 					`Refund debt opened/window: ${overviewRow.refund_debt_credits ?? 0} cr\n` +
 					`Open refund debt: ${overviewRow.open_debt_credits ?? 0} cr\n` +
 					`Free quota uses: ${overviewRow.free_quota_uses ?? 0}\n` +
+					`Bot free chat/search: ${overviewRow.bot_free_chat_uses ?? 0}/${config.freeChatDailyBotLimit} · ${overviewRow.bot_free_search_uses ?? 0}/${config.freeSearchDailyBotLimit}\n` +
 					`Unsettled payments: ${overviewRow.unsettled_payments ?? 0}\n` +
 					`Stars gross/refunded/net: ${grossStars}⭐ / ${refundedStars}⭐ / ${grossStars - refundedStars}⭐\n\n` +
 					`<b>Provider Cost</b>\n` +

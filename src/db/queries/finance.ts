@@ -264,6 +264,7 @@ export async function reserveQuotaWindow(
 	},
 ): Promise<boolean> {
 	const amount = input.amount ?? 1;
+	if (input.limit < amount) return false;
 	const windowKey = input.windowKey ?? dailyWindowKey();
 	const subjectKey = quotaSubjectKey(input);
 
@@ -336,6 +337,7 @@ export async function recordGlobalFreeToolUsage(
 		toolName: string;
 		modelId: string | null;
 		limit: number;
+		botWideLimit?: number;
 		idempotencyKey?: string;
 		meta?: Record<string, unknown>;
 	},
@@ -379,6 +381,15 @@ export async function recordGlobalFreeToolUsage(
 				meta: { ...input.meta, toolName: input.toolName },
 			});
 			if (!reserved) throw new GlobalQuotaExhaustedError();
+			if (input.botWideLimit != null) {
+				const botWideReserved = await reserveQuotaWindow(tx, {
+					scope: input.toolName === "webSearch" ? "web_search" : "promo_media",
+					botWide: true,
+					limit: input.botWideLimit,
+					meta: { ...input.meta, toolName: input.toolName },
+				});
+				if (!botWideReserved) throw new GlobalQuotaExhaustedError();
+			}
 			return "applied";
 		});
 	} catch (err) {
@@ -394,6 +405,7 @@ export async function recordFreeChatUsage(
 		chatId: string;
 		modelId: string | null;
 		limit: number;
+		botWideLimit?: number;
 		idempotencyKey?: string;
 		meta?: Record<string, unknown>;
 	},
@@ -437,6 +449,15 @@ export async function recordFreeChatUsage(
 				meta: { ...input.meta, chatId: input.chatId },
 			});
 			if (!reserved) throw new GlobalQuotaExhaustedError();
+			if (input.botWideLimit != null) {
+				const botWideReserved = await reserveQuotaWindow(tx, {
+					scope: "free_chat",
+					botWide: true,
+					limit: input.botWideLimit,
+					meta: { ...input.meta, chatId: input.chatId },
+				});
+				if (!botWideReserved) throw new GlobalQuotaExhaustedError();
+			}
 			return "applied";
 		});
 	} catch (err) {

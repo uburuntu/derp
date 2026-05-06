@@ -147,10 +147,9 @@ donationsComposer.on("message:successful_payment", async (ctx, next) => {
 	const userId = ctx.from?.id ?? ctx.dbUser?.telegramId ?? 0;
 	const targetChat = await getChatByTelegramId(ctx.db, payload.targetChatId);
 	const result = await applyDonationOrReport(ctx, payment, payload, () => {
-		if (!targetChat) throw new Error("Donation target chat not found");
 		return recordDonationPayment(ctx.db, {
 			userId: ctx.dbUser.id,
-			chatId: targetChat.id,
+			chatId: targetChat?.id ?? null,
 			telegramChargeId: payment.telegram_payment_charge_id,
 			providerChargeId: payment.provider_payment_charge_id,
 			invoicePayload: payment.invoice_payload,
@@ -163,6 +162,7 @@ donationsComposer.on("message:successful_payment", async (ctx, next) => {
 			meta: {
 				chatTelegramId: payload.targetChatId,
 				threadId: payload.targetThreadId,
+				targetChatMissing: targetChat ? undefined : true,
 			},
 		});
 	});

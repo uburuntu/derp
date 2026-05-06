@@ -46,6 +46,7 @@ export interface ToolContext {
 	creditService: CreditService;
 	tier: ModelTier;
 	isChatAdmin: boolean;
+	isGroupChat?: boolean;
 	canManageMemory: boolean;
 	canManageReminders: boolean;
 

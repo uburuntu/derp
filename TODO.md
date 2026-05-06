@@ -1,7 +1,7 @@
 # Derp Finance Hardening Harness
 
-Loop: 3 / 5
-Status: loop 3 remediation in progress
+Loop: 4 / 5
+Status: loop 4 remediation in progress
 
 ## P0
 
@@ -59,6 +59,19 @@ Status: loop 3 remediation in progress
 - [x] Payment settlement failure must not overwrite refunded/settled terminal state.
 - [x] Chat context must be capped enough that flat Standard pricing cannot explode on large history.
 - [x] Failed multi-turn chat provider calls must preserve partial usage/cost in provider accounting.
+
+## Loop 4 Reviewer P1 Findings
+
+- [x] OpenRouter paid fallback must be model-allowlisted and alert if actual cost exceeds the Standard chat cap.
+- [x] Free chat/search needs bot-wide daily caps and operator-visible usage/limits.
+- [x] Captured but invalid credit payments must create unsettled receipts for admin recovery.
+- [x] Donation payments must not disappear when the target chat row is missing.
+- [x] Chat-pack settlement retry must recover the target chat from receipt metadata.
+- [x] Paid-but-undelivered provider work must send critical admin notifications.
+- [x] `/credits`, confirmations, receipts, and footers must not expose personal balances in groups.
+- [x] Forwarded group-pack invoices must not keep a payable forwarded copy.
+- [x] Open group debt must not block debt-free personal paid spend.
+- [ ] Paid reservations are still final ledger spends, not a recoverable reservation state machine.
 
 ## Loop Notes
 

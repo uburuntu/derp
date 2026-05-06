@@ -36,6 +36,7 @@ import {
 	getBalances,
 	markPaymentSettlementFailed,
 	reconcileStarRefund,
+	recordFailedPaymentReceipt,
 } from "../db/queries/credits";
 import { getOpenDebtAmount } from "../db/queries/finance";
 
@@ -70,6 +71,61 @@ function validateStarsPayment(
 	if (totalAmount !== stars) return { errorKey: "payment-error-amount" };
 
 	return { payload, stars };
+}
+
+async function recordInvalidCreditPaymentReceipt(
+	ctx: DerpContext,
+	payment: {
+		telegram_payment_charge_id: string;
+		provider_payment_charge_id?: string;
+		invoice_payload: string;
+		currency: string;
+		total_amount: number;
+	},
+	errorKey: PaymentValidationErrorKey,
+): Promise<void> {
+	if (!ctx.dbUser || !ctx.dbChat) return;
+	const parsedPayload = parseCreditPaymentPayload(payment.invoice_payload);
+	await recordFailedPaymentReceipt(
+		ctx.db,
+		{
+			userId: ctx.dbUser.id,
+			chatId: ctx.dbChat.id,
+			telegramChargeId: payment.telegram_payment_charge_id,
+			providerChargeId: payment.provider_payment_charge_id,
+			invoicePayload: payment.invoice_payload,
+			currency: payment.currency,
+			stars: payment.total_amount,
+			productType:
+				parsedPayload?.type === "sub"
+					? "subscription"
+					: parsedPayload?.type === "pack"
+						? "pack"
+						: "unknown",
+			productId:
+				parsedPayload?.type === "sub"
+					? parsedPayload.planId
+					: parsedPayload?.type === "pack"
+						? parsedPayload.packId
+						: null,
+			creditTarget:
+				parsedPayload?.type === "pack" ? parsedPayload.target : "none",
+			credits: 0,
+			meta: {
+				validationErrorKey: errorKey,
+				payloadTargetChatId:
+					parsedPayload?.type === "pack"
+						? parsedPayload.targetChatId
+						: parsedPayload?.targetChatId,
+			},
+		},
+		errorKey,
+	).catch((err) => {
+		logger.error("invalid_credit_payment_receipt_failed", {
+			chargeId: payment.telegram_payment_charge_id,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	});
 }
 
 type SuccessfulSubscriptionPaymentFields = {
@@ -297,6 +353,7 @@ creditsComposer.command(["credits", "balance", "bal"], async (ctx) => {
 			chatId: ctx.dbChat.id,
 		}),
 	]);
+	const groupChat = isGroupChat(ctx);
 
 	let message = formatBalanceMessage(
 		userCredits,
@@ -304,10 +361,11 @@ creditsComposer.command(["credits", "balance", "bal"], async (ctx) => {
 		ctx.dbUser.subscriptionTier,
 		ctx.dbUser.subscriptionExpiresAt,
 		(key, args) => ctx.t(key, args),
+		{ showPersonal: !groupChat },
 	);
-	if (userDebt > 0 || chatDebt > 0) {
+	if ((!groupChat && userDebt > 0) || chatDebt > 0) {
 		message += `\n\n⚠️ <b>${ctx.t("credits-refund-debt-title")}</b>`;
-		if (userDebt > 0) {
+		if (!groupChat && userDebt > 0) {
 			message += `\n${ctx.t("credits-personal-debt", { credits: userDebt })}`;
 		}
 		if (chatDebt > 0) {
@@ -315,8 +373,9 @@ creditsComposer.command(["credits", "balance", "bal"], async (ctx) => {
 		}
 		message += `\n<i>${ctx.t("credits-debt-hint")}</i>`;
 	}
-	if (ctx.chat?.type === "group" || ctx.chat?.type === "supergroup") {
+	if (groupChat) {
 		message += `\n\n<i>${ctx.t("credits-spend-order-group")}</i>`;
+		message += `\n<i>${ctx.t("credits-personal-private-hint")}</i>`;
 	}
 
 	await ctx.reply(message, {
@@ -635,7 +694,11 @@ creditsComposer.callbackQuery(/^group_pack:(.+)$/, async (ctx) => {
 					amount: pack.stars,
 				},
 			],
-			{ provider_token: "", message_thread_id: messageThreadId(ctx) },
+			{
+				provider_token: "",
+				message_thread_id: messageThreadId(ctx),
+				start_parameter: `group_pack_${Math.abs(ctx.chat.id)}`,
+			},
 		);
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
@@ -690,6 +753,7 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 		payment.total_amount,
 	);
 	if ("errorKey" in validation) {
+		await recordInvalidCreditPaymentReceipt(ctx, payment, validation.errorKey);
 		await ctx.reply(
 			ctx.t("payment-validation-error", {
 				reason: escapeHtml(ctx.t(validation.errorKey)),
