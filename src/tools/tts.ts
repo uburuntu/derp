@@ -8,86 +8,86 @@ import { ModelCapability } from "../llm/registry";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types";
 
 const ttsParamsSchema = z.object({
-	text: z.string().max(2_000).describe("The text to convert to speech"),
-	voice: z
-		.string()
-		.optional()
-		.describe("Voice name (e.g., Kore, Charon, Fenrir, Aoede, Puck)"),
+    text: z.string().max(2_000).describe("The text to convert to speech"),
+    voice: z
+        .string()
+        .optional()
+        .describe("Voice name (e.g., Kore, Charon, Fenrir, Aoede, Puck)"),
 });
 
 type TTSParams = z.infer<typeof ttsParamsSchema>;
 
 async function executeTTS(
-	params: TTSParams,
-	ctx: ToolContext,
+    params: TTSParams,
+    ctx: ToolContext,
 ): Promise<ToolResult> {
-	const provider = new GoogleLLMProvider(
-		getGoogleApiKeys(config),
-		config.googleApiPaidKey,
-	);
+    const provider = new GoogleLLMProvider(
+        getGoogleApiKeys(config),
+        config.googleApiPaidKey,
+    );
 
-	let result: Awaited<ReturnType<GoogleLLMProvider["synthesizeSpeech"]>>;
-	try {
-		result = await provider.synthesizeSpeech({
-			model: "gemini-2.5-flash-preview-tts",
-			text: params.text,
-			voice: params.voice,
-			timeoutMs: 30_000,
-			tracking: {
-				db: ctx.db,
-				logicalRequestKey: ctx.idempotencyKey,
-				operation: "tts",
-				keyClass: "paid",
-				userId: ctx.user.id,
-				chatId: ctx.chat.id,
-				ledgerId: ctx.creditResult?.ledgerId,
-				toolName: "tts",
-				creditsCharged: ctx.creditResult?.creditsToDeduct ?? 0,
-				creditSource: ctx.creditResult?.source,
-			},
-		});
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err);
-		return { text: `TTS failed: ${msg}`, error: msg };
-	}
+    let result: Awaited<ReturnType<GoogleLLMProvider["synthesizeSpeech"]>>;
+    try {
+        result = await provider.synthesizeSpeech({
+            model: "gemini-2.5-flash-preview-tts",
+            text: params.text,
+            voice: params.voice,
+            timeoutMs: 30_000,
+            tracking: {
+                recorder: ctx.providerRecorder,
+                logicalRequestKey: ctx.idempotencyKey,
+                operation: "tts",
+                keyClass: "paid",
+                userId: ctx.user.id,
+                chatId: ctx.chat.id,
+                ledgerId: ctx.creditResult?.ledgerId,
+                toolName: "tts",
+                creditsCharged: ctx.creditResult?.creditsToDeduct ?? 0,
+                creditSource: ctx.creditResult?.source,
+            },
+        });
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { text: `TTS failed: ${msg}`, error: msg };
+    }
 
-	ctx.recordProviderResult?.({
-		providerCallIds: result.providerCallIds,
-		costMicros: result.costMicros,
-	});
+    ctx.recordProviderResult?.({
+        providerCallIds: result.providerCallIds,
+        costMicros: result.costMicros,
+    });
 
-	try {
-		// Convert WAV to OGG Opus for Telegram voice messages
-		const oggBuffer = await convertToOggOpus(result.audio);
-		await ctx.sendVoice(oggBuffer);
-		return {
-			handled: true,
-			providerCallIds: result.providerCallIds,
-			costMicros: result.costMicros,
-		};
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err);
-		return {
-			text: `Speech was generated, but I couldn't deliver it to Telegram: ${msg}`,
-			error: msg,
-			billableFailure: true,
-			providerCallIds: result.providerCallIds,
-			costMicros: result.costMicros,
-		};
-	}
+    try {
+        // Convert WAV to OGG Opus for Telegram voice messages
+        const oggBuffer = await convertToOggOpus(result.audio);
+        await ctx.sendVoice(oggBuffer);
+        return {
+            handled: true,
+            providerCallIds: result.providerCallIds,
+            costMicros: result.costMicros,
+        };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+            text: `Speech was generated, but I couldn't deliver it to Telegram: ${msg}`,
+            error: msg,
+            billableFailure: true,
+            providerCallIds: result.providerCallIds,
+            costMicros: result.costMicros,
+        };
+    }
 }
 
 export const ttsTool: ToolDefinition<TTSParams> = {
-	name: "tts",
-	commands: ["/tts", "/voice", "/say"],
-	description:
-		"Convert text to a voice message. Use this when the user asks to hear something, read aloud, narrate a story, or wants audio output.",
-	helpText: "tool-tts",
-	category: "media",
-	parameters: ttsParamsSchema,
-	execute: executeTTS,
-	credits: 10,
-	freeDaily: 0,
-	capability: ModelCapability.VOICE,
-	defaultModel: "gemini-2.5-flash-preview-tts",
+    name: "tts",
+    commands: ["/tts", "/voice", "/say"],
+    description:
+        "Convert text to a voice message. Use this when the user asks to hear something, read aloud, narrate a story, or wants audio output.",
+    helpText: "tool-tts",
+    category: "media",
+    parameters: ttsParamsSchema,
+    execute: executeTTS,
+    credits: 10,
+    freeDaily: 0,
+    capability: ModelCapability.VOICE,
+    defaultModel: "gemini-2.5-flash-preview-tts",
 };

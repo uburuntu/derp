@@ -7,25 +7,25 @@ import { toolRegistry } from "../tools/registry";
 const helpComposer = new Composer<DerpContext>();
 
 helpComposer.command("help", async (ctx) => {
-	const helpText = toolRegistry.getHelpText((key, args) => ctx.t(key, args));
-	// Help text is already Telegram HTML from the registry
-	const html =
-		`🤖 <b>Derp</b>\n\n${helpText}\n\n` +
-		`<i>${ctx.t("help-footer")}</i>\n\n` +
-		`⚙️ <b>${ctx.t("help-other")}</b>\n` +
-		`  /credits — ${ctx.t("cmd-credits-desc")}\n` +
-		`  /buy — ${ctx.t("cmd-buy-desc")}\n` +
-		`  /donate — ${ctx.t("cmd-donate-desc")}\n` +
-		`  /settings — ${ctx.t("cmd-settings-desc")}\n` +
-		`  /memory — ${ctx.t("cmd-memory-desc")}\n` +
-		`  /reminders — ${ctx.t("cmd-reminders-desc")}\n` +
-		`  /info — ${ctx.t("cmd-info-desc")}`;
+    const helpText = toolRegistry.getHelpText((key, args) => ctx.t(key, args));
+    // Help text is already Telegram HTML from the registry
+    const html =
+        `🤖 <b>Derp</b>\n\n${helpText}\n\n` +
+        `<i>${ctx.t("help-footer")}</i>\n\n` +
+        `⚙️ <b>${ctx.t("help-other")}</b>\n` +
+        `  /credits — ${ctx.t("cmd-credits-desc")}\n` +
+        `  /buy — ${ctx.t("cmd-buy-desc")}\n` +
+        `  /donate — ${ctx.t("cmd-donate-desc")}\n` +
+        `  /settings — ${ctx.t("cmd-settings-desc")}\n` +
+        `  /memory — ${ctx.t("cmd-memory-desc")}\n` +
+        `  /reminders — ${ctx.t("cmd-reminders-desc")}\n` +
+        `  /info — ${ctx.t("cmd-info-desc")}`;
 
-	await ctx.reply(html, {
-		parse_mode: "HTML",
-		message_thread_id: ctx.message?.message_thread_id,
-		reply_to_message_id: ctx.message?.message_id,
-	});
+    await ctx.reply(html, {
+        parse_mode: "HTML",
+        message_thread_id: ctx.message?.message_thread_id,
+        reply_to_message_id: ctx.message?.message_id,
+    });
 });
 
 export { helpComposer };

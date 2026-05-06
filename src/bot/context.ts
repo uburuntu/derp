@@ -10,15 +10,15 @@ import type { ModelTier } from "../llm/registry";
 
 /** Custom properties injected by middleware */
 export interface DerpContextProps {
-	db: Database;
-	dbUser: User;
-	dbChat: Chat;
-	creditService: CreditService;
-	tier: ModelTier;
+    db: Database;
+    dbUser: User;
+    dbChat: Chat;
+    creditService: CreditService;
+    tier: ModelTier;
 }
 
 /** The full Derp context type */
 export type DerpContext = Context &
-	DerpContextProps &
-	AutoChatActionFlavor &
-	I18nFlavor;
+    DerpContextProps &
+    AutoChatActionFlavor &
+    I18nFlavor;

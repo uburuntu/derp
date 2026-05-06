@@ -6,45 +6,49 @@ import { logger } from "../common/observability";
 import { replyHtml } from "../common/reply";
 
 export async function errorBoundary(
-	ctx: DerpContext,
-	next: NextFunction,
+    ctx: DerpContext,
+    next: NextFunction,
 ): Promise<void> {
-	try {
-		await next();
-	} catch (err) {
-		const errorMsg = err instanceof Error ? err.message : String(err);
-		logger.error("update_error", {
-			updateId: ctx.update.update_id,
-			chatId: ctx.chat?.id,
-			userId: ctx.from?.id,
-			error: errorMsg,
-		});
+    try {
+        await next();
+    } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.error("update_error", {
+            updateId: ctx.update.update_id,
+            chatId: ctx.chat?.id,
+            userId: ctx.from?.id,
+            error: errorMsg,
+        });
 
-		try {
-			await answerInteractiveFailure(ctx);
-			if (ctx.chat) {
-				await replyHtml(ctx, "Something went wrong. Please try again.", {
-					reply_to_message_id: ctx.msg?.message_id,
-				});
-			}
-		} catch {
-			logger.error("error_reply_failed", {
-				updateId: ctx.update.update_id,
-			});
-		}
-	}
+        try {
+            await answerInteractiveFailure(ctx);
+            if (ctx.chat) {
+                await replyHtml(
+                    ctx,
+                    "Something went wrong. Please try again.",
+                    {
+                        reply_to_message_id: ctx.msg?.message_id,
+                    },
+                );
+            }
+        } catch {
+            logger.error("error_reply_failed", {
+                updateId: ctx.update.update_id,
+            });
+        }
+    }
 }
 
 async function answerInteractiveFailure(ctx: DerpContext): Promise<void> {
-	if (ctx.callbackQuery) {
-		await ctx.answerCallbackQuery({
-			text: "Something went wrong. Please try again.",
-		});
-	}
-	if (ctx.preCheckoutQuery) {
-		await ctx.answerPreCheckoutQuery(
-			false,
-			"Payment could not be processed. Please try again.",
-		);
-	}
+    if (ctx.callbackQuery) {
+        await ctx.answerCallbackQuery({
+            text: "Something went wrong. Please try again.",
+        });
+    }
+    if (ctx.preCheckoutQuery) {
+        await ctx.answerPreCheckoutQuery(
+            false,
+            "Payment could not be processed. Please try again.",
+        );
+    }
 }

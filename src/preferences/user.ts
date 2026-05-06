@@ -6,76 +6,80 @@ const RESPONSE_STYLES: ResponseStyle[] = ["concise", "balanced", "detailed"];
 const DEFAULT_RESPONSE_STYLE: ResponseStyle = "balanced";
 
 function uniqueSortedTools(tools: string[] | undefined): string[] {
-	return [...new Set(tools ?? [])].filter(Boolean).sort();
+    return [...new Set(tools ?? [])].filter(Boolean).sort();
 }
 
 export function normalizeUserPreferences(
-	preferences: UserPreferences | null | undefined,
+    preferences: UserPreferences | null | undefined,
 ): Required<UserPreferences> {
-	const responseStyle = RESPONSE_STYLES.includes(
-		preferences?.responseStyle as ResponseStyle,
-	)
-		? (preferences?.responseStyle as ResponseStyle)
-		: DEFAULT_RESPONSE_STYLE;
+    const responseStyle = RESPONSE_STYLES.includes(
+        preferences?.responseStyle as ResponseStyle,
+    )
+        ? (preferences?.responseStyle as ResponseStyle)
+        : DEFAULT_RESPONSE_STYLE;
 
-	return {
-		responseStyle,
-		customInstructions: preferences?.customInstructions?.trim() || null,
-		disabledTools: uniqueSortedTools(preferences?.disabledTools),
-	};
+    return {
+        responseStyle,
+        customInstructions: preferences?.customInstructions?.trim() || null,
+        disabledTools: uniqueSortedTools(preferences?.disabledTools),
+    };
 }
 
 export function nextResponseStyle(current: ResponseStyle): ResponseStyle {
-	const index = RESPONSE_STYLES.indexOf(current);
-	return RESPONSE_STYLES[(index + 1) % RESPONSE_STYLES.length] ?? "balanced";
+    const index = RESPONSE_STYLES.indexOf(current);
+    return RESPONSE_STYLES[(index + 1) % RESPONSE_STYLES.length] ?? "balanced";
 }
 
 export function isToolDisabled(
-	preferences: UserPreferences | null | undefined,
-	toolName: string,
+    preferences: UserPreferences | null | undefined,
+    toolName: string,
 ): boolean {
-	return normalizeUserPreferences(preferences).disabledTools.includes(toolName);
+    return normalizeUserPreferences(preferences).disabledTools.includes(
+        toolName,
+    );
 }
 
 export function toggleDisabledTool(
-	preferences: UserPreferences | null | undefined,
-	toolName: string,
+    preferences: UserPreferences | null | undefined,
+    toolName: string,
 ): { disabledTools: string[]; disabled: boolean } {
-	const disabled = new Set(normalizeUserPreferences(preferences).disabledTools);
-	const wasDisabled = disabled.delete(toolName);
-	if (!wasDisabled) disabled.add(toolName);
+    const disabled = new Set(
+        normalizeUserPreferences(preferences).disabledTools,
+    );
+    const wasDisabled = disabled.delete(toolName);
+    if (!wasDisabled) disabled.add(toolName);
 
-	return {
-		disabledTools: uniqueSortedTools([...disabled]),
-		disabled: !wasDisabled,
-	};
+    return {
+        disabledTools: uniqueSortedTools([...disabled]),
+        disabled: !wasDisabled,
+    };
 }
 
 export function formatUserPreferencesForPrompt(
-	preferences: UserPreferences | null | undefined,
+    preferences: UserPreferences | null | undefined,
 ): string {
-	const prefs = normalizeUserPreferences(preferences);
-	const lines: string[] = [];
+    const prefs = normalizeUserPreferences(preferences);
+    const lines: string[] = [];
 
-	if (prefs.responseStyle === "concise") {
-		lines.push(
-			"- Prefer concise answers. Lead with the answer, then one or two useful details.",
-		);
-	} else if (prefs.responseStyle === "detailed") {
-		lines.push(
-			"- Prefer detailed answers when the question benefits from explanation or tradeoffs.",
-		);
-	}
+    if (prefs.responseStyle === "concise") {
+        lines.push(
+            "- Prefer concise answers. Lead with the answer, then one or two useful details.",
+        );
+    } else if (prefs.responseStyle === "detailed") {
+        lines.push(
+            "- Prefer detailed answers when the question benefits from explanation or tradeoffs.",
+        );
+    }
 
-	if (prefs.customInstructions) {
-		lines.push(`- User instructions: ${prefs.customInstructions}`);
-	}
+    if (prefs.customInstructions) {
+        lines.push(`- User instructions: ${prefs.customInstructions}`);
+    }
 
-	if (prefs.disabledTools.length > 0) {
-		lines.push(
-			`- Do not suggest disabled tools: ${prefs.disabledTools.join(", ")}.`,
-		);
-	}
+    if (prefs.disabledTools.length > 0) {
+        lines.push(
+            `- Do not suggest disabled tools: ${prefs.disabledTools.join(", ")}.`,
+        );
+    }
 
-	return lines.join("\n");
+    return lines.join("\n");
 }

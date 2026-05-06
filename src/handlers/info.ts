@@ -9,87 +9,87 @@ import { getMessageByTelegramId } from "../db/queries/messages";
 const infoComposer = new Composer<DerpContext>();
 
 infoComposer.command("info", async (ctx) => {
-	if (!ctx.dbChat) return;
+    if (!ctx.dbChat) return;
 
-	const replyTo = ctx.message?.message_id;
-	const threadId = ctx.message?.message_thread_id;
+    const replyTo = ctx.message?.message_id;
+    const threadId = ctx.message?.message_thread_id;
 
-	const repliedTo = ctx.message?.reply_to_message;
-	if (!repliedTo) {
-		await replyHtml(ctx, ctx.t("info-reply-required"), {
-			message_thread_id: threadId,
-			reply_to_message_id: replyTo,
-		});
-		return;
-	}
+    const repliedTo = ctx.message?.reply_to_message;
+    if (!repliedTo) {
+        await replyHtml(ctx, ctx.t("info-reply-required"), {
+            message_thread_id: threadId,
+            reply_to_message_id: replyTo,
+        });
+        return;
+    }
 
-	const msg = await getMessageByTelegramId(
-		ctx.db,
-		ctx.dbChat.id,
-		repliedTo.message_id,
-	);
+    const msg = await getMessageByTelegramId(
+        ctx.db,
+        ctx.dbChat.id,
+        repliedTo.message_id,
+    );
 
-	if (!msg) {
-		await replyHtml(ctx, ctx.t("info-not-found"), {
-			message_thread_id: threadId,
-			reply_to_message_id: replyTo,
-		});
-		return;
-	}
+    if (!msg) {
+        await replyHtml(ctx, ctx.t("info-not-found"), {
+            message_thread_id: threadId,
+            reply_to_message_id: replyTo,
+        });
+        return;
+    }
 
-	if (msg.direction !== "out" || !msg.metadata) {
-		await replyHtml(ctx, ctx.t("info-no-details"), {
-			message_thread_id: threadId,
-			reply_to_message_id: replyTo,
-		});
-		return;
-	}
+    if (msg.direction !== "out" || !msg.metadata) {
+        await replyHtml(ctx, ctx.t("info-no-details"), {
+            message_thread_id: threadId,
+            reply_to_message_id: replyTo,
+        });
+        return;
+    }
 
-	const meta = msg.metadata;
-	const lines: string[] = ["📊 <b>Message Info</b>\n"];
+    const meta = msg.metadata;
+    const lines: string[] = ["📊 <b>Message Info</b>\n"];
 
-	if (meta.model) lines.push(`<b>Model:</b> ${escapeHtml(meta.model)}`);
-	if (meta.tier) lines.push(`<b>Tier:</b> ${escapeHtml(meta.tier)}`);
-	if (meta.inputTokens != null || meta.outputTokens != null) {
-		const input = meta.inputTokens ?? 0;
-		const output = meta.outputTokens ?? 0;
-		const cache =
-			meta.cacheHitTokens && meta.cacheHitTokens > 0
-				? ` (${meta.cacheHitTokens} cached)`
-				: "";
-		lines.push(`<b>Tokens:</b> ${input} in / ${output} out${cache}`);
-	}
-	if (meta.toolsUsed && meta.toolsUsed.length > 0)
-		lines.push(`<b>Tools:</b> ${escapeHtml(meta.toolsUsed.join(", "))}`);
-	if (meta.creditsSpent != null && meta.creditsSpent > 0)
-		lines.push(
-			`<b>Credits:</b> ${meta.creditsSpent} (${meta.creditSource ?? "unknown"})`,
-		);
-	if (meta.costMicros != null && meta.costMicros > 0) {
-		lines.push(
-			`<b>Provider cost:</b> $${(meta.costMicros / 1_000_000).toFixed(4)}`,
-		);
-	}
-	if (meta.providerRoute) {
-		const fallback = meta.fallbackFrom
-			? ` from ${escapeHtml(meta.fallbackFrom)}`
-			: "";
-		lines.push(
-			`<b>Provider route:</b> ${escapeHtml(meta.providerRoute)}${fallback}`,
-		);
-	}
-	if (meta.providerCallIds && meta.providerCallIds.length > 0) {
-		lines.push(
-			`<b>Provider calls:</b> ${escapeHtml(meta.providerCallIds.join(", "))}`,
-		);
-	}
-	if (meta.durationMs != null)
-		lines.push(`<b>Duration:</b> ${meta.durationMs}ms`);
+    if (meta.model) lines.push(`<b>Model:</b> ${escapeHtml(meta.model)}`);
+    if (meta.tier) lines.push(`<b>Tier:</b> ${escapeHtml(meta.tier)}`);
+    if (meta.inputTokens != null || meta.outputTokens != null) {
+        const input = meta.inputTokens ?? 0;
+        const output = meta.outputTokens ?? 0;
+        const cache =
+            meta.cacheHitTokens && meta.cacheHitTokens > 0
+                ? ` (${meta.cacheHitTokens} cached)`
+                : "";
+        lines.push(`<b>Tokens:</b> ${input} in / ${output} out${cache}`);
+    }
+    if (meta.toolsUsed && meta.toolsUsed.length > 0)
+        lines.push(`<b>Tools:</b> ${escapeHtml(meta.toolsUsed.join(", "))}`);
+    if (meta.creditsSpent != null && meta.creditsSpent > 0)
+        lines.push(
+            `<b>Credits:</b> ${meta.creditsSpent} (${meta.creditSource ?? "unknown"})`,
+        );
+    if (meta.costMicros != null && meta.costMicros > 0) {
+        lines.push(
+            `<b>Provider cost:</b> $${(meta.costMicros / 1_000_000).toFixed(4)}`,
+        );
+    }
+    if (meta.providerRoute) {
+        const fallback = meta.fallbackFrom
+            ? ` from ${escapeHtml(meta.fallbackFrom)}`
+            : "";
+        lines.push(
+            `<b>Provider route:</b> ${escapeHtml(meta.providerRoute)}${fallback}`,
+        );
+    }
+    if (meta.providerCallIds && meta.providerCallIds.length > 0) {
+        lines.push(
+            `<b>Provider calls:</b> ${escapeHtml(meta.providerCallIds.join(", "))}`,
+        );
+    }
+    if (meta.durationMs != null)
+        lines.push(`<b>Duration:</b> ${meta.durationMs}ms`);
 
-	await replyHtml(ctx, lines.join("\n"), {
-		message_thread_id: threadId,
-		reply_to_message_id: repliedTo.message_id,
-	});
+    await replyHtml(ctx, lines.join("\n"), {
+        message_thread_id: threadId,
+        reply_to_message_id: repliedTo.message_id,
+    });
 });
 
 export { infoComposer };

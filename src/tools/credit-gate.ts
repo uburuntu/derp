@@ -2,10 +2,10 @@
 
 import { notifyAdmins } from "../common/admin-notify";
 import {
-	derpMetrics,
-	logger,
-	recordHandledFailure,
-	withSpan,
+    derpMetrics,
+    logger,
+    recordHandledFailure,
+    withSpan,
 } from "../common/observability";
 import { escapeHtml } from "../common/sanitize";
 import type { CreditCheckResult } from "../credits/types";
@@ -14,17 +14,17 @@ import { ModelTier } from "../llm/registry";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types";
 
 const TIER_RANK: Record<ModelTier, number> = {
-	[ModelTier.FREE]: 0,
-	[ModelTier.STANDARD]: 1,
-	[ModelTier.PREMIUM]: 2,
+    [ModelTier.FREE]: 0,
+    [ModelTier.STANDARD]: 1,
+    [ModelTier.PREMIUM]: 2,
 };
 
 function zeroCostResult(result: CreditCheckResult): CreditCheckResult {
-	return {
-		...result,
-		creditsToDeduct: 0,
-		creditsRemaining: null,
-	};
+    return {
+        ...result,
+        creditsToDeduct: 0,
+        creditsRemaining: null,
+    };
 }
 
 /**
@@ -36,445 +36,489 @@ function zeroCostResult(result: CreditCheckResult): CreditCheckResult {
  * 5. Deduct paid credits only after successful execution
  */
 export async function executeWithCreditGate(
-	tool: ToolDefinition,
-	params: unknown,
-	ctx: ToolContext,
+    tool: ToolDefinition,
+    params: unknown,
+    ctx: ToolContext,
 ): Promise<ToolResult & { creditResult?: CreditCheckResult }> {
-	return withSpan(
-		`tool.${tool.name}`,
-		{
-			"derp.tool.name": tool.name,
-			"derp.tool.category": tool.category,
-			"derp.tool.credits": tool.credits,
-		},
-		async (span) => {
-			// Free tools (0 credits, unlimited daily) skip gating
-			if (tool.credits === 0 && tool.freeDaily === Number.POSITIVE_INFINITY) {
-				const result = await tool.execute(params, ctx);
-				span.setAttribute("derp.tool.outcome", "free");
-				derpMetrics.toolCalls.add(1, {
-					tool: tool.name,
-					outcome: "success",
-				});
-				return { ...result };
-			}
+    return withSpan(
+        `tool.${tool.name}`,
+        {
+            "derp.tool.name": tool.name,
+            "derp.tool.category": tool.category,
+            "derp.tool.credits": tool.credits,
+        },
+        async (span) => {
+            // Free tools (0 credits, unlimited daily) skip gating
+            if (
+                tool.credits === 0 &&
+                tool.freeDaily === Number.POSITIVE_INFINITY
+            ) {
+                const result = await tool.execute(params, ctx);
+                span.setAttribute("derp.tool.outcome", "free");
+                derpMetrics.toolCalls.add(1, {
+                    tool: tool.name,
+                    outcome: "success",
+                });
+                return { ...result };
+            }
 
-			if (tool.chatAdminOnly && !ctx.isChatAdmin) {
-				const rejectReason = "Only chat admins can use this tool";
-				span.setAttribute("derp.tool.outcome", "rejected");
-				span.setAttribute("derp.tool.reject_reason", rejectReason);
-				return {
-					text: rejectReason,
-					error: rejectReason,
-				};
-			}
+            if (tool.chatAdminOnly && !ctx.isChatAdmin) {
+                const rejectReason = "Only chat admins can use this tool";
+                span.setAttribute("derp.tool.outcome", "rejected");
+                span.setAttribute("derp.tool.reject_reason", rejectReason);
+                return {
+                    text: rejectReason,
+                    error: rejectReason,
+                };
+            }
 
-			if (tool.minTier && TIER_RANK[ctx.tier] < TIER_RANK[tool.minTier]) {
-				const rejectReason = `This tool requires ${tool.minTier} access`;
-				span.setAttribute("derp.tool.outcome", "rejected");
-				span.setAttribute("derp.tool.reject_reason", rejectReason);
-				return {
-					text: `${rejectReason}. Use /buy to upgrade.`,
-					error: rejectReason,
-				};
-			}
+            if (tool.minTier && TIER_RANK[ctx.tier] < TIER_RANK[tool.minTier]) {
+                const rejectReason = `This tool requires ${tool.minTier} access`;
+                span.setAttribute("derp.tool.outcome", "rejected");
+                span.setAttribute("derp.tool.reject_reason", rejectReason);
+                return {
+                    text: `${rejectReason}. Use /buy to upgrade.`,
+                    error: rejectReason,
+                };
+            }
 
-			// Check access
-			const creditResult = await ctx.creditService.checkToolAccess(tool.name);
+            // Check access
+            const creditResult = await ctx.creditService.checkToolAccess(
+                tool.name,
+            );
 
-			if (!creditResult.allowed) {
-				span.setAttribute("derp.tool.outcome", "rejected");
-				span.setAttribute(
-					"derp.tool.reject_reason",
-					creditResult.rejectReason ?? "",
-				);
-				derpMetrics.toolCalls.add(1, {
-					tool: tool.name,
-					outcome: "rejected",
-				});
-				logger.info("tool_access_denied", {
-					tool: tool.name,
-					reason: creditResult.rejectReason,
-				});
-				const upsell = buildUpsellMessage(tool);
-				return {
-					text: buildUnavailableMessage(
-						tool,
-						creditResult.rejectReason,
-						upsell,
-						ctx.isGroupChat,
-					),
-					error: creditResult.rejectReason,
-					creditResult,
-				};
-			}
-			if (
-				(ctx.expectedCreditSource &&
-					creditResult.source !== ctx.expectedCreditSource) ||
-				(ctx.expectedCreditsToDeduct != null &&
-					creditResult.creditsToDeduct !== ctx.expectedCreditsToDeduct)
-			) {
-				const rejectReason = "Credit source or cost changed";
-				span.setAttribute("derp.tool.outcome", "rejected");
-				span.setAttribute("derp.tool.reject_reason", rejectReason);
-				logger.info("tool_confirmed_spend_changed", {
-					tool: tool.name,
-					expectedSource: ctx.expectedCreditSource,
-					actualSource: creditResult.source,
-					expectedCredits: ctx.expectedCreditsToDeduct,
-					actualCredits: creditResult.creditsToDeduct,
-				});
-				return {
-					text: "The available balance changed before the tool started. Send the command again to confirm the current spend.",
-					error: rejectReason,
-					creditResult: zeroCostResult(creditResult),
-				};
-			}
+            if (!creditResult.allowed) {
+                span.setAttribute("derp.tool.outcome", "rejected");
+                span.setAttribute(
+                    "derp.tool.reject_reason",
+                    creditResult.rejectReason ?? "",
+                );
+                derpMetrics.toolCalls.add(1, {
+                    tool: tool.name,
+                    outcome: "rejected",
+                });
+                logger.info("tool_access_denied", {
+                    tool: tool.name,
+                    reason: creditResult.rejectReason,
+                });
+                const upsell = buildUpsellMessage(tool);
+                return {
+                    text: buildUnavailableMessage(
+                        tool,
+                        creditResult.rejectReason,
+                        upsell,
+                        ctx.isGroupChat,
+                    ),
+                    error: creditResult.rejectReason,
+                    creditResult,
+                };
+            }
+            if (
+                (ctx.expectedCreditSource &&
+                    creditResult.source !== ctx.expectedCreditSource) ||
+                (ctx.expectedCreditsToDeduct != null &&
+                    creditResult.creditsToDeduct !==
+                        ctx.expectedCreditsToDeduct)
+            ) {
+                const rejectReason = "Credit source or cost changed";
+                span.setAttribute("derp.tool.outcome", "rejected");
+                span.setAttribute("derp.tool.reject_reason", rejectReason);
+                logger.info("tool_confirmed_spend_changed", {
+                    tool: tool.name,
+                    expectedSource: ctx.expectedCreditSource,
+                    actualSource: creditResult.source,
+                    expectedCredits: ctx.expectedCreditsToDeduct,
+                    actualCredits: creditResult.creditsToDeduct,
+                });
+                return {
+                    text: "The available balance changed before the tool started. Send the command again to confirm the current spend.",
+                    error: rejectReason,
+                    creditResult: zeroCostResult(creditResult),
+                };
+            }
 
-			const idempotencyKey = ctx.idempotencyKey;
-			if (creditResult.source === "free") {
-				try {
-					const reserved = await ctx.creditService.deduct(
-						creditResult,
-						tool.name,
-						idempotencyKey,
-					);
-					if (reserved === "duplicate") {
-						span.setAttribute("derp.tool.outcome", "duplicate");
-						return {
-							text: "This request was already processed.",
-							error: "Duplicate request",
-							creditResult: zeroCostResult(creditResult),
-						};
-					}
-					if (reserved === "quota_exhausted") {
-						const reason = "Daily free limit reached";
-						span.setAttribute("derp.tool.outcome", "rejected");
-						span.setAttribute("derp.tool.reject_reason", reason);
-						return {
-							text: buildUnavailableMessage(
-								tool,
-								reason,
-								buildUpsellMessage(tool),
-								ctx.isGroupChat,
-							),
-							error: reason,
-							creditResult: zeroCostResult(creditResult),
-						};
-					}
-				} catch (err) {
-					const error = err instanceof Error ? err.message : String(err);
-					span.setAttribute("derp.tool.outcome", "rejected");
-					span.setAttribute("derp.tool.reject_reason", error);
-					derpMetrics.toolCalls.add(1, {
-						tool: tool.name,
-						outcome: "rejected",
-					});
-					recordHandledFailure("tool", error, { tool: tool.name });
-					logger.error("tool_free_quota_reservation_failed", {
-						tool: tool.name,
-						error,
-					});
-					return {
-						text: "I couldn't reserve this free use. Please try again.",
-						error,
-						creditResult: zeroCostResult(creditResult),
-					};
-				}
-			} else {
-				try {
-					const reserved = await ctx.creditService.deduct(
-						creditResult,
-						tool.name,
-						idempotencyKey,
-						{ phase: "reservation" },
-					);
-					if (reserved === "duplicate") {
-						span.setAttribute("derp.tool.outcome", "duplicate");
-						return {
-							text: "This request was already processed.",
-							error: "Duplicate request",
-							creditResult: zeroCostResult(creditResult),
-						};
-					}
-				} catch (err) {
-					const error = err instanceof Error ? err.message : String(err);
-					span.setAttribute("derp.tool.outcome", "rejected");
-					span.setAttribute("derp.tool.reject_reason", error);
-					derpMetrics.toolCalls.add(1, {
-						tool: tool.name,
-						outcome: "rejected",
-					});
-					recordHandledFailure("tool_billing", error, { tool: tool.name });
-					logger.error("tool_paid_reservation_failed", {
-						tool: tool.name,
-						error,
-					});
-					return {
-						text: buildUnavailableMessage(
-							tool,
-							error,
-							buildUpsellMessage(tool),
-							ctx.isGroupChat,
-						),
-						error,
-						creditResult: zeroCostResult(creditResult),
-					};
-				}
-			}
+            const idempotencyKey = ctx.idempotencyKey;
+            if (creditResult.source === "free") {
+                try {
+                    const reserved = await ctx.creditService.deduct(
+                        creditResult,
+                        tool.name,
+                        idempotencyKey,
+                    );
+                    if (reserved === "duplicate") {
+                        span.setAttribute("derp.tool.outcome", "duplicate");
+                        return {
+                            text: "This request was already processed.",
+                            error: "Duplicate request",
+                            creditResult: zeroCostResult(creditResult),
+                        };
+                    }
+                    if (reserved === "quota_exhausted") {
+                        const reason = "Daily free limit reached";
+                        span.setAttribute("derp.tool.outcome", "rejected");
+                        span.setAttribute("derp.tool.reject_reason", reason);
+                        return {
+                            text: buildUnavailableMessage(
+                                tool,
+                                reason,
+                                buildUpsellMessage(tool),
+                                ctx.isGroupChat,
+                            ),
+                            error: reason,
+                            creditResult: zeroCostResult(creditResult),
+                        };
+                    }
+                } catch (err) {
+                    const error =
+                        err instanceof Error ? err.message : String(err);
+                    span.setAttribute("derp.tool.outcome", "rejected");
+                    span.setAttribute("derp.tool.reject_reason", error);
+                    derpMetrics.toolCalls.add(1, {
+                        tool: tool.name,
+                        outcome: "rejected",
+                    });
+                    recordHandledFailure("tool", error, { tool: tool.name });
+                    logger.error("tool_free_quota_reservation_failed", {
+                        tool: tool.name,
+                        error,
+                    });
+                    return {
+                        text: "I couldn't reserve this free use. Please try again.",
+                        error,
+                        creditResult: zeroCostResult(creditResult),
+                    };
+                }
+            } else {
+                try {
+                    const reserved = await ctx.creditService.deduct(
+                        creditResult,
+                        tool.name,
+                        idempotencyKey,
+                        { phase: "reservation" },
+                    );
+                    if (reserved === "duplicate") {
+                        span.setAttribute("derp.tool.outcome", "duplicate");
+                        return {
+                            text: "This request was already processed.",
+                            error: "Duplicate request",
+                            creditResult: zeroCostResult(creditResult),
+                        };
+                    }
+                } catch (err) {
+                    const error =
+                        err instanceof Error ? err.message : String(err);
+                    span.setAttribute("derp.tool.outcome", "rejected");
+                    span.setAttribute("derp.tool.reject_reason", error);
+                    derpMetrics.toolCalls.add(1, {
+                        tool: tool.name,
+                        outcome: "rejected",
+                    });
+                    recordHandledFailure("tool_billing", error, {
+                        tool: tool.name,
+                    });
+                    logger.error("tool_paid_reservation_failed", {
+                        tool: tool.name,
+                        error,
+                    });
+                    return {
+                        text: buildUnavailableMessage(
+                            tool,
+                            error,
+                            buildUpsellMessage(tool),
+                            ctx.isGroupChat,
+                        ),
+                        error,
+                        creditResult: zeroCostResult(creditResult),
+                    };
+                }
+            }
 
-			let result: ToolResult;
-			try {
-				ctx.creditResult = creditResult;
-				result = await tool.execute(params, ctx);
-			} catch (err) {
-				const error = err instanceof Error ? err.message : String(err);
-				await refundToolDeduction(ctx, creditResult, tool, idempotencyKey, {
-					error,
-				});
-				await markLedgerSpendStatus(ctx.db, creditResult.ledgerId, "refunded", {
-					error,
-					toolName: tool.name,
-				});
-				span.setAttribute("derp.tool.outcome", "error");
-				derpMetrics.toolCalls.add(1, {
-					tool: tool.name,
-					outcome: "error",
-				});
-				recordHandledFailure("tool", error, { tool: tool.name });
-				logger.error("tool_execution_failed", { tool: tool.name, error });
-				return {
-					text: "I couldn't complete that tool request. Please try again later.",
-					error,
-					creditResult: zeroCostResult(creditResult),
-				};
-			}
+            let result: ToolResult;
+            try {
+                ctx.creditResult = creditResult;
+                result = await tool.execute(params, ctx);
+            } catch (err) {
+                const error = err instanceof Error ? err.message : String(err);
+                await refundToolDeduction(
+                    ctx,
+                    creditResult,
+                    tool,
+                    idempotencyKey,
+                    {
+                        error,
+                    },
+                );
+                await markLedgerSpendStatus(
+                    ctx.db,
+                    creditResult.ledgerId,
+                    "refunded",
+                    {
+                        error,
+                        toolName: tool.name,
+                    },
+                );
+                span.setAttribute("derp.tool.outcome", "error");
+                derpMetrics.toolCalls.add(1, {
+                    tool: tool.name,
+                    outcome: "error",
+                });
+                recordHandledFailure("tool", error, { tool: tool.name });
+                logger.error("tool_execution_failed", {
+                    tool: tool.name,
+                    error,
+                });
+                return {
+                    text: "I couldn't complete that tool request. Please try again later.",
+                    error,
+                    creditResult: zeroCostResult(creditResult),
+                };
+            }
 
-			if (!result.error) {
-				span.setAttribute("derp.tool.outcome", "success");
-				span.setAttribute(
-					"derp.credits.deducted",
-					creditResult.creditsToDeduct,
-				);
-				span.setAttribute("derp.credits.source", creditResult.source);
-				derpMetrics.toolCalls.add(1, {
-					tool: tool.name,
-					outcome: "success",
-				});
-				if (creditResult.creditsToDeduct > 0) {
-					derpMetrics.creditTransactions.add(1, { type: "spend" });
-				}
-				if (!result.handled && creditResult.creditsToDeduct > 0) {
-					await markLedgerSpendStatus(
-						ctx.db,
-						creditResult.ledgerId,
-						"provider_succeeded",
-						{ toolName: tool.name },
-					);
-				}
-				if (result.handled && creditResult.creditsToDeduct > 0) {
-					await markLedgerSpendStatus(
-						ctx.db,
-						creditResult.ledgerId,
-						"delivered",
-						{ toolName: tool.name },
-					);
-					await ctx
-						.sendMessage(formatSpendReceipt(creditResult, ctx.isGroupChat))
-						.catch((err) => {
-							logger.warn("tool_spend_receipt_failed", {
-								tool: tool.name,
-								error: err instanceof Error ? err.message : String(err),
-							});
-						});
-				}
-			} else {
-				span.setAttribute("derp.tool.outcome", "error");
-				derpMetrics.toolCalls.add(1, {
-					tool: tool.name,
-					outcome: "error",
-				});
-				if (result.billableFailure) {
-					span.setAttribute("derp.tool.billable_failure", true);
-					logger.warn("tool_billable_failure_not_refunded", {
-						tool: tool.name,
-						error: result.error,
-						creditsDeducted: creditResult.creditsToDeduct,
-						source: creditResult.source,
-						providerCallIds: result.providerCallIds,
-						costMicros: result.costMicros,
-					});
-					await notifyAdmins(
-						`⚠️ <b>Billable tool delivery failure</b>\n\nTool: <code>${escapeHtml(tool.name)}</code>\nCredits kept: ${creditResult.creditsToDeduct}\nSource: <code>${escapeHtml(creditResult.source)}</code>\nProvider calls: <code>${escapeHtml(result.providerCallIds?.join(", ") ?? "n/a")}</code>\nProvider cost: $${((result.costMicros ?? 0) / 1_000_000).toFixed(4)}\nReason: ${escapeHtml(result.error ?? "unknown")}`,
-						{ critical: true },
-					).catch((notifyErr) => {
-						logger.error("tool_billable_failure_admin_notify_failed", {
-							tool: tool.name,
-							error:
-								notifyErr instanceof Error
-									? notifyErr.message
-									: String(notifyErr),
-						});
-					});
-					await markLedgerSpendStatus(
-						ctx.db,
-						creditResult.ledgerId,
-						"billable_failure",
-						{
-							error: result.error,
-							toolName: tool.name,
-							providerCallIds: result.providerCallIds,
-							costMicros: result.costMicros,
-						},
-					);
-				} else {
-					await refundToolDeduction(ctx, creditResult, tool, idempotencyKey, {
-						error: result.error,
-					});
-					await markLedgerSpendStatus(
-						ctx.db,
-						creditResult.ledgerId,
-						"refunded",
-						{ error: result.error, toolName: tool.name },
-					);
-				}
-				recordHandledFailure("tool", result.error, { tool: tool.name });
-				logger.error("tool_returned_error", {
-					tool: tool.name,
-					error: result.error,
-				});
-			}
+            if (!result.error) {
+                span.setAttribute("derp.tool.outcome", "success");
+                span.setAttribute(
+                    "derp.credits.deducted",
+                    creditResult.creditsToDeduct,
+                );
+                span.setAttribute("derp.credits.source", creditResult.source);
+                derpMetrics.toolCalls.add(1, {
+                    tool: tool.name,
+                    outcome: "success",
+                });
+                if (creditResult.creditsToDeduct > 0) {
+                    derpMetrics.creditTransactions.add(1, { type: "spend" });
+                }
+                if (!result.handled && creditResult.creditsToDeduct > 0) {
+                    await markLedgerSpendStatus(
+                        ctx.db,
+                        creditResult.ledgerId,
+                        "provider_succeeded",
+                        { toolName: tool.name },
+                    );
+                }
+                if (result.handled && creditResult.creditsToDeduct > 0) {
+                    await markLedgerSpendStatus(
+                        ctx.db,
+                        creditResult.ledgerId,
+                        "delivered",
+                        { toolName: tool.name },
+                    );
+                    await ctx
+                        .sendMessage(
+                            formatSpendReceipt(creditResult, ctx.isGroupChat),
+                        )
+                        .catch((err) => {
+                            logger.warn("tool_spend_receipt_failed", {
+                                tool: tool.name,
+                                error:
+                                    err instanceof Error
+                                        ? err.message
+                                        : String(err),
+                            });
+                        });
+                }
+            } else {
+                span.setAttribute("derp.tool.outcome", "error");
+                derpMetrics.toolCalls.add(1, {
+                    tool: tool.name,
+                    outcome: "error",
+                });
+                if (result.billableFailure) {
+                    span.setAttribute("derp.tool.billable_failure", true);
+                    logger.warn("tool_billable_failure_not_refunded", {
+                        tool: tool.name,
+                        error: result.error,
+                        creditsDeducted: creditResult.creditsToDeduct,
+                        source: creditResult.source,
+                        providerCallIds: result.providerCallIds,
+                        costMicros: result.costMicros,
+                    });
+                    await notifyAdmins(
+                        `⚠️ <b>Billable tool delivery failure</b>\n\nTool: <code>${escapeHtml(tool.name)}</code>\nCredits kept: ${creditResult.creditsToDeduct}\nSource: <code>${escapeHtml(creditResult.source)}</code>\nProvider calls: <code>${escapeHtml(result.providerCallIds?.join(", ") ?? "n/a")}</code>\nProvider cost: $${((result.costMicros ?? 0) / 1_000_000).toFixed(4)}\nReason: ${escapeHtml(result.error ?? "unknown")}`,
+                        { critical: true },
+                    ).catch((notifyErr) => {
+                        logger.error(
+                            "tool_billable_failure_admin_notify_failed",
+                            {
+                                tool: tool.name,
+                                error:
+                                    notifyErr instanceof Error
+                                        ? notifyErr.message
+                                        : String(notifyErr),
+                            },
+                        );
+                    });
+                    await markLedgerSpendStatus(
+                        ctx.db,
+                        creditResult.ledgerId,
+                        "billable_failure",
+                        {
+                            error: result.error,
+                            toolName: tool.name,
+                            providerCallIds: result.providerCallIds,
+                            costMicros: result.costMicros,
+                        },
+                    );
+                } else {
+                    await refundToolDeduction(
+                        ctx,
+                        creditResult,
+                        tool,
+                        idempotencyKey,
+                        {
+                            error: result.error,
+                        },
+                    );
+                    await markLedgerSpendStatus(
+                        ctx.db,
+                        creditResult.ledgerId,
+                        "refunded",
+                        { error: result.error, toolName: tool.name },
+                    );
+                }
+                recordHandledFailure("tool", result.error, { tool: tool.name });
+                logger.error("tool_returned_error", {
+                    tool: tool.name,
+                    error: result.error,
+                });
+            }
 
-			logger.info("tool_executed", {
-				tool: tool.name,
-				creditsDeducted: creditResult.creditsToDeduct,
-				source: creditResult.source,
-				outcome: result.error ? "error" : "success",
-			});
+            logger.info("tool_executed", {
+                tool: tool.name,
+                creditsDeducted: creditResult.creditsToDeduct,
+                source: creditResult.source,
+                outcome: result.error ? "error" : "success",
+            });
 
-			return {
-				...(result.error
-					? {
-							...result,
-							handled: false,
-							text: safeToolErrorText(tool, result),
-						}
-					: result),
-				creditResult: result.error
-					? result.billableFailure
-						? creditResult
-						: zeroCostResult(creditResult)
-					: creditResult,
-			};
-		},
-	);
+            return {
+                ...(result.error
+                    ? {
+                          ...result,
+                          handled: false,
+                          text: safeToolErrorText(tool, result),
+                      }
+                    : result),
+                creditResult: result.error
+                    ? result.billableFailure
+                        ? creditResult
+                        : zeroCostResult(creditResult)
+                    : creditResult,
+            };
+        },
+    );
 }
 
 async function refundToolDeduction(
-	ctx: ToolContext,
-	creditResult: CreditCheckResult,
-	tool: ToolDefinition,
-	idempotencyKey: string | undefined,
-	meta: Record<string, unknown>,
+    ctx: ToolContext,
+    creditResult: CreditCheckResult,
+    tool: ToolDefinition,
+    idempotencyKey: string | undefined,
+    meta: Record<string, unknown>,
 ): Promise<void> {
-	try {
-		await ctx.creditService.refundDeduction(
-			creditResult,
-			tool.name,
-			idempotencyKey,
-			meta,
-		);
-	} catch (err) {
-		const error = err instanceof Error ? err.message : String(err);
-		recordHandledFailure("tool_refund", error, {
-			tool: tool.name,
-			reason_code: "refund_failed",
-		});
-		logger.error("tool_refund_failed", {
-			tool: tool.name,
-			idempotencyKey,
-			source: creditResult.source,
-			credits: creditResult.creditsToDeduct,
-			error,
-		});
+    try {
+        await ctx.creditService.refundDeduction(
+            creditResult,
+            tool.name,
+            idempotencyKey,
+            meta,
+        );
+    } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        recordHandledFailure("tool_refund", error, {
+            tool: tool.name,
+            reason_code: "refund_failed",
+        });
+        logger.error("tool_refund_failed", {
+            tool: tool.name,
+            idempotencyKey,
+            source: creditResult.source,
+            credits: creditResult.creditsToDeduct,
+            error,
+        });
 
-		if (creditResult.creditsToDeduct > 0) {
-			await notifyAdmins(
-				`⚠️ <b>Tool refund failed</b>\n\nTool: <code>${escapeHtml(tool.name)}</code>\nCredits: ${creditResult.creditsToDeduct}\nSource: <code>${escapeHtml(creditResult.source)}</code>\nIdempotency: <code>${escapeHtml(idempotencyKey ?? "none")}</code>\nReason: ${escapeHtml(error)}`,
-			).catch((notifyErr) => {
-				logger.error("tool_refund_admin_notify_failed", {
-					tool: tool.name,
-					error:
-						notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
-				});
-			});
-		}
-	}
+        if (creditResult.creditsToDeduct > 0) {
+            await notifyAdmins(
+                `⚠️ <b>Tool refund failed</b>\n\nTool: <code>${escapeHtml(tool.name)}</code>\nCredits: ${creditResult.creditsToDeduct}\nSource: <code>${escapeHtml(creditResult.source)}</code>\nIdempotency: <code>${escapeHtml(idempotencyKey ?? "none")}</code>\nReason: ${escapeHtml(error)}`,
+            ).catch((notifyErr) => {
+                logger.error("tool_refund_admin_notify_failed", {
+                    tool: tool.name,
+                    error:
+                        notifyErr instanceof Error
+                            ? notifyErr.message
+                            : String(notifyErr),
+                });
+            });
+        }
+    }
 }
 
 function buildUpsellMessage(tool: ToolDefinition): string {
-	if (tool.credits === 0 && Number.isFinite(tool.freeDaily)) {
-		return "Your free daily limit is used up. Try again tomorrow.";
-	}
-	if (tool.credits >= 100) {
-		return "Subscribe from 150⭐/month for the best value. Use /buy to see plans.";
-	}
-	return "Use /buy to get credits or subscribe.";
+    if (tool.credits === 0 && Number.isFinite(tool.freeDaily)) {
+        return "Your free daily limit is used up. Try again tomorrow.";
+    }
+    if (tool.credits >= 100) {
+        return "Subscribe from 150⭐/month for the best value. Use /buy to see plans.";
+    }
+    return "Use /buy to get credits or subscribe.";
 }
 
 function formatSpendReceipt(
-	result: CreditCheckResult,
-	hidePersonalBalance?: boolean,
+    result: CreditCheckResult,
+    hidePersonalBalance?: boolean,
 ): string {
-	const source =
-		result.source === "chat"
-			? "from group pool"
-			: result.source === "user"
-				? "from personal balance"
-				: "";
-	if (result.source === "user" && hidePersonalBalance) {
-		return `✨ ${result.creditsToDeduct} credits used ${source}`;
-	}
-	return `${result.creditsRemaining != null && result.creditsRemaining <= 20 ? "⚠️" : "✨"} ${result.creditsToDeduct} credits used ${source} · ${result.creditsRemaining ?? 0} remaining`;
+    const source =
+        result.source === "chat"
+            ? "from group pool"
+            : result.source === "user"
+              ? "from personal balance"
+              : "";
+    if (result.source === "user" && hidePersonalBalance) {
+        return `✨ ${result.creditsToDeduct} credits used ${source}`;
+    }
+    return `${result.creditsRemaining != null && result.creditsRemaining <= 20 ? "⚠️" : "✨"} ${result.creditsToDeduct} credits used ${source} · ${result.creditsRemaining ?? 0} remaining`;
 }
 
 function buildUnavailableMessage(
-	tool: ToolDefinition,
-	reason: string | undefined,
-	upsell: string,
-	hidePrivateFinance?: boolean,
+    tool: ToolDefinition,
+    reason: string | undefined,
+    upsell: string,
+    hidePrivateFinance?: boolean,
 ): string {
-	if (tool.credits === 0 && Number.isFinite(tool.freeDaily)) {
-		return upsell;
-	}
-	if (hidePrivateFinance && reason?.includes("refund-debt credits")) {
-		return `Paid usage is blocked by unsettled refund debt. ${upsell}`;
-	}
-	if (reason?.toLowerCase().includes("credit")) {
-		return `${reason}. ${upsell}`;
-	}
-	return `That tool is not available right now. ${upsell}`;
+    if (tool.credits === 0 && Number.isFinite(tool.freeDaily)) {
+        return upsell;
+    }
+    if (hidePrivateFinance && reason?.includes("refund-debt credits")) {
+        return `Paid usage is blocked by unsettled refund debt. ${upsell}`;
+    }
+    if (reason?.toLowerCase().includes("credit")) {
+        return `${reason}. ${upsell}`;
+    }
+    return `That tool is not available right now. ${upsell}`;
 }
 
 const SAFE_USER_ERRORS = new Set([
-	"Missing content",
-	"Unauthorized",
-	"Unknown action",
-	"No source image",
-	"Unknown participant",
-	"No profile photo",
-	"Missing cron",
-	"Invalid datetime",
-	"Past time",
-	"Not found",
+    "Missing content",
+    "Unauthorized",
+    "Unknown action",
+    "No source image",
+    "Unknown participant",
+    "No profile photo",
+    "Missing cron",
+    "Invalid datetime",
+    "Past time",
+    "Not found",
 ]);
 
 function safeToolErrorText(tool: ToolDefinition, result: ToolResult): string {
-	if (result.error && SAFE_USER_ERRORS.has(result.error)) {
-		return result.text ?? "I need a bit more information to do that.";
-	}
-	if (tool.category === "utility" && result.text && result.text.length < 240) {
-		return result.text;
-	}
-	return "I couldn't complete that tool request. Please try again later.";
+    if (result.error && SAFE_USER_ERRORS.has(result.error)) {
+        return result.text ?? "I need a bit more information to do that.";
+    }
+    if (
+        tool.category === "utility" &&
+        result.text &&
+        result.text.length < 240
+    ) {
+        return result.text;
+    }
+    return "I couldn't complete that tool request. Please try again later.";
 }

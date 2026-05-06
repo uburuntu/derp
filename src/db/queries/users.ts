@@ -5,61 +5,61 @@ import { type UserPreferences, users } from "../schema";
 
 /** Upsert a Telegram user → DB user, returns the DB row */
 export async function upsertUser(
-	db: Database,
-	tgUser: TelegramUser,
+    db: Database,
+    tgUser: TelegramUser,
 ): Promise<typeof users.$inferSelect> {
-	const [row] = await db
-		.insert(users)
-		.values({
-			telegramId: tgUser.id,
-			isBot: tgUser.is_bot,
-			firstName: tgUser.first_name,
-			lastName: tgUser.last_name ?? null,
-			username: tgUser.username ?? null,
-			languageCode: tgUser.language_code ?? null,
-			isPremium: tgUser.is_premium ?? false,
-		})
-		.onConflictDoUpdate({
-			target: users.telegramId,
-			set: {
-				firstName: tgUser.first_name,
-				lastName: tgUser.last_name ?? null,
-				username: tgUser.username ?? null,
-				languageCode: tgUser.language_code ?? null,
-				isPremium: tgUser.is_premium ?? false,
-			},
-		})
-		.returning();
+    const [row] = await db
+        .insert(users)
+        .values({
+            telegramId: tgUser.id,
+            isBot: tgUser.is_bot,
+            firstName: tgUser.first_name,
+            lastName: tgUser.last_name ?? null,
+            username: tgUser.username ?? null,
+            languageCode: tgUser.language_code ?? null,
+            isPremium: tgUser.is_premium ?? false,
+        })
+        .onConflictDoUpdate({
+            target: users.telegramId,
+            set: {
+                firstName: tgUser.first_name,
+                lastName: tgUser.last_name ?? null,
+                username: tgUser.username ?? null,
+                languageCode: tgUser.language_code ?? null,
+                isPremium: tgUser.is_premium ?? false,
+            },
+        })
+        .returning();
 
-	if (!row) {
-		throw new Error(`Failed to upsert user ${tgUser.id}`);
-	}
-	return row;
+    if (!row) {
+        throw new Error(`Failed to upsert user ${tgUser.id}`);
+    }
+    return row;
 }
 
 /** Get a user by Telegram ID */
 export async function getUserByTelegramId(
-	db: Database,
-	telegramId: number,
+    db: Database,
+    telegramId: number,
 ): Promise<typeof users.$inferSelect | null> {
-	const [row] = await db
-		.select()
-		.from(users)
-		.where(eq(users.telegramId, telegramId))
-		.limit(1);
-	return row ?? null;
+    const [row] = await db
+        .select()
+        .from(users)
+        .where(eq(users.telegramId, telegramId))
+        .limit(1);
+    return row ?? null;
 }
 
 export async function updateUserPreferences(
-	db: Database,
-	userId: string,
-	preferences: Partial<UserPreferences>,
+    db: Database,
+    userId: string,
+    preferences: Partial<UserPreferences>,
 ): Promise<void> {
-	const patch = JSON.stringify(preferences);
-	await db
-		.update(users)
-		.set({
-			preferences: sql`COALESCE(${users.preferences}, '{}'::jsonb) || ${patch}::jsonb`,
-		})
-		.where(eq(users.id, userId));
+    const patch = JSON.stringify(preferences);
+    await db
+        .update(users)
+        .set({
+            preferences: sql`COALESCE(${users.preferences}, '{}'::jsonb) || ${patch}::jsonb`,
+        })
+        .where(eq(users.id, userId));
 }
