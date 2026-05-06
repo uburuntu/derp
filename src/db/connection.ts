@@ -1,0 +1,117 @@
+import { sql as drizzleSql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import * as schema from "./schema";
+
+let db: ReturnType<typeof createDb> | null = null;
+let sql: ReturnType<typeof postgres> | null = null;
+
+export interface DatabaseReadiness {
+    db: boolean;
+    schema: boolean;
+    error?: string;
+}
+
+const SCHEMA_CHECKS = [
+    "SELECT id, telegram_id, credits, subscription_tier FROM users LIMIT 0",
+    "SELECT id, telegram_id, credits, settings FROM chats LIMIT 0",
+    "SELECT id, chat_id, user_id, role FROM chat_members LIMIT 0",
+    "SELECT id, chat_id, user_id, telegram_message_id, telegram_date FROM messages LIMIT 0",
+    "SELECT id, user_id, chat_id, amount, balance_after FROM ledger LIMIT 0",
+    "SELECT id, user_id, telegram_charge_id, stars, product_type, status FROM payment_receipts LIMIT 0",
+    "SELECT id, provider, operation, model_id, status, actual_cost_micros FROM provider_calls LIMIT 0",
+    "SELECT id, user_id, status, outstanding_amount FROM credit_debts LIMIT 0",
+    "SELECT id, debt_id, type, amount FROM credit_debt_events LIMIT 0",
+    'SELECT id, scope, subject_key, window_key, used, "limit" FROM quota_windows LIMIT 0',
+    "SELECT id, user_id, chat_id, tool_name, status FROM pending_tool_confirmations LIMIT 0",
+    "SELECT id, user_id, payment_id, plan_id, expires_at, status FROM subscription_periods LIMIT 0",
+    "SELECT id, user_id, chat_id, usage_date, usage FROM usage_quotas LIMIT 0",
+    "SELECT id, chat_id, user_id, description, status, fire_at, cron_expression FROM reminders LIMIT 0",
+];
+
+const CRITICAL_INDEXES = [
+    "ledger_payment_receipt_charge_unique",
+    "payment_receipts_telegram_charge_unique",
+    "subscription_periods_charge_unique",
+    "provider_calls_logical_attempt_unique",
+    "quota_windows_scope_user_chat_window_unique",
+    "pending_tool_confirmations_key_unique",
+];
+
+function createDb(databaseUrl: string) {
+    const client = postgres(databaseUrl, {
+        max: 10,
+        idle_timeout: 20,
+        connect_timeout: 10,
+    });
+    sql = client;
+    return drizzle(client, { schema });
+}
+
+export type Database = ReturnType<typeof createDb>;
+
+export function getDb(databaseUrl: string): Database {
+    if (!db) {
+        db = createDb(databaseUrl);
+    }
+    return db;
+}
+
+export async function checkDatabaseReady(
+    database: Database,
+): Promise<DatabaseReadiness> {
+    try {
+        await database.execute(drizzleSql`SELECT 1`);
+    } catch (error) {
+        return {
+            db: false,
+            schema: false,
+            error: getErrorMessage(error),
+        };
+    }
+
+    try {
+        for (const check of SCHEMA_CHECKS) {
+            await database.execute(drizzleSql.raw(check));
+        }
+        for (const indexName of CRITICAL_INDEXES) {
+            const rows = await database.execute(drizzleSql`
+				SELECT 1
+				FROM pg_indexes
+				WHERE schemaname = current_schema()
+					AND indexname = ${indexName}
+				LIMIT 1
+			`);
+            if (rows.length === 0) {
+                throw new Error(`missing critical index: ${indexName}`);
+            }
+        }
+    } catch (error) {
+        return {
+            db: true,
+            schema: false,
+            error: getErrorMessage(error),
+        };
+    }
+
+    return { db: true, schema: true };
+}
+
+export async function assertDatabaseReady(database: Database): Promise<void> {
+    const readiness = await checkDatabaseReady(database);
+    if (!readiness.db || !readiness.schema) {
+        throw new Error(readiness.error ?? "database_not_ready");
+    }
+}
+
+export async function closeDb(): Promise<void> {
+    if (sql) {
+        await sql.end();
+        sql = null;
+        db = null;
+    }
+}
+
+function getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}

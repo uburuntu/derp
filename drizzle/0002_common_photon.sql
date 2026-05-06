@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "ledger_payment_receipt_charge_unique" ON "ledger" USING btree ("telegram_charge_id") WHERE "ledger"."telegram_charge_id" IS NOT NULL AND "ledger"."amount" > 0 AND "ledger"."type" IN ('purchase', 'subscription');

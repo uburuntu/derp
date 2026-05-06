@@ -1,0 +1,48 @@
+{
+    "version": "7",
+    "dialect": "postgresql",
+    "entries": [
+        {
+            "idx": 0,
+            "version": "7",
+            "when": 1777672518109,
+            "tag": "0000_red_invisible_woman",
+            "breakpoints": true
+        },
+        {
+            "idx": 1,
+            "version": "7",
+            "when": 1777676554285,
+            "tag": "0001_foundation_indexes",
+            "breakpoints": true
+        },
+        {
+            "idx": 2,
+            "version": "7",
+            "when": 1777844449536,
+            "tag": "0002_common_photon",
+            "breakpoints": true
+        },
+        {
+            "idx": 3,
+            "version": "7",
+            "when": 1777845691608,
+            "tag": "0003_silent_scarecrow",
+            "breakpoints": true
+        },
+        {
+            "idx": 4,
+            "version": "7",
+            "when": 1777917093796,
+            "tag": "0004_user_preferences",
+            "breakpoints": true
+        },
+        {
+            "idx": 5,
+            "version": "7",
+            "when": 1778072321492,
+            "tag": "0005_opposite_squirrel_girl",
+            "breakpoints": true
+        }
+    ]
+}
