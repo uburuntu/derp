@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { Database } from "../../src/db/connection";
 import type { Chat, User } from "../../src/db/schema";
 import type { ContextParticipant } from "../../src/llm/context-builder";
 import { ModelTier } from "../../src/llm/registry";
@@ -11,7 +10,6 @@ import type { ToolContext } from "../../src/tools/types";
 
 function makeToolContext(overrides: Partial<ToolContext> = {}): ToolContext {
     return {
-        db: {} as Database,
         user: { id: "user-1", telegramId: 111, firstName: "Alice" } as User,
         chat: {
             id: "chat-1",
@@ -23,6 +21,15 @@ function makeToolContext(overrides: Partial<ToolContext> = {}): ToolContext {
             start: async () => null,
             finish: async () => {},
             fail: async () => {},
+        },
+        memoryStore: { update: async () => {} },
+        reminderStore: {
+            countActive: async () => 0,
+            countRecurringForUser: async () => 0,
+            create: async () => {},
+            list: async () => [],
+            getById: async () => null,
+            cancel: async () => {},
         },
         tier: ModelTier.FREE,
         isChatAdmin: false,

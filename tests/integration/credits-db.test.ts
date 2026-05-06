@@ -273,6 +273,15 @@ describe.skipIf(!databaseUrl)("credits database invariants", () => {
             user,
             chat,
             creditService: new CreditService(db, user, chat),
+            memoryStore: { update: async () => {} },
+            reminderStore: {
+                countActive: async () => 0,
+                countRecurringForUser: async () => 0,
+                create: async () => {},
+                list: async () => [],
+                getById: async () => null,
+                cancel: async () => {},
+            },
             providerRecorder: {
                 start: async () => null,
                 finish: async () => {},

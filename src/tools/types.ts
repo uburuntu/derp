@@ -15,6 +15,44 @@ import type {
 
 export type ToolCategory = "media" | "search" | "utility" | "reasoning";
 
+// ── Tool Data Ports ─────────────────────────────────────────────────────────
+
+export interface ToolMemoryStore {
+    update(memory: string | null): Promise<void>;
+}
+
+export interface ToolReminderCreateInput {
+    threadId?: number | null;
+    description: string;
+    message?: string | null;
+    prompt?: string | null;
+    usesLlm?: boolean;
+    fireAt?: Date | null;
+    cronExpression?: string | null;
+    isRecurring?: boolean;
+    replyToMessageId?: number | null;
+}
+
+export interface ToolReminderRecord {
+    id: string;
+    chatId: string;
+    userId: string;
+    threadId: number | null;
+    description: string;
+    fireAt: Date | null;
+    cronExpression: string | null;
+    isRecurring: boolean;
+}
+
+export interface ToolReminderStore {
+    countActive(threadId?: number | null): Promise<number>;
+    countRecurringForUser(): Promise<number>;
+    create(input: ToolReminderCreateInput): Promise<void>;
+    list(threadId?: number | null): Promise<ToolReminderRecord[]>;
+    getById(id: string): Promise<ToolReminderRecord | null>;
+    cancel(id: string): Promise<void>;
+}
+
 // ── Tool Definition ──────────────────────────────────────────────────────────
 
 export interface ToolDefinition<TParams = unknown> {
@@ -44,9 +82,10 @@ export interface ToolDefinition<TParams = unknown> {
 // ── Tool Context ─────────────────────────────────────────────────────────────
 
 export interface ToolContext {
-    db: Database;
     user: User;
     chat: Chat;
+    memoryStore: ToolMemoryStore;
+    reminderStore: ToolReminderStore;
     providerRecorder: ProviderCallRecorder;
     tier: ModelTier;
     isChatAdmin: boolean;
@@ -83,6 +122,7 @@ export interface ToolContext {
 }
 
 export interface ToolExecutionContext extends ToolContext {
+    db: Database;
     creditService: CreditService;
 }
 

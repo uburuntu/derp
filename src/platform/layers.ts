@@ -22,6 +22,7 @@ export const IMPORT_BOUNDARY_RULES: ImportBoundaryRule[] = [
         source: /^src\/tools\/(?!credit-gate\.ts$|loader\.ts$|registry\.ts$|types\.ts$)[^/]+\.ts$/,
         forbiddenInternal: [
             /^src\/bot\//,
+            /^src\/db\//,
             /^src\/handlers\//,
             /^src\/middleware\//,
             /^src\/credits\/service\.ts$/,

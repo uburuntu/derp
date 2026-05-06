@@ -1,45 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import type { Database } from "../../src/db/connection";
 import type { Chat, User } from "../../src/db/schema";
 import { ModelTier } from "../../src/llm/registry";
 import { remindTool } from "../../src/tools/remind";
 import type { ToolContext } from "../../src/tools/types";
 
-function makeReminderDb(capturedValues: Record<string, unknown>[]): Database {
-    return {
-        select: () => ({
-            from: () => ({
-                where: async () => [{ count: 0 }],
-            }),
-        }),
-        insert: () => ({
-            values: (values: Record<string, unknown>) => ({
-                returning: async () => {
-                    capturedValues.push(values);
-                    return [
-                        {
-                            id: "reminder-1",
-                            ...values,
-                            status: "active",
-                            lastFiredAt: null,
-                            fireCount: 0,
-                            meta: null,
-                            createdAt: new Date(),
-                            updatedAt: new Date(),
-                        },
-                    ];
-                },
-            }),
-        }),
-    } as unknown as Database;
-}
-
 function makeToolContext(
-    db: Database,
+    capturedValues: Record<string, unknown>[],
     overrides: Partial<ToolContext> = {},
 ): ToolContext {
     return {
-        db,
         user: { id: "user-1", telegramId: 111, firstName: "Alice" } as User,
         chat: {
             id: "chat-1",
@@ -50,6 +19,21 @@ function makeToolContext(
             start: async () => null,
             finish: async () => {},
             fail: async () => {},
+        },
+        memoryStore: { update: async () => {} },
+        reminderStore: {
+            countActive: async () => 0,
+            countRecurringForUser: async () => 0,
+            create: async (values) => {
+                capturedValues.push({
+                    chatId: "chat-1",
+                    userId: "user-1",
+                    ...values,
+                });
+            },
+            list: async () => [],
+            getById: async () => null,
+            cancel: async () => {},
         },
         tier: ModelTier.FREE,
         isChatAdmin: true,
@@ -68,7 +52,6 @@ function makeToolContext(
 describe("remindTool create", () => {
     test("stores initial next fire time for recurring reminders", async () => {
         const capturedValues: Record<string, unknown>[] = [];
-        const db = makeReminderDb(capturedValues);
 
         const result = await remindTool.execute(
             {
@@ -77,7 +60,7 @@ describe("remindTool create", () => {
                 message: "daily standup",
                 cronExpression: "0 9 * * *",
             },
-            makeToolContext(db),
+            makeToolContext(capturedValues),
         );
 
         expect(result.error).toBeUndefined();
@@ -90,7 +73,6 @@ describe("remindTool create", () => {
 
     test("preserves thread and reply metadata when creating reminders", async () => {
         const capturedValues: Record<string, unknown>[] = [];
-        const db = makeReminderDb(capturedValues);
 
         const result = await remindTool.execute(
             {
@@ -99,7 +81,7 @@ describe("remindTool create", () => {
                 message: "thread reminder",
                 cronExpression: "0 9 * * *",
             },
-            makeToolContext(db, {
+            makeToolContext(capturedValues, {
                 threadId: 321,
                 replyToMessageId: 654,
             }),
@@ -113,7 +95,6 @@ describe("remindTool create", () => {
 
     test("rejects recurring LLM reminders", async () => {
         const capturedValues: Record<string, unknown>[] = [];
-        const db = makeReminderDb(capturedValues);
 
         const result = await remindTool.execute(
             {
@@ -122,7 +103,7 @@ describe("remindTool create", () => {
                 prompt: "Generate a briefing",
                 cronExpression: "0 9 * * *",
             },
-            makeToolContext(db),
+            makeToolContext(capturedValues),
         );
 
         expect(result.error).toBe("Recurring LLM reminders disabled");

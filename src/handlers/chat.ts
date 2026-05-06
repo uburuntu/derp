@@ -45,6 +45,10 @@ import {
 } from "../llm/registry";
 import type { ConversationMessage, MediaAttachment } from "../llm/types";
 import { createDbProviderCallRecorder } from "../platform/provider-call-recorder";
+import {
+    createDbToolMemoryStore,
+    createDbToolReminderStore,
+} from "../platform/tool-stores";
 import { normalizeUserPreferences } from "../preferences/user";
 import { executeWithCreditGate } from "../tools/credit-gate";
 import { toolRegistry } from "../tools/registry";
@@ -199,6 +203,12 @@ async function buildToolContext(
         user: ctx.dbUser,
         chat: ctx.dbChat,
         creditService: ctx.creditService,
+        memoryStore: createDbToolMemoryStore(ctx.db, ctx.dbChat),
+        reminderStore: createDbToolReminderStore(
+            ctx.db,
+            ctx.dbUser,
+            ctx.dbChat,
+        ),
         providerRecorder: createDbProviderCallRecorder(ctx.db),
         tier: ctx.tier,
         isChatAdmin: admin,

@@ -1,7 +1,6 @@
 /** Chat memory tool — per-chat persistent memory for the LLM agent */
 
 import { z } from "zod";
-import { updateChatMemory } from "../db/queries/chats";
 import {
     addChatMemoryItem,
     type ChatMemoryKind,
@@ -83,7 +82,7 @@ async function executeMemory(
                 kind,
                 params.content,
             );
-            await updateChatMemory(ctx.db, ctx.chat.id, memory);
+            await ctx.memoryStore.update(memory);
             ctx.chat.memory = memory;
             return { text: `Memory updated (${kind}).` };
         }
@@ -95,7 +94,7 @@ async function executeMemory(
                     error: "Unauthorized",
                 };
             }
-            await updateChatMemory(ctx.db, ctx.chat.id, null);
+            await ctx.memoryStore.update(null);
             ctx.chat.memory = null;
             return { text: "Chat memory cleared." };
         }

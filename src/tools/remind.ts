@@ -1,14 +1,6 @@
 /** Remind tool — LLM-callable tool for creating, listing, and cancelling reminders */
 
 import { z } from "zod";
-import {
-    cancelReminder,
-    countActiveReminders,
-    countRecurringReminders,
-    createReminder,
-    getReminderById,
-    getRemindersForChat,
-} from "../db/queries/reminders";
 import { parseCronToNextDate, validateCron } from "../scheduler/cron";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types";
 
@@ -175,10 +167,7 @@ async function handleCreate(
     }
 
     // Check abuse limits
-    const activeCount = await countActiveReminders(
-        ctx.db,
-        ctx.user.id,
-        ctx.chat.id,
+    const activeCount = await ctx.reminderStore.countActive(
         ctx.threadId ?? null,
     );
     if (activeCount >= MAX_ACTIVE_PER_CHAT) {
@@ -192,10 +181,7 @@ async function handleCreate(
     const cronExpression = params.cronExpression ?? null;
 
     if (isRecurring) {
-        const recurringCount = await countRecurringReminders(
-            ctx.db,
-            ctx.user.id,
-        );
+        const recurringCount = await ctx.reminderStore.countRecurringForUser();
         if (recurringCount >= MAX_RECURRING_PER_USER) {
             return {
                 text: `Maximum ${MAX_RECURRING_PER_USER} recurring reminders per user reached.`,
@@ -249,9 +235,7 @@ async function handleCreate(
     }
 
     const metadata = getReminderMetadata(ctx);
-    await createReminder(ctx.db, {
-        chatId: ctx.chat.id,
-        userId: ctx.user.id,
+    await ctx.reminderStore.create({
         threadId: metadata.threadId,
         description: params.description,
         message: params.message ?? (usesLlm ? null : params.description),
@@ -277,12 +261,7 @@ async function handleCreate(
 }
 
 async function handleList(ctx: ToolContext): Promise<ToolResult> {
-    const reminders = await getRemindersForChat(
-        ctx.db,
-        ctx.chat.id,
-        undefined,
-        ctx.threadId ?? null,
-    );
+    const reminders = await ctx.reminderStore.list(ctx.threadId ?? null);
 
     if (reminders.length === 0) {
         return { text: "No active reminders in this chat." };
@@ -313,12 +292,7 @@ async function handleCancel(
         };
     }
 
-    const reminders = await getRemindersForChat(
-        ctx.db,
-        ctx.chat.id,
-        undefined,
-        ctx.threadId ?? null,
-    );
+    const reminders = await ctx.reminderStore.list(ctx.threadId ?? null);
     const matches = reminders.filter(
         (r) =>
             r.id === params.reminderId ||
@@ -332,7 +306,7 @@ async function handleCancel(
     }
 
     const reminder =
-        matches[0] ?? (await getReminderById(ctx.db, params.reminderId));
+        matches[0] ?? (await ctx.reminderStore.getById(params.reminderId));
     if (!reminder) {
         return { text: "Reminder not found.", error: "Not found" };
     }
@@ -355,7 +329,7 @@ async function handleCancel(
         };
     }
 
-    await cancelReminder(ctx.db, reminder.id);
+    await ctx.reminderStore.cancel(reminder.id);
     return { text: `Reminder "${reminder.description}" cancelled.` };
 }
 

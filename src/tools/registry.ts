@@ -25,6 +25,10 @@ import { insertMessage } from "../db/queries/messages";
 import type { MessageMetadata } from "../db/schema";
 import type { LLMToolSchema, MediaAttachment } from "../llm/types";
 import { createDbProviderCallRecorder } from "../platform/provider-call-recorder";
+import {
+    createDbToolMemoryStore,
+    createDbToolReminderStore,
+} from "../platform/tool-stores";
 import { isToolDisabled } from "../preferences/user";
 import { executeWithCreditGate } from "./credit-gate";
 import type {
@@ -460,6 +464,12 @@ async function buildToolContext(
         user: ctx.dbUser,
         chat: ctx.dbChat,
         creditService: ctx.creditService,
+        memoryStore: createDbToolMemoryStore(ctx.db, ctx.dbChat),
+        reminderStore: createDbToolReminderStore(
+            ctx.db,
+            ctx.dbUser,
+            ctx.dbChat,
+        ),
         providerRecorder: createDbProviderCallRecorder(ctx.db),
         tier: ctx.tier,
         isChatAdmin: admin,
