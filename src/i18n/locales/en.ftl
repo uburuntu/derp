@@ -195,6 +195,9 @@ tool-confirm-done = ✅ <b>Done</b>
 tool-confirm-failed = ⚠️ <b>Could not finish this request</b>
 
     No credits were kept if the tool did not complete.
+tool-confirm-billable-failed = ⚠️ <b>Result needs review</b>
+
+    Provider work completed, but delivery failed. Credits were kept and admins were notified.
 tool-confirm-cancelled = Cancelled.
 tool-confirm-expired = This confirmation expired. Send the command again.
 tool-confirm-invalid = This saved request is no longer valid. Send the command again.

@@ -10,6 +10,7 @@ export interface CreditCheckResult {
 	creditsToDeduct: number;
 	creditsRemaining: number | null;
 	freeRemaining: number | null;
+	ledgerId?: string;
 	rejectReason?: string;
 }
 

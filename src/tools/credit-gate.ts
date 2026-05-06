@@ -9,6 +9,7 @@ import {
 } from "../common/observability";
 import { escapeHtml } from "../common/sanitize";
 import type { CreditCheckResult } from "../credits/types";
+import { markLedgerSpendStatus } from "../db/queries/credits";
 import { ModelTier } from "../llm/registry";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types";
 
@@ -101,6 +102,7 @@ export async function executeWithCreditGate(
 						tool,
 						creditResult.rejectReason,
 						upsell,
+						ctx.isGroupChat,
 					),
 					error: creditResult.rejectReason,
 					creditResult,
@@ -154,6 +156,7 @@ export async function executeWithCreditGate(
 								tool,
 								reason,
 								buildUpsellMessage(tool),
+								ctx.isGroupChat,
 							),
 							error: reason,
 							creditResult: zeroCostResult(creditResult),
@@ -212,6 +215,7 @@ export async function executeWithCreditGate(
 							tool,
 							error,
 							buildUpsellMessage(tool),
+							ctx.isGroupChat,
 						),
 						error,
 						creditResult: zeroCostResult(creditResult),
@@ -227,6 +231,10 @@ export async function executeWithCreditGate(
 				const error = err instanceof Error ? err.message : String(err);
 				await refundToolDeduction(ctx, creditResult, tool, idempotencyKey, {
 					error,
+				});
+				await markLedgerSpendStatus(ctx.db, creditResult.ledgerId, "refunded", {
+					error,
+					toolName: tool.name,
 				});
 				span.setAttribute("derp.tool.outcome", "error");
 				derpMetrics.toolCalls.add(1, {
@@ -256,7 +264,21 @@ export async function executeWithCreditGate(
 				if (creditResult.creditsToDeduct > 0) {
 					derpMetrics.creditTransactions.add(1, { type: "spend" });
 				}
+				if (!result.handled && creditResult.creditsToDeduct > 0) {
+					await markLedgerSpendStatus(
+						ctx.db,
+						creditResult.ledgerId,
+						"provider_succeeded",
+						{ toolName: tool.name },
+					);
+				}
 				if (result.handled && creditResult.creditsToDeduct > 0) {
+					await markLedgerSpendStatus(
+						ctx.db,
+						creditResult.ledgerId,
+						"delivered",
+						{ toolName: tool.name },
+					);
 					await ctx
 						.sendMessage(formatSpendReceipt(creditResult, ctx.isGroupChat))
 						.catch((err) => {
@@ -294,10 +316,27 @@ export async function executeWithCreditGate(
 									: String(notifyErr),
 						});
 					});
+					await markLedgerSpendStatus(
+						ctx.db,
+						creditResult.ledgerId,
+						"billable_failure",
+						{
+							error: result.error,
+							toolName: tool.name,
+							providerCallIds: result.providerCallIds,
+							costMicros: result.costMicros,
+						},
+					);
 				} else {
 					await refundToolDeduction(ctx, creditResult, tool, idempotencyKey, {
 						error: result.error,
 					});
+					await markLedgerSpendStatus(
+						ctx.db,
+						creditResult.ledgerId,
+						"refunded",
+						{ error: result.error, toolName: tool.name },
+					);
 				}
 				recordHandledFailure("tool", result.error, { tool: tool.name });
 				logger.error("tool_returned_error", {
@@ -403,9 +442,13 @@ function buildUnavailableMessage(
 	tool: ToolDefinition,
 	reason: string | undefined,
 	upsell: string,
+	hidePrivateFinance?: boolean,
 ): string {
 	if (tool.credits === 0 && Number.isFinite(tool.freeDaily)) {
 		return upsell;
+	}
+	if (hidePrivateFinance && reason?.includes("refund-debt credits")) {
+		return `Paid usage is blocked by unsettled refund debt. ${upsell}`;
 	}
 	if (reason?.toLowerCase().includes("credit")) {
 		return `${reason}. ${upsell}`;

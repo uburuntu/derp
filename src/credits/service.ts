@@ -297,6 +297,11 @@ export class CreditService {
 				});
 			}
 		} else if (result.source === "chat") {
+			const spendMeta = {
+				...meta,
+				spendStatus: "reserved",
+				spendStatusUpdatedAt: new Date().toISOString(),
+			};
 			const debit = await deductChatCredits(
 				this.db,
 				this.chat.id,
@@ -305,10 +310,16 @@ export class CreditService {
 				toolName,
 				result.modelId,
 				idempotencyKey,
-				meta,
+				spendMeta,
 			);
+			if (debit.ledgerId) result.ledgerId = debit.ledgerId;
 			return debit.applied ? "applied" : "duplicate";
 		} else if (result.source === "user") {
+			const spendMeta = {
+				...meta,
+				spendStatus: "reserved",
+				spendStatusUpdatedAt: new Date().toISOString(),
+			};
 			const debit = await deductUserCredits(
 				this.db,
 				this.user.id,
@@ -316,8 +327,9 @@ export class CreditService {
 				toolName,
 				result.modelId,
 				idempotencyKey,
-				meta,
+				spendMeta,
 			);
+			if (debit.ledgerId) result.ledgerId = debit.ledgerId;
 			return debit.applied ? "applied" : "duplicate";
 		}
 		return "applied";

@@ -92,6 +92,7 @@ export class OpenRouterProvider implements LLMProvider {
 					keyClass: "paid",
 					userId: params.tracking.userId,
 					chatId: params.tracking.chatId,
+					ledgerId: params.tracking.ledgerId,
 					toolName: params.tracking.toolName,
 					creditsCharged: params.tracking.creditsCharged,
 					creditSource: params.tracking.creditSource,

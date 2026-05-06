@@ -41,6 +41,7 @@ async function executeThink(
 				keyClass: "paid",
 				userId: ctx.user.id,
 				chatId: ctx.chat.id,
+				ledgerId: ctx.creditResult?.ledgerId,
 				toolName: "think",
 				creditsCharged: ctx.creditResult?.creditsToDeduct ?? 0,
 				creditSource: ctx.creditResult?.source,

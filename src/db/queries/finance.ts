@@ -179,6 +179,7 @@ export async function finishProviderCall(
 			route: providerCalls.route,
 			keyClass: providerCalls.keyClass,
 			modelId: providerCalls.modelId,
+			actualModelId: providerCalls.actualModelId,
 			creditsCharged: providerCalls.creditsCharged,
 		});
 	if (row) {
@@ -211,6 +212,7 @@ export async function failProviderCall(
 			route: providerCalls.route,
 			keyClass: providerCalls.keyClass,
 			modelId: providerCalls.modelId,
+			actualModelId: providerCalls.actualModelId,
 			creditsCharged: providerCalls.creditsCharged,
 		});
 	if (row) {
@@ -230,6 +232,7 @@ function recordProviderMetrics(
 		route: string | null;
 		keyClass: string | null;
 		modelId: string;
+		actualModelId?: string | null;
 		creditsCharged: number | null;
 	},
 	status: "succeeded" | "failed",
@@ -241,7 +244,8 @@ function recordProviderMetrics(
 		operation: row.operation,
 		route: row.route ?? "primary",
 		key_class: row.keyClass ?? "unknown",
-		model: row.modelId,
+		model: row.actualModelId ?? row.modelId,
+		requested_model: row.modelId,
 		status,
 		credits_charged: row.creditsCharged ?? 0,
 	};

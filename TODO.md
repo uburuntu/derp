@@ -1,7 +1,7 @@
 # Derp Finance Hardening Harness
 
-Loop: 4 / 5
-Status: loop 4 remediation in progress
+Loop: 5 / 5
+Status: loop 5 remediation complete
 
 ## P0
 
@@ -71,7 +71,23 @@ Status: loop 4 remediation in progress
 - [x] `/credits`, confirmations, receipts, and footers must not expose personal balances in groups.
 - [x] Forwarded group-pack invoices must not keep a payable forwarded copy.
 - [x] Open group debt must not block debt-free personal paid spend.
-- [ ] Paid reservations are still final ledger spends, not a recoverable reservation state machine.
+- [x] Paid spends must link ledger rows to provider-call rows and carry lifecycle status in ledger metadata.
+
+## Loop 5 Reviewer P1 Findings
+
+- [x] Paid reservations must expose a recoverable lifecycle and FK link provider calls to the spend ledger row.
+- [x] Paid text-tool delivery failures must notify admins and mark spend delivery failure.
+- [x] Personal refund-debt amounts must not leak in group error messages.
+- [x] Billable confirmation failures must not claim credits were refunded.
+- [x] Payment settlement-failure marking must happen before user-message delivery and manual retry errors must update receipt diagnostics.
+- [x] Invoice callback acknowledgement failures must not be treated as invoice delivery failures.
+- [x] Billable LLM reminder delivery failures must notify admins with provider call IDs/cost.
+- [x] `/admin metrics` must show today's bot-wide free usage against daily caps.
+- [x] Fallback provider metrics/admin rollups must attribute actual model, not only requested model.
+
+## Follow-up Debt
+
+- [ ] A future schema migration should promote spend lifecycle metadata into typed columns/table if this becomes an operator workflow.
 
 ## Loop Notes
 

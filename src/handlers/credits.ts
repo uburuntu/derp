@@ -220,15 +220,6 @@ async function applyPaymentOrReport<T extends { applied: boolean }>(
 			payload: payment.invoice_payload,
 			error: reason,
 		});
-		await ctx.reply(
-			ctx.t("payment-settlement-failed", {
-				chargeId: escapeHtml(payment.telegram_payment_charge_id),
-			}),
-			{
-				parse_mode: "HTML",
-				...commandReplyOptions(ctx),
-			},
-		);
 		await markPaymentSettlementFailed(
 			ctx.db,
 			payment.telegram_payment_charge_id,
@@ -239,6 +230,23 @@ async function applyPaymentOrReport<T extends { applied: boolean }>(
 				error: markErr instanceof Error ? markErr.message : String(markErr),
 			});
 		});
+		await ctx
+			.reply(
+				ctx.t("payment-settlement-failed", {
+					chargeId: escapeHtml(payment.telegram_payment_charge_id),
+				}),
+				{
+					parse_mode: "HTML",
+					...commandReplyOptions(ctx),
+				},
+			)
+			.catch((replyErr) => {
+				logger.error("payment_settlement_failed_reply_failed", {
+					chargeId: payment.telegram_payment_charge_id,
+					error:
+						replyErr instanceof Error ? replyErr.message : String(replyErr),
+				});
+			});
 		await notifyAdmins(
 			`⚠️ <b>Payment processing failed</b>\n\nUser: <code>${ctx.dbUser?.telegramId ?? "unknown"}</code>\nChat: <code>${ctx.dbChat?.telegramId ?? "unknown"}</code>\nCharge: <code>${escapeHtml(payment.telegram_payment_charge_id)}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nAmount: ${payment.total_amount} ${escapeHtml(payment.currency)}\nReason: ${escapeHtml(reason)}`,
 			{ critical: true },
@@ -334,6 +342,23 @@ function isGroupChat(ctx: DerpContext): boolean {
 function privatePaymentChatId(ctx: DerpContext): number | null {
 	if (!isGroupChat(ctx)) return ctx.chat?.id ?? null;
 	return ctx.from?.id ?? null;
+}
+
+async function answerPaymentCallback(
+	ctx: DerpContext,
+	text?: string,
+): Promise<void> {
+	try {
+		if (text) {
+			await ctx.answerCallbackQuery(text);
+		} else {
+			await ctx.answerCallbackQuery();
+		}
+	} catch (err) {
+		logger.warn("payment_callback_ack_failed", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
 }
 
 // ── /credits, /balance, /bal ────────────────────────────────────────────────
@@ -503,6 +528,7 @@ creditsComposer.callbackQuery(/^sub:(.+)$/, async (ctx) => {
 		await ctx.answerCallbackQuery(ctx.t("error-generic"));
 		return;
 	}
+	await answerPaymentCallback(ctx);
 
 	// Create subscription invoice link
 	let link: string;
@@ -564,11 +590,6 @@ creditsComposer.callbackQuery(/^sub:(.+)$/, async (ctx) => {
 				},
 			},
 		);
-		if (isGroupChat(ctx)) {
-			await ctx.answerCallbackQuery(ctx.t("buy-private-sent"));
-		} else {
-			await ctx.answerCallbackQuery();
-		}
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
 		recordHandledFailure("payment_invoice", reason, {
@@ -578,9 +599,9 @@ creditsComposer.callbackQuery(/^sub:(.+)$/, async (ctx) => {
 			planId: plan.id,
 			error: reason,
 		});
-		await ctx.answerCallbackQuery({
-			text: ctx.t("buy-private-open-bot"),
-			show_alert: true,
+		await ctx.reply(ctx.t("buy-private-open-bot"), {
+			parse_mode: "HTML",
+			...commandReplyOptions(ctx),
 		});
 	}
 });
@@ -604,6 +625,7 @@ creditsComposer.callbackQuery(/^pack:(.+)$/, async (ctx) => {
 		await ctx.answerCallbackQuery(ctx.t("error-generic"));
 		return;
 	}
+	await answerPaymentCallback(ctx);
 
 	try {
 		await ctx.api.sendInvoice(
@@ -631,11 +653,6 @@ creditsComposer.callbackQuery(/^pack:(.+)$/, async (ctx) => {
 				message_thread_id: isGroupChat(ctx) ? undefined : messageThreadId(ctx),
 			},
 		);
-		if (isGroupChat(ctx)) {
-			await ctx.answerCallbackQuery(ctx.t("buy-private-sent"));
-		} else {
-			await ctx.answerCallbackQuery();
-		}
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
 		recordHandledFailure("payment_invoice", reason, {
@@ -643,12 +660,11 @@ creditsComposer.callbackQuery(/^pack:(.+)$/, async (ctx) => {
 		});
 		logger.error("pack_invoice_failed", { packId: pack.id, error: reason });
 		if (isGroupChat(ctx)) {
-			await ctx.answerCallbackQuery({
-				text: ctx.t("buy-private-open-bot"),
-				show_alert: true,
+			await ctx.reply(ctx.t("buy-private-open-bot"), {
+				parse_mode: "HTML",
+				...commandReplyOptions(ctx),
 			});
 		} else {
-			await ctx.answerCallbackQuery();
 			await ctx.reply(ctx.t("buy-invoice-error"), {
 				parse_mode: "HTML",
 				message_thread_id: messageThreadId(ctx),

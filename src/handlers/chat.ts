@@ -28,7 +28,7 @@ import {
 	STANDARD_CHAT_CREDITS,
 	STANDARD_CHAT_TOOL_NAME,
 } from "../credits/service";
-import { getBalances } from "../db/queries/credits";
+import { getBalances, markLedgerSpendStatus } from "../db/queries/credits";
 import { recordFreeChatUsage } from "../db/queries/finance";
 import { getMembersWithUsers } from "../db/queries/members";
 import { getRecentMessages, insertMessage } from "../db/queries/messages";
@@ -468,6 +468,7 @@ chatComposer.on("message", async (ctx) => {
 				tier === ModelTier.STANDARD ? ("paid" as const) : ("free" as const),
 			userId: ctx.dbUser.id,
 			chatId: ctx.dbChat.id,
+			ledgerId: chatCreditResult?.ledgerId,
 			creditsCharged: chatCreditResult?.creditsToDeduct ?? 0,
 			creditSource:
 				chatCreditResult && chatCreditResult.source !== "rejected"
@@ -718,6 +719,15 @@ chatComposer.on("message", async (ctx) => {
 				});
 			}
 		}
+		await markLedgerSpendStatus(
+			ctx.db,
+			chatCreditResult?.ledgerId,
+			"delivered",
+			{
+				providerCallIds: billableProviderCallIds,
+				costMicros: billableProviderCostMicros,
+			},
+		);
 
 		logger.info("chat_response", {
 			model: actualModel,
@@ -755,6 +765,14 @@ chatComposer.on("message", async (ctx) => {
 								: String(refundErr),
 					});
 				});
+			await markLedgerSpendStatus(
+				ctx.db,
+				chatCreditResult.ledgerId,
+				"refunded",
+				{
+					error,
+				},
+			);
 		} else if (chatCreditResult && chatDebitReserved && providerCompleted) {
 			logger.warn("chat_billable_failure_not_refunded", {
 				error,
@@ -774,6 +792,16 @@ chatComposer.on("message", async (ctx) => {
 						notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
 				});
 			});
+			await markLedgerSpendStatus(
+				ctx.db,
+				chatCreditResult.ledgerId,
+				"delivery_failed",
+				{
+					error,
+					providerCallIds: billableProviderCallIds,
+					costMicros: billableProviderCostMicros,
+				},
+			);
 		}
 		recordHandledFailure("chat", error, {
 			chatId: ctx.dbChat.telegramId,

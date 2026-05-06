@@ -66,6 +66,7 @@ async function executeVideo(
 				keyClass: "paid",
 				userId: ctx.user.id,
 				chatId: ctx.chat.id,
+				ledgerId: ctx.creditResult?.ledgerId,
 				toolName: "video",
 				creditsCharged: ctx.creditResult?.creditsToDeduct ?? 0,
 				creditSource: ctx.creditResult?.source,

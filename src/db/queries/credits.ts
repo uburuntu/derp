@@ -17,6 +17,7 @@ export type ToolDebitResult = "applied" | "duplicate" | "quota_exhausted";
 export interface IdempotentCreditResult {
 	balanceAfter: number;
 	applied: boolean;
+	ledgerId?: string;
 	debtRecovered?: number;
 	creditedAmount?: number;
 }
@@ -204,6 +205,31 @@ export async function markPaymentSettlementFailed(
 				sql`${paymentReceipts.status} IN ('received', 'settlement_failed')`,
 			),
 		);
+}
+
+export async function markLedgerSpendStatus(
+	db: Database,
+	ledgerId: string | undefined,
+	status:
+		| "reserved"
+		| "provider_succeeded"
+		| "delivered"
+		| "delivery_failed"
+		| "refunded"
+		| "billable_failure",
+	meta: Record<string, unknown> = {},
+): Promise<void> {
+	if (!ledgerId) return;
+	await db
+		.update(ledger)
+		.set({
+			meta: sql`COALESCE(${ledger.meta}, '{}'::jsonb) || ${JSON.stringify({
+				...meta,
+				spendStatus: status,
+				spendStatusUpdatedAt: new Date().toISOString(),
+			})}::jsonb`,
+		})
+		.where(eq(ledger.id, ledgerId));
 }
 
 function numberFromMeta(
@@ -410,11 +436,15 @@ export async function deductUserCredits(
 
 			if (!inserted) {
 				const [existing] = await tx
-					.select({ balanceAfter: ledger.balanceAfter })
+					.select({ id: ledger.id, balanceAfter: ledger.balanceAfter })
 					.from(ledger)
 					.where(eq(ledger.idempotencyKey, idempotencyKey))
 					.limit(1);
-				return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
+				return {
+					balanceAfter: existing?.balanceAfter ?? 0,
+					applied: false,
+					ledgerId: existing?.id,
+				};
 			}
 
 			const [updated] = await tx
@@ -438,7 +468,11 @@ export async function deductUserCredits(
 				.set({ balanceAfter: updated.credits })
 				.where(eq(ledger.id, inserted.id));
 
-			return { balanceAfter: updated.credits, applied: true };
+			return {
+				balanceAfter: updated.credits,
+				applied: true,
+				ledgerId: inserted.id,
+			};
 		}
 
 		const [updated] = await tx
@@ -457,18 +491,25 @@ export async function deductUserCredits(
 
 		if (!updated) throw new Error("Insufficient credits or open refund debt");
 
-		await tx.insert(ledger).values({
-			userId,
-			type: "spend",
-			amount: -amount,
-			balanceAfter: updated.credits,
-			toolName,
-			modelId,
-			idempotencyKey,
-			meta,
-		});
+		const [inserted] = await tx
+			.insert(ledger)
+			.values({
+				userId,
+				type: "spend",
+				amount: -amount,
+				balanceAfter: updated.credits,
+				toolName,
+				modelId,
+				idempotencyKey,
+				meta,
+			})
+			.returning({ id: ledger.id });
 
-		return { balanceAfter: updated.credits, applied: true };
+		return {
+			balanceAfter: updated.credits,
+			applied: true,
+			ledgerId: inserted?.id,
+		};
 	});
 }
 
@@ -503,11 +544,15 @@ export async function deductChatCredits(
 
 			if (!inserted) {
 				const [existing] = await tx
-					.select({ balanceAfter: ledger.balanceAfter })
+					.select({ id: ledger.id, balanceAfter: ledger.balanceAfter })
 					.from(ledger)
 					.where(eq(ledger.idempotencyKey, idempotencyKey))
 					.limit(1);
-				return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
+				return {
+					balanceAfter: existing?.balanceAfter ?? 0,
+					applied: false,
+					ledgerId: existing?.id,
+				};
 			}
 
 			const [updated] = await tx
@@ -533,7 +578,11 @@ export async function deductChatCredits(
 				.set({ balanceAfter: updated.credits })
 				.where(eq(ledger.id, inserted.id));
 
-			return { balanceAfter: updated.credits, applied: true };
+			return {
+				balanceAfter: updated.credits,
+				applied: true,
+				ledgerId: inserted.id,
+			};
 		}
 
 		const [updated] = await tx
@@ -554,19 +603,26 @@ export async function deductChatCredits(
 			throw new Error("Insufficient chat credits or open group refund debt");
 		}
 
-		await tx.insert(ledger).values({
-			userId,
-			chatId,
-			type: "spend",
-			amount: -amount,
-			balanceAfter: updated.credits,
-			toolName,
-			modelId,
-			idempotencyKey,
-			meta,
-		});
+		const [inserted] = await tx
+			.insert(ledger)
+			.values({
+				userId,
+				chatId,
+				type: "spend",
+				amount: -amount,
+				balanceAfter: updated.credits,
+				toolName,
+				modelId,
+				idempotencyKey,
+				meta,
+			})
+			.returning({ id: ledger.id });
 
-		return { balanceAfter: updated.credits, applied: true };
+		return {
+			balanceAfter: updated.credits,
+			applied: true,
+			ledgerId: inserted?.id,
+		};
 	});
 }
 

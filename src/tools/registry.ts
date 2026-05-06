@@ -3,6 +3,7 @@
 import { type Bot, InlineKeyboard } from "grammy";
 import { toJSONSchema, type z } from "zod";
 import type { DerpContext } from "../bot/context";
+import { notifyAdmins } from "../common/admin-notify";
 import { downloadTelegramFile, extractMedia } from "../common/extractor";
 import { logger } from "../common/observability";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../common/reply";
 import { registerToolPricing } from "../credits/service";
 import type { CreditCheckResult } from "../credits/types";
+import { markLedgerSpendStatus } from "../db/queries/credits";
 import {
 	cancelPendingToolConfirmation,
 	claimPendingToolConfirmation,
@@ -587,16 +589,58 @@ async function sendToolResult(
 		remaining,
 		publicCreditSource(ctx, result.creditResult?.source),
 	);
-	await replyMarkdownAndPersist(
-		ctx,
-		chunksWithFooter,
-		replyOptions,
-		buildCommandMetadata(tool, ctx, commandStart, result.creditResult, {
-			providerCallIds: result.providerCallIds,
-			costMicros: result.costMicros,
-		}),
-		storedChunks,
-	);
+	try {
+		await replyMarkdownAndPersist(
+			ctx,
+			chunksWithFooter,
+			replyOptions,
+			buildCommandMetadata(tool, ctx, commandStart, result.creditResult, {
+				providerCallIds: result.providerCallIds,
+				costMicros: result.costMicros,
+			}),
+			storedChunks,
+		);
+		await markLedgerSpendStatus(
+			ctx.db,
+			result.creditResult?.ledgerId,
+			"delivered",
+			{ toolName: tool.name },
+		);
+	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		if (result.creditResult && result.creditResult.creditsToDeduct > 0) {
+			await markLedgerSpendStatus(
+				ctx.db,
+				result.creditResult.ledgerId,
+				"delivery_failed",
+				{
+					error,
+					toolName: tool.name,
+					providerCallIds: result.providerCallIds,
+					costMicros: result.costMicros,
+				},
+			);
+			logger.warn("tool_text_delivery_failed_after_spend", {
+				tool: tool.name,
+				error,
+				creditsDeducted: result.creditResult.creditsToDeduct,
+				source: result.creditResult.source,
+				providerCallIds: result.providerCallIds,
+				costMicros: result.costMicros,
+			});
+			await notifyAdmins(
+				`⚠️ <b>Billable tool text delivery failure</b>\n\nTool: <code>${escapeHtml(tool.name)}</code>\nCredits kept: ${result.creditResult.creditsToDeduct}\nSource: <code>${escapeHtml(result.creditResult.source)}</code>\nProvider calls: <code>${escapeHtml(result.providerCallIds?.join(", ") ?? "n/a")}</code>\nProvider cost: $${((result.costMicros ?? 0) / 1_000_000).toFixed(4)}\nReason: ${escapeHtml(error)}`,
+				{ critical: true },
+			).catch((notifyErr) => {
+				logger.error("tool_text_delivery_admin_notify_failed", {
+					tool: tool.name,
+					error:
+						notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+				});
+			});
+		}
+		throw err;
+	}
 }
 
 async function editCallbackMessageHtml(
@@ -992,9 +1036,16 @@ class ToolRegistry {
 			await sendToolResult(ctx, tool, commandStart, result, replyOptions);
 			await editCallbackMessageHtml(
 				ctx,
-				ctx.t(result.error ? "tool-confirm-failed" : "tool-confirm-done", {
-					tool: primaryCommand(tool),
-				}),
+				ctx.t(
+					result.error && result.billableFailure
+						? "tool-confirm-billable-failed"
+						: result.error
+							? "tool-confirm-failed"
+							: "tool-confirm-done",
+					{
+						tool: primaryCommand(tool),
+					},
+				),
 			);
 		});
 

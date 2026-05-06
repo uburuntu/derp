@@ -47,6 +47,7 @@ async function executeEditImage(
 				keyClass: "paid",
 				userId: ctx.user.id,
 				chatId: ctx.chat.id,
+				ledgerId: ctx.creditResult?.ledgerId,
 				toolName: "editImage",
 				creditsCharged: ctx.creditResult?.creditsToDeduct ?? 0,
 				creditSource: ctx.creditResult?.source,

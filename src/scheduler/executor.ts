@@ -3,7 +3,9 @@
 import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import type { DerpContext } from "../bot/context";
+import { notifyAdmins } from "../common/admin-notify";
 import { derpMetrics, logger } from "../common/observability";
+import { escapeHtml } from "../common/sanitize";
 import { config, getGoogleApiKeys } from "../config";
 import type { Database } from "../db/connection";
 import {
@@ -12,6 +14,7 @@ import {
 	deductChatCredits,
 	deductUserCredits,
 	getBalances,
+	markLedgerSpendStatus,
 } from "../db/queries/credits";
 import { getOpenDebtAmount } from "../db/queries/finance";
 import {
@@ -39,6 +42,7 @@ type LlmReminderReservation =
 			ownerId: string;
 			userId: string;
 			idempotencyKey: string;
+			ledgerId?: string;
 	  }
 	| {
 			ok: false;
@@ -92,6 +96,7 @@ async function reserveLlmReminderCredit(
 				ownerId: chat.id,
 				userId: user.id,
 				idempotencyKey,
+				ledgerId: debit.ledgerId,
 			};
 		}
 
@@ -118,6 +123,7 @@ async function reserveLlmReminderCredit(
 				ownerId: user.id,
 				userId: user.id,
 				idempotencyKey,
+				ledgerId: debit.ledgerId,
 			};
 		}
 	} catch (err) {
@@ -192,7 +198,11 @@ async function buildReminderMessageText(
 	reminder: Reminder,
 	delayNote: string,
 	reservation: LlmReminderReservation | null,
-): Promise<string> {
+): Promise<{
+	text: string;
+	providerCallIds?: string[];
+	costMicros?: number;
+}> {
 	if (reminder.usesLlm && reminder.prompt) {
 		if (!reservation?.ok) {
 			throw new Error("LLM reminder missing credit reservation");
@@ -216,6 +226,7 @@ async function buildReminderMessageText(
 				keyClass: "paid",
 				userId: reservation.userId,
 				chatId: chat.id,
+				ledgerId: reservation.ledgerId,
 				toolName: "reminder_llm",
 				creditsCharged: LLM_REMINDER_COST,
 				creditSource: reservation.source,
@@ -231,14 +242,18 @@ async function buildReminderMessageText(
 			throw new Error("LLM reminder returned an empty response");
 		}
 
-		return `🔔 ${responseText}${delayNote}`;
+		return {
+			text: `🔔 ${responseText}${delayNote}`,
+			providerCallIds: result.providerCallIds,
+			costMicros: result.costMicros,
+		};
 	}
 
 	if (reminder.message) {
-		return `🔔 ${reminder.message}${delayNote}`;
+		return { text: `🔔 ${reminder.message}${delayNote}` };
 	}
 
-	return `🔔 Reminder: ${reminder.description}${delayNote}`;
+	return { text: `🔔 Reminder: ${reminder.description}${delayNote}` };
 }
 
 async function sendTelegramMessageWithFallback(
@@ -384,15 +399,20 @@ export async function executeReminder(
 
 	let sentMessageId: number;
 	let reminderText: string | null = null;
+	let billableProviderCallIds: string[] | undefined;
+	let billableProviderCostMicros = 0;
 	let billableReminderFailure = false;
 	try {
-		reminderText = await buildReminderMessageText(
+		const reminderOutput = await buildReminderMessageText(
 			db,
 			chat,
 			reminder,
 			delayNote,
 			llmReservation,
 		);
+		reminderText = reminderOutput.text;
+		billableProviderCallIds = reminderOutput.providerCallIds;
+		billableProviderCostMicros = reminderOutput.costMicros ?? 0;
 		billableReminderFailure = reminder.usesLlm;
 		sentMessageId = await sendTelegramMessageWithFallback(
 			bot,
@@ -410,13 +430,16 @@ export async function executeReminder(
 		// Retry once
 		try {
 			if (!reminderText) {
-				reminderText = await buildReminderMessageText(
+				const reminderOutput = await buildReminderMessageText(
 					db,
 					chat,
 					reminder,
 					delayNote,
 					llmReservation,
 				);
+				reminderText = reminderOutput.text;
+				billableProviderCallIds = reminderOutput.providerCallIds;
+				billableProviderCostMicros = reminderOutput.costMicros ?? 0;
 				billableReminderFailure = reminder.usesLlm;
 			}
 			sentMessageId = await sendTelegramMessageWithFallback(
@@ -431,13 +454,41 @@ export async function executeReminder(
 				logger.warn("reminder_billable_failure_not_refunded", {
 					reminderId: reminder.id,
 					error: `${errorMsg}; retry: ${retryMsg}`,
+					ledgerId: llmReservation?.ok ? llmReservation.ledgerId : undefined,
+					providerCallIds: billableProviderCallIds,
+					costMicros: billableProviderCostMicros,
 				});
+				await notifyAdmins(
+					`⚠️ <b>Billable reminder delivery failure</b>\n\nReminder: <code>${escapeHtml(reminder.id)}</code>\nCredits kept: ${LLM_REMINDER_COST}\nSource: <code>${llmReservation?.ok ? llmReservation.source : "unknown"}</code>\nLedger: <code>${escapeHtml(llmReservation?.ok ? (llmReservation.ledgerId ?? "n/a") : "n/a")}</code>\nProvider calls: <code>${escapeHtml(billableProviderCallIds?.join(", ") ?? "n/a")}</code>\nProvider cost: $${(billableProviderCostMicros / 1_000_000).toFixed(4)}\nChat/user: <code>${chat.telegramId}</code> / <code>${reminder.userId}</code>\nReason: ${escapeHtml(`${errorMsg}; retry: ${retryMsg}`)}`,
+					{ critical: true },
+				).catch((notifyErr) => {
+					logger.error("reminder_billable_failure_admin_notify_failed", {
+						reminderId: reminder.id,
+						error: errorText(notifyErr),
+					});
+				});
+				await markLedgerSpendStatus(
+					db,
+					llmReservation?.ok ? llmReservation.ledgerId : undefined,
+					"delivery_failed",
+					{
+						error: `${errorMsg}; retry: ${retryMsg}`,
+						providerCallIds: billableProviderCallIds,
+						costMicros: billableProviderCostMicros,
+					},
+				);
 			} else {
 				await refundLlmReminderCredit(
 					db,
 					llmReservation,
 					reminder,
 					`${errorMsg}; retry: ${retryMsg}`,
+				);
+				await markLedgerSpendStatus(
+					db,
+					llmReservation?.ok ? llmReservation.ledgerId : undefined,
+					"refunded",
+					{ error: `${errorMsg}; retry: ${retryMsg}` },
 				);
 			}
 			await markReminderFailed(
@@ -453,6 +504,15 @@ export async function executeReminder(
 
 	try {
 		await markDelivered(db, reminder, sentMessageId);
+		await markLedgerSpendStatus(
+			db,
+			llmReservation?.ok ? llmReservation.ledgerId : undefined,
+			"delivered",
+			{
+				providerCallIds: billableProviderCallIds,
+				costMicros: billableProviderCostMicros,
+			},
+		);
 		recordReminderFired(reminder, isStartup);
 	} catch (err) {
 		const errorMsg = errorText(err);

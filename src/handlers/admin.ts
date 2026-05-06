@@ -3,6 +3,7 @@
 import { Composer } from "grammy";
 import type { DerpContext } from "../bot/context";
 import { formatRefundNotification, notifyAdmins } from "../common/admin-notify";
+import { logger } from "../common/observability";
 import { escapeHtml } from "../common/sanitize";
 import { config } from "../config";
 import { creditUsdFloor } from "../credits/economy";
@@ -10,6 +11,7 @@ import {
 	addUserCredits,
 	getBalances,
 	getTransactionByIdempotencyKey,
+	markPaymentSettlementFailed,
 	type RefundReconciliationResult,
 	reconcileStarRefund,
 	retryPaymentSettlement,
@@ -399,6 +401,7 @@ adminComposer.command("admin", async (ctx) => {
 				: 30;
 			const { sql } = await import("drizzle-orm");
 			const creditFloorUsd = creditUsdFloor();
+			const todayWindow = new Date().toISOString().slice(0, 10);
 
 			const [overview] = await ctx.db.execute(sql`
 				SELECT
@@ -420,8 +423,8 @@ adminComposer.command("admin", async (ctx) => {
 					(SELECT COALESCE(sum(credits), 0)::int FROM users) AS user_credit_liability,
 					(SELECT COALESCE(sum(credits), 0)::int FROM chats) AS chat_credit_liability,
 					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE created_at >= now() - make_interval(days => ${days})) AS free_quota_uses,
-					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE scope = 'free_chat' AND subject_key = 'bot' AND created_at >= now() - make_interval(days => ${days})) AS bot_free_chat_uses,
-					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE scope = 'web_search' AND subject_key = 'bot' AND created_at >= now() - make_interval(days => ${days})) AS bot_free_search_uses
+					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE scope = 'free_chat' AND subject_key = 'bot' AND window_key = ${todayWindow}) AS bot_free_chat_uses,
+					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE scope = 'web_search' AND subject_key = 'bot' AND window_key = ${todayWindow}) AS bot_free_search_uses
 			`);
 
 			const toolRows = await ctx.db.execute(sql`
@@ -467,6 +470,7 @@ adminComposer.command("admin", async (ctx) => {
 			const fallbackRows = await ctx.db.execute(sql`
 				SELECT
 					provider,
+					COALESCE(actual_model_id, model_id) AS model,
 					status,
 					COALESCE(error_code, '') AS error_code,
 					count(*)::int AS calls,
@@ -474,7 +478,7 @@ adminComposer.command("admin", async (ctx) => {
 				FROM provider_calls
 				WHERE created_at >= now() - make_interval(days => ${days})
 					AND route = 'fallback'
-				GROUP BY provider, status, error_code
+				GROUP BY provider, model, status, error_code
 				ORDER BY calls DESC, cost_micros DESC
 			`);
 
@@ -520,6 +524,7 @@ adminComposer.command("admin", async (ctx) => {
 			}>;
 			const fallbackHealth = fallbackRows as unknown as Array<{
 				provider: string;
+				model: string;
 				status: string;
 				error_code: string;
 				calls: number;
@@ -564,7 +569,7 @@ adminComposer.command("admin", async (ctx) => {
 								const error = row.error_code
 									? `/${escapeHtml(row.error_code)}`
 									: "";
-								return `${escapeHtml(row.provider)} ${escapeHtml(row.status)}${error}: ${row.calls} calls, ${formatUsd(cost)}`;
+								return `${escapeHtml(row.provider)} ${escapeHtml(row.model)} ${escapeHtml(row.status)}${error}: ${row.calls} calls, ${formatUsd(cost)}`;
 							})
 							.join("\n")
 					: "No fallback calls.";
@@ -592,7 +597,7 @@ adminComposer.command("admin", async (ctx) => {
 					`Refund debt opened/window: ${overviewRow.refund_debt_credits ?? 0} cr\n` +
 					`Open refund debt: ${overviewRow.open_debt_credits ?? 0} cr\n` +
 					`Free quota uses: ${overviewRow.free_quota_uses ?? 0}\n` +
-					`Bot free chat/search: ${overviewRow.bot_free_chat_uses ?? 0}/${config.freeChatDailyBotLimit} · ${overviewRow.bot_free_search_uses ?? 0}/${config.freeSearchDailyBotLimit}\n` +
+					`Bot free chat/search today: ${overviewRow.bot_free_chat_uses ?? 0}/${config.freeChatDailyBotLimit} · ${overviewRow.bot_free_search_uses ?? 0}/${config.freeSearchDailyBotLimit}\n` +
 					`Unsettled payments: ${overviewRow.unsettled_payments ?? 0}\n` +
 					`Stars gross/refunded/net: ${grossStars}⭐ / ${refundedStars}⭐ / ${grossStars - refundedStars}⭐\n\n` +
 					`<b>Provider Cost</b>\n` +
@@ -729,6 +734,15 @@ adminComposer.command("admin", async (ctx) => {
 				);
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
+				await markPaymentSettlementFailed(ctx.db, chargeId, msg).catch(
+					(markErr) => {
+						logger.error("payment_settle_retry_mark_failed", {
+							chargeId,
+							error:
+								markErr instanceof Error ? markErr.message : String(markErr),
+						});
+					},
+				);
 				await ctx.reply(`Payment settlement retry failed: ${escapeHtml(msg)}`, {
 					parse_mode: "HTML",
 				});
