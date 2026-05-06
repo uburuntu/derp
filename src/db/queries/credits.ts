@@ -8,6 +8,7 @@ import {
 	usageQuotas,
 	users,
 } from "../schema";
+import { createCreditDebt, settleOpenDebts } from "./finance";
 
 type CreditTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 export type ToolDebitResult = "applied" | "duplicate" | "quota_exhausted";
@@ -69,7 +70,7 @@ export async function getBalances(
 async function recordPaymentReceiptIn(
 	tx: CreditTransaction,
 	record: StarsPaymentRecord,
-): Promise<{ id: string; applied: boolean }> {
+): Promise<{ id: string; needsSettlement: boolean }> {
 	const [inserted] = await tx
 		.insert(paymentReceipts)
 		.values({
@@ -84,21 +85,37 @@ async function recordPaymentReceiptIn(
 			productId: record.productId ?? null,
 			creditTarget: record.creditTarget,
 			credits: record.credits,
+			status: "received",
 			meta: record.meta,
 		})
 		.onConflictDoNothing({ target: paymentReceipts.telegramChargeId })
 		.returning({ id: paymentReceipts.id });
 
-	if (inserted) return { id: inserted.id, applied: true };
+	if (inserted) return { id: inserted.id, needsSettlement: true };
 
 	const [existing] = await tx
-		.select({ id: paymentReceipts.id })
+		.select({ id: paymentReceipts.id, status: paymentReceipts.status })
 		.from(paymentReceipts)
 		.where(eq(paymentReceipts.telegramChargeId, record.telegramChargeId))
 		.limit(1);
 
 	if (!existing) throw new Error("Payment receipt conflict without row");
-	return { id: existing.id, applied: false };
+	return {
+		id: existing.id,
+		needsSettlement:
+			existing.status === "received" ||
+			existing.status === "settlement_failed",
+	};
+}
+
+async function markPaymentSettledIn(
+	tx: CreditTransaction,
+	receiptId: string,
+): Promise<void> {
+	await tx
+		.update(paymentReceipts)
+		.set({ status: "settled", settledAt: new Date() })
+		.where(eq(paymentReceipts.id, receiptId));
 }
 
 export async function recordDonationPayment(
@@ -108,7 +125,7 @@ export async function recordDonationPayment(
 	return db.transaction(async (tx) => {
 		const receipt = await recordPaymentReceiptIn(tx, record);
 		const refundKey = `donation:${record.telegramChargeId}`;
-		if (!receipt.applied) {
+		if (!receipt.needsSettlement) {
 			const [existing] = await tx
 				.select({ balanceAfter: ledger.balanceAfter })
 				.from(ledger)
@@ -133,6 +150,7 @@ export async function recordDonationPayment(
 			idempotencyKey: refundKey,
 			meta: { paymentReceiptId: receipt.id },
 		});
+		await markPaymentSettledIn(tx, receipt.id);
 
 		return { balanceAfter: userRow?.credits ?? 0, applied: true };
 	});
@@ -621,7 +639,7 @@ export async function applyUserPackPayment(
 
 	return db.transaction(async (tx) => {
 		const receipt = await recordPaymentReceiptIn(tx, record);
-		if (!receipt.applied) {
+		if (!receipt.needsSettlement) {
 			const [existing] = await tx
 				.select({ balanceAfter: ledger.balanceAfter })
 				.from(ledger)
@@ -630,9 +648,18 @@ export async function applyUserPackPayment(
 			return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
 		}
 
+		const debtSettlement = await settleOpenDebts(tx, {
+			userId: record.userId,
+			chatId: null,
+			amount: record.credits,
+			paymentReceiptId: receipt.id,
+			meta: { telegramChargeId: record.telegramChargeId },
+		});
+		const spendableCredits = debtSettlement.remainingAmount;
+
 		const [updated] = await tx
 			.update(users)
-			.set({ credits: sql`${users.credits} + ${record.credits}` })
+			.set({ credits: sql`${users.credits} + ${spendableCredits}` })
 			.where(eq(users.id, record.userId))
 			.returning({ credits: users.credits });
 
@@ -641,12 +668,17 @@ export async function applyUserPackPayment(
 		await tx.insert(ledger).values({
 			userId: record.userId,
 			type: "purchase",
-			amount: record.credits,
+			amount: spendableCredits,
 			balanceAfter: updated.credits,
 			telegramChargeId: record.telegramChargeId,
 			idempotencyKey,
-			meta: { paymentReceiptId: receipt.id },
+			meta: {
+				paymentReceiptId: receipt.id,
+				purchasedCredits: record.credits,
+				debtRecovered: debtSettlement.settledAmount,
+			},
 		});
+		await markPaymentSettledIn(tx, receipt.id);
 
 		return { balanceAfter: updated.credits, applied: true };
 	});
@@ -662,7 +694,7 @@ export async function applyChatPackPayment(
 
 	return db.transaction(async (tx) => {
 		const receipt = await recordPaymentReceiptIn(tx, record);
-		if (!receipt.applied) {
+		if (!receipt.needsSettlement) {
 			const [existing] = await tx
 				.select({ balanceAfter: ledger.balanceAfter })
 				.from(ledger)
@@ -671,9 +703,18 @@ export async function applyChatPackPayment(
 			return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
 		}
 
+		const debtSettlement = await settleOpenDebts(tx, {
+			userId: record.userId,
+			chatId,
+			amount: record.credits,
+			paymentReceiptId: receipt.id,
+			meta: { telegramChargeId: record.telegramChargeId },
+		});
+		const spendableCredits = debtSettlement.remainingAmount;
+
 		const [updated] = await tx
 			.update(chats)
-			.set({ credits: sql`${chats.credits} + ${record.credits}` })
+			.set({ credits: sql`${chats.credits} + ${spendableCredits}` })
 			.where(eq(chats.id, chatId))
 			.returning({ credits: chats.credits });
 
@@ -683,12 +724,17 @@ export async function applyChatPackPayment(
 			userId: record.userId,
 			chatId,
 			type: "purchase",
-			amount: record.credits,
+			amount: spendableCredits,
 			balanceAfter: updated.credits,
 			telegramChargeId: record.telegramChargeId,
 			idempotencyKey,
-			meta: { paymentReceiptId: receipt.id },
+			meta: {
+				paymentReceiptId: receipt.id,
+				purchasedCredits: record.credits,
+				debtRecovered: debtSettlement.settledAmount,
+			},
 		});
+		await markPaymentSettledIn(tx, receipt.id);
 
 		return { balanceAfter: updated.credits, applied: true };
 	});
@@ -794,7 +840,7 @@ export async function applySubscriptionPayment(
 			meta: paymentMeta,
 		});
 
-		if (!receipt.applied) {
+		if (!receipt.needsSettlement) {
 			const [existing] = await tx
 				.select({
 					balanceAfter: ledger.balanceAfter,
@@ -809,16 +855,29 @@ export async function applySubscriptionPayment(
 			return { balanceAfter: existing?.balanceAfter ?? 0, applied: false };
 		}
 
+		const debtSettlement = await settleOpenDebts(tx, {
+			userId,
+			chatId: null,
+			amount,
+			paymentReceiptId: receipt.id,
+			meta: { telegramChargeId },
+		});
+		const spendableCredits = debtSettlement.remainingAmount;
+
 		const [inserted] = await tx
 			.insert(ledger)
 			.values({
 				userId,
 				type: "subscription",
-				amount,
+				amount: spendableCredits,
 				balanceAfter: 0,
 				telegramChargeId,
 				idempotencyKey,
-				meta: paymentMeta,
+				meta: {
+					...paymentMeta,
+					purchasedCredits: amount,
+					debtRecovered: debtSettlement.settledAmount,
+				},
 			})
 			.onConflictDoNothing({ target: ledger.idempotencyKey })
 			.returning({ id: ledger.id });
@@ -828,7 +887,7 @@ export async function applySubscriptionPayment(
 		const [updated] = await tx
 			.update(users)
 			.set({
-				credits: sql`${users.credits} + ${amount}`,
+				credits: sql`${users.credits} + ${spendableCredits}`,
 			})
 			.where(eq(users.id, userId))
 			.returning({ credits: users.credits });
@@ -856,6 +915,7 @@ export async function applySubscriptionPayment(
 			});
 
 		await recomputeActiveSubscriptionIn(tx, userId);
+		await markPaymentSettledIn(tx, receipt.id);
 
 		return { balanceAfter: updated.credits, applied: true };
 	});
@@ -1010,6 +1070,21 @@ export async function reconcileStarRefund(
 					.update(paymentReceipts)
 					.set({ status: "refunded", refundedAt: new Date() })
 					.where(eq(paymentReceipts.id, receipt.id));
+				if (receipt.credits > 0) {
+					await createCreditDebt(tx, {
+						userId: receipt.userId,
+						chatId: receipt.chatId,
+						paymentReceiptId: receipt.id,
+						telegramChargeId,
+						target: receipt.chatId ? "chat" : "user",
+						amount: receipt.credits,
+						meta: {
+							...meta,
+							source: "refund_unrecovered",
+							originalType: receipt.productType,
+						},
+					});
+				}
 			}
 
 			return {
@@ -1109,6 +1184,29 @@ export async function reconcileStarRefund(
 				.set({ status: "refunded", refundedAt: new Date() })
 				.where(eq(subscriptionPeriods.telegramChargeId, telegramChargeId));
 			await recomputeActiveSubscriptionIn(tx, original.userId);
+		}
+
+		if (unrecoveredAmount > 0) {
+			const [receipt] = await tx
+				.select({ id: paymentReceipts.id })
+				.from(paymentReceipts)
+				.where(eq(paymentReceipts.telegramChargeId, telegramChargeId))
+				.limit(1);
+			await createCreditDebt(tx, {
+				userId: original.userId,
+				chatId: original.chatId,
+				paymentReceiptId: receipt?.id ?? null,
+				telegramChargeId,
+				target: original.chatId ? "chat" : "user",
+				amount: unrecoveredAmount,
+				meta: {
+					...meta,
+					source: "refund_unrecovered",
+					originalLedgerId: original.id,
+					originalType: original.type,
+					originalAmount: original.amount,
+				},
+			});
 		}
 
 		return {

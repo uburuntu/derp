@@ -22,6 +22,7 @@ export function initObservability(cfg: Config): void {
 		cfg.databaseUrl,
 		cfg.googleApiKey,
 		cfg.googleApiPaidKey,
+		cfg.openrouterApiKey,
 		cfg.logfireToken,
 		cfg.braveSearchApiKey,
 		...cfg.googleApiKeys,

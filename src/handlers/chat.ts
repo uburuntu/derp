@@ -25,12 +25,14 @@ import {
 	STANDARD_CHAT_TOOL_NAME,
 } from "../credits/service";
 import { getBalances } from "../db/queries/credits";
+import { reserveQuotaWindow } from "../db/queries/finance";
 import { getMembersWithUsers } from "../db/queries/members";
 import { getRecentMessages, insertMessage } from "../db/queries/messages";
 import type { MessageMetadata } from "../db/schema";
 import { buildContext, type ContextParticipant } from "../llm/context-builder";
 import { buildSystemPrompt, detectTaskSpecialist } from "../llm/prompt";
 import { GoogleLLMProvider } from "../llm/providers/google";
+import { OpenRouterProvider } from "../llm/providers/openrouter";
 import {
 	CONTEXT_LIMITS,
 	getDefaultModel,
@@ -44,6 +46,7 @@ import { toolRegistry } from "../tools/registry";
 import type { ToolContext } from "../tools/types";
 
 const chatComposer = new Composer<DerpContext>();
+const FREE_CHAT_DAILY_LIMIT = 25;
 
 /** Check if a message should trigger the bot */
 function shouldTrigger(ctx: DerpContext): boolean {
@@ -235,6 +238,22 @@ chatComposer.on("message", async (ctx) => {
 		}
 	}
 
+	if (tier === ModelTier.FREE) {
+		const freeAllowed = await reserveQuotaWindow(ctx.db, {
+			scope: "free_chat",
+			userId: ctx.dbUser.id,
+			limit: FREE_CHAT_DAILY_LIMIT,
+			meta: { chatId: ctx.dbChat.id, threadId: ctx.message?.message_thread_id },
+		});
+		if (!freeAllowed) {
+			await replyHtml(ctx, ctx.t("chat-free-quota-reached"), {
+				message_thread_id: ctx.message?.message_thread_id,
+				reply_to_message_id: ctx.message?.message_id,
+			});
+			return;
+		}
+	}
+
 	// Fetch recent messages from DB
 	const threadId = ctx.message?.message_thread_id ?? null;
 	const recentMessages = await getRecentMessages(
@@ -364,15 +383,34 @@ chatComposer.on("message", async (ctx) => {
 	let creditsRemaining = chatCreditResult?.creditsRemaining ?? null;
 
 	try {
-		const result = await provider.chatWithTools(
-			{
-				model: modelId,
-				systemPrompt: fullSystemPrompt,
-				messages: conversationMessages,
-				tools: toolSchemas.length > 0 ? toolSchemas : undefined,
-				media: mediaAttachments.length > 0 ? mediaAttachments : undefined,
-			},
-			async (toolName, args) => {
+		const tracking = {
+			db: ctx.db,
+			logicalRequestKey: chatTurnIdempotencyKey,
+			operation: "chat",
+			keyClass: tier === ModelTier.STANDARD ? ("paid" as const) : ("free" as const),
+			userId: ctx.dbUser.id,
+			chatId: ctx.dbChat.id,
+			creditsCharged: chatCreditResult?.creditsToDeduct ?? 0,
+			creditSource:
+				chatCreditResult && chatCreditResult.source !== "rejected"
+					? chatCreditResult.source
+					: "free",
+			mediaInputCount: mediaAttachments.length,
+			meta: { threadId },
+		};
+		const chatParams = {
+			model: modelId,
+			systemPrompt: fullSystemPrompt,
+			messages: conversationMessages,
+			tools: toolSchemas.length > 0 ? toolSchemas : undefined,
+			media: mediaAttachments.length > 0 ? mediaAttachments : undefined,
+			maxOutputTokens: tier === ModelTier.FREE ? 512 : 1024,
+			tracking,
+		};
+
+		let result: Awaited<ReturnType<typeof provider.chatWithTools>>;
+		try {
+			result = await provider.chatWithTools(chatParams, async (toolName, args) => {
 				if (userPreferences.disabledTools.includes(toolName)) {
 					return {
 						error: `Tool disabled by user settings: ${toolName}`,
@@ -419,8 +457,36 @@ chatComposer.on("message", async (ctx) => {
 					};
 				}
 				return { result: toolResult.text ?? "Done." };
-			},
-		);
+			});
+		} catch (primaryErr) {
+			if (
+				tier === ModelTier.STANDARD &&
+				config.openrouterApiKey &&
+				mediaAttachments.length === 0
+			) {
+				logger.warn("chat_primary_provider_failed_fallback_openrouter", {
+					error:
+						primaryErr instanceof Error
+							? primaryErr.message
+							: String(primaryErr),
+					model: modelId,
+				});
+				const fallback = new OpenRouterProvider(config.openrouterApiKey);
+				result = await fallback.chat({
+					model: config.openrouterPaidFallbackModel,
+					systemPrompt: fullSystemPrompt,
+					messages: conversationMessages,
+					maxOutputTokens: 1024,
+					tracking: {
+						...tracking,
+						route: "fallback",
+						meta: { ...tracking.meta, primaryModel: modelId },
+					},
+				});
+			} else {
+				throw primaryErr;
+			}
+		}
 
 		// Get remaining balance for footer if not set by tool calls
 		if (creditsRemaining == null && creditsSpent > 0) {
@@ -443,6 +509,7 @@ chatComposer.on("message", async (ctx) => {
 			toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
 			creditsSpent: creditsSpent > 0 ? creditsSpent : undefined,
 			creditSource,
+			providerCallIds: result.providerCallIds,
 			durationMs,
 		};
 

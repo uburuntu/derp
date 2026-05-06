@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type { CreditService } from "../credits/service";
+import type { CreditCheckResult } from "../credits/types";
 import type { Database } from "../db/connection";
 import type { Chat, User } from "../db/schema";
 import type { ContextParticipant } from "../llm/context-builder";
@@ -67,6 +68,7 @@ export interface ToolContext {
 	threadId?: number | null;
 	replyToMessageId?: number | null;
 	idempotencyKey?: string;
+	creditResult?: CreditCheckResult;
 }
 
 // ── Tool Result ──────────────────────────────────────────────────────────────

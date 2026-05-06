@@ -19,6 +19,11 @@ const SCHEMA_CHECKS = [
 	"SELECT id, chat_id, user_id, telegram_message_id, telegram_date FROM messages LIMIT 0",
 	"SELECT id, user_id, chat_id, amount, balance_after FROM ledger LIMIT 0",
 	"SELECT id, user_id, telegram_charge_id, stars, product_type, status FROM payment_receipts LIMIT 0",
+	"SELECT id, provider, operation, model_id, status, actual_cost_micros FROM provider_calls LIMIT 0",
+	"SELECT id, user_id, status, outstanding_amount FROM credit_debts LIMIT 0",
+	"SELECT id, debt_id, type, amount FROM credit_debt_events LIMIT 0",
+	"SELECT id, scope, subject_key, window_key, used, \"limit\" FROM quota_windows LIMIT 0",
+	"SELECT id, user_id, chat_id, tool_name, status FROM pending_tool_confirmations LIMIT 0",
 	"SELECT id, user_id, payment_id, plan_id, expires_at, status FROM subscription_periods LIMIT 0",
 	"SELECT id, user_id, chat_id, usage_date, usage FROM usage_quotas LIMIT 0",
 	"SELECT id, chat_id, user_id, description, status, fire_at, cron_expression FROM reminders LIMIT 0",
@@ -28,6 +33,9 @@ const CRITICAL_INDEXES = [
 	"ledger_payment_receipt_charge_unique",
 	"payment_receipts_telegram_charge_unique",
 	"subscription_periods_charge_unique",
+	"provider_calls_logical_attempt_unique",
+	"quota_windows_scope_user_chat_window_unique",
+	"pending_tool_confirmations_key_unique",
 ];
 
 function createDb(databaseUrl: string) {

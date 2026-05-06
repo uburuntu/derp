@@ -39,6 +39,18 @@ async function executeEditImage(
 			sourceImage: sourceImage.data,
 			mimeType: sourceImage.mimeType,
 			timeoutMs: 60_000,
+			tracking: {
+				db: ctx.db,
+				logicalRequestKey: ctx.idempotencyKey,
+				operation: "image",
+				keyClass: "paid",
+				userId: ctx.user.id,
+				chatId: ctx.chat.id,
+				toolName: "editImage",
+				creditsCharged: ctx.creditResult?.creditsToDeduct ?? 0,
+				creditSource: ctx.creditResult?.source,
+				mediaInputCount: 1,
+			},
 		});
 
 		await ctx.sendPhoto(result.image.data, params.prompt.slice(0, 1024));

@@ -4,6 +4,7 @@ import { Composer, InlineQueryResultBuilder } from "grammy";
 import type { DerpContext } from "../bot/context";
 import { logger } from "../common/observability";
 import { config, getGoogleApiKeys } from "../config";
+import { reserveQuotaWindow } from "../db/queries/finance";
 import { GoogleLLMProvider } from "../llm/providers/google";
 import { getDefaultModel, ModelCapability, ModelTier } from "../llm/registry";
 
@@ -11,6 +12,7 @@ const inlineComposer = new Composer<DerpContext>();
 const INLINE_MIN_QUERY_LENGTH = 8;
 const INLINE_THROTTLE_MS = 8_000;
 const INLINE_CACHE_MS = 10 * 60 * 1000;
+const INLINE_DAILY_FREE_LIMIT = 25;
 
 const inlineCache = new Map<
 	string,
@@ -70,6 +72,15 @@ async function getInlineAnswer(
 	}
 
 	inlineUserThrottle.set(userId, Date.now());
+	if (ctx.dbUser) {
+		const allowed = await reserveQuotaWindow(ctx.db, {
+			scope: "inline",
+			userId: ctx.dbUser.id,
+			limit: INLINE_DAILY_FREE_LIMIT,
+			meta: { source: "inline_query" },
+		});
+		if (!allowed) return null;
+	}
 	const text = await generateInlineAnswer(query, ctx);
 	inlineCache.set(cacheKey, {
 		text,
@@ -99,7 +110,19 @@ async function generateInlineAnswer(
 			systemPrompt:
 				"You are Derp, a concise AI assistant. Answer the user's question directly. Keep it under 200 words.",
 			messages: [{ role: "user", content: query }],
+			maxOutputTokens: 256,
 			timeoutMs: 4_500,
+			tracking: ctx.dbUser
+				? {
+						db: ctx.db,
+						logicalRequestKey: `inline:${ctx.inlineQuery?.id ?? `${ctx.from?.id ?? 0}:${Date.now()}`}`,
+						operation: "inline",
+						keyClass: "free",
+						userId: ctx.dbUser.id,
+						chatId: ctx.dbChat?.id,
+						creditSource: "free",
+					}
+				: undefined,
 		});
 
 		return result.text || ctx.t("inline-error");

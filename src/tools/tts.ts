@@ -32,6 +32,17 @@ async function executeTTS(
 			text: params.text,
 			voice: params.voice,
 			timeoutMs: 30_000,
+			tracking: {
+				db: ctx.db,
+				logicalRequestKey: ctx.idempotencyKey,
+				operation: "tts",
+				keyClass: "paid",
+				userId: ctx.user.id,
+				chatId: ctx.chat.id,
+				toolName: "tts",
+				creditsCharged: ctx.creditResult?.creditsToDeduct ?? 0,
+				creditSource: ctx.creditResult?.source,
+			},
 		});
 
 		// Convert WAV to OGG Opus for Telegram voice messages

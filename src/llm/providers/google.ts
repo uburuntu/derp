@@ -12,6 +12,12 @@ import {
 	VideoGenerationReferenceType,
 } from "@google/genai";
 import { derpMetrics, withSpan } from "../../common/observability";
+import {
+	failProviderCall,
+	finishProviderCall,
+	startProviderCall,
+} from "../../db/queries/finance";
+import { estimateUsageCostMicros } from "../registry";
 import type {
 	AudioResult,
 	BinaryMedia,
@@ -22,6 +28,7 @@ import type {
 	ImageResult,
 	LLMProvider,
 	LLMToolSchema,
+	ProviderCallTracking,
 	TokenUsage,
 	ToolCallResult,
 	TTSParams,
@@ -260,9 +267,81 @@ export class GoogleLLMProvider implements LLMProvider {
 	}
 
 	private getClient(usePaidKey = false): GoogleGenAI {
+		if (usePaidKey && !this.paidKey) {
+			throw new Error("Paid Google API key is not configured");
+		}
 		const key =
 			usePaidKey && this.paidKey ? this.paidKey : this.keyRotator.next();
 		return new GoogleGenAI({ apiKey: key });
+	}
+
+	private async startTracking(
+		params: Pick<ChatParams, "model" | "tracking">,
+		operation: string,
+		mediaInputCount = 0,
+	): Promise<string | null> {
+		const tracking = params.tracking;
+		if (!tracking) return null;
+		return await startProviderCall(tracking.db, {
+			logicalRequestKey: tracking.logicalRequestKey,
+			provider: "google",
+			operation,
+			modelId: params.model,
+			route: tracking.route,
+			keyClass: tracking.keyClass,
+			userId: tracking.userId,
+			chatId: tracking.chatId,
+			ledgerId: tracking.ledgerId,
+			messageId: tracking.messageId,
+			toolName: tracking.toolName,
+			creditsCharged: tracking.creditsCharged,
+			creditSource: tracking.creditSource,
+			mediaInputCount,
+			meta: tracking.meta,
+		});
+	}
+
+	private async finishTracking(
+		db: ProviderCallTracking["db"] | undefined,
+		callId: string | null,
+		model: string,
+		usage: TokenUsage,
+		input: {
+			mediaInputCount?: number;
+			mediaOutputCount?: number;
+			durationSeconds?: number | null;
+			finishReason?: string | null;
+			includePerRequest?: boolean;
+		} = {},
+	): Promise<number> {
+		if (!db || !callId) return estimateUsageCostMicros(model, usage, input);
+		const costMicros = estimateUsageCostMicros(model, usage, input);
+		await finishProviderCall(db, callId, {
+			actualModelId: model,
+			inputTokens: usage.inputTokens,
+			outputTokens: usage.outputTokens,
+			cacheHitTokens: usage.cacheHitTokens ?? 0,
+			mediaInputCount: input.mediaInputCount,
+			mediaOutputCount: input.mediaOutputCount,
+			durationSeconds: input.durationSeconds,
+			estimatedCostMicros: costMicros,
+			actualCostMicros: costMicros,
+			finishReason: input.finishReason,
+		});
+		return costMicros;
+	}
+
+	private async failTracking(
+		db: ProviderCallTracking["db"] | undefined,
+		callId: string | null,
+		error: unknown,
+	): Promise<void> {
+		if (!db || !callId) return;
+		const message = error instanceof Error ? error.message : String(error);
+		await failProviderCall(db, callId, {
+			errorCode: isTransientError(error) ? "transient" : "provider_error",
+			errorMessage: message,
+		});
 	}
 
 	private async callWithRetries<T>(
@@ -309,6 +388,11 @@ export class GoogleLLMProvider implements LLMProvider {
 	async chat(params: ChatParams): Promise<ChatResult> {
 		const timeoutMs = params.timeoutMs ?? DEFAULT_CHAT_TIMEOUT;
 		const deadlineMs = Date.now() + timeoutMs;
+		const callId = await this.startTracking(
+			params,
+			params.tracking?.operation ?? "chat",
+			params.media?.length ?? 0,
+		);
 
 		const attempt = async (): Promise<ChatResult> => {
 			const contents = toGoogleContents(params.messages);
@@ -336,7 +420,10 @@ export class GoogleLLMProvider implements LLMProvider {
 
 			const response = await this.callWithRetries(
 				"generateContent",
-				{ deadlineMs },
+				{
+					deadlineMs,
+					usePaidKey: params.tracking?.keyClass === "paid",
+				},
 				(ai, signal) =>
 					ai.models.generateContent({
 						model: params.model,
@@ -393,7 +480,29 @@ export class GoogleLLMProvider implements LLMProvider {
 				finishReason: finishReason ?? undefined,
 			};
 		};
-		return await attempt();
+		try {
+			const result = await attempt();
+			const costMicros = await this.finishTracking(
+				params.tracking?.db,
+				callId,
+				params.model,
+				result.usage,
+				{
+					mediaInputCount: params.media?.length,
+					mediaOutputCount: result.images?.length,
+					finishReason: result.finishReason,
+				},
+			);
+			return {
+				...result,
+				providerCallIds: callId ? [callId] : undefined,
+				actualModel: params.model,
+				costMicros,
+			};
+		} catch (err) {
+			await this.failTracking(params.tracking?.db, callId, err);
+			throw err;
+		}
 	}
 
 	/**
@@ -407,16 +516,47 @@ export class GoogleLLMProvider implements LLMProvider {
 			args: Record<string, unknown>,
 		) => Promise<unknown>,
 	): Promise<ChatResult> {
-		return withSpan(
-			"gen_ai.chat_with_tools",
-			{
-				"gen_ai.system": "google",
-				"gen_ai.request.model": params.model,
-			},
-			async (parentSpan) => {
-				return this._chatWithToolsInner(params, executeTool, parentSpan);
-			},
+		const callId = await this.startTracking(
+			params,
+			params.tracking?.operation ?? "chat_with_tools",
+			params.media?.length ?? 0,
 		);
+		try {
+			return await withSpan(
+				"gen_ai.chat_with_tools",
+				{
+					"gen_ai.system": "google",
+					"gen_ai.request.model": params.model,
+				},
+				async (parentSpan) => {
+					const result = await this._chatWithToolsInner(
+						params,
+						executeTool,
+						parentSpan,
+					);
+					const costMicros = await this.finishTracking(
+						params.tracking?.db,
+						callId,
+						params.model,
+						result.usage,
+						{
+							mediaInputCount: params.media?.length,
+							mediaOutputCount: result.images?.length,
+							finishReason: result.finishReason,
+						},
+					);
+					return {
+						...result,
+						providerCallIds: callId ? [callId] : undefined,
+						actualModel: params.model,
+						costMicros,
+					};
+				},
+			);
+		} catch (err) {
+			await this.failTracking(params.tracking?.db, callId, err);
+			throw err;
+		}
 	}
 
 	private async _chatWithToolsInner(
@@ -466,7 +606,10 @@ export class GoogleLLMProvider implements LLMProvider {
 
 			const response = await this.callWithRetries(
 				"generateContent",
-				{ deadlineMs },
+				{
+					deadlineMs,
+					usePaidKey: params.tracking?.keyClass === "paid",
+				},
 				(ai, signal) =>
 					ai.models.generateContent({
 						model: params.model,
@@ -607,6 +750,11 @@ export class GoogleLLMProvider implements LLMProvider {
 	async generateImage(params: ImageParams): Promise<ImageResult> {
 		const timeoutMs = params.timeoutMs ?? DEFAULT_IMAGE_TIMEOUT;
 		const deadlineMs = Date.now() + timeoutMs;
+		const callId = await this.startTracking(
+			params,
+			params.tracking?.operation ?? "image",
+			params.sourceImage ? 1 : 0,
+		);
 		const contents: Content[] = [];
 		const parts: Part[] = [];
 
@@ -623,176 +771,248 @@ export class GoogleLLMProvider implements LLMProvider {
 		parts.push({ text: params.prompt });
 		contents.push({ role: "user", parts });
 
-		const response = await this.callWithRetries(
-			"generateImage",
-			{ usePaidKey: true, deadlineMs },
-			(ai, signal) =>
-				ai.models.generateContent({
-					model: params.model,
-					contents,
-					config: {
-						responseModalities: ["TEXT", "IMAGE"],
-						safetySettings: SAFETY_SETTINGS,
-						abortSignal: signal,
-					},
-				}),
-		);
+		let response: GenerateContentResponse;
+		try {
+			response = await this.callWithRetries(
+				"generateImage",
+				{ usePaidKey: true, deadlineMs },
+				(ai, signal) =>
+					ai.models.generateContent({
+						model: params.model,
+						contents,
+						config: {
+							responseModalities: ["TEXT", "IMAGE"],
+							safetySettings: SAFETY_SETTINGS,
+							abortSignal: signal,
+						},
+					}),
+			);
+		} catch (err) {
+			await this.failTracking(params.tracking?.db, callId, err);
+			throw err;
+		}
 
 		// Find image in response
 		for (const candidate of response.candidates ?? []) {
 			for (const part of candidate.content?.parts ?? []) {
 				if (part.inlineData?.data) {
+					const usage = extractUsage(response);
+					const costMicros = await this.finishTracking(
+						params.tracking?.db,
+						callId,
+						params.model,
+						usage,
+						{
+							mediaInputCount: params.sourceImage ? 1 : 0,
+							mediaOutputCount: 1,
+						},
+					);
 					return {
 						image: {
 							data: Buffer.from(part.inlineData.data, "base64"),
 							mimeType: part.inlineData.mimeType ?? "image/png",
 						},
-						usage: extractUsage(response),
+						usage,
+						providerCallIds: callId ? [callId] : undefined,
+						costMicros,
 					};
 				}
 			}
 		}
 
-		throw new Error(
+		const error = new Error(
 			`No image in response: ${
 				extractText(response) || fallbackTextForEmptyResponse(response)
 			}`,
 		);
+		await this.failTracking(params.tracking?.db, callId, error);
+		throw error;
 	}
 
 	async generateVideo(params: VideoParams): Promise<VideoResult> {
 		const timeoutMs = params.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT;
 		const deadlineMs = Date.now() + timeoutMs;
-
-		let operation = await this.callWithRetries(
-			"generateVideo",
-			{
-				usePaidKey: true,
-				deadlineMs,
-				perAttemptTimeoutMs: DEFAULT_REQUEST_TIMEOUT,
-			},
-			(ai, signal) =>
-				ai.models.generateVideos({
-					model: params.model,
-					prompt: params.prompt,
-					config: {
-						numberOfVideos: 1,
-						abortSignal: signal,
-						...(params.referenceImage
-							? {
-									referenceImages: [
-										{
-											image: {
-												imageBytes: params.referenceImage.toString("base64"),
-												mimeType: "image/jpeg",
-											},
-											referenceType: VideoGenerationReferenceType.ASSET,
-										},
-									],
-								}
-							: {}),
-					},
-				}),
+		const callId = await this.startTracking(
+			params,
+			params.tracking?.operation ?? "video",
+			params.referenceImage ? 1 : 0,
 		);
 
-		// Poll for completion
-		while (!operation.done) {
-			if (remainingMs(deadlineMs) <= 0) {
-				throw new Error("Video generation timed out");
-			}
-			await sleep(Math.min(5_000, remainingMs(deadlineMs)));
-			operation = await this.callWithRetries(
-				"getVideosOperation",
+		try {
+			let operation = await this.callWithRetries(
+				"generateVideo",
 				{
 					usePaidKey: true,
 					deadlineMs,
 					perAttemptTimeoutMs: DEFAULT_REQUEST_TIMEOUT,
 				},
 				(ai, signal) =>
-					ai.operations.getVideosOperation({
-						operation,
-						config: { abortSignal: signal },
+					ai.models.generateVideos({
+						model: params.model,
+						prompt: params.prompt,
+						config: {
+							numberOfVideos: 1,
+							abortSignal: signal,
+							...(params.referenceImage
+								? {
+										referenceImages: [
+											{
+												image: {
+													imageBytes:
+														params.referenceImage.toString("base64"),
+													mimeType: "image/jpeg",
+												},
+												referenceType: VideoGenerationReferenceType.ASSET,
+											},
+										],
+									}
+								: {}),
+						},
 					}),
 			);
-		}
 
-		if (operation.error) {
-			throw new Error(
-				`Video generation failed: ${JSON.stringify(operation.error)}`,
+			// Poll for completion
+			while (!operation.done) {
+				if (remainingMs(deadlineMs) <= 0) {
+					throw new Error("Video generation timed out");
+				}
+				await sleep(Math.min(5_000, remainingMs(deadlineMs)));
+				operation = await this.callWithRetries(
+					"getVideosOperation",
+					{
+						usePaidKey: true,
+						deadlineMs,
+						perAttemptTimeoutMs: DEFAULT_REQUEST_TIMEOUT,
+					},
+					(ai, signal) =>
+						ai.operations.getVideosOperation({
+							operation,
+							config: { abortSignal: signal },
+						}),
+				);
+			}
+
+			if (operation.error) {
+				throw new Error(
+					`Video generation failed: ${JSON.stringify(operation.error)}`,
+				);
+			}
+			const generatedVideo = operation.response?.generatedVideos?.[0]?.video;
+			if (!generatedVideo?.uri) {
+				const reasons = operation.response?.raiMediaFilteredReasons?.join(", ");
+				throw new Error(
+					reasons ? `No video generated: ${reasons}` : "No video generated",
+				);
+			}
+
+			// Download the video from the URI
+			const videoResponse = await withAbortTimeout(
+				Math.min(DEFAULT_REQUEST_TIMEOUT, remainingMs(deadlineMs)),
+				"downloadGeneratedVideo",
+				(signal) => fetch(generatedVideo.uri as string, { signal }),
 			);
-		}
-		const generatedVideo = operation.response?.generatedVideos?.[0]?.video;
-		if (!generatedVideo?.uri) {
-			const reasons = operation.response?.raiMediaFilteredReasons?.join(", ");
-			throw new Error(
-				reasons ? `No video generated: ${reasons}` : "No video generated",
+			if (!videoResponse.ok) {
+				throw new Error(`Failed to download video: ${videoResponse.status}`);
+			}
+			const videoData = await readResponseLimited(
+				videoResponse,
+				MAX_GENERATED_VIDEO_BYTES,
+				"Generated video",
 			);
-		}
+			const usage = { inputTokens: 0, outputTokens: 0, cacheHitTokens: 0 };
+			const costMicros = await this.finishTracking(
+				params.tracking?.db,
+				callId,
+				params.model,
+				usage,
+				{
+					mediaInputCount: params.referenceImage ? 1 : 0,
+					mediaOutputCount: 1,
+					durationSeconds: 5,
+				},
+			);
 
-		// Download the video from the URI
-		const videoResponse = await withAbortTimeout(
-			Math.min(DEFAULT_REQUEST_TIMEOUT, remainingMs(deadlineMs)),
-			"downloadGeneratedVideo",
-			(signal) => fetch(generatedVideo.uri as string, { signal }),
-		);
-		if (!videoResponse.ok) {
-			throw new Error(`Failed to download video: ${videoResponse.status}`);
+			return {
+				video: {
+					data: videoData,
+					mimeType: "video/mp4",
+				},
+				durationSeconds: 5,
+				providerCallIds: callId ? [callId] : undefined,
+				costMicros,
+			};
+		} catch (err) {
+			await this.failTracking(params.tracking?.db, callId, err);
+			throw err;
 		}
-		const videoData = await readResponseLimited(
-			videoResponse,
-			MAX_GENERATED_VIDEO_BYTES,
-			"Generated video",
-		);
-
-		return {
-			video: {
-				data: videoData,
-				mimeType: "video/mp4",
-			},
-			durationSeconds: 5,
-		};
 	}
 
 	async synthesizeSpeech(params: TTSParams): Promise<AudioResult> {
 		const timeoutMs = params.timeoutMs ?? DEFAULT_CHAT_TIMEOUT;
 		const deadlineMs = Date.now() + timeoutMs;
+		const callId = await this.startTracking(
+			params,
+			params.tracking?.operation ?? "tts",
+			0,
+		);
 
-		const response = await this.callWithRetries(
-			"synthesizeSpeech",
-			{ deadlineMs },
-			(ai, signal) =>
-				ai.models.generateContent({
-					model: params.model,
-					contents: params.text,
-					config: {
-						responseModalities: ["AUDIO"],
-						speechConfig: {
-							voiceConfig: {
-								prebuiltVoiceConfig: {
-									voiceName: params.voice ?? "Kore",
+		let response: GenerateContentResponse;
+		try {
+			response = await this.callWithRetries(
+				"synthesizeSpeech",
+				{
+					deadlineMs,
+					usePaidKey: params.tracking?.keyClass === "paid",
+				},
+				(ai, signal) =>
+					ai.models.generateContent({
+						model: params.model,
+						contents: params.text,
+						config: {
+							responseModalities: ["AUDIO"],
+							speechConfig: {
+								voiceConfig: {
+									prebuiltVoiceConfig: {
+										voiceName: params.voice ?? "Kore",
+									},
 								},
 							},
+							abortSignal: signal,
 						},
-						abortSignal: signal,
-					},
-				}),
-		);
+					}),
+			);
+		} catch (err) {
+			await this.failTracking(params.tracking?.db, callId, err);
+			throw err;
+		}
 
 		// Extract audio from response
 		for (const candidate of response.candidates ?? []) {
 			for (const part of candidate.content?.parts ?? []) {
 				if (part.inlineData?.data) {
+					const usage = extractUsage(response);
+					const costMicros = await this.finishTracking(
+						params.tracking?.db,
+						callId,
+						params.model,
+						usage,
+						{ mediaOutputCount: 1 },
+					);
 					return {
 						audio: Buffer.from(part.inlineData.data, "base64"),
 						mimeType: part.inlineData.mimeType ?? "audio/wav",
+						providerCallIds: callId ? [callId] : undefined,
+						costMicros,
 					};
 				}
 			}
 		}
 
-		throw new Error(
+		const error = new Error(
 			`No audio in TTS response: ${fallbackTextForEmptyResponse(response)}`,
 		);
+		await this.failTracking(params.tracking?.db, callId, error);
+		throw error;
 	}
 
 	private recordLlmMetrics(model: string, usage: TokenUsage): void {

@@ -34,6 +34,17 @@ async function executeVideo(
 			model: "veo-3.1-fast-generate-preview",
 			prompt: params.prompt,
 			timeoutMs: 180_000,
+			tracking: {
+				db: ctx.db,
+				logicalRequestKey: ctx.idempotencyKey,
+				operation: "video",
+				keyClass: "paid",
+				userId: ctx.user.id,
+				chatId: ctx.chat.id,
+				toolName: "video",
+				creditsCharged: ctx.creditResult?.creditsToDeduct ?? 0,
+				creditSource: ctx.creditResult?.source,
+			},
 		});
 
 		const caption = captionPartsForMedia(params.prompt);

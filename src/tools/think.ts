@@ -19,7 +19,7 @@ type ThinkParams = z.infer<typeof thinkParamsSchema>;
 
 async function executeThink(
 	params: ThinkParams,
-	_ctx: ToolContext,
+	ctx: ToolContext,
 ): Promise<ToolResult> {
 	const provider = new GoogleLLMProvider(
 		getGoogleApiKeys(config),
@@ -34,6 +34,17 @@ async function executeThink(
 			messages: [{ role: "user", content: params.question }],
 			maxOutputTokens: 4096,
 			timeoutMs: 60_000,
+			tracking: {
+				db: ctx.db,
+				logicalRequestKey: ctx.idempotencyKey,
+				operation: "think",
+				keyClass: "paid",
+				userId: ctx.user.id,
+				chatId: ctx.chat.id,
+				toolName: "think",
+				creditsCharged: ctx.creditResult?.creditsToDeduct ?? 0,
+				creditSource: ctx.creditResult?.source,
+			},
 		});
 
 		return { text: result.text };

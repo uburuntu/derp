@@ -1,5 +1,7 @@
 /** LLM provider abstraction — Google-only at launch, but any provider can implement this interface */
 
+import type { Database } from "../db/connection";
+
 export interface LLMProvider {
 	chat(params: ChatParams): Promise<ChatResult>;
 	generateImage?(params: ImageParams): Promise<ImageResult>;
@@ -18,6 +20,7 @@ export interface ChatParams {
 	maxOutputTokens?: number;
 	temperature?: number;
 	timeoutMs?: number;
+	tracking?: ProviderCallTracking;
 }
 
 export interface ChatResult {
@@ -26,6 +29,9 @@ export interface ChatResult {
 	usage: TokenUsage;
 	toolCalls?: ToolCallResult[];
 	finishReason?: string;
+	providerCallIds?: string[];
+	actualModel?: string;
+	costMicros?: number;
 }
 
 export interface ConversationMessage {
@@ -55,11 +61,14 @@ export interface ImageParams {
 	sourceImage?: Buffer;
 	mimeType?: string;
 	timeoutMs?: number;
+	tracking?: ProviderCallTracking;
 }
 
 export interface ImageResult {
 	image: BinaryMedia;
 	usage?: TokenUsage;
+	providerCallIds?: string[];
+	costMicros?: number;
 }
 
 // ── Video ────────────────────────────────────────────────────────────────────
@@ -69,11 +78,14 @@ export interface VideoParams {
 	prompt: string;
 	referenceImage?: Buffer;
 	timeoutMs?: number;
+	tracking?: ProviderCallTracking;
 }
 
 export interface VideoResult {
 	video: BinaryMedia;
 	durationSeconds?: number;
+	providerCallIds?: string[];
+	costMicros?: number;
 }
 
 // ── TTS ──────────────────────────────────────────────────────────────────────
@@ -83,12 +95,15 @@ export interface TTSParams {
 	text: string;
 	voice?: string;
 	timeoutMs?: number;
+	tracking?: ProviderCallTracking;
 }
 
 export interface AudioResult {
 	audio: Buffer;
 	mimeType: string;
 	durationSeconds?: number;
+	providerCallIds?: string[];
+	costMicros?: number;
 }
 
 // ── Shared ───────────────────────────────────────────────────────────────────
@@ -108,4 +123,22 @@ export interface ToolCallResult {
 	name: string;
 	args: Record<string, unknown>;
 	result: unknown;
+}
+
+export interface ProviderCallTracking {
+	db: Database;
+	logicalRequestKey?: string;
+	provider?: string;
+	operation: string;
+	route?: "primary" | "fallback";
+	keyClass: "free" | "paid";
+	userId?: string | null;
+	chatId?: string | null;
+	ledgerId?: string | null;
+	messageId?: string | null;
+	toolName?: string | null;
+	creditsCharged?: number;
+	creditSource?: string | null;
+	mediaInputCount?: number;
+	meta?: Record<string, unknown>;
 }

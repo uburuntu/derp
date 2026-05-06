@@ -199,7 +199,7 @@ export async function executeWithCreditGate(
 
 			let result: ToolResult;
 			try {
-				result = await tool.execute(params, ctx);
+				result = await tool.execute(params, { ...ctx, creditResult });
 			} catch (err) {
 				const error = err instanceof Error ? err.message : String(err);
 				await refundToolDeduction(ctx, creditResult, tool, idempotencyKey, {

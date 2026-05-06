@@ -102,6 +102,8 @@ export interface ChatSettings {
 	remindersAccess: "admins" | "everyone";
 }
 
+export type CreditAccountTarget = "user" | "chat";
+
 // ── Chat Members ─────────────────────────────────────────────────────────────
 
 export const chatMembers = pgTable(
@@ -186,7 +188,8 @@ export interface MessageMetadata {
 	cacheHitTokens?: number;
 	toolsUsed?: string[];
 	creditsSpent?: number;
-	creditSource?: string; // "user" | "chat" | "free"
+	creditSource?: string; // "user" | "chat" | "personal" | "group" | "free"
+	providerCallIds?: string[];
 	durationMs?: number;
 }
 
@@ -244,7 +247,8 @@ export const paymentReceipts = pgTable(
 		productId: varchar("product_id", { length: 100 }),
 		creditTarget: varchar("credit_target", { length: 20 }), // user, chat, none
 		credits: integer("credits").notNull().default(0),
-		status: varchar("status", { length: 20 }).notNull().default("paid"), // paid, refunded
+		status: varchar("status", { length: 30 }).notNull().default("settled"), // received, settled, settlement_failed, refund_pending, refunded
+		settledAt: timestamp("settled_at", { withTimezone: true }),
 		refundedAt: timestamp("refunded_at", { withTimezone: true }),
 		meta: jsonb("meta").$type<Record<string, unknown>>(),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -262,6 +266,211 @@ export const paymentReceipts = pgTable(
 		index("payment_receipts_user_id_idx").on(t.userId),
 		index("payment_receipts_chat_id_idx").on(t.chatId),
 		index("payment_receipts_status_idx").on(t.status),
+	],
+);
+
+// ── Provider Calls (durable model/provider spend accounting) ────────────────
+
+export const providerCalls = pgTable(
+	"provider_calls",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		logicalRequestKey: varchar("logical_request_key", { length: 255 }),
+		attemptNo: integer("attempt_no").notNull().default(1),
+		provider: varchar("provider", { length: 40 }).notNull(),
+		operation: varchar("operation", { length: 40 }).notNull(), // chat, chat_with_tools, image, video, tts, inline, reminder
+		route: varchar("route", { length: 40 }).notNull().default("primary"), // primary, fallback
+		keyClass: varchar("key_class", { length: 20 }).notNull().default("free"), // free, paid
+		modelId: varchar("model_id", { length: 150 }).notNull(),
+		actualModelId: varchar("actual_model_id", { length: 150 }),
+		userId: uuid("user_id").references(() => users.id),
+		chatId: uuid("chat_id").references(() => chats.id),
+		ledgerId: uuid("ledger_id").references(() => ledger.id),
+		messageId: uuid("message_id").references(() => messages.id),
+		toolName: varchar("tool_name", { length: 50 }),
+		status: varchar("status", { length: 30 }).notNull().default("started"), // started, succeeded, failed
+		inputTokens: integer("input_tokens").notNull().default(0),
+		outputTokens: integer("output_tokens").notNull().default(0),
+		cacheHitTokens: integer("cache_hit_tokens").notNull().default(0),
+		mediaInputCount: integer("media_input_count").notNull().default(0),
+		mediaOutputCount: integer("media_output_count").notNull().default(0),
+		durationSeconds: integer("duration_seconds"),
+		estimatedCostMicros: integer("estimated_cost_micros")
+			.notNull()
+			.default(0),
+		actualCostMicros: integer("actual_cost_micros").notNull().default(0),
+		creditsCharged: integer("credits_charged").notNull().default(0),
+		creditSource: varchar("credit_source", { length: 20 }),
+		providerRequestId: varchar("provider_request_id", { length: 255 }),
+		finishReason: varchar("finish_reason", { length: 100 }),
+		errorCode: varchar("error_code", { length: 100 }),
+		errorMessage: varchar("error_message", { length: 500 }),
+		meta: jsonb("meta").$type<Record<string, unknown>>(),
+		startedAt: timestamp("started_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		finishedAt: timestamp("finished_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date()),
+	},
+	(t) => [
+		unique("provider_calls_logical_attempt_unique").on(
+			t.logicalRequestKey,
+			t.attemptNo,
+		),
+		index("provider_calls_user_id_idx").on(t.userId),
+		index("provider_calls_chat_id_idx").on(t.chatId),
+		index("provider_calls_provider_model_idx").on(t.provider, t.modelId),
+		index("provider_calls_status_idx").on(t.status),
+		index("provider_calls_created_at_idx").on(t.createdAt),
+	],
+);
+
+// ── Refund Debts ────────────────────────────────────────────────────────────
+
+export const creditDebts = pgTable(
+	"credit_debts",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id),
+		chatId: uuid("chat_id").references(() => chats.id),
+		paymentReceiptId: uuid("payment_receipt_id").references(
+			() => paymentReceipts.id,
+		),
+		telegramChargeId: varchar("telegram_charge_id", { length: 255 }),
+		target: varchar("target", { length: 20 }).notNull(), // user, chat
+		status: varchar("status", { length: 20 }).notNull().default("open"), // open, settled, waived
+		amount: integer("amount").notNull(),
+		recoveredAmount: integer("recovered_amount").notNull().default(0),
+		outstandingAmount: integer("outstanding_amount").notNull(),
+		meta: jsonb("meta").$type<Record<string, unknown>>(),
+		settledAt: timestamp("settled_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date()),
+	},
+	(t) => [
+		index("credit_debts_user_status_idx").on(t.userId, t.status),
+		index("credit_debts_chat_status_idx").on(t.chatId, t.status),
+		index("credit_debts_charge_idx").on(t.telegramChargeId),
+		check("credit_debts_amount_check", sql`${t.amount} > 0`),
+		check(
+			"credit_debts_outstanding_check",
+			sql`${t.outstandingAmount} >= 0`,
+		),
+	],
+);
+
+export const creditDebtEvents = pgTable(
+	"credit_debt_events",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		debtId: uuid("debt_id")
+			.notNull()
+			.references(() => creditDebts.id),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id),
+		chatId: uuid("chat_id").references(() => chats.id),
+		ledgerId: uuid("ledger_id").references(() => ledger.id),
+		paymentReceiptId: uuid("payment_receipt_id").references(
+			() => paymentReceipts.id,
+		),
+		type: varchar("type", { length: 20 }).notNull(), // created, recovered, waived
+		amount: integer("amount").notNull(),
+		meta: jsonb("meta").$type<Record<string, unknown>>(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [
+		index("credit_debt_events_debt_id_idx").on(t.debtId),
+		index("credit_debt_events_user_id_idx").on(t.userId),
+		index("credit_debt_events_chat_id_idx").on(t.chatId),
+	],
+);
+
+// ── Quota Windows (global trial and promo burn accounting) ──────────────────
+
+export const quotaWindows = pgTable(
+	"quota_windows",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		scope: varchar("scope", { length: 40 }).notNull(), // free_chat, web_search, inline, promo_media, bot_promo
+		subjectKey: varchar("subject_key", { length: 120 }).notNull(), // user:<uuid>, chat:<uuid>, bot
+		userId: uuid("user_id").references(() => users.id),
+		chatId: uuid("chat_id").references(() => chats.id),
+		windowKey: varchar("window_key", { length: 40 }).notNull(), // YYYY-MM-DD, YYYY-Www, global
+		used: integer("used").notNull().default(0),
+		limit: integer("limit").notNull(),
+		meta: jsonb("meta").$type<Record<string, unknown>>(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date()),
+	},
+	(t) => [
+		unique("quota_windows_scope_user_chat_window_unique").on(
+			t.scope,
+			t.subjectKey,
+			t.windowKey,
+		),
+		index("quota_windows_scope_window_idx").on(t.scope, t.windowKey),
+		index("quota_windows_subject_idx").on(t.subjectKey),
+		index("quota_windows_user_scope_idx").on(t.userId, t.scope),
+	],
+);
+
+// ── Pending Tool Confirmations ──────────────────────────────────────────────
+
+export const pendingToolConfirmations = pgTable(
+	"pending_tool_confirmations",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id),
+		chatId: uuid("chat_id")
+			.notNull()
+			.references(() => chats.id),
+		telegramChatId: bigint("telegram_chat_id", { mode: "number" }).notNull(),
+		messageId: integer("message_id"),
+		threadId: integer("thread_id"),
+		toolName: varchar("tool_name", { length: 50 }).notNull(),
+		params: jsonb("params").$type<Record<string, unknown>>().notNull(),
+		cost: integer("cost").notNull(),
+		source: varchar("source", { length: 20 }).notNull(), // user, chat
+		status: varchar("status", { length: 20 }).notNull().default("pending"), // pending, confirmed, cancelled, expired
+		idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		meta: jsonb("meta").$type<Record<string, unknown>>(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date()),
+	},
+	(t) => [
+		unique("pending_tool_confirmations_key_unique").on(t.idempotencyKey),
+		index("pending_tool_confirmations_user_status_idx").on(t.userId, t.status),
+		index("pending_tool_confirmations_chat_status_idx").on(t.chatId, t.status),
+		index("pending_tool_confirmations_expires_idx").on(t.expiresAt),
 	],
 );
 
@@ -397,6 +606,12 @@ export type ChatMember = typeof chatMembers.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type LedgerEntry = typeof ledger.$inferSelect;
 export type PaymentReceipt = typeof paymentReceipts.$inferSelect;
+export type ProviderCall = typeof providerCalls.$inferSelect;
+export type CreditDebt = typeof creditDebts.$inferSelect;
+export type CreditDebtEvent = typeof creditDebtEvents.$inferSelect;
+export type QuotaWindow = typeof quotaWindows.$inferSelect;
+export type PendingToolConfirmation =
+	typeof pendingToolConfirmations.$inferSelect;
 export type SubscriptionPeriod = typeof subscriptionPeriods.$inferSelect;
 export type UsageQuota = typeof usageQuotas.$inferSelect;
 export type Reminder = typeof reminders.$inferSelect;

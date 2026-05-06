@@ -12,6 +12,10 @@ const configSchema = z
 			.default("")
 			.transform((s) => (s ? s.split(",").filter(Boolean) : [])),
 		googleApiPaidKey: z.string().optional(),
+		openrouterApiKey: z.string().optional(),
+		openrouterPaidFallbackModel: z
+			.string()
+			.default("openai/gpt-5.4-mini"),
 		braveSearchApiKey: z.string().optional(),
 		botAdminIds: z
 			.string()
@@ -58,6 +62,13 @@ const configSchema = z
 				message: "BOT_ADMIN_EVENTS_CHAT_ID is required when ENVIRONMENT=prod",
 			});
 		}
+		if (cfg.environment === "prod" && !cfg.googleApiPaidKey) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["googleApiPaidKey"],
+				message: "GOOGLE_API_PAID_KEY is required when ENVIRONMENT=prod",
+			});
+		}
 	});
 
 export type Config = z.infer<typeof configSchema>;
@@ -71,6 +82,8 @@ function loadConfig(): Config {
 		googleApiKey: process.env.GOOGLE_API_KEY,
 		googleApiKeys: process.env.GOOGLE_API_KEYS,
 		googleApiPaidKey: process.env.GOOGLE_API_PAID_KEY,
+		openrouterApiKey: process.env.OPENROUTER_API_KEY,
+		openrouterPaidFallbackModel: process.env.OPENROUTER_PAID_FALLBACK_MODEL,
 		braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY,
 		botAdminIds: process.env.BOT_ADMIN_IDS,
 		botAdminEventsChatId: process.env.BOT_ADMIN_EVENTS_CHAT_ID,

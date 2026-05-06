@@ -37,6 +37,8 @@ describe.skipIf(!databaseUrl)("credits database invariants", () => {
 			googleApiKey: "test-google-key",
 			googleApiKeys: [],
 			googleApiPaidKey: undefined,
+			openrouterApiKey: undefined,
+			openrouterPaidFallbackModel: "openai/gpt-5.4-mini",
 			braveSearchApiKey: undefined,
 			botAdminIds: [],
 			botAdminEventsChatId: undefined,

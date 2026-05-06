@@ -29,6 +29,17 @@ async function executeImagine(
 			model: "gemini-2.5-flash-preview-image",
 			prompt: params.prompt,
 			timeoutMs: 60_000,
+			tracking: {
+				db: ctx.db,
+				logicalRequestKey: ctx.idempotencyKey,
+				operation: "image",
+				keyClass: "paid",
+				userId: ctx.user.id,
+				chatId: ctx.chat.id,
+				toolName: "imagine",
+				creditsCharged: ctx.creditResult?.creditsToDeduct ?? 0,
+				creditSource: ctx.creditResult?.source,
+			},
 		});
 
 		const caption = captionPartsForMedia(params.prompt);

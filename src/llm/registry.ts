@@ -1,6 +1,7 @@
 /** Model registry — tier-based model selection with pricing */
 
 import { providerCostToCredits } from "../credits/economy";
+import type { TokenUsage } from "./types";
 
 export enum ModelCapability {
 	TEXT = "text",
@@ -207,6 +208,27 @@ export function getDefaultModel(
 
 export function getAllModels(): ModelConfig[] {
 	return [...MODEL_REGISTRY.values()];
+}
+
+export function estimateUsageCostUsd(
+	modelId: string,
+	usage: TokenUsage,
+	options: { includePerRequest?: boolean } = {},
+): number {
+	const model = getModel(modelId);
+	const inputTokens = Math.max(0, usage.inputTokens - (usage.cacheHitTokens ?? 0));
+	const tokenCost =
+		(inputTokens * model.inputCostPer1M) / 1_000_000 +
+		(usage.outputTokens * model.outputCostPer1M) / 1_000_000;
+	return tokenCost + (options.includePerRequest === false ? 0 : model.perRequestCost);
+}
+
+export function estimateUsageCostMicros(
+	modelId: string,
+	usage: TokenUsage,
+	options: { includePerRequest?: boolean } = {},
+): number {
+	return Math.round(estimateUsageCostUsd(modelId, usage, options) * 1_000_000);
 }
 
 // ── Context Limits ───────────────────────────────────────────────────────────

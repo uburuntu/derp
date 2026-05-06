@@ -5,11 +5,14 @@ import {
 	deductChatCredits,
 	deductUserCredits,
 	getBalances,
-	getDailyUsage,
 	getTransactionByIdempotencyKey,
-	recordFreeToolUsage,
 	type ToolDebitResult,
 } from "../db/queries/credits";
+import {
+	getOpenDebtAmount,
+	getQuotaUsage,
+	recordGlobalFreeToolUsage,
+} from "../db/queries/finance";
 import type { Chat, User } from "../db/schema";
 import {
 	CONTEXT_LIMITS,
@@ -74,10 +77,17 @@ export class CreditService {
 			this.user.telegramId,
 			this.chat.telegramId,
 		);
+		const [userDebt, chatDebt] = await Promise.all([
+			getOpenDebtAmount(this.db, { userId: this.user.id }),
+			getOpenDebtAmount(this.db, {
+				userId: this.user.id,
+				chatId: this.chat.id,
+			}),
+		]);
 
 		const hasPaid =
-			chatCredits >= STANDARD_CHAT_CREDITS ||
-			userCredits >= STANDARD_CHAT_CREDITS;
+			(chatCredits >= STANDARD_CHAT_CREDITS && chatDebt === 0) ||
+			(userCredits >= STANDARD_CHAT_CREDITS && userDebt === 0);
 		const tier = hasPaid ? ModelTier.STANDARD : ModelTier.FREE;
 		const model = getDefaultModel(ModelCapability.TEXT, tier);
 		const contextLimit = CONTEXT_LIMITS[tier];
@@ -117,12 +127,10 @@ export class CreditService {
 
 		// Check free daily limit first
 		if (hasMeteredFreeQuota) {
-			const used = await getDailyUsage(
-				this.db,
-				this.user.id,
-				this.chat.id,
-				toolName,
-			);
+			const used = await getQuotaUsage(this.db, {
+				scope: toolName === "webSearch" ? "web_search" : "promo_media",
+				userId: this.user.id,
+			});
 			if (used < pricing.freeDaily) {
 				return {
 					allowed: true,
@@ -168,9 +176,28 @@ export class CreditService {
 			this.user.telegramId,
 			this.chat.telegramId,
 		);
+		const [userDebt, chatDebt] = await Promise.all([
+			getOpenDebtAmount(this.db, { userId: this.user.id }),
+			getOpenDebtAmount(this.db, {
+				userId: this.user.id,
+				chatId: this.chat.id,
+			}),
+		]);
 
 		// Chat credits first
 		if (chatCredits >= totalCost) {
+			if (chatDebt > 0) {
+				return {
+					allowed: false,
+					tier: model.tier,
+					modelId: model.id,
+					source: "rejected",
+					creditsToDeduct: 0,
+					creditsRemaining: chatCredits,
+					freeRemaining: null,
+					rejectReason: `This group has ${chatDebt} refund-debt credits to settle before paid tools can use the shared pool`,
+				};
+			}
 			return {
 				allowed: true,
 				tier: model.tier,
@@ -184,6 +211,18 @@ export class CreditService {
 
 		// User credits
 		if (userCredits >= totalCost) {
+			if (userDebt > 0) {
+				return {
+					allowed: false,
+					tier: model.tier,
+					modelId: model.id,
+					source: "rejected",
+					creditsToDeduct: 0,
+					creditsRemaining: userCredits,
+					freeRemaining: null,
+					rejectReason: `You have ${userDebt} refund-debt credits to settle before paid tools can use personal credits`,
+				};
+			}
 			return {
 				allowed: true,
 				tier: model.tier,
@@ -237,16 +276,15 @@ export class CreditService {
 				Number.isFinite(pricing.freeDaily) &&
 				pricing.freeDaily > 0
 			) {
-				return await recordFreeToolUsage(
-					this.db,
-					this.user.id,
-					this.chat.id,
+				return await recordGlobalFreeToolUsage(this.db, {
+					userId: this.user.id,
+					chatId: this.chat.id,
 					toolName,
-					result.modelId,
-					pricing.freeDaily,
+					modelId: result.modelId,
+					limit: pricing.freeDaily,
 					idempotencyKey,
 					meta,
-				);
+				});
 			}
 		} else if (result.source === "chat") {
 			const debit = await deductChatCredits(
