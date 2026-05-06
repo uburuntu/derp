@@ -185,6 +185,11 @@ class ToolRegistry {
         return [...this.tools.values()];
     }
 
+    resetForTests(): void {
+        this.tools.clear();
+        this.commandMap.clear();
+    }
+
     /** Generate LLM function-calling schemas for all tools */
     getLLMToolSchemas(disabledTools: Iterable<string> = []): LLMToolSchema[] {
         const schemas: LLMToolSchema[] = [];

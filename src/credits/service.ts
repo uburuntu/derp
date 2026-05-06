@@ -37,15 +37,24 @@ const toolPricingMap = new Map<string, ToolPricing>();
 export const STANDARD_CHAT_TOOL_NAME = "chat";
 export const STANDARD_CHAT_CREDITS = 2;
 
-toolPricingMap.set(STANDARD_CHAT_TOOL_NAME, {
-    credits: STANDARD_CHAT_CREDITS,
-    freeDaily: 0,
-    capability: ModelCapability.TEXT,
-});
+function registerStandardChatPricing(): void {
+    toolPricingMap.set(STANDARD_CHAT_TOOL_NAME, {
+        credits: STANDARD_CHAT_CREDITS,
+        freeDaily: 0,
+        capability: ModelCapability.TEXT,
+    });
+}
+
+registerStandardChatPricing();
 
 /** Register a tool's pricing (called by ToolRegistry on startup) */
 export function registerToolPricing(name: string, pricing: ToolPricing): void {
     toolPricingMap.set(name, pricing);
+}
+
+export function resetToolPricingForTests(): void {
+    toolPricingMap.clear();
+    registerStandardChatPricing();
 }
 
 export function hasActiveSubscription(

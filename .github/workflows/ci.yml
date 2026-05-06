@@ -48,4 +48,10 @@ jobs:
         env:
           DATABASE_URL: postgresql://derp:derp@localhost:5432/derp_test
           DERP_RUN_DB_TESTS: "1"
+          DERP_RUN_E2E_TESTS: "1"
+          TELEGRAM_BOT_TOKEN: "123456:test"
+          BOT_USERNAME: "DerpTestBot"
+          GOOGLE_API_KEY: "test-google-key"
+          BOT_ADMIN_IDS: "7000000001"
+          PAYMENT_PAYLOAD_SECRET: "derp-ci-payment-payload-secret"
         run: bun run check

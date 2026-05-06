@@ -7,6 +7,7 @@ import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { Bot } from "grammy";
 import { logger } from "../common/observability";
 import { config } from "../config";
+import { resetToolPricingForTests } from "../credits/service";
 import type { Database } from "../db/connection";
 import { adminComposer } from "../handlers/admin";
 import { chatComposer } from "../handlers/chat";
@@ -26,6 +27,7 @@ import { createRateLimiter } from "../middleware/rate-limiter";
 import { sessionMiddleware } from "../middleware/session";
 import { loadToolDefinitions } from "../tools/loader";
 import { toolRegistry } from "../tools/registry";
+import type { ToolDefinition } from "../tools/types";
 import type { DerpContext } from "./context";
 
 function sequentializeKeys(ctx: DerpContext): string[] | undefined {
@@ -48,18 +50,37 @@ function sequentializeKeys(ctx: DerpContext): string[] | undefined {
     return [`chat:${chatId}:thread:${threadId}`];
 }
 
-export async function createBot(db: Database): Promise<Bot<DerpContext>> {
+export interface CreateBotOptions {
+    tools?: ToolDefinition[];
+    resetToolRegistry?: boolean;
+    installRuntimeApiTransformers?: boolean;
+    enableRateLimiter?: boolean;
+}
+
+export async function createBot(
+    db: Database,
+    options: CreateBotOptions = {},
+): Promise<Bot<DerpContext>> {
     const bot = new Bot<DerpContext>(config.telegramBotToken);
 
     // ── API Transformers (outgoing) ──────────────────────────────────
-    bot.api.config.use(autoRetry());
-    bot.api.config.use(apiThrottler());
+    if (options.installRuntimeApiTransformers ?? true) {
+        bot.api.config.use(autoRetry());
+        bot.api.config.use(apiThrottler());
+    }
+
+    if (options.resetToolRegistry) {
+        toolRegistry.resetForTests();
+        resetToolPricingForTests();
+    }
 
     // ── Middleware Stack (incoming, order matters) ───────────────────
     // 1. Error boundary — catch all errors
     bot.use(errorBoundary);
     // 2. Rate limiter — cheap per-user guard before DB work
-    bot.use(createRateLimiter());
+    if (options.enableRateLimiter ?? true) {
+        bot.use(createRateLimiter());
+    }
     // 3. Sequentialize ordinary chat messages only; buttons/payments must answer fast.
     bot.use(sequentialize(sequentializeKeys));
     // 4. Logger — structured logging
@@ -74,7 +95,8 @@ export async function createBot(db: Database): Promise<Bot<DerpContext>> {
     bot.use(i18n);
 
     // ── Register Tools ──────────────────────────────────────────────
-    for (const tool of await loadToolDefinitions()) {
+    const tools = options.tools ?? (await loadToolDefinitions());
+    for (const tool of tools) {
         toolRegistry.register(tool);
     }
 

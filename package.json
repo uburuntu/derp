@@ -8,6 +8,7 @@
         "format": "biome check --write .",
         "lint": "biome check .",
         "test": "bun test",
+        "test:e2e": "DERP_RUN_E2E_TESTS=1 bun test tests/e2e",
         "typecheck": "tsc --noEmit"
     },
     "devDependencies": {
