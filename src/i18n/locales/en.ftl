@@ -103,8 +103,18 @@ buy-pay-button = Pay { $stars }⭐/month
 buy-plan-button = Monthly { $plan } — { $stars }⭐ → { $credits } credits ({ $savings } off){ $tag }
 buy-pack-button = One-time { $pack } — { $stars }⭐ → { $credits } credits{ $bonus }
 buy-group-pack-button = Group { $pack } — { $stars }⭐ → { $credits } shared credits{ $bonus }
+buy-invoice-sub-title = { $plan } Subscription
+buy-invoice-sub-description = { $credits } credits/month ({ $savings } savings)
+buy-invoice-sub-label = { $plan } Subscription
+buy-invoice-pack-title = { $pack } Credit Pack
+buy-invoice-pack-description = { $credits } credits
+buy-invoice-pack-label = { $pack } Pack
+buy-invoice-group-pack-title = { $pack } Group Credit Pack
+buy-invoice-group-pack-description = { $credits } credits for this chat
+buy-invoice-group-pack-label = { $pack } Group Pack
 buy-chat-groups-only = This command is for groups. Use /buy for personal credits.
 buy-invoice-error = Could not create the payment link. Please try again.
+payment-validation-error = Payment rejected: { $reason }
 
 ## Donations
 donate-choose = ⭐ <b>Support Derp</b>

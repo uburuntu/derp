@@ -103,6 +103,12 @@ function remainingMs(deadlineMs: number): number {
 	return Math.max(0, deadlineMs - Date.now());
 }
 
+function operationNameFrom(operation: unknown): string | null {
+	if (!operation || typeof operation !== "object") return null;
+	const maybeName = (operation as { name?: unknown }).name;
+	return typeof maybeName === "string" && maybeName ? maybeName : null;
+}
+
 async function withAbortTimeout<T>(
 	timeoutMs: number,
 	label: string,
@@ -312,6 +318,8 @@ export class GoogleLLMProvider implements LLMProvider {
 			durationSeconds?: number | null;
 			finishReason?: string | null;
 			includePerRequest?: boolean;
+			providerRequestId?: string | null;
+			meta?: Record<string, unknown>;
 		} = {},
 	): Promise<number> {
 		if (!db || !callId) return estimateUsageCostMicros(model, usage, input);
@@ -326,7 +334,9 @@ export class GoogleLLMProvider implements LLMProvider {
 			durationSeconds: input.durationSeconds,
 			estimatedCostMicros: costMicros,
 			actualCostMicros: costMicros,
+			providerRequestId: input.providerRequestId,
 			finishReason: input.finishReason,
+			meta: input.meta,
 		});
 		return costMicros;
 	}
@@ -335,12 +345,18 @@ export class GoogleLLMProvider implements LLMProvider {
 		db: ProviderCallTracking["db"] | undefined,
 		callId: string | null,
 		error: unknown,
+		input: {
+			providerRequestId?: string | null;
+			meta?: Record<string, unknown>;
+		} = {},
 	): Promise<void> {
 		if (!db || !callId) return;
 		const message = error instanceof Error ? error.message : String(error);
 		await failProviderCall(db, callId, {
 			errorCode: isTransientError(error) ? "transient" : "provider_error",
 			errorMessage: message,
+			providerRequestId: input.providerRequestId,
+			meta: input.meta,
 		});
 	}
 
@@ -837,6 +853,7 @@ export class GoogleLLMProvider implements LLMProvider {
 			params.tracking?.operation ?? "video",
 			params.referenceImage ? 1 : 0,
 		);
+		let operationName: string | null = null;
 
 		try {
 			let operation = await this.callWithRetries(
@@ -869,6 +886,7 @@ export class GoogleLLMProvider implements LLMProvider {
 						},
 					}),
 			);
+			operationName = operationNameFrom(operation);
 
 			// Poll for completion
 			while (!operation.done) {
@@ -889,6 +907,7 @@ export class GoogleLLMProvider implements LLMProvider {
 							config: { abortSignal: signal },
 						}),
 				);
+				operationName = operationNameFrom(operation) ?? operationName;
 			}
 
 			if (operation.error) {
@@ -928,6 +947,10 @@ export class GoogleLLMProvider implements LLMProvider {
 					mediaInputCount: params.referenceImage ? 1 : 0,
 					mediaOutputCount: 1,
 					durationSeconds: 5,
+					providerRequestId: operationName,
+					meta: operationName
+						? { googleOperationName: operationName }
+						: undefined,
 				},
 			);
 
@@ -941,7 +964,12 @@ export class GoogleLLMProvider implements LLMProvider {
 				costMicros,
 			};
 		} catch (err) {
-			await this.failTracking(params.tracking?.db, callId, err);
+			await this.failTracking(params.tracking?.db, callId, err, {
+				providerRequestId: operationName,
+				meta: operationName
+					? { googleOperationName: operationName }
+					: undefined,
+			});
 			throw err;
 		}
 	}

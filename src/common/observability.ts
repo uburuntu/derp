@@ -162,6 +162,12 @@ interface DerpMetrics {
 	handledFailures: ReturnType<
 		ReturnType<typeof otelMetrics.getMeter>["createCounter"]
 	>;
+	providerCalls: ReturnType<
+		ReturnType<typeof otelMetrics.getMeter>["createCounter"]
+	>;
+	providerCostMicros: ReturnType<
+		ReturnType<typeof otelMetrics.getMeter>["createCounter"]
+	>;
 }
 
 export let derpMetrics: DerpMetrics;
@@ -199,6 +205,12 @@ function initMetrics(): void {
 		}),
 		handledFailures: meter.createCounter("derp.failures.handled", {
 			description: "Handled user-visible failures by subsystem",
+		}),
+		providerCalls: meter.createCounter("derp.provider.calls", {
+			description: "Provider calls by provider, route, operation, and status",
+		}),
+		providerCostMicros: meter.createCounter("derp.provider.cost_micros", {
+			description: "Estimated or actual provider cost in USD micros",
 		}),
 	};
 }

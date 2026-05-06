@@ -2,6 +2,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../connection";
 import {
 	chats,
+	creditDebts,
 	ledger,
 	paymentReceipts,
 	subscriptionPeriods,
@@ -147,10 +148,23 @@ async function markPaymentSettledIn(
 export async function markPaymentSettlementFailed(
 	db: Database,
 	telegramChargeId: string,
+	error?: string,
 ): Promise<void> {
 	await db
 		.update(paymentReceipts)
-		.set({ status: "settlement_failed", updatedAt: new Date() })
+		.set({
+			status: "settlement_failed",
+			updatedAt: new Date(),
+			meta: sql`COALESCE(${paymentReceipts.meta}, '{}'::jsonb) || ${JSON.stringify(
+				{
+					lastSettlementError: error ?? null,
+					lastSettlementFailedAt: new Date().toISOString(),
+				},
+			)}::jsonb || jsonb_build_object(
+				'settlementAttemptCount',
+				COALESCE((${paymentReceipts.meta}->>'settlementAttemptCount')::int, 0) + 1
+			)`,
+		})
 		.where(eq(paymentReceipts.telegramChargeId, telegramChargeId));
 }
 
@@ -160,6 +174,23 @@ function numberFromMeta(
 ): number | null {
 	const value = meta?.[key];
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function noOpenUserDebt(userId: string) {
+	return sql`NOT EXISTS (
+		SELECT 1 FROM ${creditDebts}
+		WHERE ${creditDebts.userId} = ${userId}
+			AND ${creditDebts.chatId} IS NULL
+			AND ${creditDebts.status} = 'open'
+	)`;
+}
+
+function noOpenChatDebt(chatId: string) {
+	return sql`NOT EXISTS (
+		SELECT 1 FROM ${creditDebts}
+		WHERE ${creditDebts.chatId} = ${chatId}
+			AND ${creditDebts.status} = 'open'
+	)`;
 }
 
 export async function recordDonationPayment(
@@ -353,10 +384,16 @@ export async function deductUserCredits(
 				.set({
 					credits: sql`${users.credits} - ${amount}`,
 				})
-				.where(and(eq(users.id, userId), sql`${users.credits} >= ${amount}`))
+				.where(
+					and(
+						eq(users.id, userId),
+						sql`${users.credits} >= ${amount}`,
+						noOpenUserDebt(userId),
+					),
+				)
 				.returning({ credits: users.credits });
 
-			if (!updated) throw new Error("Insufficient credits");
+			if (!updated) throw new Error("Insufficient credits or open refund debt");
 
 			await tx
 				.update(ledger)
@@ -371,10 +408,16 @@ export async function deductUserCredits(
 			.set({
 				credits: sql`${users.credits} - ${amount}`,
 			})
-			.where(and(eq(users.id, userId), sql`${users.credits} >= ${amount}`))
+			.where(
+				and(
+					eq(users.id, userId),
+					sql`${users.credits} >= ${amount}`,
+					noOpenUserDebt(userId),
+				),
+			)
 			.returning({ credits: users.credits });
 
-		if (!updated) throw new Error("Insufficient credits");
+		if (!updated) throw new Error("Insufficient credits or open refund debt");
 
 		await tx.insert(ledger).values({
 			userId,
@@ -434,10 +477,18 @@ export async function deductChatCredits(
 				.set({
 					credits: sql`${chats.credits} - ${amount}`,
 				})
-				.where(and(eq(chats.id, chatId), sql`${chats.credits} >= ${amount}`))
+				.where(
+					and(
+						eq(chats.id, chatId),
+						sql`${chats.credits} >= ${amount}`,
+						noOpenChatDebt(chatId),
+					),
+				)
 				.returning({ credits: chats.credits });
 
-			if (!updated) throw new Error("Insufficient chat credits");
+			if (!updated) {
+				throw new Error("Insufficient chat credits or open group refund debt");
+			}
 
 			await tx
 				.update(ledger)
@@ -452,10 +503,18 @@ export async function deductChatCredits(
 			.set({
 				credits: sql`${chats.credits} - ${amount}`,
 			})
-			.where(and(eq(chats.id, chatId), sql`${chats.credits} >= ${amount}`))
+			.where(
+				and(
+					eq(chats.id, chatId),
+					sql`${chats.credits} >= ${amount}`,
+					noOpenChatDebt(chatId),
+				),
+			)
 			.returning({ credits: chats.credits });
 
-		if (!updated) throw new Error("Insufficient chat credits");
+		if (!updated) {
+			throw new Error("Insufficient chat credits or open group refund debt");
+		}
 
 		await tx.insert(ledger).values({
 			userId,
@@ -739,8 +798,8 @@ export async function applyChatPackPayment(
 	db: Database,
 	record: StarsPaymentRecord,
 ): Promise<IdempotentCreditResult> {
-	if (!record.chatId) throw new Error("Chat payment missing chat ID");
 	await ensurePaymentReceiptReceived(db, record);
+	if (!record.chatId) throw new Error("Chat payment missing chat ID");
 	const chatId = record.chatId;
 	const idempotencyKey = `pack:${record.telegramChargeId}`;
 
@@ -1191,6 +1250,7 @@ export async function reconcileStarRefund(
 			.select()
 			.from(paymentReceipts)
 			.where(eq(paymentReceipts.telegramChargeId, telegramChargeId))
+			.for("update")
 			.limit(1);
 
 		const [original] = await tx
@@ -1220,6 +1280,13 @@ export async function reconcileStarRefund(
 			numberFromMeta(original?.meta, "purchasedCredits") ??
 			original?.amount ??
 			0;
+		const unsettledReceiptWithoutLedger =
+			!original &&
+			receipt != null &&
+			(receipt.status === "received" || receipt.status === "settlement_failed");
+		const refundImpactAmount = unsettledReceiptWithoutLedger
+			? 0
+			: originalAmount;
 		const originalStars =
 			receipt?.stars ?? numberFromMeta(original?.meta, "stars") ?? null;
 
@@ -1238,10 +1305,11 @@ export async function reconcileStarRefund(
 						...meta,
 						paymentReceiptId: receipt?.id ?? null,
 						originalType,
-						originalAmount,
+						originalAmount: refundImpactAmount,
+						receiptCredits: originalAmount,
 						originalStars,
 						recoveredAmount: 0,
-						unrecoveredAmount: originalAmount,
+						unrecoveredAmount: refundImpactAmount,
 					},
 				})
 				.onConflictDoNothing({ target: ledger.idempotencyKey })
@@ -1261,19 +1329,20 @@ export async function reconcileStarRefund(
 						.where(eq(subscriptionPeriods.telegramChargeId, telegramChargeId));
 					await recomputeActiveSubscriptionIn(tx, userId);
 				}
-				if (originalAmount > 0) {
+				if (refundImpactAmount > 0) {
 					await createCreditDebt(tx, {
 						userId,
 						chatId,
 						paymentReceiptId: receipt?.id ?? null,
 						telegramChargeId,
 						target: chatId ? "chat" : "user",
-						amount: originalAmount,
+						amount: refundImpactAmount,
 						meta: {
 							...meta,
 							source: "refund_unrecovered",
 							originalType,
-							originalAmount,
+							originalAmount: refundImpactAmount,
+							receiptCredits: originalAmount,
 						},
 					});
 				}
@@ -1283,9 +1352,9 @@ export async function reconcileStarRefund(
 				applied: Boolean(inserted),
 				target: chatId ? "chat" : "user",
 				originalType,
-				originalAmount,
+				originalAmount: refundImpactAmount,
 				recoveredAmount: 0,
-				unrecoveredAmount: originalAmount,
+				unrecoveredAmount: refundImpactAmount,
 				balanceAfter: 0,
 			};
 		}

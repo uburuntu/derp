@@ -1,7 +1,7 @@
 # Derp Finance Hardening Harness
 
 Loop: 2 / 5
-Status: reviewer loop 2 running
+Status: reviewer loop 2 findings captured; remediation in progress
 
 ## P0
 
@@ -32,6 +32,20 @@ Status: reviewer loop 2 running
 - [x] LLM reminders must create provider-call accounting rows.
 - [x] Fallback routing must be visible in admin metrics and message metadata.
 - [x] Provider-success / Telegram-delivery-failure paths must not auto-refund provider spend.
+
+## Loop 2 Reviewer P1 Findings
+
+- [x] Refund of an unsettled receipt must not create false refund debt.
+- [x] Debt blocking must be enforced atomically with paid deduction.
+- [x] Free chat turns must be durably idempotent.
+- [x] Standard chat debit must be inside the refund-protected execution path.
+- [x] Chat-pack payment failures must persist a receipt before internal chat lookup can fail.
+- [x] Personal payment confirmations must not be posted back to a public/group payload chat.
+- [x] Pack invoice creation failures must use localized user-facing error handling.
+- [x] Pay-critical invoice and validation copy must be localized.
+- [x] Unsettled payment visibility must include charge IDs and retry commands.
+- [x] Provider metrics must include media/fallback paths.
+- [x] Google video calls must persist operation IDs.
 
 ## Loop Notes
 

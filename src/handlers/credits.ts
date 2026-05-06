@@ -166,6 +166,7 @@ async function applyPaymentOrReport<T extends { applied: boolean }>(
 		await markPaymentSettlementFailed(
 			ctx.db,
 			payment.telegram_payment_charge_id,
+			reason,
 		).catch((markErr) => {
 			logger.error("payment_mark_settlement_failed_failed", {
 				chargeId: payment.telegram_payment_charge_id,
@@ -251,13 +252,6 @@ function messageThreadId(ctx: DerpContext): number | undefined {
 	return (
 		ctx.message?.message_thread_id ?? callbackMessage(ctx)?.message_thread_id
 	);
-}
-
-function requireTargetChatId(
-	chat: Awaited<ReturnType<typeof getChatByTelegramId>>,
-): string {
-	if (!chat) throw new Error("Payment target chat not found");
-	return chat.id;
 }
 
 function commandReplyOptions(ctx: DerpContext) {
@@ -418,8 +412,11 @@ creditsComposer.callbackQuery(/^sub:(.+)$/, async (ctx) => {
 	let link: string;
 	try {
 		link = await ctx.api.createInvoiceLink(
-			`${plan.label} Subscription`,
-			`${plan.credits} credits/month (${plan.savings} savings)`,
+			ctx.t("buy-invoice-sub-title", { plan: plan.label }),
+			ctx.t("buy-invoice-sub-description", {
+				credits: plan.credits,
+				savings: plan.savings,
+			}),
 			buildCreditPaymentPayload({
 				type: "sub",
 				planId: plan.id,
@@ -428,7 +425,12 @@ creditsComposer.callbackQuery(/^sub:(.+)$/, async (ctx) => {
 			}),
 			"", // empty provider_token for Stars
 			"XTR",
-			[{ label: `${plan.label} Subscription`, amount: plan.stars }],
+			[
+				{
+					label: ctx.t("buy-invoice-sub-label", { plan: plan.label }),
+					amount: plan.stars,
+				},
+			],
 			{ subscription_period: 2592000 },
 		);
 	} catch (err) {
@@ -474,21 +476,38 @@ creditsComposer.callbackQuery(/^pack:(.+)$/, async (ctx) => {
 	}
 
 	await ctx.answerCallbackQuery();
-	await ctx.api.sendInvoice(
-		ctx.chat.id,
-		`${pack.label} Credit Pack`,
-		`${pack.credits} credits`,
-		buildCreditPaymentPayload({
-			type: "pack",
-			packId: pack.id,
-			target: "user",
-			targetChatId: ctx.chat.id,
-			targetThreadId: messageThreadId(ctx) ?? null,
-		}),
-		"XTR",
-		[{ label: `${pack.label} Pack`, amount: pack.stars }],
-		{ provider_token: "", message_thread_id: messageThreadId(ctx) },
-	);
+	try {
+		await ctx.api.sendInvoice(
+			ctx.chat.id,
+			ctx.t("buy-invoice-pack-title", { pack: pack.label }),
+			ctx.t("buy-invoice-pack-description", { credits: pack.credits }),
+			buildCreditPaymentPayload({
+				type: "pack",
+				packId: pack.id,
+				target: "user",
+				targetChatId: ctx.chat.id,
+				targetThreadId: messageThreadId(ctx) ?? null,
+			}),
+			"XTR",
+			[
+				{
+					label: ctx.t("buy-invoice-pack-label", { pack: pack.label }),
+					amount: pack.stars,
+				},
+			],
+			{ provider_token: "", message_thread_id: messageThreadId(ctx) },
+		);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		recordHandledFailure("payment_invoice", reason, {
+			reason_code: "pack_invoice",
+		});
+		logger.error("pack_invoice_failed", { packId: pack.id, error: reason });
+		await ctx.reply(ctx.t("buy-invoice-error"), {
+			parse_mode: "HTML",
+			message_thread_id: messageThreadId(ctx),
+		});
+	}
 });
 
 // ── Callback: group credit pack ─────────────────────────────────────────────
@@ -507,21 +526,43 @@ creditsComposer.callbackQuery(/^group_pack:(.+)$/, async (ctx) => {
 	}
 
 	await ctx.answerCallbackQuery();
-	await ctx.api.sendInvoice(
-		ctx.chat.id,
-		`${pack.label} Group Credit Pack`,
-		`${pack.credits} credits for this chat`,
-		buildCreditPaymentPayload({
-			type: "pack",
+	try {
+		await ctx.api.sendInvoice(
+			ctx.chat.id,
+			ctx.t("buy-invoice-group-pack-title", { pack: pack.label }),
+			ctx.t("buy-invoice-group-pack-description", {
+				credits: pack.credits,
+			}),
+			buildCreditPaymentPayload({
+				type: "pack",
+				packId: pack.id,
+				target: "chat",
+				targetChatId: ctx.chat.id,
+				targetThreadId: messageThreadId(ctx) ?? null,
+			}),
+			"XTR",
+			[
+				{
+					label: ctx.t("buy-invoice-group-pack-label", { pack: pack.label }),
+					amount: pack.stars,
+				},
+			],
+			{ provider_token: "", message_thread_id: messageThreadId(ctx) },
+		);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		recordHandledFailure("payment_invoice", reason, {
+			reason_code: "group_pack_invoice",
+		});
+		logger.error("group_pack_invoice_failed", {
 			packId: pack.id,
-			target: "chat",
-			targetChatId: ctx.chat.id,
-			targetThreadId: messageThreadId(ctx) ?? null,
-		}),
-		"XTR",
-		[{ label: `${pack.label} Group Pack`, amount: pack.stars }],
-		{ provider_token: "", message_thread_id: messageThreadId(ctx) },
-	);
+			error: reason,
+		});
+		await ctx.reply(ctx.t("buy-invoice-error"), {
+			parse_mode: "HTML",
+			message_thread_id: messageThreadId(ctx),
+		});
+	}
 });
 
 // ── Pre-checkout query ──────────────────────────────────────────────────────
@@ -536,7 +577,10 @@ creditsComposer.on("pre_checkout_query", async (ctx, next) => {
 		query.total_amount,
 	);
 	if ("error" in validation) {
-		await ctx.answerPreCheckoutQuery(false, validation.error);
+		await ctx.answerPreCheckoutQuery(
+			false,
+			ctx.t("payment-validation-error", { reason: validation.error }),
+		);
 		return;
 	}
 
@@ -558,10 +602,15 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 		payment.total_amount,
 	);
 	if ("error" in validation) {
-		await ctx.reply(`Payment rejected: ${escapeHtml(validation.error)}`, {
-			parse_mode: "HTML",
-			...commandReplyOptions(ctx),
-		});
+		await ctx.reply(
+			ctx.t("payment-validation-error", {
+				reason: escapeHtml(validation.error),
+			}),
+			{
+				parse_mode: "HTML",
+				...commandReplyOptions(ctx),
+			},
+		);
 		await notifyAdmins(
 			`⚠️ <b>Payment validation failed</b>\n\nUser: <code>${ctx.dbUser.telegramId}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nReason: ${escapeHtml(validation.error)}`,
 		);
@@ -641,8 +690,8 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 			revenueStars: plan.stars,
 			revenueSource: "subscription",
 			transactionType: "subscription",
-			targetChatId: payload.targetChatId,
-			targetThreadId: payload.targetThreadId,
+			targetChatId: ctx.chat?.id ?? payload.targetChatId,
+			targetThreadId: messageThreadId(ctx) ?? null,
 		});
 	} else if (payload.type === "pack") {
 		const pack = getTopUpPack(payload.packId);
@@ -656,7 +705,7 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 			const result = await applyPaymentOrReport(ctx, payment, () =>
 				applyChatPackPayment(ctx.db, {
 					userId: ctx.dbUser.id,
-					chatId: requireTargetChatId(targetChat),
+					chatId: targetChat?.id ?? null,
 					telegramChargeId: chargeId,
 					providerChargeId: payment.provider_payment_charge_id,
 					invoicePayload: payment.invoice_payload,
@@ -666,7 +715,7 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 					productId: pack.id,
 					creditTarget: "chat",
 					credits: pack.credits,
-					meta: { packId: pack.id },
+					meta: { packId: pack.id, targetTelegramChatId: payload.targetChatId },
 				}),
 			);
 			if (!result?.applied) return;
@@ -734,8 +783,8 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 				revenueStars: pack.stars,
 				revenueSource: "pack_user",
 				transactionType: "purchase",
-				targetChatId: payload.targetChatId,
-				targetThreadId: payload.targetThreadId,
+				targetChatId: ctx.chat?.id ?? payload.targetChatId,
+				targetThreadId: messageThreadId(ctx) ?? null,
 			});
 		}
 	}

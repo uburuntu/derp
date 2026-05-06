@@ -1,4 +1,5 @@
 import { and, asc, eq, sql } from "drizzle-orm";
+import { derpMetrics } from "../../common/observability";
 import type { Database } from "../connection";
 import {
 	creditDebtEvents,
@@ -61,6 +62,7 @@ export interface FailProviderCallInput {
 	errorMessage?: string | null;
 	estimatedCostMicros?: number;
 	actualCostMicros?: number;
+	providerRequestId?: string | null;
 	meta?: Record<string, unknown>;
 }
 
@@ -124,16 +126,25 @@ export async function startProviderCall(
 			mediaInputCount: input.mediaInputCount ?? 0,
 			meta: input.meta,
 		})
-		.onConflictDoUpdate({
+		.onConflictDoNothing({
 			target: [providerCalls.logicalRequestKey, providerCalls.attemptNo],
-			set: {
-				status: "started",
-				updatedAt: new Date(),
-			},
 		})
 		.returning({ id: providerCalls.id });
 
-	if (!inserted) throw new Error("Provider call insert failed");
+	if (!inserted) {
+		const [existing] = await db
+			.select({ id: providerCalls.id })
+			.from(providerCalls)
+			.where(
+				and(
+					eq(providerCalls.logicalRequestKey, input.logicalRequestKey ?? ""),
+					eq(providerCalls.attemptNo, input.attemptNo ?? 1),
+				),
+			)
+			.limit(1);
+		if (!existing) throw new Error("Provider call conflict without row");
+		return existing.id;
+	}
 	return inserted.id;
 }
 
@@ -142,7 +153,7 @@ export async function finishProviderCall(
 	id: string,
 	input: FinishProviderCallInput,
 ): Promise<void> {
-	await db
+	const [row] = await db
 		.update(providerCalls)
 		.set({
 			status: "succeeded",
@@ -161,7 +172,18 @@ export async function finishProviderCall(
 			finishedAt: new Date(),
 			updatedAt: new Date(),
 		})
-		.where(eq(providerCalls.id, id));
+		.where(eq(providerCalls.id, id))
+		.returning({
+			provider: providerCalls.provider,
+			operation: providerCalls.operation,
+			route: providerCalls.route,
+			keyClass: providerCalls.keyClass,
+			modelId: providerCalls.modelId,
+			creditsCharged: providerCalls.creditsCharged,
+		});
+	if (row) {
+		recordProviderMetrics(row, "succeeded", input.actualCostMicros ?? 0);
+	}
 }
 
 export async function failProviderCall(
@@ -169,19 +191,63 @@ export async function failProviderCall(
 	id: string,
 	input: FailProviderCallInput,
 ): Promise<void> {
-	await db
+	const [row] = await db
 		.update(providerCalls)
 		.set({
 			status: "failed",
 			errorCode: input.errorCode ?? "provider_error",
 			errorMessage: input.errorMessage?.slice(0, 500),
+			providerRequestId: input.providerRequestId ?? undefined,
 			estimatedCostMicros: input.estimatedCostMicros ?? undefined,
 			actualCostMicros: input.actualCostMicros ?? undefined,
 			meta: input.meta ?? undefined,
 			finishedAt: new Date(),
 			updatedAt: new Date(),
 		})
-		.where(eq(providerCalls.id, id));
+		.where(eq(providerCalls.id, id))
+		.returning({
+			provider: providerCalls.provider,
+			operation: providerCalls.operation,
+			route: providerCalls.route,
+			keyClass: providerCalls.keyClass,
+			modelId: providerCalls.modelId,
+			creditsCharged: providerCalls.creditsCharged,
+		});
+	if (row) {
+		recordProviderMetrics(
+			row,
+			"failed",
+			input.actualCostMicros ?? input.estimatedCostMicros ?? 0,
+			input.errorCode ?? undefined,
+		);
+	}
+}
+
+function recordProviderMetrics(
+	row: {
+		provider: string;
+		operation: string;
+		route: string | null;
+		keyClass: string | null;
+		modelId: string;
+		creditsCharged: number | null;
+	},
+	status: "succeeded" | "failed",
+	costMicros: number,
+	errorCode?: string,
+): void {
+	const attrs: Record<string, string | number> = {
+		provider: row.provider,
+		operation: row.operation,
+		route: row.route ?? "primary",
+		key_class: row.keyClass ?? "unknown",
+		model: row.modelId,
+		status,
+		credits_charged: row.creditsCharged ?? 0,
+	};
+	if (errorCode) attrs.error_code = errorCode;
+	derpMetrics?.providerCalls.add(1, attrs);
+	if (costMicros > 0) derpMetrics?.providerCostMicros.add(costMicros, attrs);
 }
 
 export async function reserveQuotaWindow(
@@ -311,6 +377,64 @@ export async function recordGlobalFreeToolUsage(
 				userId: input.userId,
 				limit: input.limit,
 				meta: { ...input.meta, toolName: input.toolName },
+			});
+			if (!reserved) throw new GlobalQuotaExhaustedError();
+			return "applied";
+		});
+	} catch (err) {
+		if (err instanceof GlobalQuotaExhaustedError) return "quota_exhausted";
+		throw err;
+	}
+}
+
+export async function recordFreeChatUsage(
+	db: Database,
+	input: {
+		userId: string;
+		chatId: string;
+		modelId: string | null;
+		limit: number;
+		idempotencyKey?: string;
+		meta?: Record<string, unknown>;
+	},
+): Promise<"applied" | "duplicate" | "quota_exhausted"> {
+	try {
+		return await db.transaction(async (tx) => {
+			if (input.idempotencyKey) {
+				const [inserted] = await tx
+					.insert(ledger)
+					.values({
+						userId: input.userId,
+						chatId: input.chatId,
+						type: "spend",
+						amount: 0,
+						balanceAfter: 0,
+						toolName: "chat_free",
+						modelId: input.modelId,
+						idempotencyKey: input.idempotencyKey,
+						meta: input.meta,
+					})
+					.onConflictDoNothing({ target: ledger.idempotencyKey })
+					.returning({ id: ledger.id });
+				if (!inserted) return "duplicate";
+
+				const [userRow] = await tx
+					.select({ credits: users.credits })
+					.from(users)
+					.where(eq(users.id, input.userId))
+					.limit(1);
+
+				await tx
+					.update(ledger)
+					.set({ balanceAfter: userRow?.credits ?? 0 })
+					.where(eq(ledger.id, inserted.id));
+			}
+
+			const reserved = await reserveQuotaWindow(tx, {
+				scope: "free_chat",
+				userId: input.userId,
+				limit: input.limit,
+				meta: { ...input.meta, chatId: input.chatId },
 			});
 			if (!reserved) throw new GlobalQuotaExhaustedError();
 			return "applied";

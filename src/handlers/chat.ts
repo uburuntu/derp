@@ -25,7 +25,7 @@ import {
 	STANDARD_CHAT_TOOL_NAME,
 } from "../credits/service";
 import { getBalances } from "../db/queries/credits";
-import { reserveQuotaWindow } from "../db/queries/finance";
+import { recordFreeChatUsage } from "../db/queries/finance";
 import { getMembersWithUsers } from "../db/queries/members";
 import { getRecentMessages, insertMessage } from "../db/queries/messages";
 import type { MessageMetadata } from "../db/schema";
@@ -212,6 +212,7 @@ chatComposer.on("message", async (ctx) => {
 	let chatCreditResult: Awaited<
 		ReturnType<typeof ctx.creditService.checkToolAccess>
 	> | null = null;
+	let chatDebitReserved = false;
 	const chatTurnIdempotencyKey = ctx.chat
 		? `chat:${ctx.chat.id}:${message.message_id}`
 		: undefined;
@@ -221,15 +222,7 @@ chatComposer.on("message", async (ctx) => {
 			STANDARD_CHAT_TOOL_NAME,
 		);
 
-		if (chatCreditResult.allowed) {
-			const reserved = await ctx.creditService.deduct(
-				chatCreditResult,
-				STANDARD_CHAT_TOOL_NAME,
-				chatTurnIdempotencyKey,
-				{ phase: "chat_turn" },
-			);
-			if (reserved === "duplicate") return;
-		} else {
+		if (!chatCreditResult.allowed) {
 			const freeModel = getDefaultModel(ModelCapability.TEXT, ModelTier.FREE);
 			tier = ModelTier.FREE;
 			modelId = freeModel.id;
@@ -239,13 +232,18 @@ chatComposer.on("message", async (ctx) => {
 	}
 
 	if (tier === ModelTier.FREE) {
-		const freeAllowed = await reserveQuotaWindow(ctx.db, {
-			scope: "free_chat",
+		const freeReservation = await recordFreeChatUsage(ctx.db, {
 			userId: ctx.dbUser.id,
+			chatId: ctx.dbChat.id,
+			modelId,
 			limit: FREE_CHAT_DAILY_LIMIT,
+			idempotencyKey: chatTurnIdempotencyKey
+				? `free:${chatTurnIdempotencyKey}`
+				: undefined,
 			meta: { chatId: ctx.dbChat.id, threadId: ctx.message?.message_thread_id },
 		});
-		if (!freeAllowed) {
+		if (freeReservation === "duplicate") return;
+		if (freeReservation === "quota_exhausted") {
 			await replyHtml(ctx, ctx.t("chat-free-quota-reached"), {
 				message_thread_id: ctx.message?.message_thread_id,
 				reply_to_message_id: ctx.message?.message_id,
@@ -386,6 +384,17 @@ chatComposer.on("message", async (ctx) => {
 	let fallbackFrom: string | undefined;
 
 	try {
+		if (chatCreditResult?.allowed) {
+			const reserved = await ctx.creditService.deduct(
+				chatCreditResult,
+				STANDARD_CHAT_TOOL_NAME,
+				chatTurnIdempotencyKey,
+				{ phase: "chat_turn" },
+			);
+			if (reserved === "duplicate") return;
+			chatDebitReserved = true;
+		}
+
 		const tracking = {
 			db: ctx.db,
 			logicalRequestKey: chatTurnIdempotencyKey,
@@ -620,7 +629,7 @@ chatComposer.on("message", async (ctx) => {
 		derpMetrics.contextTokens.record(recentMessages.length, { tier });
 	} catch (err) {
 		const error = err instanceof Error ? err.message : String(err);
-		if (chatCreditResult && !providerCompleted) {
+		if (chatCreditResult && chatDebitReserved && !providerCompleted) {
 			await ctx.creditService
 				.refundDeduction(
 					chatCreditResult,
@@ -636,7 +645,7 @@ chatComposer.on("message", async (ctx) => {
 								: String(refundErr),
 					});
 				});
-		} else if (chatCreditResult && providerCompleted) {
+		} else if (chatCreditResult && chatDebitReserved && providerCompleted) {
 			logger.warn("chat_billable_failure_not_refunded", {
 				error,
 				creditsDeducted: chatCreditResult.creditsToDeduct,

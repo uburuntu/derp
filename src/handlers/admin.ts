@@ -701,6 +701,78 @@ adminComposer.command("admin", async (ctx) => {
 			break;
 		}
 
+		case "unsettled_payments": {
+			const limitArg = Number.parseInt(args.trim() || "10", 10);
+			const limit = Number.isFinite(limitArg)
+				? Math.max(1, Math.min(25, limitArg))
+				: 10;
+			const { sql } = await import("drizzle-orm");
+			const rows = await ctx.db.execute(sql`
+				SELECT
+					p.telegram_charge_id,
+					p.status,
+					p.product_type,
+					p.product_id,
+					p.stars,
+					p.credits,
+					p.created_at,
+					p.updated_at,
+					p.meta->>'lastSettlementError' AS last_error,
+					COALESCE((p.meta->>'settlementAttemptCount')::int, 0) AS attempts,
+					u.telegram_id AS user_telegram_id,
+					c.telegram_id AS chat_telegram_id
+				FROM payment_receipts p
+				JOIN users u ON u.id = p.user_id
+				LEFT JOIN chats c ON c.id = p.chat_id
+				WHERE p.status IN ('received', 'settlement_failed', 'refund_pending')
+				ORDER BY p.updated_at ASC
+				LIMIT ${limit}
+			`);
+			const payments = rows as unknown as Array<{
+				telegram_charge_id: string;
+				status: string;
+				product_type: string;
+				product_id: string | null;
+				stars: number;
+				credits: number;
+				created_at: Date;
+				updated_at: Date;
+				last_error: string | null;
+				attempts: number;
+				user_telegram_id: number;
+				chat_telegram_id: number | null;
+			}>;
+			if (payments.length === 0) {
+				await ctx.reply("No unsettled payments.");
+				break;
+			}
+			const lines = payments.map((payment) => {
+				const ageMinutes = Math.max(
+					0,
+					Math.round(
+						(Date.now() - new Date(payment.created_at).getTime()) / 60000,
+					),
+				);
+				const product = payment.product_id
+					? `${payment.product_type}/${payment.product_id}`
+					: payment.product_type;
+				return (
+					`<code>${escapeHtml(payment.telegram_charge_id)}</code>\n` +
+					`Status: ${escapeHtml(payment.status)} · Attempts: ${payment.attempts} · Age: ${ageMinutes}m\n` +
+					`User/chat: <code>${payment.user_telegram_id}</code> / <code>${payment.chat_telegram_id ?? "n/a"}</code>\n` +
+					`Product: ${escapeHtml(product)} · ${payment.stars}⭐ · ${payment.credits} cr\n` +
+					`Retry: <code>/admin settle_payment ${escapeHtml(payment.telegram_charge_id)}</code>` +
+					(payment.last_error
+						? `\nLast error: ${escapeHtml(payment.last_error).slice(0, 240)}`
+						: "")
+				);
+			});
+			await ctx.reply(`<b>Unsettled Payments</b>\n\n${lines.join("\n\n")}`, {
+				parse_mode: "HTML",
+			});
+			break;
+		}
+
 		case "db": {
 			// /admin db — table row counts
 			const { sql } = await import("drizzle-orm");
@@ -844,6 +916,7 @@ adminComposer.command("admin", async (ctx) => {
 					"/admin stars — Bot Stars balance\n" +
 					"/admin reconcile_refund &lt;chargeId&gt; — Reconcile an already-refunded charge\n" +
 					"/admin settle_payment &lt;chargeId&gt; — Retry a pending payment settlement\n" +
+					"/admin unsettled_payments [limit] — List payments needing settlement\n" +
 					"/admin db — Table row counts\n" +
 					"/admin test — E2E smoke test (grants 100 credits)\n\n" +
 					"/refund &lt;userId&gt; &lt;chargeId&gt; — Refund a payment",

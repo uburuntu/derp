@@ -20,7 +20,10 @@ import {
 	type SignedDonationPayload,
 } from "../credits/payment-payload";
 import { getChatByTelegramId } from "../db/queries/chats";
-import { recordDonationPayment } from "../db/queries/credits";
+import {
+	markPaymentSettlementFailed,
+	recordDonationPayment,
+} from "../db/queries/credits";
 
 const donationsComposer = new Composer<DerpContext>();
 const DONATION_OPTIONS = [20, 100, 250];
@@ -211,6 +214,16 @@ async function applyDonationOrReport<T extends { applied: boolean }>(
 				...threadOptions(ctx),
 			},
 		);
+		await markPaymentSettlementFailed(
+			ctx.db,
+			payment.telegram_payment_charge_id,
+			reason,
+		).catch((markErr) => {
+			logger.error("donation_mark_settlement_failed_failed", {
+				chargeId: payment.telegram_payment_charge_id,
+				error: markErr instanceof Error ? markErr.message : String(markErr),
+			});
+		});
 		await notifyAdmins(
 			`⚠️ <b>Donation processing failed</b>\n\nUser: <code>${ctx.dbUser?.telegramId ?? "unknown"}</code>\nTarget chat: <code>${payload.targetChatId}</code>\nCharge: <code>${escapeHtml(payment.telegram_payment_charge_id)}</code>\nPayload: <code>${escapeHtml(payment.invoice_payload)}</code>\nAmount: ${payment.total_amount} ${escapeHtml(payment.currency)}\nReason: ${escapeHtml(reason)}`,
 			{ critical: true },

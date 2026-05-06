@@ -103,8 +103,18 @@ buy-pay-button = Оплатить { $stars }⭐/мес
 buy-plan-button = Ежемесячно { $plan } — { $stars }⭐ → { $credits } кр. (выгода { $savings }){ $tag }
 buy-pack-button = Разовый { $pack } — { $stars }⭐ → { $credits } кр.{ $bonus }
 buy-group-pack-button = В чат { $pack } — { $stars }⭐ → { $credits } общих кр.{ $bonus }
+buy-invoice-sub-title = Подписка { $plan }
+buy-invoice-sub-description = { $credits } кредитов в месяц (выгода { $savings })
+buy-invoice-sub-label = Подписка { $plan }
+buy-invoice-pack-title = Пакет кредитов { $pack }
+buy-invoice-pack-description = { $credits } кредитов
+buy-invoice-pack-label = Пакет { $pack }
+buy-invoice-group-pack-title = Пакет кредитов группы { $pack }
+buy-invoice-group-pack-description = { $credits } кредитов для этого чата
+buy-invoice-group-pack-label = Пакет группы { $pack }
 buy-chat-groups-only = Эта команда работает в группах. Для личных кредитов используй /buy.
 buy-invoice-error = Не удалось создать ссылку на оплату. Попробуй ещё раз.
+payment-validation-error = Платёж отклонён: { $reason }
 
 ## Donations
 donate-choose = ⭐ <b>Поддержать Derp</b>
