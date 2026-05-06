@@ -92,12 +92,14 @@ Status: loop 5 remediation complete
 ## Platformization Debt
 
 - [x] Split tool execution-context construction and delivery persistence out of `src/tools/registry.ts`.
-- [ ] Split `src/db/queries/credits.ts` into ledger, payments, subscriptions, free-quota, and metrics repositories.
-- [ ] Split `src/handlers/admin.ts` into command registration, finance operations, observability dashboards, and maintenance actions.
+- [x] Split credit ledger/balance mutation and free-quota accounting out of `src/db/queries/credits.ts`.
+- [x] Split admin metrics and standalone refund command out of `src/handlers/admin.ts`.
+- [ ] Split remaining `src/db/queries/credits.ts` payment-settlement, subscription, donation, and refund-reconciliation repositories.
+- [ ] Split remaining `src/handlers/admin.ts` finance recovery views, DB maintenance, and smoke-test actions.
 - [ ] Split `src/handlers/credits.ts` into balance view, purchase flows, receipts, refunds, and group-pool UX.
 - [ ] Continue shrinking provider adapters by moving shared Google media-operation orchestration out of `src/llm/providers/google.ts`.
 
-Current largest files after the tool runtime split: `src/db/queries/credits.ts` (1696), `src/handlers/admin.ts` (1113), `src/llm/providers/google.ts` (1073), `src/handlers/credits.ts` (1068), `src/handlers/chat.ts` (838), `src/handlers/settings.ts` (755), `src/db/queries/finance.ts` (747).
+Current largest files after this pass: `src/llm/providers/google.ts` (1073), `src/handlers/credits.ts` (1068), `src/db/queries/credits.ts` (995), `src/handlers/chat.ts` (838), `src/handlers/settings.ts` (755), `src/db/queries/finance.ts` (747), `src/handlers/admin.ts` (723).
 
 ## Loop Notes
 
