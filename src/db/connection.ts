@@ -22,7 +22,7 @@ const SCHEMA_CHECKS = [
 	"SELECT id, provider, operation, model_id, status, actual_cost_micros FROM provider_calls LIMIT 0",
 	"SELECT id, user_id, status, outstanding_amount FROM credit_debts LIMIT 0",
 	"SELECT id, debt_id, type, amount FROM credit_debt_events LIMIT 0",
-	"SELECT id, scope, subject_key, window_key, used, \"limit\" FROM quota_windows LIMIT 0",
+	'SELECT id, scope, subject_key, window_key, used, "limit" FROM quota_windows LIMIT 0',
 	"SELECT id, user_id, chat_id, tool_name, status FROM pending_tool_confirmations LIMIT 0",
 	"SELECT id, user_id, payment_id, plan_id, expires_at, status FROM subscription_periods LIMIT 0",
 	"SELECT id, user_id, chat_id, usage_date, usage FROM usage_quotas LIMIT 0",

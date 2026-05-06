@@ -233,6 +233,16 @@ export async function executeWithCreditGate(
 				if (creditResult.creditsToDeduct > 0) {
 					derpMetrics.creditTransactions.add(1, { type: "spend" });
 				}
+				if (result.handled && creditResult.creditsToDeduct > 0) {
+					await ctx
+						.sendMessage(formatSpendReceipt(creditResult))
+						.catch((err) => {
+							logger.warn("tool_spend_receipt_failed", {
+								tool: tool.name,
+								error: err instanceof Error ? err.message : String(err),
+							});
+						});
+				}
 			} else {
 				span.setAttribute("derp.tool.outcome", "error");
 				derpMetrics.toolCalls.add(1, {
@@ -322,6 +332,16 @@ function buildUpsellMessage(tool: ToolDefinition): string {
 		return "Subscribe from 150⭐/month for the best value. Use /buy to see plans.";
 	}
 	return "Use /buy to get credits or subscribe.";
+}
+
+function formatSpendReceipt(result: CreditCheckResult): string {
+	const source =
+		result.source === "chat"
+			? "from group pool"
+			: result.source === "user"
+				? "from personal balance"
+				: "";
+	return `${result.creditsRemaining != null && result.creditsRemaining <= 20 ? "⚠️" : "✨"} ${result.creditsToDeduct} credits used ${source} · ${result.creditsRemaining ?? 0} remaining`;
 }
 
 function buildUnavailableMessage(

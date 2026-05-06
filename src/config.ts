@@ -13,9 +13,7 @@ const configSchema = z
 			.transform((s) => (s ? s.split(",").filter(Boolean) : [])),
 		googleApiPaidKey: z.string().optional(),
 		openrouterApiKey: z.string().optional(),
-		openrouterPaidFallbackModel: z
-			.string()
-			.default("openai/gpt-5.4-mini"),
+		openrouterPaidFallbackModel: z.string().default("openai/gpt-5.4-mini"),
 		braveSearchApiKey: z.string().optional(),
 		botAdminIds: z
 			.string()

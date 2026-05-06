@@ -387,7 +387,8 @@ chatComposer.on("message", async (ctx) => {
 			db: ctx.db,
 			logicalRequestKey: chatTurnIdempotencyKey,
 			operation: "chat",
-			keyClass: tier === ModelTier.STANDARD ? ("paid" as const) : ("free" as const),
+			keyClass:
+				tier === ModelTier.STANDARD ? ("paid" as const) : ("free" as const),
 			userId: ctx.dbUser.id,
 			chatId: ctx.dbChat.id,
 			creditsCharged: chatCreditResult?.creditsToDeduct ?? 0,
@@ -410,54 +411,60 @@ chatComposer.on("message", async (ctx) => {
 
 		let result: Awaited<ReturnType<typeof provider.chatWithTools>>;
 		try {
-			result = await provider.chatWithTools(chatParams, async (toolName, args) => {
-				if (userPreferences.disabledTools.includes(toolName)) {
-					return {
-						error: `Tool disabled by user settings: ${toolName}`,
-					};
-				}
-
-				const tool = toolRegistry.getTool(toolName);
-				if (!tool) {
-					return { error: `Unknown tool: ${toolName}` };
-				}
-
-				const parsed = tool.parameters.safeParse(args);
-				if (!parsed.success) {
-					return { error: `Invalid parameters: ${parsed.error.message}` };
-				}
-
-				const toolCallIndex = toolsUsed.length;
-				const toolResult = await executeWithCreditGate(tool, parsed.data, {
-					...toolContext,
-					idempotencyKey:
-						ctx.chat && ctx.message
-							? `tool:${toolName}:llm:${ctx.chat.id}:${ctx.message.message_id}:${toolCallIndex}`
-							: undefined,
-				});
-				toolsUsed.push(toolName);
-				if (toolResult.creditResult) {
-					creditsSpent += toolResult.creditResult.creditsToDeduct;
-					if (toolResult.creditResult.creditsRemaining != null) {
-						creditsRemaining = toolResult.creditResult.creditsRemaining;
+			result = await provider.chatWithTools(
+				chatParams,
+				async (toolName, args) => {
+					if (userPreferences.disabledTools.includes(toolName)) {
+						return {
+							error: `Tool disabled by user settings: ${toolName}`,
+						};
 					}
-					if (!creditSource && toolResult.creditResult.source !== "rejected") {
-						creditSource = toolResult.creditResult.source;
-					}
-				}
 
-				if (toolResult.handled) {
-					return { result: "Response sent directly to chat." };
-				}
-				if (toolResult.error) {
-					return {
-						result:
-							toolResult.text ??
-							"I couldn't complete that tool request. Please try again later.",
-					};
-				}
-				return { result: toolResult.text ?? "Done." };
-			});
+					const tool = toolRegistry.getTool(toolName);
+					if (!tool) {
+						return { error: `Unknown tool: ${toolName}` };
+					}
+
+					const parsed = tool.parameters.safeParse(args);
+					if (!parsed.success) {
+						return { error: `Invalid parameters: ${parsed.error.message}` };
+					}
+
+					const toolCallIndex = toolsUsed.length;
+					const toolResult = await executeWithCreditGate(tool, parsed.data, {
+						...toolContext,
+						idempotencyKey:
+							ctx.chat && ctx.message
+								? `tool:${toolName}:llm:${ctx.chat.id}:${ctx.message.message_id}:${toolCallIndex}`
+								: undefined,
+					});
+					toolsUsed.push(toolName);
+					if (toolResult.creditResult) {
+						creditsSpent += toolResult.creditResult.creditsToDeduct;
+						if (toolResult.creditResult.creditsRemaining != null) {
+							creditsRemaining = toolResult.creditResult.creditsRemaining;
+						}
+						if (
+							!creditSource &&
+							toolResult.creditResult.source !== "rejected"
+						) {
+							creditSource = toolResult.creditResult.source;
+						}
+					}
+
+					if (toolResult.handled) {
+						return { result: "Response sent directly to chat." };
+					}
+					if (toolResult.error) {
+						return {
+							result:
+								toolResult.text ??
+								"I couldn't complete that tool request. Please try again later.",
+						};
+					}
+					return { result: toolResult.text ?? "Done." };
+				},
+			);
 		} catch (primaryErr) {
 			if (
 				tier === ModelTier.STANDARD &&
@@ -540,6 +547,7 @@ chatComposer.on("message", async (ctx) => {
 				chunks,
 				creditsSpent,
 				creditsRemaining ?? 0,
+				creditSource,
 			);
 
 			for (let i = 0; i < withFooter.length; i++) {

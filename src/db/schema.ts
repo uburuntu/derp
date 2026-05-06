@@ -295,9 +295,7 @@ export const providerCalls = pgTable(
 		mediaInputCount: integer("media_input_count").notNull().default(0),
 		mediaOutputCount: integer("media_output_count").notNull().default(0),
 		durationSeconds: integer("duration_seconds"),
-		estimatedCostMicros: integer("estimated_cost_micros")
-			.notNull()
-			.default(0),
+		estimatedCostMicros: integer("estimated_cost_micros").notNull().default(0),
 		actualCostMicros: integer("actual_cost_micros").notNull().default(0),
 		creditsCharged: integer("credits_charged").notNull().default(0),
 		creditSource: varchar("credit_source", { length: 20 }),
@@ -365,10 +363,7 @@ export const creditDebts = pgTable(
 		index("credit_debts_chat_status_idx").on(t.chatId, t.status),
 		index("credit_debts_charge_idx").on(t.telegramChargeId),
 		check("credit_debts_amount_check", sql`${t.amount} > 0`),
-		check(
-			"credit_debts_outstanding_check",
-			sql`${t.outstandingAmount} >= 0`,
-		),
+		check("credit_debts_outstanding_check", sql`${t.outstandingAmount} >= 0`),
 	],
 );
 

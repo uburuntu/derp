@@ -72,12 +72,22 @@ export function splitMessage(
 }
 
 /** Format a credit usage footer line */
-export function formatBalanceFooter(cost: number, remaining: number): string {
+export function formatBalanceFooter(
+	cost: number,
+	remaining: number,
+	source?: string,
+): string {
 	if (cost === 0) return "";
+	const sourceText =
+		source === "chat"
+			? " from group pool"
+			: source === "user"
+				? " from personal balance"
+				: "";
 	if (remaining <= 20) {
-		return `\n\n⚠️ ${cost} credits used · ${remaining} remaining · /buy to top up`;
+		return `\n\n⚠️ ${cost} credits used${sourceText} · ${remaining} remaining · /buy to top up`;
 	}
-	return `\n\n✨ ${cost} credits used · ${remaining} remaining`;
+	return `\n\n✨ ${cost} credits used${sourceText} · ${remaining} remaining`;
 }
 
 /** Append balance footer to the last chunk of a split message */
@@ -85,9 +95,10 @@ export function appendFooterToChunks(
 	chunks: string[],
 	cost: number,
 	remaining: number,
+	source?: string,
 ): string[] {
 	if (cost === 0 || chunks.length === 0) return chunks;
-	const footer = formatBalanceFooter(cost, remaining);
+	const footer = formatBalanceFooter(cost, remaining, source);
 	const last = chunks[chunks.length - 1] + footer;
 
 	// If appending footer exceeds limit, add as a new chunk

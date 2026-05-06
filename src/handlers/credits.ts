@@ -20,7 +20,14 @@ import {
 	type SignedCreditPaymentPayload,
 } from "../credits/payment-payload";
 import { getSubscriptionPlan } from "../credits/subscriptions";
-import { buildBuyKeyboard, formatBalanceMessage } from "../credits/ui";
+import {
+	buildBuyKeyboard,
+	buildBuyTargetKeyboard,
+	buildGroupPackKeyboard,
+	buildPersonalPackKeyboard,
+	buildSubscriptionKeyboard,
+	formatBalanceMessage,
+} from "../credits/ui";
 import { getChatByTelegramId } from "../db/queries/chats";
 import {
 	applyChatPackPayment,
@@ -29,6 +36,7 @@ import {
 	getBalances,
 	reconcileStarRefund,
 } from "../db/queries/credits";
+import { getOpenDebtAmount } from "../db/queries/finance";
 
 const creditsComposer = new Composer<DerpContext>();
 
@@ -259,14 +267,34 @@ creditsComposer.command(["credits", "balance", "bal"], async (ctx) => {
 		ctx.dbUser.telegramId,
 		ctx.dbChat.telegramId,
 	);
+	const [userDebt, chatDebt] = await Promise.all([
+		getOpenDebtAmount(ctx.db, { userId: ctx.dbUser.id }),
+		getOpenDebtAmount(ctx.db, {
+			userId: ctx.dbUser.id,
+			chatId: ctx.dbChat.id,
+		}),
+	]);
 
-	const message = formatBalanceMessage(
+	let message = formatBalanceMessage(
 		userCredits,
 		chatCredits,
 		ctx.dbUser.subscriptionTier,
 		ctx.dbUser.subscriptionExpiresAt,
 		(key, args) => ctx.t(key, args),
 	);
+	if (userDebt > 0 || chatDebt > 0) {
+		message += `\n\n⚠️ <b>Refund debt</b>`;
+		if (userDebt > 0) {
+			message += `\nPersonal debt: ${userDebt} credits`;
+		}
+		if (chatDebt > 0) {
+			message += `\nGroup debt: ${chatDebt} credits`;
+		}
+		message += `\n<i>New payments settle debt first; paid usage is blocked until it is settled.</i>`;
+	}
+	if (ctx.chat?.type === "group" || ctx.chat?.type === "supergroup") {
+		message += `\n\n<i>Spend order here: group pool first, then personal credits.</i>`;
+	}
 
 	await ctx.reply(message, {
 		parse_mode: "HTML",
@@ -297,13 +325,68 @@ creditsComposer.command(["buy_chat", "buychat"], async (ctx) => {
 		return;
 	}
 
-	const keyboard = buildBuyKeyboard(true, (key, args) => ctx.t(key, args));
-	await ctx.reply(ctx.t("buy-choose"), {
+	const keyboard = buildGroupPackKeyboard((key, args) => ctx.t(key, args));
+	await ctx.reply(ctx.t("buy-choose-group"), {
 		parse_mode: "HTML",
 		reply_markup: keyboard,
 		...commandReplyOptions(ctx),
 	});
 });
+
+creditsComposer.callbackQuery(
+	/^buy:(personal|group|subs|back|cancel)$/,
+	async (ctx) => {
+		const action = ctx.match[1];
+		if (!action) return;
+		await ctx.answerCallbackQuery();
+
+		if (action === "cancel") {
+			await ctx.deleteMessage().catch(() => undefined);
+			return;
+		}
+
+		const isGroup =
+			ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+		if (action === "back") {
+			await ctx.editMessageText(ctx.t("buy-choose"), {
+				parse_mode: "HTML",
+				reply_markup: isGroup
+					? buildBuyTargetKeyboard((key, args) => ctx.t(key, args))
+					: buildBuyKeyboard(false, (key, args) => ctx.t(key, args)),
+			});
+			return;
+		}
+
+		if (action === "personal") {
+			await ctx.editMessageText(ctx.t("buy-choose-personal"), {
+				parse_mode: "HTML",
+				reply_markup: buildPersonalPackKeyboard((key, args) =>
+					ctx.t(key, args),
+				),
+			});
+			return;
+		}
+
+		if (action === "group") {
+			if (!isGroup) {
+				await ctx.editMessageText(ctx.t("buy-chat-groups-only"), {
+					parse_mode: "HTML",
+				});
+				return;
+			}
+			await ctx.editMessageText(ctx.t("buy-choose-group"), {
+				parse_mode: "HTML",
+				reply_markup: buildGroupPackKeyboard((key, args) => ctx.t(key, args)),
+			});
+			return;
+		}
+
+		await ctx.editMessageText(ctx.t("buy-choose-subscriptions"), {
+			parse_mode: "HTML",
+			reply_markup: buildSubscriptionKeyboard((key, args) => ctx.t(key, args)),
+		});
+	},
+);
 
 // ── Callback: subscription selection ────────────────────────────────────────
 
@@ -518,9 +601,13 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 		);
 		if (!result?.applied) return;
 
-		const msg = isRenewal
-			? `${plan.label} subscription renewed! ${plan.credits} credits added.`
-			: `Subscribed to ${plan.label}! ${plan.credits} credits added. Your subscription renews monthly.`;
+		const msgBase = isRenewal
+			? `${plan.label} subscription renewed!`
+			: `Subscribed to ${plan.label}! Your subscription renews monthly.`;
+		const msg =
+			result.debtRecovered && result.debtRecovered > 0
+				? `${msgBase} ${result.debtRecovered} credits settled refund debt; ${result.creditedAmount ?? 0} credits added.`
+				: `${msgBase} ${plan.credits} credits added.`;
 		await runAppliedPaymentSideEffects(ctx, payment, {
 			replyText: msg,
 			adminText: formatPaymentNotification({
@@ -567,7 +654,10 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 			);
 			if (!result?.applied) return;
 			await runAppliedPaymentSideEffects(ctx, payment, {
-				replyText: `${pack.credits} credits added to this chat's pool!`,
+				replyText:
+					result.debtRecovered && result.debtRecovered > 0
+						? `${result.debtRecovered} credits settled group refund debt; ${result.creditedAmount ?? 0} shared credits added.`
+						: `${pack.credits} credits added to this chat's pool!`,
 				adminText: formatPaymentNotification({
 					type: "purchase",
 					userId: ctx.dbUser.telegramId,
@@ -604,7 +694,10 @@ creditsComposer.on("message:successful_payment", async (ctx, next) => {
 			);
 			if (!result?.applied) return;
 			await runAppliedPaymentSideEffects(ctx, payment, {
-				replyText: `${pack.credits} credits added to your balance!`,
+				replyText:
+					result.debtRecovered && result.debtRecovered > 0
+						? `${result.debtRecovered} credits settled personal refund debt; ${result.creditedAmount ?? 0} credits added.`
+						: `${pack.credits} credits added to your balance!`,
 				adminText: formatPaymentNotification({
 					type: "purchase",
 					userId: ctx.dbUser.telegramId,
@@ -647,6 +740,13 @@ creditsComposer.on("message:refunded_payment", async (ctx) => {
 		await notifyAdmins(
 			`↩️ <b>Refund reconciled</b>\n\nCharge: <code>${escapeHtml(refund.telegram_payment_charge_id)}</code>\nTarget: ${reconciliation.target}\nRecovered: ${reconciliation.recoveredAmount}/${reconciliation.originalAmount}\nUnrecovered: ${reconciliation.unrecoveredAmount}`,
 			{ critical: true },
+		);
+		await ctx.reply(
+			`↩️ <b>Refund processed</b>\n\nRecovered ${reconciliation.recoveredAmount}/${reconciliation.originalAmount} credits from ${reconciliation.target === "chat" ? "this group's shared pool" : "your personal balance"}.${reconciliation.unrecoveredAmount > 0 ? `\n\n${reconciliation.unrecoveredAmount} credits were already used and must be settled before paid usage continues.` : ""}`,
+			{
+				parse_mode: "HTML",
+				...commandReplyOptions(ctx),
+			},
 		);
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);

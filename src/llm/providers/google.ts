@@ -858,8 +858,7 @@ export class GoogleLLMProvider implements LLMProvider {
 										referenceImages: [
 											{
 												image: {
-													imageBytes:
-														params.referenceImage.toString("base64"),
+													imageBytes: params.referenceImage.toString("base64"),
 													mimeType: "image/jpeg",
 												},
 												referenceType: VideoGenerationReferenceType.ASSET,

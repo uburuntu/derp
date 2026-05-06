@@ -13,6 +13,7 @@ import {
 	type RefundReconciliationResult,
 	reconcileStarRefund,
 } from "../db/queries/credits";
+import { waiveCreditDebt } from "../db/queries/finance";
 import { getUserByTelegramId } from "../db/queries/users";
 import { toolRegistry } from "../tools/registry";
 
@@ -408,11 +409,15 @@ adminComposer.command("admin", async (ctx) => {
 					(SELECT COALESCE(sum(amount), 0)::int FROM ledger WHERE created_at >= now() - make_interval(days => ${days}) AND type = 'grant') AS credits_granted,
 					(SELECT COALESCE(sum(-amount), 0)::int FROM ledger WHERE created_at >= now() - make_interval(days => ${days}) AND type = 'refund') AS credits_refunded,
 					(SELECT COALESCE(sum(((meta->>'unrecoveredAmount')::int)), 0)::int FROM ledger WHERE created_at >= now() - make_interval(days => ${days}) AND type = 'refund' AND meta ? 'unrecoveredAmount') AS refund_debt_credits,
+					(SELECT COALESCE(sum(outstanding_amount), 0)::int FROM credit_debts WHERE status = 'open') AS open_debt_credits,
 					(SELECT COALESCE(sum(stars), 0)::int FROM payment_receipts WHERE created_at >= now() - make_interval(days => ${days})) AS gross_stars,
 					(SELECT COALESCE(sum(stars), 0)::int FROM payment_receipts WHERE refunded_at >= now() - make_interval(days => ${days}) AND status = 'refunded') AS refunded_stars,
+					(SELECT count(*)::int FROM payment_receipts WHERE status IN ('received', 'settlement_failed', 'refund_pending')) AS unsettled_payments,
+					(SELECT COALESCE(sum(actual_cost_micros), 0)::bigint FROM provider_calls WHERE created_at >= now() - make_interval(days => ${days})) AS provider_cost_micros,
+					(SELECT COALESCE(sum(actual_cost_micros), 0)::bigint FROM provider_calls WHERE created_at >= now() - make_interval(days => ${days}) AND credits_charged = 0) AS free_provider_cost_micros,
 					(SELECT COALESCE(sum(credits), 0)::int FROM users) AS user_credit_liability,
 					(SELECT COALESCE(sum(credits), 0)::int FROM chats) AS chat_credit_liability,
-					(SELECT COALESCE(sum(value::int), 0)::int FROM usage_quotas, jsonb_each_text(usage) WHERE usage_date >= current_date - make_interval(days => ${days})) AS free_quota_uses
+					(SELECT COALESCE(sum(used), 0)::int FROM quota_windows WHERE created_at >= now() - make_interval(days => ${days})) AS free_quota_uses
 			`);
 
 			const toolRows = await ctx.db.execute(sql`
@@ -435,7 +440,7 @@ adminComposer.command("admin", async (ctx) => {
 					COALESCE(sum(stars), 0)::int AS stars
 				FROM payment_receipts
 				WHERE created_at >= now() - make_interval(days => ${days})
-					AND status = 'paid'
+					AND status IN ('paid', 'settled')
 				GROUP BY product_type
 				ORDER BY stars DESC
 			`);
@@ -449,8 +454,12 @@ adminComposer.command("admin", async (ctx) => {
 				credits_granted?: number;
 				credits_refunded?: number;
 				refund_debt_credits?: number;
+				open_debt_credits?: number;
 				gross_stars?: number;
 				refunded_stars?: number;
+				unsettled_payments?: number;
+				provider_cost_micros?: number;
+				free_provider_cost_micros?: number;
 				user_credit_liability?: number;
 				chat_credit_liability?: number;
 				free_quota_uses?: number;
@@ -490,6 +499,12 @@ adminComposer.command("admin", async (ctx) => {
 			const outstandingUsd = outstandingCredits * creditFloorUsd;
 			const grossStars = overviewRow.gross_stars ?? 0;
 			const refundedStars = overviewRow.refunded_stars ?? 0;
+			const providerCostUsd =
+				Number(overviewRow.provider_cost_micros ?? 0) / 1_000_000;
+			const freeProviderCostUsd =
+				Number(overviewRow.free_provider_cost_micros ?? 0) / 1_000_000;
+			const netRevenueUsd = (grossStars - refundedStars) * 0.013;
+			const grossMarginUsd = netRevenueUsd - providerCostUsd;
 
 			await ctx.reply(
 				`📈 <b>Usage Metrics</b> (${days}d)\n\n` +
@@ -499,9 +514,16 @@ adminComposer.command("admin", async (ctx) => {
 					`Credits spent: ${overviewRow.credits_spent ?? 0}\n` +
 					`Credits granted: ${overviewRow.credits_granted ?? 0}\n` +
 					`Credits refunded/recovered: ${overviewRow.credits_refunded ?? 0}\n` +
-					`Refund debt: ${overviewRow.refund_debt_credits ?? 0} cr\n` +
+					`Refund debt opened/window: ${overviewRow.refund_debt_credits ?? 0} cr\n` +
+					`Open refund debt: ${overviewRow.open_debt_credits ?? 0} cr\n` +
 					`Free quota uses: ${overviewRow.free_quota_uses ?? 0}\n` +
+					`Unsettled payments: ${overviewRow.unsettled_payments ?? 0}\n` +
 					`Stars gross/refunded/net: ${grossStars}⭐ / ${refundedStars}⭐ / ${grossStars - refundedStars}⭐\n\n` +
+					`<b>Provider Cost</b>\n` +
+					`Provider cost: ${formatUsd(providerCostUsd)}\n` +
+					`Free/promo burn: ${formatUsd(freeProviderCostUsd)}\n` +
+					`Net revenue estimate: ${formatUsd(netRevenueUsd)}\n` +
+					`Gross margin estimate: ${formatUsd(grossMarginUsd)}\n\n` +
 					`<b>Liability</b>\n` +
 					`Outstanding credits: ${outstandingCredits} cr (${formatUsd(outstandingUsd)} floor value)\n` +
 					`User/chat split: ${overviewRow.user_credit_liability ?? 0} / ${overviewRow.chat_credit_liability ?? 0} cr\n` +
@@ -510,6 +532,70 @@ adminComposer.command("admin", async (ctx) => {
 					`<b>Payments</b>\n${paymentLines}`,
 				{ parse_mode: "HTML" },
 			);
+			break;
+		}
+
+		case "debts": {
+			const limitArg = Number.parseInt(args.trim() || "10", 10);
+			const limit = Number.isFinite(limitArg)
+				? Math.max(1, Math.min(25, limitArg))
+				: 10;
+			const { sql } = await import("drizzle-orm");
+			const rows = await ctx.db.execute(sql`
+				SELECT
+					d.id,
+					d.target,
+					d.amount,
+					d.recovered_amount,
+					d.outstanding_amount,
+					d.telegram_charge_id,
+					d.created_at,
+					u.telegram_id AS user_telegram_id,
+					c.telegram_id AS chat_telegram_id
+				FROM credit_debts d
+				JOIN users u ON u.id = d.user_id
+				LEFT JOIN chats c ON c.id = d.chat_id
+				WHERE d.status = 'open'
+				ORDER BY d.created_at ASC
+				LIMIT ${limit}
+			`);
+			const debts = rows as unknown as Array<{
+				id: string;
+				target: string;
+				amount: number;
+				recovered_amount: number;
+				outstanding_amount: number;
+				telegram_charge_id: string | null;
+				created_at: Date;
+				user_telegram_id: number;
+				chat_telegram_id: number | null;
+			}>;
+			if (debts.length === 0) {
+				await ctx.reply("No open refund debt.");
+				break;
+			}
+			const lines = debts.map(
+				(row) =>
+					`<code>${escapeHtml(row.id)}</code>\n${escapeHtml(row.target)} · outstanding ${row.outstanding_amount}/${row.amount} cr · user <code>${row.user_telegram_id}</code>${row.chat_telegram_id ? ` · chat <code>${row.chat_telegram_id}</code>` : ""}${row.telegram_charge_id ? `\ncharge: <code>${escapeHtml(row.telegram_charge_id)}</code>` : ""}`,
+			);
+			await ctx.reply(`<b>Open Refund Debt</b>\n\n${lines.join("\n\n")}`, {
+				parse_mode: "HTML",
+			});
+			break;
+		}
+
+		case "waive_debt": {
+			const debtId = args.trim();
+			if (!debtId) {
+				await ctx.reply("Usage: /admin waive_debt <debt_id>");
+				return;
+			}
+			const waived = await waiveCreditDebt(ctx.db, {
+				debtId,
+				adminId,
+				meta: { source: "admin_command" },
+			});
+			await ctx.reply(waived ? "Debt waived." : "Open debt not found.");
 			break;
 		}
 
@@ -557,6 +643,11 @@ adminComposer.command("admin", async (ctx) => {
 				"messages",
 				"ledger",
 				"payment_receipts",
+				"provider_calls",
+				"credit_debts",
+				"credit_debt_events",
+				"quota_windows",
+				"pending_tool_confirmations",
 				"subscription_periods",
 				"usage_quotas",
 				"reminders",
@@ -680,6 +771,8 @@ adminComposer.command("admin", async (ctx) => {
 					"/admin ledger [userId] — Last 10 transactions\n" +
 					"/admin tools — List registered tools with pricing\n" +
 					"/admin metrics [days] — Usage, credit, and payment rollup\n" +
+					"/admin debts [limit] — Open refund debt\n" +
+					"/admin waive_debt &lt;debtId&gt; — Waive open refund debt\n" +
 					"/admin stars — Bot Stars balance\n" +
 					"/admin reconcile_refund &lt;chargeId&gt; — Reconcile an already-refunded charge\n" +
 					"/admin db — Table row counts\n" +

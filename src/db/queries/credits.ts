@@ -16,6 +16,8 @@ export type ToolDebitResult = "applied" | "duplicate" | "quota_exhausted";
 export interface IdempotentCreditResult {
 	balanceAfter: number;
 	applied: boolean;
+	debtRecovered?: number;
+	creditedAmount?: number;
 }
 
 export interface RefundReconciliationResult {
@@ -103,8 +105,7 @@ async function recordPaymentReceiptIn(
 	return {
 		id: existing.id,
 		needsSettlement:
-			existing.status === "received" ||
-			existing.status === "settlement_failed",
+			existing.status === "received" || existing.status === "settlement_failed",
 	};
 }
 
@@ -680,7 +681,12 @@ export async function applyUserPackPayment(
 		});
 		await markPaymentSettledIn(tx, receipt.id);
 
-		return { balanceAfter: updated.credits, applied: true };
+		return {
+			balanceAfter: updated.credits,
+			applied: true,
+			debtRecovered: debtSettlement.settledAmount,
+			creditedAmount: spendableCredits,
+		};
 	});
 }
 
@@ -736,7 +742,12 @@ export async function applyChatPackPayment(
 		});
 		await markPaymentSettledIn(tx, receipt.id);
 
-		return { balanceAfter: updated.credits, applied: true };
+		return {
+			balanceAfter: updated.credits,
+			applied: true,
+			debtRecovered: debtSettlement.settledAmount,
+			creditedAmount: spendableCredits,
+		};
 	});
 }
 
@@ -917,7 +928,12 @@ export async function applySubscriptionPayment(
 		await recomputeActiveSubscriptionIn(tx, userId);
 		await markPaymentSettledIn(tx, receipt.id);
 
-		return { balanceAfter: updated.credits, applied: true };
+		return {
+			balanceAfter: updated.credits,
+			applied: true,
+			debtRecovered: debtSettlement.settledAmount,
+			creditedAmount: spendableCredits,
+		};
 	});
 }
 

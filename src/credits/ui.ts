@@ -9,14 +9,20 @@ type Translator = (
 	args?: Record<string, string | number>,
 ) => string;
 
-/** Build the /buy inline keyboard with subscriptions first, then packs */
-export function buildBuyKeyboard(
-	isGroup: boolean,
-	t: Translator,
-): InlineKeyboard {
+export function buildBuyTargetKeyboard(t: Translator): InlineKeyboard {
+	return new InlineKeyboard()
+		.text(t("buy-target-personal"), "buy:personal")
+		.row()
+		.text(t("buy-target-group"), "buy:group")
+		.row()
+		.text(t("buy-target-subscriptions"), "buy:subs")
+		.row()
+		.text(t("settings-close"), "buy:cancel");
+}
+
+export function buildSubscriptionKeyboard(t: Translator): InlineKeyboard {
 	const kb = new InlineKeyboard();
 
-	// Subscriptions section
 	for (const plan of SUBSCRIPTION_PLANS) {
 		const tag = plan.tag ? ` [${plan.tag}]` : "";
 		const label = t("buy-plan-button", {
@@ -28,8 +34,13 @@ export function buildBuyKeyboard(
 		});
 		kb.text(label, `sub:${plan.id}`).row();
 	}
+	kb.text(t("settings-back"), "buy:back");
+	return kb;
+}
 
-	// Top-up packs
+export function buildPersonalPackKeyboard(t: Translator): InlineKeyboard {
+	const kb = new InlineKeyboard();
+
 	for (const pack of TOPUP_PACKS) {
 		const bonus = pack.bonus ? ` ${pack.bonus}` : "";
 		const label = t("buy-pack-button", {
@@ -40,21 +51,39 @@ export function buildBuyKeyboard(
 		});
 		kb.text(label, `pack:${pack.id}`).row();
 	}
+	kb.text(t("settings-back"), "buy:back");
+	return kb;
+}
 
-	// Group-specific: fund the group pool
-	if (isGroup) {
-		for (const pack of TOPUP_PACKS) {
-			const bonus = pack.bonus ? ` ${pack.bonus}` : "";
-			const label = t("buy-group-pack-button", {
-				pack: pack.label,
-				stars: pack.stars,
-				credits: pack.credits,
-				bonus,
-			});
-			kb.text(label, `group_pack:${pack.id}`).row();
+export function buildGroupPackKeyboard(t: Translator): InlineKeyboard {
+	const kb = new InlineKeyboard();
+	for (const pack of TOPUP_PACKS) {
+		const bonus = pack.bonus ? ` ${pack.bonus}` : "";
+		const label = t("buy-group-pack-button", {
+			pack: pack.label,
+			stars: pack.stars,
+			credits: pack.credits,
+			bonus,
+		});
+		kb.text(label, `group_pack:${pack.id}`).row();
+	}
+	kb.text(t("settings-back"), "buy:back");
+	return kb;
+}
+
+/** Build the /buy inline keyboard with subscriptions first, then packs */
+export function buildBuyKeyboard(
+	isGroup: boolean,
+	t: Translator,
+): InlineKeyboard {
+	if (isGroup) return buildBuyTargetKeyboard(t);
+	const kb = buildSubscriptionKeyboard(t);
+	for (const row of buildPersonalPackKeyboard(t).inline_keyboard.slice(0, -1)) {
+		kb.row();
+		for (const button of row) {
+			kb.add(button);
 		}
 	}
-
 	return kb;
 }
 

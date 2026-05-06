@@ -216,11 +216,16 @@ export function estimateUsageCostUsd(
 	options: { includePerRequest?: boolean } = {},
 ): number {
 	const model = getModel(modelId);
-	const inputTokens = Math.max(0, usage.inputTokens - (usage.cacheHitTokens ?? 0));
+	const inputTokens = Math.max(
+		0,
+		usage.inputTokens - (usage.cacheHitTokens ?? 0),
+	);
 	const tokenCost =
 		(inputTokens * model.inputCostPer1M) / 1_000_000 +
 		(usage.outputTokens * model.outputCostPer1M) / 1_000_000;
-	return tokenCost + (options.includePerRequest === false ? 0 : model.perRequestCost);
+	return (
+		tokenCost + (options.includePerRequest === false ? 0 : model.perRequestCost)
+	);
 }
 
 export function estimateUsageCostMicros(

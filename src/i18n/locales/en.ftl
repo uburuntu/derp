@@ -35,6 +35,7 @@ credits-added-chat = { $credits } shared credits added to this chat!
 credits-subscribed = Subscribed to { $plan }! { $credits } credits added. Your subscription renews monthly.
 credits-renewed = { $plan } subscription renewed! { $credits } credits added.
 credits-insufficient = Need { $cost } credits for { $tool }. Use /buy to get credits.
+chat-free-quota-reached = Free chat limit reached for today. Use /buy for standard replies, or try again tomorrow.
 
 ## Buy
 buy-choose = 💰 <b>Add credits</b>
@@ -42,6 +43,21 @@ buy-choose = 💰 <b>Add credits</b>
     Subscriptions add monthly personal credits. Packs are one-time.
     Standard chat replies spend 2 credits; paid tools show their own cost.
     In groups, group packs add shared credits everyone can use here.
+buy-choose-personal = 💰 <b>Personal credits</b>
+
+    Personal credits are yours and work in any chat.
+    Standard chat replies spend 2 credits; paid tools show their own cost.
+buy-choose-group = 💰 <b>Group shared pool</b>
+
+    Group credits are shared in this chat; anyone here can spend them.
+    Derp spends group credits before personal credits here.
+buy-choose-subscriptions = 💰 <b>Monthly subscriptions</b>
+
+    Subscriptions add personal credits now and on each renewal.
+    They are not shared with groups, and standard chat still spends credits.
+buy-target-personal = My personal credits
+buy-target-group = This group's shared pool
+buy-target-subscriptions = Monthly subscriptions
 buy-plan-not-found = Plan not found
 buy-pack-not-found = Pack not found
 buy-subscribe = Subscribe to { $plan }:
@@ -82,6 +98,29 @@ tool-cost-free-daily = { $freeDaily } free per user/chat/day
 tool-cost-credits = { $credits } cr
 tool-cost-credits-with-quota = { $credits } cr, { $freeDaily } free per user/chat/day
 tool-disabled = { $tool } is disabled in your settings. Use /settings to enable it.
+tool-confirm-source-chat = from this group's shared pool
+tool-confirm-source-user = from your personal balance
+tool-confirm-message = ⚠️ <b>Confirm spend</b>
+
+    <code>{ $tool }</code> will use { $cost } credits { $source }.
+    Remaining after this: { $remaining }.
+
+    <i>Run it when the result is worth the cost.</i>
+tool-confirm-run = Run
+tool-confirm-cancel = Cancel
+tool-confirm-running-alert = Running { $tool }...
+tool-confirm-running = ⏳ <b>Running</b>
+
+    <code>{ $tool }</code> is in progress.
+tool-confirm-done = ✅ <b>Done</b>
+
+    <code>{ $tool }</code> finished.
+tool-confirm-failed = ⚠️ <b>Could not finish this request</b>
+
+    No credits were kept if the tool did not complete.
+tool-confirm-cancelled = Cancelled.
+tool-confirm-expired = This confirmation expired. Send the command again.
+tool-confirm-invalid = This saved request is no longer valid. Send the command again.
 
 ## Settings
 settings-title = Settings
