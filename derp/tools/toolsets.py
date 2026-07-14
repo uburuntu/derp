@@ -64,26 +64,3 @@ def create_chat_toolset() -> FunctionToolset[AgentDeps]:
     )
 
     return toolset
-
-
-def create_free_toolset() -> FunctionToolset[AgentDeps]:
-    """Create a minimal toolset for free tier.
-
-    Only includes tools that are completely free or have generous
-    free limits. Premium tools are excluded so the agent doesn't
-    see them at all (alternative to placeholder approach).
-
-    Returns:
-        A FunctionToolset with only free tools.
-    """
-    toolset: FunctionToolset[AgentDeps] = FunctionToolset()
-
-    toolset.tool(update_chat_memory)
-    toolset.tool(web_search)
-
-    logfire.debug(
-        "free_toolset_created",
-        tools=["update_chat_memory", "web_search"],
-    )
-
-    return toolset

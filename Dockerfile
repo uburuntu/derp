@@ -22,10 +22,15 @@ COPY . /app
 
 # Install the project itself in non-editable mode
 RUN --mount=type=cache,target=/opt/uv-cache/ \
-    uv sync --locked --no-editable
+    uv sync --locked --no-editable && \
+    uv run pybabel compile -d derp/locales -D messages
 
 # Production stage - smaller final image
-FROM python:3.13-slim AS runtime
+FROM python:3.13-slim-bookworm AS runtime
+
+# Create the runtime identity before named --chown directives.
+RUN groupadd --gid=1000 app && \
+    useradd --uid=1000 --gid=app --shell=/bin/bash --create-home app
 
 # Copy the virtual environment from builder stage
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
@@ -41,10 +46,6 @@ COPY --from=builder --chown=app:app /app/migrations /app/migrations
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/*
-
-# Create non-root user for security
-RUN groupadd --gid=1000 app && \
-    useradd --uid=1000 --gid=app --shell=/bin/bash --create-home app
 
 # Set working directory and switch to non-root user
 WORKDIR /app

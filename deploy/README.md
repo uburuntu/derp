@@ -194,11 +194,10 @@ Required in `/opt/derp/.env.prod`:
 TELEGRAM_BOT_TOKEN=
 
 # Database
-DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/db?sslmode=require
+DATABASE_URL=postgresql+asyncpg://user:pass@host.docker.internal:5432/db?sslmode=require
 
 # LLM
-DEFAULT_LLM_MODEL=gemini-2.0-flash
-GOOGLE_API_KEY=
+GOOGLE_API_PAID_KEY=
 
 # Observability
 LOGFIRE_TOKEN=

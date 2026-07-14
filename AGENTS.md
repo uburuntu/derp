@@ -10,6 +10,8 @@
 - `derp/locales/`: i18n sources (`.po/.pot`) and compiled `.mo` files.
 - `tests/`: Pytest suite (async-friendly, real database integration).
 - `migrations/`: Alembic migrations (generated via `make db-revision`).
+- `docs/architecture-roadmap.md`: Cross-cutting work deferred from chores.
+- `references/`: Gitignored upstream source checkouts matching the lockfile.
 
 ## Build, Test, and Development Commands
 
@@ -138,7 +140,7 @@ async def handler(...):
 ## Security & Configuration
 
 - Do not commit secrets. Use `env.example` to populate `.env`/`.env.prod`.
-- Required env: Telegram token, `DATABASE_URL`, OpenAI/Google/OpenRouter keys, `LOGFIRE_TOKEN`, `ENVIRONMENT`.
+- Required env: Telegram token, `DATABASE_URL`, `GOOGLE_API_PAID_KEY`, `LOGFIRE_TOKEN`, `ENVIRONMENT`.
 - Production containers run non‑root; prefer read‑only FS and minimal privileges.
 
 ## Architecture Overview
@@ -161,14 +163,16 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 
 ## Event Handling & Middlewares
 
-- **Routers:** Registered in `derp/__main__.py` via `dp.include_routers(...)` in this order: `debug` (admin only), `basic`, `donations`, `chat_settings`, `credit_cmds`, `payments`, `image`, `inline`, then catch‑all `chat` last.
+- **Routers:** Registered in `derp/__main__.py` in this order: `debug`, `basic`, `donations`, `chat_settings`, `credit_cmds`, `think`, `payments`, `image`, `video`, `tts`, `inline`, then catch-all `chat`.
 - **Outer middlewares:**
   - `LogUpdatesMiddleware`: formats and logs each `Update` with elapsed ms.
   - `DatabaseLoggerMiddleware`: upserts user/chat and projects messages to the messages table.
-- **Inner middlewares:**
+- **Update middlewares** (run for every update before router dispatch):
   - `EventContextMiddleware`: injects `bot`, `db`, and derived `user`, `chat`, `thread_id`, `business_connection_id` into handler `data`. Note: `user` and `chat` here are aiogram types (with `.id` for Telegram ID).
   - `DatabaseModelMiddleware`: loads SQLAlchemy models from DB and injects `user_model` (`UserModel`) and `chat_model` (`ChatModel`) into handler `data`. These have `.telegram_id` for the Telegram ID and `.id` for the database UUID.
   - `CreditServiceMiddleware`: creates a `CreditService` instance with a fresh DB session and injects it as `credit_service` into handler `data`.
+- **Event middlewares:**
+  - `MessageSenderMiddleware`: injects `MessageSender` for messages and callback queries.
   - `ChatActionMiddleware`: shows typing/upload actions for long‑running handlers.
   - `ThrottleUsersMiddleware` (available): prevents concurrent handling per user; not enabled by default.
 - **Session middlewares:**
@@ -176,8 +180,8 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 
 ## LLM Integration (Pydantic-AI)
 
-- **Provider Abstraction:** `derp/llm/providers.py` defines `ModelTier` enum and `create_model()` factory. Models are selected by tier (CHEAP, STANDARD, PREMIUM, IMAGE), not by name, enabling easy provider switching.
-- **Agent Factories:** `derp/llm/agents.py` provides `create_chat_agent()`, `create_image_agent()`, `create_inline_agent()` pre-configured with system prompts and toolsets.
+- **Provider Factory:** `derp/llm/providers.py` maps tiers (CHEAP, STANDARD, PREMIUM, IMAGE) to Google models. Provider switching is not currently implemented.
+- **Agent Factories:** `derp/llm/agents.py` provides `create_chat_agent()`, `create_image_agent()`, and `create_inline_agent()`. Chat tools are attached per run through `create_chat_toolset()`.
 - **Dependencies:** `AgentDeps` dataclass (`derp/llm/deps.py`) injects context (message, chat, user, db, bot, tier, credit_service) into tools and prompts.
 - **Result Wrapper:** `AgentResult` (`derp/llm/result.py`) standardizes agent output and provides `reply_to()` for sending Telegram messages with text, images, code blocks.
 - **Handlers:**
@@ -231,7 +235,7 @@ The bot uses a credit-based monetization system with tiered access to features.
 derp/credits/
 ├── models.py     # ModelConfig, MODEL_REGISTRY, tier mappings
 ├── tools.py      # ToolConfig, TOOL_REGISTRY, tool pricing
-├── types.py      # ModelTier, ModelType, TransactionType, CreditCheckResult
+├── types.py      # CreditCheckResult
 └── service.py    # CreditService: check access, deduct, purchase, refund
 ```
 
@@ -277,7 +281,7 @@ derp/credits/
 ## Observability & Resilience
 
 - **Logging/Tracing:** `logfire` is configured with service name and environment. In `dev`, instruments `httpx`. Also instruments system metrics, Pydantic failures, and Google GenAI calls. A `LogfireLoggingHandler` bridges stdlib logging.
-- **Backpressure/Throttling:** `ThrottleUsersMiddleware` available to drop concurrent messages per user. For CPU/IO offload with timeouts, see `derp/common/executor.py` (thread/process pools with `ThrottlerSimultaneous` and per‑task timeouts).
+- **Backpressure/Throttling:** Polling has a configurable global concurrency limit. `ThrottleUsersMiddleware` is available for per-user exclusion but is not enabled.
 - **Error Handling:** Handlers catch and log exceptions, replying with friendly fallbacks; image pipelines degrade to text if no images are returned.
 
 ### Instrumentation Guidelines
@@ -325,14 +329,12 @@ derp/credits/
 
 When generating code, setting up configuration, or needing API documentation for any of these libraries, use the Context7 MCP tools (`resolve-library-id` and `get-library-docs`) automatically to get up-to-date references.
 
-- **aiogram 3.x:** Telegram bot framework (routers, middleware, filters, FSM, i18n).
-- **pydantic-ai:** Provider-agnostic LLM framework (agents, tools, structured output, multi-provider support).
+- **aiogram 3.x:** Telegram runtime. Consult `references/aiogram` before changing routers, middleware, dependency injection, polling, flags, payments, or session middleware.
+- **pydantic-ai 2.x:** Agent runtime. Consult its upgrade guide and `references/pydantic-ai` before changing agents, capabilities, tools, history, retries, instrumentation, or durable execution.
 - **SQLAlchemy 2.x + asyncpg:** Async PostgreSQL ORM with typed models.
 - **Alembic:** Database migrations.
 - **logfire 4.x:** Structured logging, metrics, instrumentation.
 - **pydantic 2.x + pydantic-settings:** Config and validation.
-- **throttler:** Concurrency control for executors.
-- **aiocache, aiojobs:** Caching and background job utilities (available; enable as needed).
 - **babel/pybabel:** i18n extraction/update/compile.
 - **dev tools:** `uv`, `ruff`, `pytest`, `pytest-asyncio`.
 

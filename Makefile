@@ -32,14 +32,15 @@ run:
 ## CODE QUALITY
 ## =============================================================================
 
-## Lint and format code with Ruff
-lint format f:
-	uv run ruff format .
-	uv run ruff check . --fix
+## Check lint and formatting without modifying files
+lint check:
+	uv run ruff format --check .
+	uv run ruff check .
 
-## Run type checking (optional, may have errors)
-typecheck:
-	uv run mypy derp --ignore-missing-imports || true
+## Format code and apply safe Ruff fixes
+format f:
+	uv run ruff check . --fix
+	uv run ruff format .
 
 ## =============================================================================
 ## TESTING
@@ -55,18 +56,18 @@ test-verbose:
 
 ## Run ALL tests including database tests (requires PostgreSQL)
 test-all: db-test-up
-	DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v
-	$(MAKE) db-test-down
+	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v
 
 ## Run only database tests (requires PostgreSQL)
 test-db: db-test-up
-	DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v tests/test_db_queries.py tests/test_models.py
-	$(MAKE) db-test-down
+	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v tests/test_db_queries.py tests/test_models.py
 
 ## Run tests with coverage
 test-cov: db-test-up
-	DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v --cov=derp --cov-report=html --cov-report=term-missing
-	$(MAKE) db-test-down
+	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v --cov=derp --cov-report=html --cov-report=term-missing
 	@echo "Coverage report: htmlcov/index.html"
 
 ## =============================================================================
@@ -75,25 +76,21 @@ test-cov: db-test-up
 
 ## Start development PostgreSQL (persistent data)
 db-up:
-	docker compose up -d db
-	@echo "Waiting for PostgreSQL to be ready..."
-	@sleep 2
+	docker compose up -d --wait db
 	@echo "PostgreSQL is ready at localhost:5432"
 
 ## Stop development PostgreSQL
 db-down:
-	docker compose down db
+	docker compose stop db
 
 ## Start test PostgreSQL (ephemeral, in-memory)
 db-test-up:
-	docker compose up -d db-test
-	@echo "Waiting for test PostgreSQL to be ready..."
-	@sleep 2
+	docker compose --profile test up -d --wait db-test
 	@echo "Test PostgreSQL is ready at localhost:5433"
 
 ## Stop test PostgreSQL
 db-test-down:
-	docker compose down db-test
+	docker compose --profile test rm -sf db-test
 
 ## Run database migrations (development)
 db-migrate:
@@ -177,7 +174,7 @@ docker-restart-bot:
 ## =============================================================================
 
 ## Set up complete development environment
-dev-setup: venv db-up db-migrate
+dev-setup: venv i18n-compile db-up db-migrate
 	@echo ""
 	@echo "Development environment is ready!"
 	@echo ""
@@ -208,8 +205,8 @@ help:
 	@echo "    run               Run the bot locally"
 	@echo ""
 	@echo "  Code Quality:"
-	@echo "    lint/format/f     Lint and format with Ruff"
-	@echo "    typecheck         Run mypy type checking"
+	@echo "    lint/check        Check lint and formatting"
+	@echo "    format/f          Format code and apply safe fixes"
 	@echo ""
 	@echo "  Testing:"
 	@echo "    test              Run tests (quick, no database)"
@@ -243,7 +240,7 @@ help:
 	@echo "    dev-setup         Set up complete dev environment"
 	@echo "    dev-clean         Clean up dev environment"
 
-.PHONY: venv install run lint format f typecheck \
+.PHONY: venv install run lint check format f \
         test test-verbose test-all test-db test-cov \
         db-up db-down db-test-up db-test-down db-migrate db-migrate-test \
         db-revision db-status db-downgrade db-reset db-shell \

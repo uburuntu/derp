@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from enum import IntEnum, auto
 
 import httpx
@@ -302,7 +303,7 @@ class Extractor:
         reply_policy = reply_policy or cls.ReplyPolicy.prefer_origin
 
         async def call_extractor(msg):
-            if asyncio.iscoroutinefunction(extractor_func):
+            if inspect.iscoroutinefunction(extractor_func):
                 return await extractor_func(msg)
             return extractor_func(msg)
 

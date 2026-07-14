@@ -139,6 +139,7 @@ jobs:
             # Run database migrations
             echo "=== Running database migrations ==="
             docker run --rm \
+              --add-host host.docker.internal:host-gateway \
               --env-file /opt/derp/.env.prod \
               "$IMAGE" \
               alembic upgrade head
@@ -148,8 +149,8 @@ jobs:
             docker run -d \
               --name derp-bot \
               --restart unless-stopped \
+              --add-host host.docker.internal:host-gateway \
               --env-file /opt/derp/.env.prod \
-              -e IS_DOCKER=true \
               "$IMAGE"
             
             # Health check - wait for container to stabilize

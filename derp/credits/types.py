@@ -3,22 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from derp.credits.models import ModelTier
-
-
-class TransactionType(StrEnum):
-    """Types of credit transactions for audit trail."""
-
-    PURCHASE = "purchase"  # Bought with Telegram Stars
-    SPEND = "spend"  # Used for tool/feature
-    REFUND = "refund"  # Refunded after failed operation or dispute
-    GIFT = "gift"  # Gifted from another user
-    BONUS = "bonus"  # Promotional credits
-    EXPIRE = "expire"  # Credits expired (if we add expiry)
 
 
 @dataclass(frozen=True, slots=True)

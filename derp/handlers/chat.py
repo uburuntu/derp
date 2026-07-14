@@ -229,6 +229,7 @@ async def show_context(message: Message, chat_model: ChatModel | None) -> None:
 @router.message(Command("derp"))
 @router.message(F.chat.type == "private")
 @router.message(F.reply_to_message.from_user.id == settings.bot_id)
+@flags.chat_action
 class ChatAgentHandler(MessageHandler):
     """Message handler for AI responses using Pydantic-AI agents.
 
@@ -238,7 +239,6 @@ class ChatAgentHandler(MessageHandler):
     - Has credits: STANDARD model, 100 message context
     """
 
-    @flags.chat_action
     async def handle(self) -> Any:
         """Handle messages using the Pydantic-AI chat agent."""
         # Extract dependencies from middleware data
@@ -310,16 +310,17 @@ class ChatAgentHandler(MessageHandler):
                     "running_agent",
                     tier=deps.tier.value,
                     context_limit=context_limit,
-                    tools=len(toolset._tools) if hasattr(toolset, "_tools") else 0,
+                    tools=len(toolset.tools),
                 )
 
-                result = await agent.run(
-                    user_prompt,
-                    deps=deps,
-                    toolsets=[toolset],
-                    usage_limits=UsageLimits(tool_calls_limit=3),
-                    model_settings=RELAXED_SAFETY_SETTINGS,
-                )
+                with agent.parallel_tool_call_execution_mode("sequential"):
+                    result = await agent.run(
+                        user_prompt,
+                        deps=deps,
+                        toolsets=[toolset],
+                        usage_limits=UsageLimits(request_limit=5, tool_calls_limit=3),
+                        model_settings=RELAXED_SAFETY_SETTINGS,
+                    )
 
                 # Convert to AgentResult and send response
                 agent_result = AgentResult.from_run_result(result)
@@ -364,10 +365,7 @@ class ChatAgentHandler(MessageHandler):
         except UnexpectedModelBehavior:
             logfire.warning("agent_unexpected_behavior", _exc_info=True)
             return await self.event.reply(
-                _(
-                    "⏳ I'm getting too many requests right now. "
-                    "Please try again in about 30 seconds."
-                )
+                _("😅 Something went wrong. I couldn't process that message.")
             )
         except Exception:
             logfire.exception("chat_agent_failed")

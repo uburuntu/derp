@@ -1,11 +1,54 @@
 services:
+  db:
+    image: postgres:17-alpine
+    container_name: derp-postgres
+    environment:
+      POSTGRES_DB: derp
+      POSTGRES_USER: derp
+      POSTGRES_PASSWORD: derp
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U derp -d derp"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+  db-test:
+    image: postgres:17-alpine
+    container_name: derp-postgres-test
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: derp_test
+      POSTGRES_USER: derp_test
+      POSTGRES_PASSWORD: derp_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U derp_test -d derp_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
   bot:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: derp-bot
     env_file:
-      - .env.prod
+      - path: .env
+        required: false
     environment:
-      - IS_DOCKER=true
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql+asyncpg://derp:derp@db:5432/derp}
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  postgres-data:

@@ -1,7 +1,5 @@
 """Configuration settings using Pydantic."""
 
-import itertools
-from collections.abc import Iterable
 from typing import Literal
 
 from pydantic import Field
@@ -17,34 +15,16 @@ class Settings(BaseSettings):
     # Allows to detect type of deployment
     environment: Literal["dev", "prod"]
 
-    # Allows to detect environment
-    is_docker: bool = False
-
     # Token got from https://t.me/BotFather
     telegram_bot_token: str
     bot_username: str = "DerpRobot"
 
     # PostgreSQL database connection string
     database_url: str = "postgresql+asyncpg://localhost:5432/derp"
+    polling_concurrency: int = Field(default=10, ge=1)
 
-    # Default LLM model (legacy, kept for reference)
-    default_llm_model: str = ""
-
-    # Default LLM provider for Pydantic-AI: google, openai, anthropic, openrouter
-    default_llm_provider: Literal["google", "openai", "anthropic", "openrouter"] = (
-        "google"
-    )
-
-    # OpenAI API key for Pydantic AI
-    openai_api_key: str = ""
-
-    # Google API key for Pydantic AI
-    google_api_key: str
-    google_api_extra_keys: str
+    # Google API key used by all configured models
     google_api_paid_key: str
-
-    # OpenRouter API key for Pydantic AI (optional fallback provider)
-    openrouter_api_key: str = ""
 
     # Logfire token
     logfire_token: str
@@ -59,14 +39,6 @@ class Settings(BaseSettings):
 
     rmbk_id: int = 28006241
 
-    premium_chat_ids: set[int] = Field(
-        default_factory=lambda: [
-            28006241,  # @rm_bk
-            -1001174590460,  # Related
-            -1001130715084,  # Солнышки
-        ]
-    )
-
     model_config = SettingsConfigDict(
         # `.env.prod` takes priority over `.env`
         env_file=(".env", ".env.prod"),
@@ -77,14 +49,6 @@ class Settings(BaseSettings):
     @property
     def bot_id(self) -> int:
         return int(self.telegram_bot_token.split(":")[0])
-
-    @property
-    def google_api_keys(self) -> list[str]:
-        return [self.google_api_key] + self.google_api_extra_keys.split(",")
-
-    @property
-    def google_api_key_iter(self) -> Iterable[str]:
-        return itertools.cycle(self.google_api_keys)
 
 
 settings = Settings()

@@ -26,7 +26,7 @@ Key environment variables in `.env`:
 |----------|-------------|
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
 | `DATABASE_URL` | PostgreSQL connection string |
-| `GOOGLE_API_KEY` | Google AI API key |
+| `GOOGLE_API_PAID_KEY` | Google AI API key |
 | `LOGFIRE_TOKEN` | Logfire observability token |
 | `ENVIRONMENT` | `dev` or `prod` |
 
@@ -35,3 +35,6 @@ See `env.example` for the complete list.
 ## Commands
 
 Run `make help` to see all available targets.
+
+Cross-cutting work deferred from cleanup is tracked in
+[`docs/architecture-roadmap.md`](docs/architecture-roadmap.md).

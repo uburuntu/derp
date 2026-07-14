@@ -3,7 +3,6 @@
 Model tiers abstract away specific model names, allowing:
 - Easy model upgrades without code changes
 - Different quality levels for free vs paid users
-- Provider switching via configuration
 """
 
 from __future__ import annotations
@@ -47,11 +46,6 @@ TIER_MODELS: dict[ModelTier, str] = {
 }
 
 
-def _get_google_api_key() -> str:
-    """Get the next Google API key from the rotating iterator."""
-    return next(settings.google_api_key_iter)
-
-
 def create_model(tier: ModelTier = ModelTier.STANDARD) -> Model:
     """Create a Pydantic-AI model for the given quality tier.
 
@@ -88,8 +82,7 @@ def create_image_model() -> Model:
     return GoogleModel(model_name, provider=provider)
 
 
-# Relaxed safety settings for creative content.
-# BLOCK_ONLY_HIGH allows more creative freedom while still blocking egregious content.
+# Safety filtering is disabled here; provider-level policy may still reject content.
 # https://ai.google.dev/gemini-api/docs/safety-settings
 RELAXED_SAFETY_SETTINGS = GoogleModelSettings(
     google_safety_settings=[

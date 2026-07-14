@@ -20,7 +20,7 @@ from derp.credits.models import (
 )
 from derp.credits.service import CONTEXT_LIMITS, CreditService, get_placeholder_message
 from derp.credits.tools import TOOL_REGISTRY, ToolConfig, get_tool
-from derp.credits.types import CreditCheckResult, TransactionType
+from derp.credits.types import CreditCheckResult
 
 __all__ = [
     # Model registry
@@ -43,5 +43,4 @@ __all__ = [
     "get_placeholder_message",
     # Types
     "CreditCheckResult",
-    "TransactionType",
 ]

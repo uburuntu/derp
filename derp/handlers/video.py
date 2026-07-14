@@ -1,6 +1,6 @@
 """Video generation handler (/video) using Veo 3.1.
 
-Uses google-genai SDK under the hood (see derp/tools/video_gen.py) and shares
+Uses google-genai SDK under the hood (see derp/tools/veo_video.py) and shares
 credit limits/pricing with the agent tool `video_generate`.
 
 Docs:

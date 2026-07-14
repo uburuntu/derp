@@ -14,7 +14,6 @@ import logfire
 from pydantic_ai import RunContext
 
 from derp.credits.service import CreditService, get_placeholder_message
-from derp.credits.tools import TOOL_REGISTRY
 
 if TYPE_CHECKING:
     from derp.llm.deps import AgentDeps
@@ -143,15 +142,3 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
         return wrapper  # type: ignore[return-value]
 
     return decorator
-
-
-def is_premium_tool(tool_name: str) -> bool:
-    """Check if a tool is marked as premium."""
-    tool = TOOL_REGISTRY.get(tool_name)
-    return tool.is_premium if tool else False
-
-
-def get_tool_cost(tool_name: str) -> int:
-    """Get the base credit cost of a tool."""
-    tool = TOOL_REGISTRY.get(tool_name)
-    return tool.base_credit_cost if tool else 0

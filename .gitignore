@@ -151,6 +151,9 @@ cython_debug/
 # VSCode
 # .vscode/
 
+# Local upstream source checkouts
+references/
+
 # Secrets
 *.env
 .env.*
