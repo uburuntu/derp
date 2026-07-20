@@ -1,5 +1,19 @@
 """Paid-operation domain values shared by billing, features, and delivery."""
 
+from derp.operations.quotes import (
+    DEFAULT_QUOTE_POLICY,
+    PRICING_VERSION,
+    ChatQuoteInput,
+    DeepThinkQuoteInput,
+    ImageEditQuoteInput,
+    ImageGenerateQuoteInput,
+    InlineChatQuoteInput,
+    QuoteEngine,
+    QuoteInput,
+    QuotePolicy,
+    TtsQuoteInput,
+    VideoGenerateQuoteInput,
+)
 from derp.operations.types import (
     ContextBand,
     DeliveryState,
@@ -15,15 +29,27 @@ from derp.operations.types import (
 )
 
 __all__ = [
+    "DEFAULT_QUOTE_POLICY",
+    "PRICING_VERSION",
+    "ChatQuoteInput",
     "ContextBand",
+    "DeepThinkQuoteInput",
     "DeliveryState",
+    "ImageEditQuoteInput",
+    "ImageGenerateQuoteInput",
+    "InlineChatQuoteInput",
     "InventoryAllocation",
     "InventoryKind",
     "OperationId",
     "OperationState",
     "Quote",
+    "QuoteEngine",
     "QuoteId",
+    "QuoteInput",
     "QuoteKey",
+    "QuotePolicy",
+    "TtsQuoteInput",
+    "VideoGenerateQuoteInput",
     "WalletOwner",
     "WalletOwnerKind",
 ]
