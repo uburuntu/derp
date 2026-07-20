@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.25.0@sha256:0adf442eae370b6087e08edc7c50b552d80ddf261576f4ebd6421006b2461f12
 
 # Use the lock-matched uv image with the production Python runtime.
-FROM ghcr.io/astral-sh/uv:0.11.29-python3.14-trixie@sha256:cd22b8ef1b9a27e285a0e8ee3416db1c955d7d14c33bb39ec2a41306c68a5500 AS builder
+FROM ghcr.io/astral-sh/uv:0.11.30-python3.14-trixie@sha256:bf3b8020dab9acd0a9c2cb0ea4ab5c65167f2a1af513c6031f289ac268b3dd4f AS builder
 
 # Set environment variables for uv
 ENV UV_CACHE_DIR=/opt/uv-cache/
