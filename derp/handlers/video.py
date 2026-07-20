@@ -23,17 +23,26 @@ from derp.filters.meta import MetaCommand, MetaInfo
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
-from derp.tools.veo_video import VEO_31_FAST, VEO_31_STANDARD, generate_and_send_video
+from derp.tools.veo_video import generate_and_send_video
 
 router = Router(name="video")
 
 
-def _parse_quality(meta: MetaInfo) -> str:
-    # Accept: /video fast ... or /video standard ...
-    if not meta.arguments:
-        return "fast"
-    q = meta.arguments[0].strip().lower()
-    return q if q in ("fast", "standard") else "fast"
+def _parse_video_request(meta: MetaInfo) -> tuple[str, str]:
+    """Resolve quality and remove an explicit command quality from the prompt."""
+    quality = "fast"
+    has_explicit_quality = False
+    if meta.arguments:
+        candidate = meta.arguments[0].strip().lower()
+        if candidate in {"fast", "standard"}:
+            quality = candidate
+            has_explicit_quality = True
+
+    prompt = meta.target_text
+    first, separator, remainder = prompt.partition(" ")
+    if has_explicit_quality and meta.command and first.lower() == quality:
+        prompt = remainder.strip() if separator else ""
+    return quality, prompt
 
 
 @router.message(MetaCommand("video", "vid", "veo"))
@@ -46,7 +55,7 @@ async def handle_video(
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
 ) -> Message:
-    prompt = meta.target_text
+    quality, prompt = _parse_video_request(meta)
     if not prompt:
         return await message.reply(
             _("Usage: /video [fast|standard] <prompt>"),
@@ -57,11 +66,12 @@ async def handle_video(
             _("😅 Could not verify your access. Please try again.")
         )
 
-    quality = _parse_quality(meta)
-    model_id = VEO_31_STANDARD if quality == "standard" else VEO_31_FAST
-
+    duration_seconds = 6
     access = await credit_service.check_tool_access(
-        user_model, chat_model, "video_generate", model_id
+        user_model,
+        chat_model,
+        "video_generate",
+        arguments={"quality": quality, "duration_seconds": duration_seconds},
     )
     if not access.allowed:
         return await sender.reply(
@@ -71,6 +81,7 @@ async def handle_video(
             + "\n\n"
             + purchase_suspension_message(),
         )
+    model = access.require_model()
 
     try:
         from derp.llm.deps import AgentDeps
@@ -81,13 +92,15 @@ async def handle_video(
             bot=message.bot,
             user_model=user_model,
             chat_model=chat_model,
+            model=model,
         )
 
         await generate_and_send_video(
             deps_obj,
             prompt=prompt,
             quality=quality,
-            model=model_id,
+            duration_seconds=duration_seconds,
+            model=model,
         )
 
         idempotency_key = (
@@ -99,7 +112,11 @@ async def handle_video(
             chat_model,
             "video_generate",
             idempotency_key=idempotency_key,
-            metadata={"quality": quality, "model": model_id},
+            metadata={
+                "quality": quality,
+                "duration_seconds": duration_seconds,
+                "model": model.provider_model_id,
+            },
         )
 
         logfire.info(
@@ -107,7 +124,7 @@ async def handle_video(
             user_id=user_model.telegram_id,
             chat_id=chat_model.telegram_id,
             quality=quality,
-            model=model_id,
+            model=model.provider_model_id,
         )
         return message
     except Exception:

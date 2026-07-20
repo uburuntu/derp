@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from derp.llm.providers import ModelTier
+from derp.catalog import GoogleModelKey, GoogleModelSpec, get_google_model
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -32,7 +32,7 @@ class AgentDeps:
     - chat_model: Chat database model (for settings, memory, credits)
     - db: Database manager for persistence
     - bot: Bot instance for sending messages
-    - tier: The model tier being used (for cost-aware tools)
+    - model: The exact catalog model used by the parent agent
     """
 
     message: Message
@@ -40,7 +40,9 @@ class AgentDeps:
     bot: Bot
     user_model: UserModel | None = None
     chat_model: ChatModel | None = None
-    tier: ModelTier = field(default=ModelTier.STANDARD)
+    model: GoogleModelSpec = field(
+        default_factory=lambda: get_google_model(GoogleModelKey.CHAT_STANDARD)
+    )
 
     @property
     def chat_id(self) -> int:

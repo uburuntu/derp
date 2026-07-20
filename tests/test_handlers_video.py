@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from derp.credits.models import ModelTier
+from derp.catalog import GoogleModelKey
 from derp.handlers.video import handle_video
 
 
@@ -18,6 +18,18 @@ def _get_text_from_call_args(call_args):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_text", "arguments", "model_key", "quality"),
+    [
+        ("a cat", ["a", "cat"], GoogleModelKey.VIDEO_FAST, "fast"),
+        (
+            "standard a cat",
+            ["standard", "a", "cat"],
+            GoogleModelKey.VIDEO_STANDARD,
+            "standard",
+        ),
+    ],
+)
 async def test_handle_video_success(
     make_message,
     mock_sender,
@@ -27,18 +39,21 @@ async def test_handle_video_success(
     mock_db_client,
     mock_credit_service_factory,
     make_credit_check_result,
+    target_text,
+    arguments,
+    model_key,
+    quality,
 ):
     """Test successful video generation flow."""
     message = make_message(text="/video a cat")
     sender = mock_sender(message=message)
     user = mock_user_model()
     chat = mock_chat_model()
-    meta = mock_meta(target_text="a cat")
+    meta = mock_meta(target_text=target_text, arguments=arguments, command="video")
 
     check_result = make_credit_check_result(
         allowed=True,
-        tier=ModelTier.STANDARD,
-        model_id="veo-3.1-fast-generate-preview",
+        model_key=model_key,
         source="free",
         free_remaining=1,
     )
@@ -55,6 +70,16 @@ async def test_handle_video_success(
         )
 
         mock_gen.assert_awaited_once()
+        service.check_tool_access.assert_awaited_once_with(
+            user,
+            chat,
+            "video_generate",
+            arguments={"quality": quality, "duration_seconds": 6},
+        )
+        assert mock_gen.await_args.kwargs["model"] is check_result.model
+        assert mock_gen.await_args.kwargs["quality"] == quality
+        assert mock_gen.await_args.kwargs["duration_seconds"] == 6
+        assert mock_gen.await_args.kwargs["prompt"] == "a cat"
         service.deduct.assert_awaited_once()
 
 
@@ -77,8 +102,7 @@ async def test_handle_video_no_credits(
 
     check_result = make_credit_check_result(
         allowed=False,
-        tier=ModelTier.STANDARD,
-        model_id="veo-3.1-fast-generate-preview",
+        model_key=GoogleModelKey.VIDEO_FAST,
         reject_reason="Not enough credits",
     )
     service = mock_credit_service_factory(check_result=check_result)

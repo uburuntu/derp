@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from derp.credits.models import ModelTier
+from derp.catalog import GoogleModelKey
 from derp.handlers.think import handle_think
 
 
@@ -26,8 +26,7 @@ async def test_handle_think_success(
 
     check_result = make_credit_check_result(
         allowed=True,
-        tier=ModelTier.PREMIUM,
-        model_id="gemini-3-pro-preview",
+        model_key=GoogleModelKey.CHAT_REASONING,
         credits_to_deduct=10,
         credits_remaining=90,
     )
@@ -43,7 +42,7 @@ async def test_handle_think_success(
 
         await handle_think(message, sender, service, user_model=user, chat_model=chat)
 
-        mock_create_agent.assert_called_with(ModelTier.PREMIUM)
+        mock_create_agent.assert_called_with(check_result.model)
         mock_agent.run.assert_awaited_once()
         service.deduct.assert_awaited_once()
         sender.reply.assert_awaited()
@@ -70,8 +69,7 @@ async def test_handle_think_no_credits(
 
     check_result = make_credit_check_result(
         allowed=False,
-        tier=ModelTier.PREMIUM,
-        model_id="gemini-3-pro-preview",
+        model_key=GoogleModelKey.CHAT_REASONING,
         reject_reason="Not enough credits",
     )
     service = mock_credit_service_factory(check_result=check_result)

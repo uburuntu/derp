@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-20 18:44+0100\n"
+"POT-Creation-Date: 2026-07-20 19:31+0100\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -107,26 +107,26 @@ msgid ""
 "• /debug_help - All debug commands"
 msgstr ""
 
-#: derp/handlers/chat.py:222
+#: derp/handlers/chat.py:219
 #, python-brace-format
 msgid "Context: {chars} chars, {msgs} messages"
 msgstr ""
 
-#: derp/handlers/chat.py:352 derp/handlers/image.py:132
-#: derp/handlers/image.py:267 derp/handlers/think.py:132
+#: derp/handlers/chat.py:341 derp/handlers/image.py:133
+#: derp/handlers/image.py:269 derp/handlers/think.py:129
 msgid ""
 "⏳ The AI service is overloaded right now.\n"
 "\n"
 "This happens during peak usage. Please wait 30-60 seconds and try again."
 msgstr ""
 
-#: derp/handlers/chat.py:359 derp/handlers/chat.py:369
-#: derp/handlers/chat.py:374
+#: derp/handlers/chat.py:348 derp/handlers/chat.py:358
+#: derp/handlers/chat.py:363
 #, fuzzy
 msgid "😅 Something went wrong. I couldn't process that message."
 msgstr "😅 Something went wrong with Gemini. I couldn't process that message."
 
-#: derp/handlers/chat.py:364
+#: derp/handlers/chat.py:353
 msgid "⚠️ Too many tool calls. Please try a simpler request."
 msgstr ""
 
@@ -169,7 +169,7 @@ msgstr ""
 msgid "✅ You have credits for premium features!"
 msgstr ""
 
-#: derp/handlers/debug.py:494
+#: derp/handlers/debug.py:499
 msgid ""
 "🛠 **Debug Commands** (admin only)\n"
 "\n"
@@ -179,7 +179,7 @@ msgid ""
 "• /debug_refund <charge_id> - Test refund flow\n"
 "\n"
 "**Diagnostics:**\n"
-"• /debug_status - Show tier, balances, model config\n"
+"• /debug_status - Show model role, balances, and config\n"
 "• /debug_tools - List tools with pricing\n"
 "• /debug_help - This help message"
 msgstr ""
@@ -369,25 +369,25 @@ msgstr "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
 msgid "Usage: /imagine <prompt>"
 msgstr "Usage: /imagine <prompt>"
 
-#: derp/handlers/image.py:53 derp/handlers/image.py:182
-#: derp/handlers/think.py:61 derp/handlers/tts.py:46 derp/handlers/video.py:57
+#: derp/handlers/image.py:53 derp/handlers/image.py:183
+#: derp/handlers/think.py:57 derp/handlers/tts.py:46 derp/handlers/video.py:66
 msgid "😅 Could not verify your access. Please try again."
 msgstr ""
 
-#: derp/handlers/image.py:62 derp/handlers/image.py:191
+#: derp/handlers/image.py:62 derp/handlers/image.py:192
 #, python-brace-format
 msgid "✨ {reason}"
 msgstr ""
 
-#: derp/handlers/image.py:120 derp/handlers/image.py:255
+#: derp/handlers/image.py:121 derp/handlers/image.py:257
 msgid "🤷 No image generated."
 msgstr "🤷 No image generated."
 
-#: derp/handlers/image.py:139 derp/handlers/image.py:152
+#: derp/handlers/image.py:140 derp/handlers/image.py:153
 msgid "😅 Something went wrong while generating the image. Try again later."
 msgstr "😅 Something went wrong while generating the image. Try again later."
 
-#: derp/handlers/image.py:145 derp/handlers/image.py:280
+#: derp/handlers/image.py:146 derp/handlers/image.py:282
 #: derp/handlers/inline.py:181
 msgid ""
 "⏳ I'm getting too many requests right now. Please try again in about 30 "
@@ -396,47 +396,47 @@ msgstr ""
 "⏳ I'm getting too many requests right now. Please try again in about 30 "
 "seconds."
 
-#: derp/handlers/image.py:172
+#: derp/handlers/image.py:173
 msgid "Reply to an image and use: /edit <prompt>"
 msgstr "Reply to an image and use: /edit <prompt>"
 
-#: derp/handlers/image.py:177
+#: derp/handlers/image.py:178
 #, fuzzy
 msgid "Please reply to an image (photo/document/sticker) to edit it."
 msgstr "Please reply to an image (photo/document sticker) to edit it."
 
-#: derp/handlers/image.py:274 derp/handlers/image.py:287
+#: derp/handlers/image.py:276 derp/handlers/image.py:289
 msgid "😅 Something went wrong while editing the image. Try again later."
 msgstr "😅 Something went wrong while editing the image. Try again later."
 
-#: derp/handlers/inline.py:40 derp/handlers/inline.py:67
+#: derp/handlers/inline.py:41 derp/handlers/inline.py:68
 msgid "🤖 Ask Derp"
 msgstr "🤖 Ask Derp"
 
-#: derp/handlers/inline.py:41
+#: derp/handlers/inline.py:42
 msgid "Start typing to get an AI-powered response."
 msgstr "Start typing to get an AI-powered response."
 
-#: derp/handlers/inline.py:43
+#: derp/handlers/inline.py:44
 msgid "🤖 Please enter a prompt for Derp AI."
 msgstr "🤖 Please enter a prompt for Derp AI."
 
-#: derp/handlers/inline.py:49 derp/handlers/inline.py:80
+#: derp/handlers/inline.py:50 derp/handlers/inline.py:81
 #: derp/handlers/inline.py:138
 msgid "Add Derp to your chat"
 msgstr "Add Derp to your chat"
 
-#: derp/handlers/inline.py:68
+#: derp/handlers/inline.py:69
 #, python-brace-format
 msgid "Get an AI-powered response for: {user_input}"
 msgstr "Get an AI-powered response for: {user_input}"
 
-#: derp/handlers/inline.py:73
+#: derp/handlers/inline.py:74
 #, python-brace-format
 msgid "🧠 Thinking about: {user_input}"
 msgstr "🧠 Thinking about: {user_input}"
 
-#: derp/handlers/inline.py:90
+#: derp/handlers/inline.py:91
 msgid "Start personal chat"
 msgstr "Start personal chat"
 
@@ -489,17 +489,17 @@ msgid ""
 "{charge_id}"
 msgstr ""
 
-#: derp/handlers/think.py:52
+#: derp/handlers/think.py:48
 msgid ""
 "🧠 **Deep Thinking Mode**\n"
 "\n"
-"Use Gemini 3 Pro for complex math, logic puzzles, or problems that need "
-"careful analysis.\n"
+"Use advanced reasoning for complex math, logic puzzles, or problems that "
+"need careful analysis.\n"
 "\n"
 "Usage: /think <your problem or question>"
 msgstr ""
 
-#: derp/handlers/think.py:70
+#: derp/handlers/think.py:66
 #, python-brace-format
 msgid ""
 "🧠 Deep thinking requires credits.\n"
@@ -507,7 +507,7 @@ msgid ""
 "✨ {reason}"
 msgstr ""
 
-#: derp/handlers/think.py:143 derp/handlers/think.py:151
+#: derp/handlers/think.py:140 derp/handlers/think.py:148
 #, fuzzy
 msgid "😅 Something went wrong during deep thinking. Please try again."
 msgstr "😅 Something went wrong while editing the image. Try again later."
@@ -516,7 +516,7 @@ msgstr "😅 Something went wrong while editing the image. Try again later."
 msgid "Usage: /tts <text>"
 msgstr ""
 
-#: derp/handlers/tts.py:54
+#: derp/handlers/tts.py:57
 #, python-brace-format
 msgid ""
 "🔊 Voice generation requires credits.\n"
@@ -524,19 +524,19 @@ msgid ""
 "✨ {reason}"
 msgstr ""
 
-#: derp/handlers/tts.py:91
+#: derp/handlers/tts.py:96
 #, fuzzy
 msgid ""
 "😅 Something went wrong while generating the voice message. Try again "
 "later."
 msgstr "😅 Something went wrong while generating the image. Try again later."
 
-#: derp/handlers/video.py:52
+#: derp/handlers/video.py:61
 #, fuzzy
 msgid "Usage: /video [fast|standard] <prompt>"
 msgstr "Usage: /imagine <prompt>"
 
-#: derp/handlers/video.py:68
+#: derp/handlers/video.py:78
 #, python-brace-format
 msgid ""
 "🎬 Video generation requires credits.\n"
@@ -544,7 +544,7 @@ msgid ""
 "✨ {reason}"
 msgstr ""
 
-#: derp/handlers/video.py:116
+#: derp/handlers/video.py:133
 #, fuzzy
 msgid "😅 Something went wrong while generating the video. Try again later."
 msgstr "😅 Something went wrong while generating the image. Try again later."

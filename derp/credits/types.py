@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
-if TYPE_CHECKING:
-    from derp.credits.models import ModelTier
+from derp.catalog import GoogleModelSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,13 +17,23 @@ class CreditCheckResult:
     """
 
     allowed: bool
-    tier: ModelTier
-    model_id: str
+    model: GoogleModelSpec | None
     source: Literal["free", "chat", "user", "rejected"]
     credits_to_deduct: int
     credits_remaining: int | None  # None for free tier
     free_remaining: int | None  # Remaining free uses today
     reject_reason: str | None = None
+
+    @property
+    def model_id(self) -> str | None:
+        """Concrete provider ID retained for persistence compatibility."""
+        return self.model.provider_model_id if self.model else None
+
+    def require_model(self) -> GoogleModelSpec:
+        """Return the provider model for a provider-backed feature."""
+        if self.model is None:
+            raise RuntimeError("Provider-backed feature resolved without a model")
+        return self.model
 
     @property
     def is_free_use(self) -> bool:

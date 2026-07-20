@@ -12,21 +12,24 @@ Video docs: https://ai.google.dev/gemini-api/docs/video.md.txt
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Literal
 
 import logfire
 from google import genai
 from google.genai import types
 from pydantic_ai import RunContext
 
+from derp.catalog import (
+    GoogleModelKey,
+    GoogleModelSpec,
+    VideoPricing,
+    get_google_model,
+)
 from derp.common.extractor import Extractor
 from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.llm.deps import AgentDeps
 from derp.tools.wrapper import credit_aware_tool
-
-VEO_31_FAST = "veo-3.1-fast-generate-preview"
-VEO_31_STANDARD = "veo-3.1-generate-preview"
 
 
 class VideoGenerationError(Exception):
@@ -56,7 +59,7 @@ class VideoGenerationError(Exception):
         return " | ".join(parts)
 
 
-def _pick_veo_model(*, quality: str, model: str | None) -> str:
+def _pick_veo_model(*, quality: str, model: GoogleModelSpec | None) -> GoogleModelSpec:
     """Pick a Veo model id.
 
     Args:
@@ -66,8 +69,8 @@ def _pick_veo_model(*, quality: str, model: str | None) -> str:
     if model:
         return model
     if quality.lower() == "standard":
-        return VEO_31_STANDARD
-    return VEO_31_FAST
+        return get_google_model(GoogleModelKey.VIDEO_STANDARD)
+    return get_google_model(GoogleModelKey.VIDEO_FAST)
 
 
 async def _download_video_to_bytes(client: genai.Client, video: types.Video) -> bytes:
@@ -88,7 +91,7 @@ async def generate_and_send_video(
     quality: str = "fast",
     duration_seconds: int = 6,
     aspect_ratio: str = "16:9",
-    model: str | None = None,
+    model: GoogleModelSpec | None = None,
     with_profile_photo: bool = False,
 ) -> None:
     """Generate and send a video to the chat.
@@ -101,13 +104,18 @@ async def generate_and_send_video(
         deps: Agent dependencies with message context.
         prompt: Video generation prompt.
         quality: 'fast' or 'standard' (affects model selection).
-        duration_seconds: Video length (6 or 8 seconds).
+        duration_seconds: Video length (4, 6, or 8 seconds).
         aspect_ratio: Video aspect ratio ('16:9', '9:16', '1:1').
         model: Explicit model override (bypasses quality selection).
         with_profile_photo: If True, use user's profile photo as reference
             when no image is attached (for "animate my photo" requests).
     """
-    veo_model = _pick_veo_model(quality=quality, model=model)
+    model_spec = _pick_veo_model(quality=quality, model=model)
+    pricing = model_spec.pricing
+    if not isinstance(pricing, VideoPricing):
+        raise ValueError(f"{model_spec.key} is not a video model")
+    if duration_seconds not in pricing.supported_durations_seconds:
+        raise ValueError(f"Unsupported video duration: {duration_seconds}")
 
     # Use paid key for Veo (paid tier feature)
     client = genai.Client(api_key=settings.google_api_paid_key.get_secret_value())
@@ -122,7 +130,7 @@ async def generate_and_send_video(
 
     logfire.info(
         "veo_generate_start",
-        model=veo_model,
+        model=model_spec.provider_model_id,
         duration_seconds=duration_seconds,
         aspect_ratio=aspect_ratio,
         has_reference_image=bool(photo),
@@ -131,7 +139,7 @@ async def generate_and_send_video(
 
     # Use async API
     operation = await client.aio.models.generate_videos(
-        model=veo_model,
+        model=model_spec.provider_model_id,
         prompt=prompt,
         image=image,
         config=types.GenerateVideosConfig(
@@ -212,7 +220,7 @@ async def generate_and_send_video(
 
     logfire.info(
         "veo_generate_done",
-        model=veo_model,
+        model=model_spec.provider_model_id,
         bytes=len(video_bytes),
         chat_id=deps.chat_id,
     )
@@ -224,7 +232,7 @@ async def video_generate(
     prompt: str,
     *,
     quality: str = "fast",
-    duration_seconds: int = 6,
+    duration_seconds: Literal[4, 6, 8] = 6,
     aspect_ratio: str = "16:9",
     use_profile_photo: bool = False,
 ) -> str:
@@ -233,7 +241,7 @@ async def video_generate(
     Args:
         prompt: Description of the video to generate. Be detailed and creative.
         quality: 'fast' for quick generation, 'standard' for higher quality.
-        duration_seconds: Video length - 6 or 8 seconds.
+        duration_seconds: Video length - 4, 6, or 8 seconds.
         aspect_ratio: '16:9' (landscape), '9:16' (portrait/stories), or '1:1' (square).
         use_profile_photo: Set to True when the user asks to "use my photo",
             "animate my photo", "make a video of me", etc. This uses their

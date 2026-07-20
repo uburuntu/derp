@@ -22,7 +22,7 @@ from derp.llm.deps import AgentDeps
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
-from derp.tools.gemini_tts import TTS_MODEL, generate_and_send_tts
+from derp.tools.gemini_tts import generate_and_send_tts
 
 router = Router(name="tts")
 
@@ -47,7 +47,10 @@ async def handle_tts(
         )
 
     access = await credit_service.check_tool_access(
-        user_model, chat_model, "voice_tts", TTS_MODEL
+        user_model,
+        chat_model,
+        "voice_tts",
+        arguments={"text": text},
     )
     if not access.allowed:
         return await sender.reply(
@@ -57,6 +60,7 @@ async def handle_tts(
             + "\n\n"
             + purchase_suspension_message(),
         )
+    model = access.require_model()
 
     try:
         deps = AgentDeps(
@@ -65,8 +69,9 @@ async def handle_tts(
             bot=message.bot,
             user_model=user_model,
             chat_model=chat_model,
+            model=model,
         )
-        await generate_and_send_tts(deps, text=text, model=TTS_MODEL)
+        await generate_and_send_tts(deps, text=text, model=model)
 
         idempotency_key = f"voice_tts:{chat_model.telegram_id}:{message.message_id}"
         await credit_service.deduct(
@@ -75,7 +80,7 @@ async def handle_tts(
             chat_model,
             "voice_tts",
             idempotency_key=idempotency_key,
-            metadata={"model": TTS_MODEL},
+            metadata={"model": model.provider_model_id},
         )
 
         logfire.info(

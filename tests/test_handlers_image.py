@@ -1,10 +1,10 @@
 """Tests for image generation handler."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from derp.credits.models import ModelTier
+from derp.catalog import GoogleModelKey
 from derp.handlers.image import (
     handle_edit,
     handle_imagine,
@@ -71,8 +71,7 @@ class TestHandleImagine:
 
         check_result = make_credit_check_result(
             allowed=False,
-            tier=ModelTier.STANDARD,
-            model_id="gemini-2.5-flash-image",
+            model_key=GoogleModelKey.IMAGE,
             reject_reason="Not enough credits",
         )
         service = mock_credit_service_factory(check_result=check_result)
@@ -104,3 +103,40 @@ class TestHandleEdit:
 
         message.reply.assert_awaited_once()
         assert "Reply to an image" in message.reply.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_uses_distinct_edit_access_policy(
+        self,
+        make_message,
+        mock_user_model,
+        mock_chat_model,
+        mock_credit_service_factory,
+        make_credit_check_result,
+        mock_sender,
+    ):
+        message = make_message(text="/edit add a hat")
+        meta = MagicMock(target_text="add a hat")
+        user = mock_user_model()
+        chat = mock_chat_model()
+        sender = mock_sender(message)
+        check_result = make_credit_check_result(
+            allowed=False,
+            model_key=GoogleModelKey.IMAGE,
+            reject_reason="Not enough credits",
+        )
+        service = mock_credit_service_factory(check_result=check_result)
+
+        with patch(
+            "derp.handlers.image.Extractor.photo",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            await handle_edit(
+                message,
+                meta,
+                sender,
+                service,
+                user_model=user,
+                chat_model=chat,
+            )
+
+        service.check_tool_access.assert_awaited_once_with(user, chat, "image_edit")

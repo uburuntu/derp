@@ -571,12 +571,13 @@ Command and agent-tool paths choose models, charge, execute, send, and recover
 differently. Milestones 2 and 3 move each capability behind one feature service
 and delete the replaced paths incrementally.
 
-### AR-005: Model selection has two sources of truth
+### AR-005: Model selection had two sources of truth (resolved)
 
-`derp/llm/providers.py` and `derp/credits/models.py` can price and execute
-different models, and the current registry contains stale TODO prices.
-Milestone 0 creates one Google-only catalog used unchanged by quoting and
-execution.
+`derp/catalog/google.py` now owns immutable model IDs, lifecycle, capabilities,
+limits, source links, and current provider pricing. Billing checks and runtime
+execution carry the same exact model spec; feature policy stores only semantic
+keys. Milestone 2 will consume this catalog when immutable quotes replace the
+temporary fixed credit estimates.
 
 ### AR-006: Payment fulfillment lacks a durable intent
 

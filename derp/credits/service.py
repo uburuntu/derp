@@ -1,7 +1,7 @@
 """Credit service for checking and deducting credits.
 
 This is the main entry point for credit operations. It handles:
-- Tier selection based on credit balance
+- Chat model selection based on credit balance
 - Tool access checking with daily limits
 - Credit deduction after successful operations
 - Credit purchases
@@ -9,15 +9,15 @@ This is the main entry point for credit operations. It handles:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import logfire
 
-from derp.credits.models import (
-    ModelTier,
-    ModelType,
-    get_default_model,
-    get_model,
+from derp.catalog import (
+    GoogleModelKey,
+    GoogleModelSpec,
+    get_google_model,
 )
 from derp.credits.tools import TOOL_REGISTRY, get_tool
 from derp.credits.types import CreditCheckResult
@@ -39,11 +39,11 @@ if TYPE_CHECKING:
     from derp.models import Chat, User
 
 
-# Context limits by tier
-CONTEXT_LIMITS: dict[ModelTier, int] = {
-    ModelTier.CHEAP: 10,  # Free tier: limited context
-    ModelTier.STANDARD: 100,  # Paid tier: full context
-    ModelTier.PREMIUM: 100,  # Premium: full context
+# Context limits are product policy, not provider model capabilities.
+CONTEXT_LIMITS: dict[GoogleModelKey, int] = {
+    GoogleModelKey.CHAT_ECONOMY: 10,
+    GoogleModelKey.CHAT_STANDARD: 100,
+    GoogleModelKey.CHAT_REASONING: 100,
 }
 
 
@@ -55,8 +55,8 @@ class CreditService:
     Usage:
         service = CreditService(session)
 
-        # Get orchestrator config (which model/tier to use)
-        tier, model_id, context_limit = await service.get_orchestrator_config(user, chat)
+        # Get the exact orchestrator model and context policy.
+        model, context_limit = await service.get_orchestrator_config(user, chat)
 
         # Check tool access
         result = await service.check_tool_access(user, chat, "image_generate")
@@ -74,7 +74,7 @@ class CreditService:
         self,
         user: User,
         chat: Chat,
-    ) -> tuple[ModelTier, str, int]:
+    ) -> tuple[GoogleModelSpec, int]:
         """Get orchestrator configuration based on credit balance.
 
         Args:
@@ -82,40 +82,37 @@ class CreditService:
             chat: Database Chat model.
 
         Returns:
-            Tuple of (tier, model_id, context_limit).
-            - Free tier (no credits): CHEAP model, 10 message context
-            - Paid tier (has credits): STANDARD model, 100 message context
+            Exact catalog model plus the message context limit.
         """
         chat_credits, user_credits = await get_balances(
             self.session, user.telegram_id, chat.telegram_id
         )
 
         if chat_credits > 0 or user_credits > 0:
-            model = get_default_model(ModelType.TEXT, ModelTier.STANDARD)
-            tier = ModelTier.STANDARD
+            model = get_google_model(GoogleModelKey.CHAT_STANDARD)
         else:
-            model = get_default_model(ModelType.TEXT, ModelTier.CHEAP)
-            tier = ModelTier.CHEAP
+            model = get_google_model(GoogleModelKey.CHAT_ECONOMY)
 
-        context_limit = CONTEXT_LIMITS[tier]
+        context_limit = CONTEXT_LIMITS[model.key]
 
         logfire.debug(
             "orchestrator_config",
-            tier=tier.value,
-            model=model.id,
+            model_key=model.key.value,
+            model=model.provider_model_id,
             context_limit=context_limit,
             chat_credits=chat_credits,
             user_credits=user_credits,
         )
 
-        return tier, model.id, context_limit
+        return model, context_limit
 
     async def check_tool_access(
         self,
         user: User,
         chat: Chat,
         tool_name: str,
-        model_id: str | None = None,
+        *,
+        arguments: Mapping[str, object] | None = None,
     ) -> CreditCheckResult:
         """Check if a tool can be used, considering credits and daily limits.
 
@@ -129,23 +126,16 @@ class CreditService:
             user: Database User model.
             chat: Database Chat model.
             tool_name: Name of the tool to check.
-            model_id: Optional specific model to use (defaults to tool's default).
+            arguments: Validated tool arguments used for model variants.
 
         Returns:
             CreditCheckResult with access decision and details.
         """
         tool = get_tool(tool_name)
-
-        # Resolve model
-        if model_id:
-            model = get_model(model_id)
-        elif tool.default_model_id:
-            model = get_model(tool.default_model_id)
-        else:
-            # Use default for the tool's model type
-            model = get_default_model(tool.model_type, ModelTier.STANDARD)
-
-        total_cost = tool.total_cost(model.credit_cost)
+        resolved_arguments = arguments or {}
+        model_key = tool.resolve_model_key(resolved_arguments)
+        model = get_google_model(model_key) if model_key else None
+        total_cost = tool.total_cost(tool.model_credit_cost(model, resolved_arguments))
 
         # Get balances
         chat_credits, user_credits = await get_balances(
@@ -158,20 +148,29 @@ class CreditService:
             if used < tool.free_daily_limit:
                 return CreditCheckResult(
                     allowed=True,
-                    tier=model.tier,
-                    model_id=model.id,
+                    model=model,
                     source="free",
                     credits_to_deduct=0,
                     credits_remaining=None,
                     free_remaining=tool.free_daily_limit - used - 1,
                 )
 
+        if total_cost == 0:
+            return CreditCheckResult(
+                allowed=False,
+                model=model,
+                source="rejected",
+                credits_to_deduct=0,
+                credits_remaining=None,
+                free_remaining=0,
+                reject_reason=f"Daily limit reached for {tool.name}",
+            )
+
         # Check chat credits
         if chat_credits >= total_cost:
             return CreditCheckResult(
                 allowed=True,
-                tier=model.tier,
-                model_id=model.id,
+                model=model,
                 source="chat",
                 credits_to_deduct=total_cost,
                 credits_remaining=chat_credits - total_cost,
@@ -182,8 +181,7 @@ class CreditService:
         if user_credits >= total_cost:
             return CreditCheckResult(
                 allowed=True,
-                tier=model.tier,
-                model_id=model.id,
+                model=model,
                 source="user",
                 credits_to_deduct=total_cost,
                 credits_remaining=user_credits - total_cost,
@@ -193,8 +191,7 @@ class CreditService:
         # Rejected
         return CreditCheckResult(
             allowed=False,
-            tier=model.tier,
-            model_id=model.id,
+            model=model,
             source="rejected",
             credits_to_deduct=0,
             credits_remaining=0,

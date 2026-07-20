@@ -1,7 +1,7 @@
 """Inline query handler using Pydantic-AI.
 
 This handler processes inline queries for quick AI responses,
-using the CHEAP tier for cost efficiency on high-volume queries.
+using the economy chat role for cost efficiency on high-volume queries.
 """
 
 from __future__ import annotations
@@ -23,9 +23,10 @@ from aiogram.types import (
 from aiogram.utils.i18n import gettext as _
 from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
+from derp.catalog import GoogleModelKey
 from derp.common.sender import MessageSender
 from derp.config import settings
-from derp.llm import ModelTier, create_inline_agent
+from derp.llm import create_inline_agent
 from derp.observability import report_exception
 
 router = Router(name="inline")
@@ -120,8 +121,7 @@ async def chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bot) -> N
             telegram_user_id=chosen_result.from_user.id,
             query_length=len(chosen_result.query),
         ):
-            # Use CHEAP tier for inline queries (high volume, low cost)
-            agent = create_inline_agent(ModelTier.CHEAP)
+            agent = create_inline_agent(GoogleModelKey.CHAT_ECONOMY)
             result = await agent.run(prompt)
 
             if result.output:

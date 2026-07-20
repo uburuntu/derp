@@ -5,8 +5,8 @@ the provider-agnostic Pydantic-AI infrastructure with tools like
 DuckDuckGo search and chat memory.
 
 The handler is credit-aware:
-- Free tier (no credits): Uses CHEAP model with 10 message context
-- Paid tier (has credits): Uses STANDARD model with 100 message context
+- Free access: Uses the economy chat role with 10-message context
+- Paid access: Uses the standard chat role with 100-message context
 """
 
 from __future__ import annotations
@@ -27,10 +27,10 @@ from pydantic_ai.exceptions import (
     UsageLimitExceeded,
 )
 
+from derp.catalog import GoogleModelKey, get_google_model
 from derp.common.extractor import Extractor
 from derp.config import settings
 from derp.credits import CONTEXT_LIMITS, CreditService
-from derp.credits import ModelTier as CreditModelTier
 from derp.db import DatabaseManager, get_db_manager, get_recent_messages
 from derp.filters import DerpMentionFilter
 from derp.llm import (
@@ -38,9 +38,6 @@ from derp.llm import (
     AgentDeps,
     AgentResult,
     create_chat_agent,
-)
-from derp.llm import (
-    ModelTier as LLMModelTier,
 )
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
@@ -165,7 +162,7 @@ async def build_context_prompt(
         ]
     )
 
-    # Recent chat history from messages table (limited by tier)
+    # Recent chat history from messages table (limited by product policy)
     async with db.read_session() as session:
         recent_msgs = await get_recent_messages(
             session, chat_telegram_id=message.chat.id, limit=context_limit
@@ -234,10 +231,10 @@ async def show_context(message: Message, chat_model: ChatModel | None) -> None:
 class ChatAgentHandler(MessageHandler):
     """Message handler for AI responses using Pydantic-AI agents.
 
-    Credit-aware handler that selects model tier and context limit
+    Credit-aware handler that selects a catalog model and context limit
     based on user/chat credit balance:
-    - No credits: CHEAP model, 10 message context
-    - Has credits: STANDARD model, 100 message context
+    - No credits: economy chat role, 10-message context
+    - Has credits: standard chat role, 100-message context
     """
 
     async def handle(self) -> Any:
@@ -249,32 +246,22 @@ class ChatAgentHandler(MessageHandler):
         chat_model: ChatModel | None = self.data.get("chat_model")
         credit_service: CreditService | None = self.data.get("credit_service")
 
-        # Determine tier and context limit based on credits
-        tier = LLMModelTier.CHEAP  # Default for free tier
-        context_limit = CONTEXT_LIMITS[CreditModelTier.CHEAP]
-
-        tier_map = {
-            CreditModelTier.CHEAP: LLMModelTier.CHEAP,
-            CreditModelTier.STANDARD: LLMModelTier.STANDARD,
-            CreditModelTier.PREMIUM: LLMModelTier.PREMIUM,
-        }
+        model = get_google_model(GoogleModelKey.CHAT_ECONOMY)
+        context_limit = CONTEXT_LIMITS[model.key]
 
         if user_model and chat_model and credit_service:
-            (
-                credit_tier,
-                _model_id,
-                context_limit,
-            ) = await credit_service.get_orchestrator_config(user_model, chat_model)
-            tier = tier_map.get(credit_tier, LLMModelTier.CHEAP)
+            model, context_limit = await credit_service.get_orchestrator_config(
+                user_model, chat_model
+            )
 
-        # Create agent dependencies with determined tier
+        # Carry the exact selected model into the agent and its tools.
         deps = AgentDeps(
             message=self.event,
             db=db,
             bot=bot,
             user_model=user_model,
             chat_model=chat_model,
-            tier=tier,
+            model=model,
         )
 
         try:
@@ -284,10 +271,11 @@ class ChatAgentHandler(MessageHandler):
                 telegram_chat_id=self.event.chat.id,
                 telegram_user_id=self.event.from_user and self.event.from_user.id,
                 telegram_message_id=self.event.message_id,
-                model_tier=deps.tier.value,
+                model_key=deps.model.key.value,
+                model=deps.model.provider_model_id,
                 context_limit=context_limit,
             ) as span:
-                # Build context prompt with tier-appropriate limit
+                # Build context prompt with the selected product-policy limit.
                 context = await build_context_prompt(self.event, db, context_limit)
                 span.set_attribute("derp.context_chars", len(context))
                 span.set_attribute(
@@ -304,12 +292,13 @@ class ChatAgentHandler(MessageHandler):
                 user_prompt.extend(media_parts)
 
                 # Create and run the agent with tools
-                agent = create_chat_agent(deps.tier)
+                agent = create_chat_agent(deps.model)
                 toolset = create_chat_toolset()
 
                 logfire.info(
                     "running_agent",
-                    tier=deps.tier.value,
+                    model_key=deps.model.key.value,
+                    model=deps.model.provider_model_id,
                     context_limit=context_limit,
                     tools=len(toolset.tools),
                 )

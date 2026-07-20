@@ -692,13 +692,13 @@ def make_credit_check_result():
                 reject_reason="Not enough credits"
             )
     """
-    from derp.credits.models import ModelTier
+    from derp.catalog import GoogleModelKey, GoogleModelSpec, get_google_model
     from derp.credits.types import CreditCheckResult
 
     def _make(
         allowed: bool = True,
-        tier: ModelTier = ModelTier.STANDARD,
-        model_id: str = "gemini-2.5-flash",
+        model: GoogleModelSpec | None = None,
+        model_key: GoogleModelKey = GoogleModelKey.CHAT_STANDARD,
         source: str = "user",
         credits_to_deduct: int = 1,
         credits_remaining: int | None = 99,
@@ -707,8 +707,7 @@ def make_credit_check_result():
     ) -> CreditCheckResult:
         return CreditCheckResult(
             allowed=allowed,
-            tier=tier,
-            model_id=model_id,
+            model=model or get_google_model(model_key),
             source=source if allowed else "rejected",
             credits_to_deduct=credits_to_deduct if allowed else 0,
             credits_remaining=credits_remaining,
@@ -747,7 +746,7 @@ def mock_credit_service_factory(make_credit_check_result):
         service.deduct = AsyncMock()
         service.purchase_credits = AsyncMock(return_value=purchase_result)
         service.get_orchestrator_config = AsyncMock(
-            return_value=(check_result.tier, check_result.model_id, 100)
+            return_value=(check_result.model, 100)
         )
         service.refund_credits = AsyncMock(return_value=True)
 

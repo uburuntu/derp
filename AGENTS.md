@@ -158,7 +158,8 @@ only when its replacement is covered and working.
   - `derp/middlewares/*`: cross‑cutting concerns (logging, DB persistence, event context, DB model injection, credit service, throttling helper).
   - `derp/filters/*`: input shaping (mentions, meta command/hashtag parser).
   - `derp/common/*`: shared services (LLM, extraction, executors, Telegram helpers).
-  - `derp/credits/*`: credit economy (pricing, tiers, service, registries).
+  - `derp/catalog/*`: immutable provider model facts and pricing.
+  - `derp/credits/*`: credit economy (feature policy, service, transactions).
   - `derp/db/*`: database session and query functions.
   - `derp/models/*`: SQLAlchemy models (User, Chat, Message, CreditTransaction, DailyUsage).
   - `derp/tools/*`: LLM tool implementations (chat memory, web search, image gen, think).
@@ -184,12 +185,16 @@ only when its replacement is covered and working.
 
 ## LLM Integration (Pydantic-AI)
 
-- **Provider Factory:** `derp/llm/providers.py` maps tiers (CHEAP, STANDARD, PREMIUM, IMAGE) to Google models. Provider switching is not currently implemented.
+- **Provider Factory:** `derp/llm/providers.py` accepts an exact catalog spec or
+  semantic key and creates the corresponding Google model. Provider switching
+  is not currently implemented.
 - **Agent Factories:** `derp/llm/agents.py` provides `create_chat_agent()`, `create_image_agent()`, and `create_inline_agent()`. Chat tools are attached per run through `create_chat_toolset()`.
-- **Dependencies:** `AgentDeps` dataclass (`derp/llm/deps.py`) injects context (message, chat, user, db, bot, tier, credit_service) into tools and prompts.
+- **Dependencies:** `AgentDeps` dataclass (`derp/llm/deps.py`) injects context
+  (message, chat, user, db, bot, exact model spec) into tools and prompts.
 - **Result Wrapper:** `AgentResult` (`derp/llm/result.py`) standardizes agent output and provides `reply_to()` for sending Telegram messages with text, images, code blocks.
 - **Handlers:**
-  - `derp/handlers/chat.py`: main chat handler. Determines tier from credits, builds context, runs agent, handles multi-modal output.
+  - `derp/handlers/chat.py`: main chat handler. Resolves the catalog model from
+    credit state, builds context, runs the agent, and handles multi-modal output.
   - `derp/handlers/image.py`: premium image generation/editing via `/imagine` and `/edit` commands.
   - `derp/handlers/inline.py`: inline mode with placeholder-then-edit pattern.
 - **Tools & Toolsets:**
@@ -234,15 +239,20 @@ The bot uses a credit-based monetization system with tiered access to features.
 - **Two Credit Pools:** Users have personal credits; chats have shared credits.
   Current code checks chat then personal balances. The target requires explicit
   per-user, per-chat consent before personal fallback; never add silent fallback.
-- **Model Tiers:** LLM models are abstracted into quality tiers (CHEAP, STANDARD, PREMIUM, IMAGE) rather than specific model names. This allows swapping providers without changing business logic.
-- **Free Tier:** Users without credits use the CHEAP tier with reduced context length and no premium tools.
-- **Paid Tier:** Users/chats with credits > 0 unlock STANDARD tier, longer context, and premium tools.
+- **Model Keys:** Stable semantic keys select immutable Google model specs. The
+  shared spec carries the exact provider ID, lifecycle, limits, capabilities,
+  source links, and current pricing used by both execution and billing.
+- **Free Tier:** Users without credits use the economy chat role with reduced
+  context length and no paid-only tools.
+- **Paid Tier:** Users/chats with credits unlock the standard chat role, longer
+  context, and premium tools.
 
 ### Architecture
 
 ```
+derp/catalog/
+└── google.py     # Immutable Google model specs, limits, capabilities, pricing
 derp/credits/
-├── models.py     # ModelConfig, MODEL_REGISTRY, tier mappings
 ├── tools.py      # ToolConfig, TOOL_REGISTRY, tool pricing
 ├── types.py      # CreditCheckResult
 ├── service.py    # CreditService: check access, deduct, purchase, refund
@@ -250,8 +260,10 @@ derp/credits/
 ```
 
 - **CreditService:** Central service for all credit operations. Accepts SQLAlchemy `UserModel`/`ChatModel` directly (not Telegram IDs). Performs atomic balance updates, records transactions with idempotency keys, and checks tool/model access. Injected via `CreditServiceMiddleware`.
-- **Registries:** `MODEL_REGISTRY` and `TOOL_REGISTRY` define available models/tools with their costs. Pricing is derived from provider costs with a margin.
-- **CreditCheckResult:** Returned by access checks; contains `allowed`, `reject_reason`, source (chat/user), and cost information.
+- **Catalogs:** `GOOGLE_MODEL_CATALOG` owns provider facts and pricing;
+  `TOOL_REGISTRY` owns feature access policy and semantic model selection.
+- **CreditCheckResult:** Returned by access checks; contains the exact immutable
+  model spec, `allowed`, `reject_reason`, source (chat/user), and cost information.
 
 ### Payment Flow
 

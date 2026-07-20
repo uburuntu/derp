@@ -71,7 +71,7 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
                     deps.user_model,
                     deps.chat_model,
                     tool_name,
-                    kwargs.get("model"),
+                    arguments=kwargs,
                 )
 
                 if not result.allowed:
@@ -90,6 +90,8 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
                     "tool_invoked",
                     tool=tool_name,
                     source=result.source,
+                    model_key=result.model and result.model.key.value,
+                    model=result.model and result.model.provider_model_id,
                     credits_to_deduct=result.credits_to_deduct,
                     user_id=deps.user_id,
                     chat_id=deps.chat_id,

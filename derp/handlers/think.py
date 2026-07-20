@@ -1,6 +1,6 @@
 """Handler for deep thinking commands (/think).
 
-Uses the PREMIUM model tier (Gemini 3 Pro) for complex reasoning tasks.
+Uses the catalog's current reasoning model for complex reasoning tasks.
 Shares credit checks and limits with the agent tool `think_deep`.
 """
 
@@ -18,7 +18,6 @@ from derp.credits import CreditService
 from derp.credits.purchase_suspension import purchase_suspension_message
 from derp.db import get_db_manager
 from derp.llm import AgentDeps, create_chat_agent
-from derp.llm.providers import ModelTier
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
@@ -35,12 +34,9 @@ async def handle_think(
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
 ) -> Message:
-    """Handle /think command for deep reasoning using Gemini 3 Pro.
+    """Handle /think with the catalog's advanced reasoning model.
 
-    Uses the PREMIUM model tier (gemini-3-pro-preview) for complex
-    reasoning tasks with extended thinking capabilities.
-
-    Reference: https://ai.google.dev/gemini-api/docs/models#gemini-3
+    Reference: https://ai.google.dev/gemini-api/docs/models
     """
     prompt = message.text
     if prompt:
@@ -50,7 +46,7 @@ async def handle_think(
         return await sender.reply(
             _(
                 "🧠 **Deep Thinking Mode**\n\n"
-                "Use Gemini 3 Pro for complex math, logic puzzles, "
+                "Use advanced reasoning for complex math, logic puzzles, "
                 "or problems that need careful analysis.\n\n"
                 "Usage: /think <your problem or question>"
             ),
@@ -73,6 +69,7 @@ async def handle_think(
             + "\n\n"
             + purchase_suspension_message(),
         )
+    model = result.require_model()
 
     logfire.info(
         "think_command_started",
@@ -81,7 +78,7 @@ async def handle_think(
     )
 
     try:
-        agent = create_chat_agent(ModelTier.PREMIUM)
+        agent = create_chat_agent(model)
 
         deps = AgentDeps(
             message=message,
@@ -89,7 +86,7 @@ async def handle_think(
             bot=message.bot,
             user_model=user_model,
             chat_model=chat_model,
-            tier=ModelTier.PREMIUM,
+            model=model,
         )
 
         thinking_prompt = (

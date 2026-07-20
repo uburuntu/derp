@@ -1,7 +1,7 @@
 """Image generation and editing handler using Pydantic-AI.
 
 This handler processes /imagine and /edit commands with credit checking,
-using the IMAGE tier model for image generation capabilities.
+using the catalog's native image model.
 
 Credit-aware:
 - Free tier: 1 free image per day
@@ -63,6 +63,7 @@ async def handle_imagine(
             + "\n\n"
             + purchase_suspension_message()
         )
+    model = result.require_model()
 
     # Create sender bound to target message for reply
     target_sender = MessageSender.from_message(meta.target_message)
@@ -76,7 +77,7 @@ async def handle_imagine(
             prompt_length=len(prompt),
             credit_source=result.source,
         ):
-            agent = create_image_agent()
+            agent = create_image_agent(model)
             run_result = await agent.run(prompt)
             output = run_result.output
 
@@ -183,7 +184,7 @@ async def handle_edit(
         )
 
     result = await credit_service.check_tool_access(
-        user_model, chat_model, "image_generate"
+        user_model, chat_model, "image_edit"
     )
 
     if not result.allowed:
@@ -192,6 +193,7 @@ async def handle_edit(
             + "\n\n"
             + purchase_suspension_message()
         )
+    model = result.require_model()
 
     # Create sender bound to target message for reply
     target_sender = MessageSender.from_message(meta.target_message)
@@ -208,7 +210,7 @@ async def handle_edit(
             data = await photo.download()
             logfire.debug("source_image_downloaded", size=len(data))
 
-            agent = create_image_agent()
+            agent = create_image_agent(model)
             user_prompt: list[str | BinaryContent] = [
                 prompt,
                 BinaryContent(data=data, media_type=photo.media_type),
@@ -231,7 +233,7 @@ async def handle_edit(
                         result,
                         user_model,
                         chat_model,
-                        "image_generate",
+                        "image_edit",
                         idempotency_key=idempotency_key,
                     )
                     sent = await target_sender.compose().images(images).reply()
@@ -244,7 +246,7 @@ async def handle_edit(
                     result,
                     user_model,
                     chat_model,
-                    "image_generate",
+                    "image_edit",
                     idempotency_key=idempotency_key,
                 )
                 sent = await target_sender.compose().image(output).reply()

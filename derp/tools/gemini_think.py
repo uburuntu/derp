@@ -1,10 +1,9 @@
 """Deep thinking tool for Pydantic-AI agents.
 
-This tool uses Gemini 3 Pro (gemini-3-pro-preview) for complex reasoning tasks.
-It's useful for mathematical problems, logical puzzles, or tasks that
-require extended thinking capabilities.
+This tool uses the catalog's current reasoning model for mathematical
+problems, logical puzzles, and tasks that require extended thinking.
 
-Reference: https://ai.google.dev/gemini-api/docs/models#gemini-3
+Reference: https://ai.google.dev/gemini-api/docs/models
 """
 
 from __future__ import annotations
@@ -12,9 +11,9 @@ from __future__ import annotations
 import logfire
 from pydantic_ai import RunContext
 
+from derp.catalog import GoogleModelKey
 from derp.llm.agents import create_chat_agent
 from derp.llm.deps import AgentDeps
-from derp.llm.providers import ModelTier
 from derp.observability import report_exception
 from derp.tools.wrapper import credit_aware_tool
 
@@ -42,7 +41,7 @@ async def think_deep(
     ctx: RunContext[AgentDeps],
     problem: str,
 ) -> str:
-    """Apply deep reasoning to a complex problem using Gemini 3 Pro.
+    """Apply the catalog's advanced reasoning model to a complex problem.
 
     Use this tool when the user asks you to "think harder", "analyze deeply",
     or for complex mathematical or logical problems.
@@ -59,8 +58,7 @@ async def think_deep(
     )
 
     try:
-        # Create a PREMIUM tier agent (Gemini 3 Pro) for deep thinking
-        agent = create_chat_agent(ModelTier.PREMIUM)
+        agent = create_chat_agent(GoogleModelKey.CHAT_REASONING)
 
         # Run with the thinking prompt and problem
         prompt = f"{THINKING_PROMPT}\n\n**Problem:**\n{problem}"

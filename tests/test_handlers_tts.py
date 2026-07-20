@@ -1,11 +1,12 @@
 """Tests for TTS handler."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from derp.credits.models import ModelTier
+from derp.catalog import GoogleModelKey, get_google_model
 from derp.handlers.tts import handle_tts
+from derp.tools.gemini_tts import generate_and_send_tts
 
 
 def _get_text_from_call_args(call_args):
@@ -37,8 +38,7 @@ async def test_handle_tts_success(
 
     check_result = make_credit_check_result(
         allowed=True,
-        tier=ModelTier.STANDARD,
-        model_id="gemini-2.5-pro-preview-tts",
+        model_key=GoogleModelKey.TTS,
         source="free",
         free_remaining=1,
     )
@@ -55,6 +55,10 @@ async def test_handle_tts_success(
         )
 
         mock_gen.assert_awaited_once()
+        service.check_tool_access.assert_awaited_once_with(
+            user, chat, "voice_tts", arguments={"text": "hello world"}
+        )
+        assert mock_gen.await_args.kwargs["model"] is check_result.model
         service.deduct.assert_awaited_once()
 
 
@@ -77,8 +81,7 @@ async def test_handle_tts_no_credits(
 
     check_result = make_credit_check_result(
         allowed=False,
-        tier=ModelTier.STANDARD,
-        model_id="gemini-2.5-pro-preview-tts",
+        model_key=GoogleModelKey.TTS,
         reject_reason="Not enough credits",
     )
     service = mock_credit_service_factory(check_result=check_result)
@@ -94,3 +97,36 @@ async def test_handle_tts_no_credits(
         sender.reply.assert_awaited_once()
         text = _get_text_from_call_args(sender.reply.call_args)
         assert "Not enough credits" in text
+
+
+@pytest.mark.asyncio
+async def test_tts_provider_output_is_capped_to_the_billed_duration() -> None:
+    deps = MagicMock(chat_id=123, message=MagicMock())
+    response = MagicMock()
+    response.parts = [
+        MagicMock(inline_data=MagicMock(data=b"pcm", mime_type="audio/L16"))
+    ]
+    client = MagicMock()
+    client.aio.models.generate_content = AsyncMock(return_value=response)
+    composer = MagicMock()
+    composer.voice.return_value = composer
+    composer.reply = AsyncMock()
+    sender = MagicMock()
+    sender.compose.return_value = composer
+
+    with (
+        patch("derp.tools.gemini_tts.genai.Client", return_value=client),
+        patch(
+            "derp.tools.gemini_tts.convert_to_ogg_opus",
+            new=AsyncMock(return_value=b"ogg"),
+        ),
+        patch("derp.tools.gemini_tts.MessageSender.from_message", return_value=sender),
+    ):
+        await generate_and_send_tts(
+            deps,
+            text="hello",
+            model=get_google_model(GoogleModelKey.TTS),
+        )
+
+    config = client.aio.models.generate_content.await_args.kwargs["config"]
+    assert config.max_output_tokens == 750

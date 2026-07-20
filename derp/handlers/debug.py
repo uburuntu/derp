@@ -13,9 +13,10 @@ from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 from aiogram.utils.i18n import gettext as _
 from pydantic import BaseModel, ConfigDict, Field
 
+from derp.catalog import GoogleModelKey, get_google_model
 from derp.common.sender import MessageSender
 from derp.config import settings
-from derp.credits import CreditService, ModelTier
+from derp.credits import CreditService
 from derp.credits.purchase_suspension import (
     PurchaseIntakeSource,
     reject_purchase_callback,
@@ -344,7 +345,7 @@ async def debug_status(
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
 ) -> Message:
-    """Show detailed debug status for credits and tier detection.
+    """Show detailed debug status for credits and model selection.
 
     Usage:
     - /debug_status - Show full diagnostic info
@@ -360,14 +361,17 @@ async def debug_status(
 
     # Get orchestrator config (requires both models for the new API)
     if chat_model:
-        tier, model_id, context_limit = await credit_service.get_orchestrator_config(
+        model, context_limit = await credit_service.get_orchestrator_config(
             user_model, chat_model
         )
     else:
-        # No chat model, use defaults
-        tier = ModelTier.CHEAP if user_credits == 0 else ModelTier.STANDARD
-        model_id = "default"
-        context_limit = 10 if tier == ModelTier.CHEAP else 100
+        model = get_google_model(
+            GoogleModelKey.CHAT_ECONOMY
+            if user_credits == 0
+            else GoogleModelKey.CHAT_STANDARD
+        )
+        context_limit = 10 if user_credits == 0 else 100
+    is_paid = (chat_credits + user_credits) > 0
 
     # Build status report
     lines = [
@@ -391,13 +395,13 @@ async def debug_status(
     lines.extend(
         [
             "",
-            "**Tier Detection:**",
-            f"• Tier: `{tier.value}`",
-            f"• Model: `{model_id}`",
+            "**Model Selection:**",
+            f"• Role: `{model.key.value}`",
+            f"• Model: `{model.provider_model_id}`",
             f"• Context Limit: {context_limit} messages",
             "",
-            f"**Is Paid Tier:** {'✅ Yes' if (chat_credits + user_credits) > 0 else '❌ No (free)'}",
-            f"**Premium Tools:** {'✅ Available' if tier != ModelTier.CHEAP else '❌ Not available'}",
+            f"**Is Paid Tier:** {'✅ Yes' if is_paid else '❌ No (free)'}",
+            f"**Premium Tools:** {'✅ Available' if is_paid else '❌ Not available'}",
         ]
     )
 
@@ -405,7 +409,8 @@ async def debug_status(
         "debug_status_shown",
         user_id=user_model.telegram_id,
         chat_id=chat_id,
-        tier=tier.value,
+        model_key=model.key.value,
+        model=model.provider_model_id,
         user_credits=user_credits,
         chat_credits=chat_credits,
     )
@@ -497,7 +502,7 @@ async def debug_help(
         "• /debug_reset [chat] - Reset credits to 0\n"
         "• /debug_refund <charge_id> - Test refund flow\n\n"
         "**Diagnostics:**\n"
-        "• /debug_status - Show tier, balances, model config\n"
+        "• /debug_status - Show model role, balances, and config\n"
         "• /debug_tools - List tools with pricing\n"
         "• /debug_help - This help message"
     )

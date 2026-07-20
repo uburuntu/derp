@@ -1,7 +1,7 @@
 """Image generation and editing tools for Pydantic-AI agents.
 
-These tools use Gemini's Nano Banana (gemini-2.5-flash-image) model
-for native image generation. Images are sent directly to the chat.
+These tools use the catalog's current native image model. Images are sent
+directly to the chat.
 
 Reference: https://ai.google.dev/gemini-api/docs/nanobanana
 """
