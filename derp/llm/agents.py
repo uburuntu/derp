@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import logfire
 from pydantic_ai import Agent, BinaryImage, RunContext
+from pydantic_ai.capabilities import ProcessHistory
 
 from derp.catalog import GoogleModelKey, GoogleModelSpec
 from derp.execution import ExecutionPlan, Feature, plan_execution
+from derp.history.service import process_native_history
 from derp.llm.deps import AgentDeps
 from derp.llm.prompts import (
     IMAGE_SYSTEM_PROMPT,
@@ -68,6 +70,7 @@ def create_chat_agent(
         name="chat",
         deps_type=AgentDeps,
         output_type=str,
+        capabilities=[ProcessHistory(process_native_history)],
     )
 
     @agent.instructions

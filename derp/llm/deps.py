@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from derp.catalog import GoogleModelKey, GoogleModelSpec, get_google_model
+from derp.history.service import HISTORY_WINDOWS, HistoryWindow
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -42,6 +43,9 @@ class AgentDeps:
     chat_model: ChatModel | None = None
     model: GoogleModelSpec = field(
         default_factory=lambda: get_google_model(GoogleModelKey.CHAT_STANDARD)
+    )
+    history_window: HistoryWindow = field(
+        default_factory=lambda: HISTORY_WINDOWS[GoogleModelKey.CHAT_STANDARD]
     )
 
     @property

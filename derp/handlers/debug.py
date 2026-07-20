@@ -25,6 +25,7 @@ from derp.credits.purchase_suspension import (
 )
 from derp.db.credits import get_balances
 from derp.execution import Feature, plan_execution
+from derp.history.service import HISTORY_WINDOWS
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception, telemetry_fingerprint
@@ -362,7 +363,7 @@ async def debug_status(
 
     # The shared-chat path requires both database models for balance policy.
     if chat_model:
-        plan, context_limit = await credit_service.get_orchestrator_config(
+        plan, history_window = await credit_service.get_orchestrator_config(
             user_model, chat_model
         )
     else:
@@ -372,7 +373,7 @@ async def debug_status(
             if user_credits == 0
             else GoogleModelKey.CHAT_STANDARD,
         )
-        context_limit = 10 if user_credits == 0 else 100
+        history_window = HISTORY_WINDOWS[plan.model.key]
     model = plan.model
     is_paid = (chat_credits + user_credits) > 0
 
@@ -401,7 +402,8 @@ async def debug_status(
             "**Model Selection:**",
             f"• Role: `{model.key.value}`",
             f"• Model: `{model.provider_model_id}`",
-            f"• Context Limit: {context_limit} messages",
+            f"• Context: {history_window.max_turns} turns / "
+            f"{history_window.max_tokens} estimated tokens",
             "",
             f"**Is Paid Tier:** {'✅ Yes' if is_paid else '❌ No (free)'}",
             f"**Premium Tools:** {'✅ Available' if is_paid else '❌ Not available'}",

@@ -18,6 +18,7 @@ from aiogram.types import Message
 from derp.common.message_log import mark_deleted, upsert_message_from_message
 from derp.common.update_context import update_ctx
 from derp.db import DatabaseManager
+from derp.history.capture import should_capture_outbound
 from derp.observability import report_exception
 
 
@@ -53,12 +54,13 @@ class PersistBotActionsMiddleware(BaseRequestMiddleware):
             elif isinstance(result, Iterable):
                 messages = [m for m in result if isinstance(m, Message)]
 
-            for m in messages:
-                await upsert_message_from_message(
-                    self.db,
-                    message=m,
-                    direction="out",
-                )
+            if should_capture_outbound():
+                for m in messages:
+                    await upsert_message_from_message(
+                        self.db,
+                        message=m,
+                        direction="out",
+                    )
 
             # Handle deletes: when deleteMessage returns bool
             if (

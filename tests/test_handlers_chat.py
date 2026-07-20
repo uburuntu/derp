@@ -3,7 +3,13 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic_ai import BinaryContent
+from pydantic_ai import BinaryContent, ModelRequest
+
+from derp.history.service import LoadedHistory
+
+
+def empty_history() -> LoadedHistory:
+    return LoadedHistory(messages=(), turns=(), estimated_tokens=0, source_messages=0)
 
 
 class TestExtractMediaForAgent:
@@ -232,10 +238,9 @@ class TestBuildContextPrompt:
         message.chat.title = "Test Chat"
 
         with patch(
-            "derp.handlers.chat.get_recent_messages", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = []
-
+            "derp.handlers.chat._load_history",
+            new=AsyncMock(return_value=empty_history()),
+        ):
             result = await build_context_prompt(
                 message, mock_db_client, context_limit=10
             )
@@ -243,11 +248,24 @@ class TestBuildContextPrompt:
             assert "Test Chat" in result or "supergroup" in result
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Complex mocking required for JSON serialization")
     async def test_includes_recent_messages(self, make_message, mock_db_client):
         """Test context includes recent chat history."""
-        # This test requires proper Message model mocks that serialize to JSON
-        pass
+        from derp.handlers.chat import build_context_prompt
+
+        message = make_message(text="current")
+        history = LoadedHistory(
+            messages=(ModelRequest.user_text_prompt("prior native message"),),
+            turns=(),
+            estimated_tokens=10,
+            source_messages=1,
+        )
+        with patch(
+            "derp.handlers.chat._load_history",
+            new=AsyncMock(return_value=history),
+        ):
+            result = await build_context_prompt(message, mock_db_client)
+
+        assert "prior native message" in result
 
     @pytest.mark.asyncio
     async def test_includes_current_message(self, make_message, mock_db_client):
@@ -259,10 +277,9 @@ class TestBuildContextPrompt:
         message.from_user.username = "asker"
 
         with patch(
-            "derp.handlers.chat.get_recent_messages", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = []
-
+            "derp.handlers.chat._load_history",
+            new=AsyncMock(return_value=empty_history()),
+        ):
             result = await build_context_prompt(
                 message, mock_db_client, context_limit=10
             )
@@ -278,12 +295,11 @@ class TestBuildContextPrompt:
         message.chat.id = -100123
 
         with patch(
-            "derp.handlers.chat.get_recent_messages", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = []
-
+            "derp.handlers.chat._load_history",
+            new=AsyncMock(return_value=empty_history()),
+        ) as mock_load:
             await build_context_prompt(message, mock_db_client, context_limit=5)
 
-            mock_get.assert_awaited_once()
-            call_args = mock_get.call_args
-            assert call_args[1]["limit"] == 5
+            mock_load.assert_awaited_once()
+            window = mock_load.await_args.args[2]
+            assert window.max_turns == 5

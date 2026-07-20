@@ -47,6 +47,18 @@ class FakeDatabase:
         self.events.append("db_disconnect")
 
 
+class FakeRetentionWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("retention_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("retention_stop")
+
+
 @pytest.mark.asyncio
 async def test_runtime_closes_bot_before_database() -> None:
     events: list[str] = []
@@ -57,6 +69,10 @@ async def test_runtime_closes_bot_before_database() -> None:
     with (
         patch("derp.application.create_bot", return_value=bot),
         patch("derp.application.init_db_manager", return_value=database),
+        patch(
+            "derp.application.HistoryRetentionWorker",
+            return_value=FakeRetentionWorker(events),
+        ),
     ):
         async with open_runtime(settings) as runtime:
             assert runtime.bot is bot
@@ -66,7 +82,9 @@ async def test_runtime_closes_bot_before_database() -> None:
     assert events == [
         "bot_enter",
         "db_connect",
+        "retention_start",
         "running",
+        "retention_stop",
         "bot_close",
         "db_disconnect",
     ]
@@ -82,10 +100,13 @@ async def test_runtime_cleans_up_after_partial_startup() -> None:
     with (
         patch("derp.application.create_bot", return_value=bot),
         patch("derp.application.init_db_manager", return_value=database),
+        patch("derp.application.HistoryRetentionWorker") as retention_worker,
         pytest.raises(RuntimeError, match="database unavailable"),
     ):
         async with open_runtime(settings):
             pytest.fail("runtime should not open")
+
+    retention_worker.assert_not_called()
 
     assert events == [
         "bot_enter",

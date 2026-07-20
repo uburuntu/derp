@@ -6,7 +6,7 @@ Queries are optimized for parallel execution with minimal round-trips.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import logfire
 from sqlalchemy import ScalarSelect, and_, or_, select, update
@@ -176,8 +176,14 @@ async def upsert_message(
     telegram_message_id: int,
     thread_id: int | None,
     direction: str,
+    role: str = "user",
+    capture_kind: str = "explicit",
     content_type: str | None,
     text: str | None,
+    source_snapshot: dict[str, object] | None = None,
+    history_dto: dict[str, object] | None = None,
+    canonical_projection: dict[str, object] | None = None,
+    retention_expires_at: datetime | None = None,
     media_group_id: str | None = None,
     attachment_type: str | None = None,
     attachment_file_id: str | None = None,
@@ -194,6 +200,7 @@ async def upsert_message(
     # Use subqueries to resolve IDs inline (single round-trip)
     chat_id = _chat_id_subquery(chat_telegram_id)
     user_id = _user_id_subquery(user_telegram_id) if user_telegram_id else None
+    retention_expires_at = retention_expires_at or telegram_date + timedelta(days=30)
 
     stmt = insert(Message).values(
         chat_id=chat_id,
@@ -201,8 +208,14 @@ async def upsert_message(
         telegram_message_id=telegram_message_id,
         thread_id=thread_id,
         direction=direction,
+        role=role,
+        capture_kind=capture_kind,
         content_type=content_type,
         text=text,
+        source_snapshot=source_snapshot or {},
+        history_dto=history_dto or {},
+        canonical_projection=canonical_projection or {},
+        retention_expires_at=retention_expires_at,
         media_group_id=media_group_id,
         attachment_type=attachment_type,
         attachment_file_id=attachment_file_id,
@@ -214,8 +227,13 @@ async def upsert_message(
         constraint="uq_messages_chat_message",
         set_={
             "direction": stmt.excluded.direction,
+            "role": stmt.excluded.role,
+            "capture_kind": stmt.excluded.capture_kind,
             "content_type": stmt.excluded.content_type,
             "text": stmt.excluded.text,
+            "source_snapshot": stmt.excluded.source_snapshot,
+            "history_dto": stmt.excluded.history_dto,
+            "canonical_projection": stmt.excluded.canonical_projection,
             "media_group_id": stmt.excluded.media_group_id,
             "attachment_type": stmt.excluded.attachment_type,
             "attachment_file_id": stmt.excluded.attachment_file_id,
@@ -224,6 +242,7 @@ async def upsert_message(
             "edited_at": stmt.excluded.edited_at,
             "updated_at": datetime.now(UTC),
         },
+        where=Message.privacy_deleted_at.is_(None),
     ).returning(Message)
 
     result = await session.execute(stmt, execution_options={"populate_existing": True})
@@ -262,6 +281,7 @@ async def get_recent_messages(
     limit: int = 100,
     before_telegram_date: datetime | None = None,
     before_telegram_message_id: int | None = None,
+    active_at: datetime | None = None,
 ) -> list[Message]:
     """Get prior non-deleted messages for one chat/topic scope.
 
@@ -272,6 +292,7 @@ async def get_recent_messages(
         raise ValueError("History limit must be positive")
     if (before_telegram_date is None) != (before_telegram_message_id is None):
         raise ValueError("History cursor requires both date and message ID")
+    active_at = active_at or datetime.now(UTC)
 
     with logfire.span(
         "db.get_recent_messages",
@@ -294,6 +315,7 @@ async def get_recent_messages(
                 Chat.telegram_id == chat_telegram_id,
                 scope,
                 Message.deleted_at.is_(None),
+                Message.retention_expires_at > active_at,
             )
             .order_by(
                 Message.telegram_date.desc(),

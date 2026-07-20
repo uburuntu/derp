@@ -11,7 +11,7 @@ The handler is credit-aware:
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
 from typing import Any
 
 import logfire
@@ -30,16 +30,45 @@ from pydantic_ai.exceptions import (
 from derp.catalog import GoogleModelKey
 from derp.common.extractor import Extractor
 from derp.config import settings
-from derp.credits import CONTEXT_LIMITS, CreditService
-from derp.db import DatabaseManager, get_db_manager, get_recent_messages
+from derp.credits import CreditService
+from derp.db import DatabaseManager, get_db_manager
 from derp.execution import Feature, plan_execution
 from derp.filters import DerpMentionFilter
+from derp.handlers.context_settings import ensure_group_context_notice
+from derp.history.capture import capture_outbound_history
+from derp.history.core import (
+    AttachmentReference,
+    Speaker,
+    UserTextTurn,
+    render_user_content,
+)
+from derp.history.media import (
+    DEFAULT_AGGREGATE_MEDIA_BYTES,
+    HydratedMedia,
+    hydrate_media,
+    hydration_candidate,
+)
+from derp.history.persistence import project_persisted_message
+from derp.history.service import (
+    HISTORY_WINDOWS,
+    ConversationHistoryService,
+    HistoryWindow,
+    LoadedHistory,
+)
+from derp.history.snapshot import (
+    CaptureKind,
+    MessageDirection,
+    SnapshotRole,
+    TelegramMessageSnapshot,
+    project_message_snapshot,
+)
 from derp.llm import (
     RELAXED_SAFETY_SETTINGS,
     AgentDeps,
     AgentResult,
     create_chat_agent,
 )
+from derp.media import MediaGateway
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
@@ -49,11 +78,26 @@ router = Router(name="chat")
 
 
 @logfire.instrument("extract_media", extract_args=False)
-async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
+async def extract_media_for_agent(
+    message: Message,
+    media_gateway: MediaGateway | None = None,
+    *,
+    max_total_bytes: int = DEFAULT_AGGREGATE_MEDIA_BYTES,
+) -> list[BinaryContent]:
     """Extract supported media from message for agent processing.
 
     Converts Telegram media to Pydantic-AI BinaryContent format.
     """
+    if max_total_bytes < 0:
+        raise ValueError("Aggregate media byte limit must not be negative")
+    if media_gateway is not None:
+        hydrated = await _hydrate_current_media(
+            message,
+            media_gateway,
+            max_total_bytes=max_total_bytes,
+        )
+        return list(hydrated.content.values())
+
     media_parts: list[BinaryContent] = []
 
     # Extract photo (includes image documents and static stickers)
@@ -130,7 +174,52 @@ async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
         except Exception:
             report_exception("document_download_failed")
 
-    return media_parts
+    bounded_parts: list[BinaryContent] = []
+    retained_bytes = 0
+    for part in media_parts:
+        if retained_bytes + len(part.data) > max_total_bytes:
+            continue
+        bounded_parts.append(part)
+        retained_bytes += len(part.data)
+    return bounded_parts
+
+
+async def _hydrate_current_media(
+    message: Message,
+    media_gateway: MediaGateway,
+    *,
+    max_total_bytes: int,
+) -> HydratedMedia:
+    snapshot = _attachment_source_snapshot(message)
+    candidates = [
+        candidate
+        for attachment in snapshot.attachments
+        if (candidate := hydration_candidate(attachment)) is not None
+    ]
+    return await hydrate_media(
+        gateway=media_gateway,
+        bot=message.bot,
+        candidates=candidates,
+        max_items=8,
+        max_total_bytes=max_total_bytes,
+    )
+
+
+def _attachment_source_snapshot(message: Message) -> TelegramMessageSnapshot:
+    current = project_message_snapshot(
+        message,
+        role=SnapshotRole.USER,
+        direction=MessageDirection.INBOUND,
+        capture=CaptureKind.EXPLICIT,
+    )
+    if current.attachments or not message.reply_to_message:
+        return current
+    return project_message_snapshot(
+        message.reply_to_message,
+        role=SnapshotRole.USER,
+        direction=MessageDirection.INBOUND,
+        capture=CaptureKind.EXPLICIT,
+    )
 
 
 @logfire.instrument("build_context", extract_args=False)
@@ -139,82 +228,105 @@ async def build_context_prompt(
     db: DatabaseManager,
     context_limit: int = 100,
 ) -> str:
-    """Build the context prompt for the agent.
+    """Render the scoped native history for the admin `/context` diagnostic."""
+    window = HistoryWindow(
+        max_turns=context_limit,
+        max_tokens=max(4_096, context_limit * 2_048),
+        query_limit=max(context_limit, context_limit * 3),
+    )
+    history = await _load_history(message, db, window)
+    current = render_user_content(_current_user_turn(message))
+    title = message.chat.title or message.chat.username or str(message.chat.id)
+    parts = [
+        f"scope={message.chat.id}:{message.message_thread_id or 0} chat={title}",
+        *(repr(native) for native in history.messages),
+        current,
+    ]
+    return "\n".join(parts)
 
-    Includes chat info, recent history, and current message.
-    Note: Chat memory is injected via the agent's system prompt.
 
-    Args:
-        message: The Telegram message.
-        db: Database manager.
-        context_limit: Max number of recent messages to include.
-    """
-    context_parts: list[str] = []
-
-    # Chat info
-    context_parts.extend(
-        [
-            "# CHAT",
-            json.dumps(
-                message.chat.model_dump(
-                    exclude_defaults=True, exclude_none=True, exclude_unset=True
-                )
-            ),
-        ]
+async def _load_history(
+    message: Message,
+    db: DatabaseManager,
+    window: HistoryWindow,
+    media_gateway: MediaGateway | None = None,
+) -> LoadedHistory:
+    return await ConversationHistoryService(
+        db,
+        media_gateway=media_gateway,
+        bot=message.bot if media_gateway else None,
+    ).load_before(
+        chat_id=message.chat.id,
+        thread_id=message.message_thread_id,
+        current_date=message.date,
+        current_message_id=message.message_id,
+        window=window,
     )
 
-    # Recent chat history from messages table (limited by product policy)
-    async with db.read_session() as session:
-        recent_msgs = await get_recent_messages(
-            session,
-            chat_telegram_id=message.chat.id,
-            thread_id=message.message_thread_id,
-            limit=context_limit,
-            before_telegram_date=message.date,
-            before_telegram_message_id=message.message_id,
-        )
 
-    if recent_msgs:
-        context_parts.append("# RECENT CHAT HISTORY")
-        context_parts.extend(
-            json.dumps(
-                {
-                    "message_id": m.telegram_message_id,
-                    "sender": m.user
-                    and {
-                        "user_id": m.user.telegram_id,
-                        "name": m.user.display_name,
-                        "username": m.user.username,
-                    },
-                    "date": m.telegram_date and m.telegram_date.isoformat(),
-                    "content": m.content_type,
-                    "text": m.text,
-                    "reply_to": m.reply_to_message_id,
-                    "attachment": m.attachment_type,
-                },
-                ensure_ascii=False,
+def _current_user_turn(message: Message) -> UserTextTurn:
+    snapshot = project_message_snapshot(
+        message,
+        role=SnapshotRole.USER,
+        direction=MessageDirection.INBOUND,
+        capture=CaptureKind.EXPLICIT,
+    )
+    attachment_snapshot = _attachment_source_snapshot(message)
+    projection = project_persisted_message(snapshot)
+    sender = snapshot.sender
+    display_name = "Unknown sender"
+    if sender:
+        display_name = (
+            sender.title
+            or (f"@{sender.username}" if sender.username else None)
+            or " ".join(part for part in (sender.first_name, sender.last_name) if part)
+            or str(sender.id)
+        )
+    return UserTextTurn(
+        source_message_id=snapshot.message_id,
+        timestamp=snapshot.sent_at,
+        speaker=Speaker(id=sender and sender.id, display_name=display_name),
+        text=projection.text,
+        attachments=tuple(
+            AttachmentReference(
+                media_type=attachment.media_type.value,
+                file_id=attachment.file_id,
+                file_unique_id=attachment.file_unique_id,
             )
-            for m in recent_msgs
-        )
-
-    # Current message
-    context_parts.extend(
-        [
-            "# CURRENT MESSAGE",
-            message.model_dump_json(
-                exclude_defaults=True, exclude_none=True, exclude_unset=True
-            ),
-        ]
+            for attachment in attachment_snapshot.attachments
+        ),
     )
 
-    logfire.debug(
-        "context_built",
-        chars=len("\n".join(context_parts)),
-        messages=len(recent_msgs) if recent_msgs else 0,
-        limit=context_limit,
-    )
 
-    return "\n".join(context_parts)
+def _current_user_prompt(
+    message: Message,
+    media_by_reference: Mapping[AttachmentReference, BinaryContent],
+) -> list[str | BinaryContent]:
+    turn = _current_user_turn(message)
+    media_parts = [
+        media_by_reference[reference]
+        for reference in turn.attachments
+        if reference in media_by_reference
+    ]
+    return [
+        render_user_content(
+            turn,
+            available_attachments=media_by_reference,
+        ),
+        *media_parts,
+    ]
+
+
+def _history_media_bytes(history: LoadedHistory) -> int:
+    total = 0
+    for message in history.messages:
+        for part in message.parts:
+            content = getattr(part, "content", None)
+            values = content if isinstance(content, list) else [content]
+            total += sum(
+                len(value.data) for value in values if isinstance(value, BinaryContent)
+            )
+    return total
 
 
 @router.message(Command("context"), F.from_user.id.in_(settings.admin_ids))
@@ -251,12 +363,20 @@ class ChatAgentHandler(MessageHandler):
         user_model: UserModel | None = self.data.get("user_model")
         chat_model: ChatModel | None = self.data.get("chat_model")
         credit_service: CreditService | None = self.data.get("credit_service")
+        media_gateway: MediaGateway | None = self.data.get("media_gateway")
+
+        await ensure_group_context_notice(
+            self.event,
+            chat_model=chat_model,
+            db=db,
+            bot=bot,
+        )
 
         plan = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_ECONOMY)
-        context_limit = CONTEXT_LIMITS[plan.model.key]
+        history_window = HISTORY_WINDOWS[plan.model.key]
 
         if user_model and chat_model and credit_service:
-            plan, context_limit = await credit_service.get_orchestrator_config(
+            plan, history_window = await credit_service.get_orchestrator_config(
                 user_model, chat_model
             )
 
@@ -268,6 +388,7 @@ class ChatAgentHandler(MessageHandler):
             user_model=user_model,
             chat_model=chat_model,
             model=plan.model,
+            history_window=history_window,
         )
 
         try:
@@ -279,23 +400,55 @@ class ChatAgentHandler(MessageHandler):
                 telegram_message_id=self.event.message_id,
                 model_key=deps.model.key.value,
                 model=deps.model.provider_model_id,
-                context_limit=context_limit,
+                history_max_turns=history_window.max_turns,
+                history_max_tokens=history_window.max_tokens,
             ) as span:
-                # Build context prompt with the selected product-policy limit.
-                context = await build_context_prompt(self.event, db, context_limit)
-                span.set_attribute("derp.context_chars", len(context))
+                history = await _load_history(
+                    self.event,
+                    db,
+                    history_window,
+                    media_gateway,
+                )
+                span.set_attribute("derp.context_messages", len(history.messages))
+                span.set_attribute("derp.context_turns", len(history.turns))
                 span.set_attribute(
-                    "derp.context_messages", context.count('"message_id"')
+                    "derp.context_estimated_tokens", history.estimated_tokens
+                )
+                span.set_attribute("derp.history_media", history.hydrated_media)
+                span.set_attribute(
+                    "derp.history_media_failures", history.media_failures
                 )
 
-                # Extract media
-                media_parts = await extract_media_for_agent(self.event)
-                span.set_attribute("derp.has_media", len(media_parts) > 0)
-                span.set_attribute("derp.media_count", len(media_parts))
+                history_media_bytes = _history_media_bytes(history)
+                current_media_budget = max(
+                    0,
+                    DEFAULT_AGGREGATE_MEDIA_BYTES - history_media_bytes,
+                )
+                current_turn = _current_user_turn(self.event)
+                if media_gateway is not None:
+                    hydrated_current = await _hydrate_current_media(
+                        self.event,
+                        media_gateway,
+                        max_total_bytes=current_media_budget,
+                    )
+                    media_by_reference = hydrated_current.content
+                else:
+                    media_parts = await extract_media_for_agent(self.event)
+                    media_by_reference = dict(
+                        zip(current_turn.attachments, media_parts, strict=False)
+                    )
+                span.set_attribute("derp.has_media", bool(media_by_reference))
+                span.set_attribute("derp.media_count", len(media_by_reference))
+                span.set_attribute(
+                    "derp.media_bytes",
+                    history_media_bytes
+                    + sum(len(item.data) for item in media_by_reference.values()),
+                )
 
-                # Build the user prompt with context and media
-                user_prompt: list[str | BinaryContent] = [context]
-                user_prompt.extend(media_parts)
+                user_prompt = _current_user_prompt(
+                    self.event,
+                    media_by_reference,
+                )
 
                 # Create and run the agent with tools
                 agent = create_chat_agent(plan)
@@ -305,18 +458,26 @@ class ChatAgentHandler(MessageHandler):
                     "running_agent",
                     model_key=deps.model.key.value,
                     model=deps.model.provider_model_id,
-                    context_limit=context_limit,
+                    history_max_turns=history_window.max_turns,
+                    history_estimated_tokens=history.estimated_tokens,
                     tools=len(toolset.tools),
                 )
 
-                with agent.parallel_tool_call_execution_mode("sequential"):
-                    result = await agent.run(
-                        user_prompt,
-                        deps=deps,
-                        toolsets=[toolset],
-                        usage_limits=UsageLimits(request_limit=5, tool_calls_limit=3),
-                        model_settings=RELAXED_SAFETY_SETTINGS,
-                    )
+                with capture_outbound_history():
+                    with agent.parallel_tool_call_execution_mode("sequential"):
+                        result = await agent.run(
+                            user_prompt,
+                            message_history=history.messages,
+                            deps=deps,
+                            toolsets=[toolset],
+                            usage_limits=UsageLimits(
+                                request_limit=5,
+                                tool_calls_limit=3,
+                                input_tokens_limit=plan.model.input_token_limit,
+                                output_tokens_limit=plan.model.output_token_limit,
+                            ),
+                            model_settings=RELAXED_SAFETY_SETTINGS,
+                        )
 
                 # Convert to AgentResult and send response
                 agent_result = AgentResult.from_run_result(result)
@@ -333,7 +494,8 @@ class ChatAgentHandler(MessageHandler):
                         logfire.debug("empty_response_react_failed")
                     return None
 
-                return await agent_result.reply_to(self.event)
+                with capture_outbound_history():
+                    return await agent_result.reply_to(self.event)
 
         except ModelHTTPError as exc:
             if exc.status_code == 429:

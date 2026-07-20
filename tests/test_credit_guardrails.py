@@ -25,7 +25,7 @@ from derp.catalog import (
     get_google_model_by_id,
 )
 from derp.credits import service as service_module
-from derp.credits.service import CONTEXT_LIMITS, CreditService
+from derp.credits.service import CreditService
 from derp.credits.tools import TOOL_REGISTRY, get_tool
 from derp.credits.types import CreditCheckResult
 from derp.execution import Feature, plan_execution
@@ -365,9 +365,12 @@ async def test_provider_free_daily_limit_rejects_without_fake_model_charge(
     assert result.reject_reason == "Daily limit reached for web_search"
 
 
-def test_context_limits_are_product_policy_for_chat_models() -> None:
-    assert CONTEXT_LIMITS == {
-        GoogleModelKey.CHAT_ECONOMY: 10,
-        GoogleModelKey.CHAT_STANDARD: 100,
-        GoogleModelKey.CHAT_REASONING: 100,
-    }
+def test_history_windows_are_product_policy_for_chat_models() -> None:
+    from derp.history.service import HISTORY_WINDOWS
+
+    assert HISTORY_WINDOWS[GoogleModelKey.CHAT_ECONOMY].max_turns == 10
+    assert HISTORY_WINDOWS[GoogleModelKey.CHAT_STANDARD].max_turns == 100
+    assert HISTORY_WINDOWS[GoogleModelKey.CHAT_REASONING].max_turns == 100
+    assert HISTORY_WINDOWS[GoogleModelKey.CHAT_STANDARD].max_tokens > (
+        HISTORY_WINDOWS[GoogleModelKey.CHAT_ECONOMY].max_tokens
+    )

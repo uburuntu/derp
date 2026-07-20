@@ -399,6 +399,25 @@ class TestMessageModel:
         with pytest.raises(IntegrityError):
             await db_session.commit()
 
+    @pytest.mark.asyncio
+    async def test_message_projection_invariants(self, db_session, chat_factory):
+        chat = await chat_factory(telegram_id=-1009876543210)
+        message = Message(
+            chat_id=chat.id,
+            telegram_message_id=999,
+            direction="in",
+            role="system",
+            capture_kind="unknown",
+            source_schema_version=0,
+            content_type="text",
+            text="invalid",
+            telegram_date=datetime.now(UTC),
+        )
+        db_session.add(message)
+
+        with pytest.raises(IntegrityError):
+            await db_session.commit()
+
 
 class TestModelRelationships:
     """Tests for model relationships."""

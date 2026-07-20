@@ -16,7 +16,7 @@ from derp.catalog import (
     get_google_model,
     get_google_model_by_id,
 )
-from derp.credits.service import CONTEXT_LIMITS, CreditService, get_placeholder_message
+from derp.credits.service import CreditService, get_placeholder_message
 from derp.credits.tools import TOOL_REGISTRY, ToolConfig, get_tool
 from derp.credits.types import CreditCheckResult
 
@@ -36,7 +36,6 @@ __all__ = [
     "get_tool",
     # Service
     "CreditService",
-    "CONTEXT_LIMITS",
     "get_placeholder_message",
     # Types
     "CreditCheckResult",

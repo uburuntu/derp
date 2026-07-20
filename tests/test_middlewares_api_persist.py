@@ -9,6 +9,7 @@ from aiogram.methods.send_message import SendMessage
 from aiogram.types import Message
 
 from derp.common.update_context import UpdateContext
+from derp.history.capture import capture_outbound_history
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
 
 
@@ -54,7 +55,8 @@ class TestPersistBotActionsMiddleware:
         with patch("derp.middlewares.api_persist.update_ctx") as mock_ctx:
             mock_ctx.get.return_value = None
 
-            result = await middleware(make_request, mock_bot, method)
+            with capture_outbound_history():
+                result = await middleware(make_request, mock_bot, method)
 
             assert result is expected_result
             make_request.assert_awaited_once_with(mock_bot, method)
@@ -75,7 +77,8 @@ class TestPersistBotActionsMiddleware:
         ):
             mock_ctx.get.return_value = mock_context
 
-            result = await middleware(make_request, mock_bot, method)
+            with capture_outbound_history():
+                result = await middleware(make_request, mock_bot, method)
 
             mock_persist.assert_awaited_once()
             call_args = mock_persist.call_args
@@ -98,7 +101,8 @@ class TestPersistBotActionsMiddleware:
         ):
             mock_ctx.get.return_value = mock_context
 
-            await middleware(make_request, mock_bot, method)
+            with capture_outbound_history():
+                await middleware(make_request, mock_bot, method)
 
             # Should persist each message
             assert mock_persist.await_count == 2
@@ -125,6 +129,25 @@ class TestPersistBotActionsMiddleware:
             assert call_args[1]["chat_id"] == -100123
             assert call_args[1]["message_id"] == 456
             assert result is True
+
+    @pytest.mark.asyncio
+    async def test_does_not_persist_control_panel_messages(
+        self, middleware, mock_bot, mock_context
+    ):
+        method = SendMessage(chat_id=-100123, text="Settings")
+        make_request = AsyncMock(return_value=MagicMock(spec=Message))
+
+        with (
+            patch("derp.middlewares.api_persist.update_ctx") as mock_ctx,
+            patch(
+                "derp.middlewares.api_persist.upsert_message_from_message",
+                new_callable=AsyncMock,
+            ) as mock_persist,
+        ):
+            mock_ctx.get.return_value = mock_context
+            await middleware(make_request, mock_bot, method)
+
+        mock_persist.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_skips_failed_delete(self, middleware, mock_bot, mock_context):
@@ -163,6 +186,7 @@ class TestPersistBotActionsMiddleware:
             mock_ctx.get.return_value = mock_context
 
             # Should not raise, just log
-            result = await middleware(make_request, mock_bot, method)
+            with capture_outbound_history():
+                result = await middleware(make_request, mock_bot, method)
 
             assert result is message_result

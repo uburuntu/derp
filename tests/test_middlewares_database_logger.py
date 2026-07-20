@@ -22,7 +22,11 @@ def mock_db():
 @pytest.fixture
 def middleware(mock_db):
     """Create middleware with mocked db."""
-    return DatabaseLoggerMiddleware(mock_db)
+    return DatabaseLoggerMiddleware(
+        mock_db,
+        bot_id=999,
+        bot_username="DerpRobot",
+    )
 
 
 @pytest.fixture
@@ -32,7 +36,7 @@ def make_update():
     def _make_update(
         user_id: int = 12345,
         chat_id: int = -100123,
-        message_text: str = "Hello",
+        message_text: str = "/derp Hello",
         event_type: str = "message",
     ) -> Update:
         user = User(id=user_id, is_bot=False, first_name="Test", username="test_user")
@@ -42,10 +46,15 @@ def make_update():
         message = MagicMock(spec=Message)
         message.message_id = 1
         message.text = message_text
+        message.caption = None
+        message.entities = None
+        message.caption_entities = None
+        message.content_type = "text"
         message.from_user = user
         message.chat = chat
         message.sender_chat = None
         message.message_thread_id = None
+        message.reply_to_message = None
         message.date = None
 
         update = MagicMock(spec=Update)
@@ -164,6 +173,36 @@ class TestDatabaseLoggerMiddleware:
             mock_persist.assert_awaited_once()
             call_args = mock_persist.call_args
             assert call_args[1]["direction"] == "in"
+            assert call_args[1]["capture"].value == "explicit"
+
+    @pytest.mark.asyncio
+    async def test_ambient_capture_follows_persisted_chat_policy(
+        self, middleware, make_update
+    ):
+        update = make_update(message_text="ordinary room message")
+        handler = AsyncMock(return_value=MagicMock())
+        chat_model = MagicMock(ambient_history_enabled=False)
+
+        with (
+            patch(
+                "derp.middlewares.database_logger.upsert_user", new_callable=AsyncMock
+            ),
+            patch(
+                "derp.middlewares.database_logger.upsert_chat",
+                new=AsyncMock(return_value=chat_model),
+            ),
+            patch(
+                "derp.middlewares.database_logger.upsert_message_from_update",
+                new_callable=AsyncMock,
+            ) as mock_persist,
+        ):
+            await middleware(handler, update, {})
+            mock_persist.assert_not_awaited()
+
+            chat_model.ambient_history_enabled = True
+            await middleware(handler, update, {})
+
+            assert mock_persist.await_args.kwargs["capture"].value == "ambient"
 
     @pytest.mark.asyncio
     async def test_handles_persist_failure(self, middleware, make_update):
@@ -189,3 +228,38 @@ class TestDatabaseLoggerMiddleware:
 
             handler.assert_awaited_once()
             assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_edit_that_no_longer_qualifies_removes_stale_projection(
+        self, middleware, make_update, mock_db
+    ):
+        update = make_update(
+            message_text="ordinary edited text",
+            event_type="edited_message",
+        )
+        update.edited_message = update.message
+        update.message = None
+        handler = AsyncMock(return_value=None)
+        chat_model = MagicMock(ambient_history_enabled=False)
+
+        with (
+            patch(
+                "derp.middlewares.database_logger.upsert_user",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "derp.middlewares.database_logger.upsert_chat",
+                new=AsyncMock(return_value=chat_model),
+            ),
+            patch(
+                "derp.middlewares.database_logger.remove_disqualified_message",
+                new_callable=AsyncMock,
+            ) as remove,
+        ):
+            await middleware(handler, update, {})
+
+        remove.assert_awaited_once_with(
+            mock_db.session.return_value,
+            chat_telegram_id=update.edited_message.chat.id,
+            telegram_message_id=update.edited_message.message_id,
+        )

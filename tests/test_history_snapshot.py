@@ -350,7 +350,9 @@ def test_sensitive_telegram_bodies_are_never_copied(
 
 
 def test_attachment_projection_never_copies_signed_download_url() -> None:
-    signed_url = "https://api.telegram.org/file/botSECRET_TOKEN/document.pdf?signature=SECRET"
+    signed_url = (
+        "https://api.telegram.org/file/botSECRET_TOKEN/document.pdf?signature=SECRET"
+    )
     document = Document(
         file_id="document-file",
         file_unique_id="document-unique",

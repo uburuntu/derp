@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
+import httpx
 import logfire
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -21,6 +22,7 @@ from derp.handlers import (
     basic,
     chat,
     chat_settings,
+    context_settings,
     credit_cmds,
     debug,
     donations,
@@ -31,6 +33,8 @@ from derp.handlers import (
     tts,
     video,
 )
+from derp.history.retention import HistoryRetentionWorker
+from derp.media import MediaGateway
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
 from derp.middlewares.api_resilient import ResilientRequestMiddleware
 from derp.middlewares.credit_service import CreditServiceMiddleware
@@ -45,6 +49,7 @@ logger = logging.getLogger(__name__)
 APPLICATION_ROUTERS = (
     debug.reconciliation_router,
     debug.router,
+    context_settings.router,
     basic.router,
     donations.router,
     chat_settings.router,
@@ -65,6 +70,7 @@ class Runtime:
 
     bot: Bot
     db: DatabaseManager
+    media_gateway: MediaGateway
 
 
 def create_bot(settings: Settings) -> Bot:
@@ -94,8 +100,12 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
     async with AsyncExitStack() as stack:
         stack.push_async_callback(db.disconnect)
         await stack.enter_async_context(bot)
+        media_client = await stack.enter_async_context(
+            httpx.AsyncClient(follow_redirects=False)
+        )
         await db.connect()
-        yield Runtime(bot=bot, db=db)
+        await stack.enter_async_context(HistoryRetentionWorker(db))
+        yield Runtime(bot=bot, db=db, media_gateway=MediaGateway(media_client))
 
 
 def create_dispatcher(
@@ -106,7 +116,10 @@ def create_dispatcher(
     """Assemble middleware and routers for a configured runtime."""
     bot = runtime.bot
     db = runtime.db
-    dispatcher = Dispatcher(storage=MemoryStorage())
+    dispatcher = Dispatcher(
+        storage=MemoryStorage(),
+        media_gateway=runtime.media_gateway,
+    )
 
     i18n = I18n(path="derp/locales", default_locale="en", domain="messages")
     SimpleI18nMiddleware(i18n).setup(dispatcher)
@@ -115,7 +128,13 @@ def create_dispatcher(
     bot.session.middleware(PersistBotActionsMiddleware(db=db))
 
     dispatcher.update.outer_middleware(LogUpdatesMiddleware(logfire_instance))
-    dispatcher.update.outer_middleware(DatabaseLoggerMiddleware(db=db))
+    dispatcher.update.outer_middleware(
+        DatabaseLoggerMiddleware(
+            db=db,
+            bot_id=settings.bot_id,
+            bot_username=settings.bot_username,
+        )
+    )
 
     dispatcher.update.middleware(EventContextMiddleware(db=db))
     dispatcher.update.middleware(DatabaseModelMiddleware(db=db))

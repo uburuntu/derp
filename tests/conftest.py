@@ -318,6 +318,8 @@ def make_message(make_user, make_chat):
         message.message_id = message_id
         message.text = text
         message.caption = caption
+        message.entities = None
+        message.caption_entities = None
         message.from_user = user
         message.chat = chat
         message.reply_to_message = reply_to_message
@@ -339,12 +341,17 @@ def make_message(make_user, make_chat):
         message.animation = None
         message.video_note = None
         message.media_group_id = None
+        message.live_photo = None
+        message.paid_media = None
         message.date = datetime.now(UTC)
         message.edit_date = None
         message.html_text = text
         message.forward_from = None
         message.is_topic_message = False
+        message.direct_messages_topic = None
         message.sender_chat = None
+        message.external_reply = None
+        message.reply_to_story = None
 
         # Mock common async methods
         message.reply = AsyncMock(return_value=message)
@@ -622,6 +629,13 @@ def mock_chat_model():
         chat.type = chat_type
         chat.credits = credits
         chat.llm_memory = llm_memory
+        chat.admin_policy = None
+        chat.ambient_history_enabled = False
+        chat.context_notice_version = 1
+        chat.retention_days = 30
+        chat.shared_facts_member_edit = False
+        chat.shared_credit_spending_enabled = True
+        chat.expensive_tools_enabled = True
         for key, value in kwargs.items():
             setattr(chat, key, value)
         return chat
@@ -742,8 +756,16 @@ def mock_credit_service_factory(make_credit_check_result):
         service.check_model_access = AsyncMock(return_value=check_result)
         service.deduct = AsyncMock()
         service.purchase_credits = AsyncMock(return_value=purchase_result)
+        from derp.catalog import GoogleModelKey
+        from derp.execution import Feature, plan_execution
+        from derp.history.service import HISTORY_WINDOWS
+
+        chat_plan = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_STANDARD)
         service.get_orchestrator_config = AsyncMock(
-            return_value=(check_result.plan, 100)
+            return_value=(
+                chat_plan,
+                HISTORY_WINDOWS[chat_plan.model.key],
+            )
         )
         service.refund_credits = AsyncMock(return_value=True)
 

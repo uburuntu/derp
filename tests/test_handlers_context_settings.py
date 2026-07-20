@@ -1,0 +1,277 @@
+"""Context onboarding and settings stay native, truthful, and authorized."""
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from aiogram import Bot
+from aiogram.types import CallbackQuery, ChatMemberAdministrator, User
+
+from derp.handlers.context_settings import (
+    ContextAction,
+    ContextCallback,
+    ambient_delivery_available,
+    build_context_panel,
+    build_privacy_panel,
+    delete_my_history,
+    ensure_group_context_notice,
+    forget_replied_message,
+    toggle_context,
+)
+
+
+def test_panel_never_claims_ambient_context_when_telegram_cannot_deliver(
+    mock_chat_model,
+) -> None:
+    chat = mock_chat_model(ambient_history_enabled=True, retention_days=30)
+
+    text, markup = build_context_panel(
+        chat,
+        ambient_available=False,
+        can_manage=True,
+    )
+
+    assert "Context: Mentions only" in text
+    assert markup.inline_keyboard[0][1].text == "Context: Mentions only"
+
+
+def test_private_panel_reports_always_on_history_without_ambient_toggle(
+    mock_chat_model,
+) -> None:
+    chat = mock_chat_model(chat_type="private", ambient_history_enabled=False)
+
+    text, markup = build_context_panel(
+        chat,
+        ambient_available=True,
+        can_manage=True,
+    )
+
+    assert "History: On · 30 days" in text
+    callback = ContextCallback.unpack(markup.inline_keyboard[0][1].callback_data)
+    assert callback.action is ContextAction.PRIVACY
+
+
+def test_privacy_panel_exposes_personal_deletion_to_non_admin(
+    mock_chat_model,
+) -> None:
+    text, markup = build_privacy_panel(mock_chat_model(), can_manage=False)
+
+    assert "remove your own stored messages" in text
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert "Delete my messages" in labels
+    assert "Clear this chat" not in labels
+
+
+@pytest.mark.asyncio
+async def test_admin_membership_enables_ambient_delivery_fallback() -> None:
+    bot = MagicMock(spec=Bot)
+    bot.get_me = AsyncMock(
+        return_value=User(
+            id=99,
+            is_bot=True,
+            first_name="Derp",
+            can_read_all_group_messages=False,
+        )
+    )
+    bot.get_chat_member = AsyncMock(
+        return_value=ChatMemberAdministrator.model_construct(status="administrator")
+    )
+
+    assert await ambient_delivery_available(bot, -1001)
+
+
+@pytest.mark.asyncio
+async def test_first_invocation_sends_notice_before_enabling_capture(
+    make_message,
+    mock_chat_model,
+) -> None:
+    message = make_message(text="/derp hello", user_id=42)
+    chat = mock_chat_model(
+        context_notice_version=0,
+        ambient_history_enabled=False,
+        retention_days=30,
+    )
+    session = MagicMock()
+    db = MagicMock()
+    db.session.return_value.__aenter__ = AsyncMock(return_value=session)
+    db.session.return_value.__aexit__ = AsyncMock(return_value=None)
+    bot = MagicMock(spec=Bot)
+
+    with (
+        patch(
+            "derp.handlers.context_settings.ambient_delivery_available",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "derp.handlers.context_settings.actor_can_manage",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "derp.handlers.context_settings.acknowledge_context_notice",
+            new_callable=AsyncMock,
+        ) as acknowledge,
+    ):
+        sent = await ensure_group_context_notice(
+            message,
+            chat_model=chat,
+            db=db,
+            bot=bot,
+        )
+
+    assert sent
+    message.reply.assert_awaited_once()
+    assert "Context: On" in message.reply.await_args.args[0]
+    acknowledge.assert_awaited_once_with(
+        session,
+        chat_telegram_id=message.chat.id,
+        ambient_enabled=True,
+    )
+    assert chat.context_notice_version == 1
+    assert chat.ambient_history_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_toggle_requires_live_admin_and_purges_when_disabled(
+    make_message,
+    make_user,
+    mock_chat_model,
+) -> None:
+    message = make_message(text="panel")
+    message.edit_text = AsyncMock()
+    query = MagicMock(spec=CallbackQuery)
+    query.message = message
+    query.from_user = make_user(id=42)
+    query.answer = AsyncMock()
+    chat = mock_chat_model(ambient_history_enabled=True, retention_days=30)
+    session = MagicMock()
+    db = MagicMock()
+    db.session.return_value.__aenter__ = AsyncMock(return_value=session)
+    db.session.return_value.__aexit__ = AsyncMock(return_value=None)
+    callback = ContextCallback(action=ContextAction.TOGGLE, value=0)
+
+    with (
+        patch(
+            "derp.handlers.context_settings.actor_can_manage",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "derp.handlers.context_settings.ambient_delivery_available",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "derp.handlers.context_settings.set_ambient_history",
+            new=AsyncMock(return_value=4),
+        ) as set_context,
+    ):
+        await toggle_context(
+            query,
+            callback,
+            db,
+            MagicMock(spec=Bot),
+            chat,
+        )
+
+    set_context.assert_awaited_once_with(
+        session,
+        chat_telegram_id=message.chat.id,
+        enabled=False,
+    )
+    assert chat.ambient_history_enabled is False
+    assert "removed 4 messages" in query.answer.await_args.args[0]
+    message.edit_text.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_toggle_fails_before_database_access(
+    make_message,
+    make_user,
+    mock_chat_model,
+) -> None:
+    query = MagicMock(spec=CallbackQuery)
+    query.message = make_message(text="panel")
+    query.from_user = make_user(id=42)
+    query.answer = AsyncMock()
+    db = MagicMock()
+
+    with patch(
+        "derp.handlers.context_settings.actor_can_manage",
+        new=AsyncMock(return_value=False),
+    ):
+        await toggle_context(
+            query,
+            ContextCallback(action=ContextAction.TOGGLE, value=1),
+            db,
+            MagicMock(spec=Bot),
+            mock_chat_model(),
+        )
+
+    db.session.assert_not_called()
+    assert query.answer.await_args.kwargs["show_alert"] is True
+
+
+@pytest.mark.asyncio
+async def test_personal_deletion_uses_callback_actor_identity(
+    make_message,
+    make_user,
+    mock_chat_model,
+) -> None:
+    message = make_message(text="panel")
+    message.edit_text = AsyncMock()
+    query = MagicMock(spec=CallbackQuery)
+    query.message = message
+    query.from_user = make_user(id=42)
+    query.answer = AsyncMock()
+    session = MagicMock()
+    db = MagicMock()
+    db.session.return_value.__aenter__ = AsyncMock(return_value=session)
+    db.session.return_value.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "derp.handlers.context_settings.tombstone_user_messages",
+            new=AsyncMock(return_value=3),
+        ) as tombstone,
+        patch(
+            "derp.handlers.context_settings.actor_can_manage",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        await delete_my_history(
+            query,
+            db,
+            MagicMock(spec=Bot),
+            mock_chat_model(),
+        )
+
+    tombstone.assert_awaited_once_with(
+        session,
+        chat_telegram_id=message.chat.id,
+        actor_telegram_id=42,
+    )
+    assert "Removed 3" in query.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_forget_targets_replied_message_and_never_trusts_its_sender(
+    make_message,
+) -> None:
+    target = make_message(message_id=77, user_id=999, text="target")
+    command = make_message(message_id=78, user_id=42, text="/forget")
+    command.reply_to_message = target
+    session = MagicMock()
+    db = MagicMock()
+    db.session.return_value.__aenter__ = AsyncMock(return_value=session)
+    db.session.return_value.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "derp.handlers.context_settings.tombstone_user_messages",
+        new=AsyncMock(return_value=0),
+    ) as tombstone:
+        await forget_replied_message(command, db)
+
+    tombstone.assert_awaited_once_with(
+        session,
+        chat_telegram_id=command.chat.id,
+        actor_telegram_id=42,
+        telegram_message_id=77,
+    )
+    assert "does not belong to you" in command.reply.await_args.args[0]

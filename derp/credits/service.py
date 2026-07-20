@@ -28,20 +28,13 @@ from derp.db.credits import (
     increment_daily_usage,
 )
 from derp.execution import ExecutionPlan, Feature, plan_execution
+from derp.history.service import HISTORY_WINDOWS, HistoryWindow
 from derp.observability import telemetry_fingerprint
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from derp.models import Chat, User
-
-
-# Context limits are product policy, not provider model capabilities.
-CONTEXT_LIMITS: dict[GoogleModelKey, int] = {
-    GoogleModelKey.CHAT_ECONOMY: 10,
-    GoogleModelKey.CHAT_STANDARD: 100,
-    GoogleModelKey.CHAT_REASONING: 100,
-}
 
 
 class CreditService:
@@ -53,7 +46,7 @@ class CreditService:
         service = CreditService(session)
 
         # Get the exact orchestrator plan and context policy.
-        plan, context_limit = await service.get_orchestrator_config(user, chat)
+        plan, history_window = await service.get_orchestrator_config(user, chat)
 
         # Check tool access
         result = await service.check_tool_access(user, chat, "image_generate")
@@ -71,7 +64,7 @@ class CreditService:
         self,
         user: User,
         chat: Chat,
-    ) -> tuple[ExecutionPlan, int]:
+    ) -> tuple[ExecutionPlan, HistoryWindow]:
         """Get orchestrator configuration based on credit balance.
 
         Args:
@@ -79,7 +72,7 @@ class CreditService:
             chat: Database Chat model.
 
         Returns:
-            Validated chat execution plan plus the message context limit.
+            Validated chat execution plan plus its product history window.
         """
         chat_credits, user_credits = await get_balances(
             self.session, user.telegram_id, chat.telegram_id
@@ -91,18 +84,19 @@ class CreditService:
             model_key = GoogleModelKey.CHAT_ECONOMY
 
         plan = plan_execution(Feature.CHAT, model_key)
-        context_limit = CONTEXT_LIMITS[plan.model.key]
+        history_window = HISTORY_WINDOWS[plan.model.key]
 
         logfire.debug(
             "orchestrator_config",
             model_key=plan.model.key.value,
             model=plan.model.provider_model_id,
-            context_limit=context_limit,
+            history_max_turns=history_window.max_turns,
+            history_max_tokens=history_window.max_tokens,
             chat_credits=chat_credits,
             user_credits=user_credits,
         )
 
-        return plan, context_limit
+        return plan, history_window
 
     async def check_tool_access(
         self,
