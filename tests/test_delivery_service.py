@@ -32,6 +32,8 @@ from derp.delivery import (
     DeliveryUncertain,
     PreparedDelivery,
     ResendAuthorization,
+    ResendCallbackAuthorization,
+    ResendResult,
     ResendTokenCodec,
 )
 from derp.features import MediaContent
@@ -244,6 +246,74 @@ async def test_timeout_requires_authenticated_resend_and_never_charges_again(
     delivery_env.reversal.reverse.assert_not_awaited()
 
 
+async def test_callback_resend_resolves_original_operation_target_and_requester(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    operation_id = await _operation(delivery_env)
+    prepared = await _prepare_and_capture(delivery_env, operation_id)
+    delivery_env.bot.send_photo.side_effect = [TimeoutError(), _message(203)]
+    actor_user_id = await _requester_telegram_id(delivery_env, operation_id)
+    await delivery_env.service.deliver(operation_id)
+
+    result = await delivery_env.service.resend_from_callback(
+        ResendCallbackAuthorization(
+            prepared.resend_token,
+            actor_user_id,
+            chat_id=-1001,
+            thread_id=77,
+        )
+    )
+
+    assert result == ResendResult(
+        operation_id,
+        DeliveryTarget(-1001, 77, 42),
+        Delivered((203,)),
+    )
+    assert delivery_env.bot.send_photo.await_count == 2
+    delivery_env.reversal.reverse.assert_not_awaited()
+    async with delivery_env.transactions() as session:
+        intent = await session.scalar(
+            select(DeliveryIntent).where(
+                DeliveryIntent.operation_id == operation_id.value
+            )
+        )
+        assert intent is not None
+        assert intent.resend_token_hash != prepared.resend_token
+        assert len(intent.resend_token_hash) == 64
+
+
+async def test_callback_resend_definite_failure_refunds_without_another_charge(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    operation_id = await _operation(delivery_env)
+    prepared = await _prepare_and_capture(delivery_env, operation_id)
+    delivery_env.bot.send_photo.side_effect = [
+        TimeoutError(),
+        TelegramBadRequest(MagicMock(), "chat not found"),
+    ]
+    actor_user_id = await _requester_telegram_id(delivery_env, operation_id)
+    await delivery_env.service.deliver(operation_id)
+
+    result = await delivery_env.service.resend_from_callback(
+        ResendCallbackAuthorization(
+            prepared.resend_token,
+            actor_user_id,
+            chat_id=-1001,
+            thread_id=77,
+        )
+    )
+
+    assert result.outcome == DeliveryFailed(
+        "TelegramBadRequest",
+        retryable=False,
+    )
+    assert delivery_env.bot.send_photo.await_count == 2
+    delivery_env.reversal.reverse.assert_awaited_once_with(
+        operation_id,
+        reason="delivery_TelegramBadRequest",
+    )
+
+
 async def test_uncertain_delivery_can_reissue_restart_stable_resend_token(
     delivery_env: DeliveryEnvironment,
 ) -> None:
@@ -294,6 +364,45 @@ async def test_resend_rejects_forged_token_actor_and_target(
             match="Invalid resend authorization",
         ):
             await delivery_env.service.resend(authorization)
+
+    assert delivery_env.bot.send_photo.await_count == 1
+
+
+async def test_callback_resend_rejects_forged_actor_chat_and_topic(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    operation_id = await _operation(delivery_env)
+    prepared = await _prepare_and_capture(delivery_env, operation_id)
+    delivery_env.bot.send_photo.side_effect = TimeoutError()
+    actor_user_id = await _requester_telegram_id(delivery_env, operation_id)
+    await delivery_env.service.deliver(operation_id)
+
+    authorizations = (
+        ResendCallbackAuthorization(
+            prepared.resend_token,
+            actor_user_id + 1,
+            chat_id=-1001,
+            thread_id=77,
+        ),
+        ResendCallbackAuthorization(
+            prepared.resend_token,
+            actor_user_id,
+            chat_id=-1002,
+            thread_id=77,
+        ),
+        ResendCallbackAuthorization(
+            prepared.resend_token,
+            actor_user_id,
+            chat_id=-1001,
+            thread_id=78,
+        ),
+    )
+    for authorization in authorizations:
+        with pytest.raises(
+            DeliveryAuthorizationError,
+            match="Invalid resend authorization",
+        ):
+            await delivery_env.service.resend_from_callback(authorization)
 
     assert delivery_env.bot.send_photo.await_count == 1
 

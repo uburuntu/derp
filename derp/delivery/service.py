@@ -38,6 +38,8 @@ from derp.delivery.types import (
     DeliveryTarget,
     DeliveryUncertain,
     ResendAuthorization,
+    ResendCallbackAuthorization,
+    ResendResult,
     classify_delivery_exception,
 )
 from derp.features import MediaContent
@@ -302,6 +304,15 @@ class DeliveryService:
         operation_id, started = await self._begin_resend(authorization)
         return await self._execute_attempt(operation_id, started)
 
+    async def resend_from_callback(
+        self,
+        authorization: ResendCallbackAuthorization,
+    ) -> ResendResult:
+        """Resend in the authenticated scope without opening another charge."""
+        operation_id, target, started = await self._begin_callback_resend(authorization)
+        outcome = await self._execute_attempt(operation_id, started)
+        return ResendResult(operation_id, target, outcome)
+
     async def inspect(self, operation_id: OperationId) -> DeliveryInspection:
         """Return content-free durable state without changing delivery."""
         async with self._transactions() as session:
@@ -562,32 +573,13 @@ class DeliveryService:
         self,
         authorization: ResendAuthorization,
     ) -> tuple[OperationId, BeginDeliveryResult]:
-        token_hash = self._token_codec.digest(authorization.token)
         async with self._transactions() as session:
-            intent = await session.scalar(
-                select(DeliveryIntent)
-                .where(DeliveryIntent.resend_token_hash == token_hash)
-                .with_for_update()
-            )
-            if intent is None:
-                raise DeliveryAuthorizationError("Invalid resend authorization")
-            operation_id = OperationId(intent.operation_id)
-            operation = await session.scalar(
-                select(PaidOperation)
-                .where(PaidOperation.id == operation_id.value)
-                .with_for_update()
-            )
-            if operation is None:
-                raise DeliveryAuthorizationError("Invalid resend authorization")
-            actor_user_id = await session.scalar(
-                select(User.telegram_id)
-                .join(
-                    OperationQuote,
-                    OperationQuote.requester_id == User.id,
-                )
-                .where(OperationQuote.id == operation.quote_id)
-            )
-            stored_target = self._target(intent)
+            (
+                operation_id,
+                intent,
+                actor_user_id,
+                stored_target,
+            ) = await self._resolve_resend_locked(session, authorization.token)
             if (
                 actor_user_id != authorization.actor_user_id
                 or stored_target != authorization.target
@@ -600,6 +592,64 @@ class DeliveryService:
                 authorized_resend=True,
             )
             return operation_id, started
+
+    async def _begin_callback_resend(
+        self,
+        authorization: ResendCallbackAuthorization,
+    ) -> tuple[OperationId, DeliveryTarget, BeginDeliveryResult]:
+        async with self._transactions() as session:
+            (
+                operation_id,
+                intent,
+                actor_user_id,
+                stored_target,
+            ) = await self._resolve_resend_locked(session, authorization.token)
+            if (
+                actor_user_id != authorization.actor_user_id
+                or stored_target.chat_id != authorization.chat_id
+                or stored_target.thread_id != authorization.thread_id
+            ):
+                raise DeliveryAuthorizationError("Invalid resend authorization")
+            started = await self._start_locked_attempt(
+                session,
+                operation_id,
+                intent,
+                authorized_resend=True,
+            )
+            return operation_id, stored_target, started
+
+    async def _resolve_resend_locked(
+        self,
+        session: AsyncSession,
+        token: str,
+    ) -> tuple[OperationId, DeliveryIntent, int, DeliveryTarget]:
+        token_hash = self._token_codec.digest(token)
+        intent = await session.scalar(
+            select(DeliveryIntent)
+            .where(DeliveryIntent.resend_token_hash == token_hash)
+            .with_for_update()
+        )
+        if intent is None:
+            raise DeliveryAuthorizationError("Invalid resend authorization")
+        operation_id = OperationId(intent.operation_id)
+        operation = await session.scalar(
+            select(PaidOperation)
+            .where(PaidOperation.id == operation_id.value)
+            .with_for_update()
+        )
+        if operation is None:
+            raise DeliveryAuthorizationError("Invalid resend authorization")
+        actor_user_id = await session.scalar(
+            select(User.telegram_id)
+            .join(
+                OperationQuote,
+                OperationQuote.requester_id == User.id,
+            )
+            .where(OperationQuote.id == operation.quote_id)
+        )
+        if actor_user_id is None:
+            raise DeliveryAuthorizationError("Invalid resend authorization")
+        return operation_id, intent, actor_user_id, self._target(intent)
 
     async def _start_locked_attempt(
         self,

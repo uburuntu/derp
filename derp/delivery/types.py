@@ -71,6 +71,35 @@ class ResendAuthorization:
 
 
 @dataclass(frozen=True, slots=True)
+class ResendCallbackAuthorization:
+    """Telegram-authenticated context for an opaque resend capability."""
+
+    token: str
+    actor_user_id: int
+    chat_id: int
+    thread_id: int | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.token, str) or not self.token.strip():
+            raise ValueError("resend token must not be blank")
+        if len(self.token) > 128:
+            raise ValueError("resend token is too long")
+        for name in ("actor_user_id", "chat_id"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer")
+            if name == "actor_user_id" and value <= 0:
+                raise ValueError("actor_user_id must be positive")
+            if name == "chat_id" and value == 0:
+                raise ValueError("chat_id must not be zero")
+        if self.thread_id is not None:
+            if isinstance(self.thread_id, bool) or not isinstance(self.thread_id, int):
+                raise TypeError("thread_id must be an integer")
+            if self.thread_id <= 0:
+                raise ValueError("thread_id must be positive")
+
+
+@dataclass(frozen=True, slots=True)
 class DeliveryInspection:
     """Content-free durable delivery state exposed to coordinators."""
 
@@ -179,6 +208,26 @@ class DeliveryUncertain:
 
 
 type DeliveryOutcome = Delivered | DeliveryFailed | DeliveryUncertain
+
+
+@dataclass(frozen=True, slots=True)
+class ResendResult:
+    """Server-resolved resend identity and resulting delivery outcome."""
+
+    operation_id: OperationId
+    target: DeliveryTarget
+    outcome: DeliveryOutcome
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operation_id, OperationId):
+            raise TypeError("resend operation_id must be an OperationId")
+        if not isinstance(self.target, DeliveryTarget):
+            raise TypeError("resend target must be a DeliveryTarget")
+        if not isinstance(
+            self.outcome,
+            (Delivered, DeliveryFailed, DeliveryUncertain),
+        ):
+            raise TypeError("resend outcome must be a DeliveryOutcome")
 
 
 def classify_delivery_exception(error: BaseException) -> DeliveryOutcome:

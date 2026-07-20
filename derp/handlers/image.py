@@ -2,13 +2,30 @@
 
 from __future__ import annotations
 
-from aiogram import Router, flags
-from aiogram.types import Message
+from aiogram import F, Router, flags
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from aiogram.utils.i18n import gettext as _
 
 from derp.catalog import GoogleModelKey
 from derp.common.extractor import Extractor
-from derp.delivery import DeliveryTarget, ProgressStage
+from derp.delivery import (
+    Delivered,
+    DeliveryAuthorizationError,
+    DeliveryFailed,
+    DeliveryResendCallback,
+    DeliveryService,
+    DeliveryStateError,
+    DeliveryTarget,
+    DeliveryUncertain,
+    ProgressStage,
+    ResendCallbackAuthorization,
+    ResendResult,
+)
 from derp.execution import Feature, plan_execution
 from derp.features import (
     ImageAwaitingFunding,
@@ -74,7 +91,9 @@ def _outcome_text(outcome: ImageOperationOutcome) -> str:
         return _("Refunded. Delivery failed, so the charged credits were returned.")
     if isinstance(outcome, ImageDeliveryUncertain):
         return _(
-            "Delivery uncertain. The image may already have arrived. Do not retry yet."
+            "Delivery uncertain. The image may already have arrived. Check the chat "
+            "first, then use Send again only if it is missing. Sending again does "
+            "not charge credits again."
         )
     if isinstance(outcome, ImageInProgress):
         return {
@@ -91,10 +110,63 @@ def _outcome_text(outcome: ImageOperationOutcome) -> str:
     raise TypeError(f"Unsupported image operation outcome: {type(outcome).__name__}")
 
 
-async def _edit_progress(progress: Message, text: str) -> Message:
+def _outcome_markup(
+    outcome: ImageOperationOutcome,
+) -> InlineKeyboardMarkup | None:
+    if not isinstance(outcome, ImageDeliveryUncertain):
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_("Send again"),
+                    callback_data=DeliveryResendCallback(
+                        token=outcome.resend_token
+                    ).pack(),
+                )
+            ]
+        ]
+    )
+
+
+def _resend_outcome(
+    result: ResendResult,
+    *,
+    resend_token: str,
+) -> ImageOperationOutcome:
+    outcome = result.outcome
+    if isinstance(outcome, Delivered):
+        return ImageDelivered(result.operation_id, outcome.message_ids)
+    if isinstance(outcome, DeliveryUncertain):
+        if outcome.code == "attempt_in_progress_or_interrupted":
+            return ImageInProgress(
+                result.operation_id,
+                ProgressStage.DELIVERING,
+                outcome.code,
+            )
+        return ImageDeliveryUncertain(
+            result.operation_id,
+            outcome.code,
+            resend_token,
+        )
+    if isinstance(outcome, DeliveryFailed) and outcome.retryable:
+        return ImageInProgress(
+            result.operation_id,
+            ProgressStage.DELIVERING,
+            outcome.code,
+        )
+    return ImageRefunded(result.operation_id, outcome.code)
+
+
+async def _edit_progress(
+    progress: Message,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> Message:
     """Keep one status message when possible and preserve the final outcome."""
     try:
-        edited = await progress.edit_text(text)
+        edited = await progress.edit_text(text, reply_markup=reply_markup)
     except Exception as exc:
         report_exception(
             "image_progress_edit_failed",
@@ -102,7 +174,7 @@ async def _edit_progress(progress: Message, text: str) -> Message:
             level="warning",
         )
         try:
-            return await progress.reply(text)
+            return await progress.reply(text, reply_markup=reply_markup)
         except Exception as fallback_exc:
             report_exception(
                 "image_progress_fallback_failed",
@@ -111,6 +183,34 @@ async def _edit_progress(progress: Message, text: str) -> Message:
             )
             return progress
     return edited if isinstance(edited, Message) else progress
+
+
+async def _finish_outcome(
+    progress: Message,
+    outcome: ImageOperationOutcome,
+) -> Message:
+    """Remove delivered progress, otherwise render the durable operation state."""
+    if isinstance(outcome, ImageDelivered):
+        try:
+            deleted = await progress.delete()
+        except Exception as exc:
+            report_exception(
+                "image_progress_delete_failed",
+                exception=exc,
+                level="warning",
+            )
+        else:
+            if deleted:
+                return progress
+        return await _edit_progress(
+            progress,
+            _outcome_text(outcome),
+        )
+    return await _edit_progress(
+        progress,
+        _outcome_text(outcome),
+        reply_markup=_outcome_markup(outcome),
+    )
 
 
 def _delivery_target(message: Message, reply_to: Message) -> DeliveryTarget:
@@ -170,7 +270,60 @@ async def _run_image_operation(
                 "Check your credit balance before retrying."
             ),
         )
-    return await _edit_progress(progress, _outcome_text(outcome))
+    return await _finish_outcome(progress, outcome)
+
+
+@router.callback_query(DeliveryResendCallback.filter())
+async def resend_image_delivery(
+    callback: CallbackQuery,
+    callback_data: DeliveryResendCallback,
+    delivery_service: DeliveryService,
+) -> Message | None:
+    """Retry one uncertain delivery within its persisted requester and scope."""
+    message = callback.message
+    if not isinstance(message, Message):
+        await callback.answer(
+            _("This delivery control is unavailable."),
+            show_alert=True,
+        )
+        return None
+
+    await callback.answer()
+    authorization = ResendCallbackAuthorization(
+        token=callback_data.token,
+        actor_user_id=callback.from_user.id,
+        chat_id=message.chat.id,
+        thread_id=message.message_thread_id,
+    )
+    try:
+        result = await delivery_service.resend_from_callback(authorization)
+    except DeliveryAuthorizationError:
+        return None
+    except DeliveryStateError:
+        return await _edit_progress(
+            message,
+            _("In progress. Delivery status is still being reconciled."),
+        )
+    except Exception as exc:
+        report_exception(
+            "image_resend_failed",
+            exception=exc,
+            telegram_chat_id=message.chat.id,
+            telegram_user_id=callback.from_user.id,
+        )
+        return None
+
+    outcome = _resend_outcome(result, resend_token=callback_data.token)
+    return await _finish_outcome(message, outcome)
+
+
+@router.callback_query(F.data.startswith("ir:"))
+async def reject_malformed_image_resend(callback: CallbackQuery) -> None:
+    """Answer malformed or obsolete recovery controls without doing work."""
+    await callback.answer(
+        _("This delivery control is invalid or expired."),
+        show_alert=True,
+    )
 
 
 @router.message(MetaCommand("imagine", "image", "img", "и"))

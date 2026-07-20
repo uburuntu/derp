@@ -9,6 +9,7 @@ from derp.delivery.service import (
     DeliveryStateError,
     PreparedDelivery,
 )
+from derp.delivery.telegram import DeliveryResendCallback
 from derp.delivery.tokens import ResendTokenCodec
 from derp.delivery.types import (
     ArtifactCleanup,
@@ -22,6 +23,8 @@ from derp.delivery.types import (
     DeliveryUncertain,
     ProgressStage,
     ResendAuthorization,
+    ResendCallbackAuthorization,
+    ResendResult,
     classify_delivery_exception,
 )
 
@@ -32,6 +35,7 @@ __all__ = [
     "DeliveryInspection",
     "DeliveryOutcome",
     "DeliveryReconciliation",
+    "DeliveryResendCallback",
     "DeliveryState",
     "DeliveryTarget",
     "DeliveryUncertain",
@@ -44,6 +48,8 @@ __all__ = [
     "PreparedDelivery",
     "ProgressStage",
     "ResendAuthorization",
+    "ResendCallbackAuthorization",
+    "ResendResult",
     "ResendTokenCodec",
     "classify_delivery_exception",
 ]

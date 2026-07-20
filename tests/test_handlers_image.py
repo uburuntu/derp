@@ -4,14 +4,25 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, MagicMock, call
 from uuid import uuid4
 
 import pytest
-from aiogram.types import PhotoSize
+from aiogram.types import CallbackQuery, PhotoSize
 
 from derp.catalog import GoogleModelKey, ImageResolution
-from derp.delivery import ProgressStage
+from derp.delivery import (
+    Delivered,
+    DeliveryAuthorizationError,
+    DeliveryFailed,
+    DeliveryResendCallback,
+    DeliveryService,
+    DeliveryTarget,
+    DeliveryUncertain,
+    ProgressStage,
+    ResendCallbackAuthorization,
+    ResendResult,
+)
 from derp.execution import Feature, plan_execution
 from derp.features import (
     ImageAwaitingFunding,
@@ -25,7 +36,14 @@ from derp.features import (
     ImageOperationCoordinator,
     ImageRefunded,
 )
-from derp.handlers.image import _outcome_text, handle_edit, handle_imagine
+from derp.handlers.image import (
+    _outcome_markup,
+    _outcome_text,
+    _resend_outcome,
+    handle_edit,
+    handle_imagine,
+    resend_image_delivery,
+)
 from derp.operations import (
     ImageGenerateQuoteInput,
     OperationId,
@@ -33,6 +51,8 @@ from derp.operations import (
     QuoteId,
     ReservationRejection,
 )
+
+RESEND_TOKEN = "A" * 43
 
 
 def _models() -> tuple[SimpleNamespace, SimpleNamespace]:
@@ -101,11 +121,45 @@ async def test_imagine_builds_stable_scoped_operation_and_uses_coordinator(
     assert plan.model.key is GoogleModelKey.IMAGE
     assert request == ImageGenerateRequest("a lighthouse")
     assert coordinator.run.await_args.kwargs == {}
-    assert message.edit_text.await_args_list == [
-        call("Generating image..."),
-        call("Image delivered."),
-    ]
+    message.edit_text.assert_awaited_once_with(
+        "Generating image...",
+        reply_markup=None,
+    )
+    message.delete.assert_awaited_once_with()
     assert result is message
+
+
+@pytest.mark.asyncio
+async def test_delivered_image_edits_status_when_progress_delete_fails(
+    make_message,
+) -> None:
+    message = make_message(
+        message_id=78,
+        text="/imagine a lighthouse",
+        business_connection_id=None,
+    )
+    message.delete.side_effect = RuntimeError("delete failed")
+    user_model, chat_model = _models()
+    coordinator = AsyncMock(spec=ImageOperationCoordinator)
+    operation_id = OperationId.for_command(
+        feature=Feature.IMAGE_GENERATE,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+    )
+    coordinator.run.return_value = ImageDelivered(operation_id, (9001,))
+
+    await handle_imagine(
+        message,
+        _meta(prompt="a lighthouse", target_message=message),
+        coordinator,
+        user_model,
+        chat_model,
+    )
+
+    assert message.edit_text.await_args_list == [
+        call("Generating image...", reply_markup=None),
+        call("Image delivered.", reply_markup=None),
+    ]
 
 
 @pytest.mark.asyncio
@@ -236,3 +290,150 @@ def test_all_image_operation_outcomes_have_concise_user_copy() -> None:
 
     for outcome, marker in expected:
         assert marker in _outcome_text(outcome)
+
+
+def test_uncertain_outcome_has_compact_typed_send_again_callback() -> None:
+    operation_id = OperationId.for_command(
+        feature=Feature.IMAGE_GENERATE,
+        chat_id=-100,
+        message_id=2,
+    )
+    outcome = ImageDeliveryUncertain(operation_id, "network", RESEND_TOKEN)
+
+    markup = _outcome_markup(outcome)
+
+    assert markup is not None
+    button = markup.inline_keyboard[0][0]
+    assert button.text == "Send again"
+    assert button.callback_data is not None
+    assert len(button.callback_data.encode()) <= 64
+    assert DeliveryResendCallback.unpack(button.callback_data).token == RESEND_TOKEN
+    assert _outcome_markup(ImageDelivered(operation_id, (1,))) is None
+
+
+@pytest.mark.parametrize(
+    ("delivery_outcome", "expected_type", "expected_marker", "has_button"),
+    (
+        (Delivered((10,)), ImageDelivered, "Image delivered", False),
+        (
+            DeliveryUncertain("network"),
+            ImageDeliveryUncertain,
+            "Delivery uncertain",
+            True,
+        ),
+        (
+            DeliveryUncertain("attempt_in_progress_or_interrupted"),
+            ImageInProgress,
+            "In progress",
+            False,
+        ),
+        (
+            DeliveryFailed("TelegramRetryAfter", retryable=True),
+            ImageInProgress,
+            "In progress",
+            False,
+        ),
+        (
+            DeliveryFailed("TelegramBadRequest", retryable=False),
+            ImageRefunded,
+            "Refunded",
+            False,
+        ),
+    ),
+)
+def test_resend_outcomes_render_honest_state(
+    delivery_outcome,
+    expected_type,
+    expected_marker: str,
+    has_button: bool,
+) -> None:
+    operation_id = OperationId.for_command(
+        feature=Feature.IMAGE_GENERATE,
+        chat_id=-100,
+        message_id=3,
+    )
+    result = ResendResult(
+        operation_id,
+        DeliveryTarget(-100, 7, 3),
+        delivery_outcome,
+    )
+
+    outcome = _resend_outcome(result, resend_token=RESEND_TOKEN)
+
+    assert isinstance(outcome, expected_type)
+    assert expected_marker in _outcome_text(outcome)
+    assert (_outcome_markup(outcome) is not None) is has_button
+
+
+@pytest.mark.asyncio
+async def test_resend_callback_answers_before_authenticated_scoped_delivery(
+    make_message,
+    make_user,
+) -> None:
+    message = make_message(
+        text="Delivery uncertain",
+        chat_id=-1001,
+        message_thread_id=77,
+    )
+    callback = MagicMock(spec=CallbackQuery)
+    callback.message = message
+    callback.from_user = make_user(id=12345)
+    callback.answer = AsyncMock()
+    operation_id = OperationId.for_command(
+        feature=Feature.IMAGE_GENERATE,
+        chat_id=-1001,
+        message_id=4,
+    )
+    service = MagicMock(spec=DeliveryService)
+
+    async def resend(authorization):
+        callback.answer.assert_awaited_once_with()
+        return ResendResult(
+            operation_id,
+            DeliveryTarget(-1001, 77, 4),
+            Delivered((9001,)),
+        )
+
+    service.resend_from_callback = AsyncMock(side_effect=resend)
+
+    await resend_image_delivery(
+        callback,
+        DeliveryResendCallback(token=RESEND_TOKEN),
+        service,
+    )
+
+    service.resend_from_callback.assert_awaited_once_with(
+        ResendCallbackAuthorization(
+            RESEND_TOKEN,
+            actor_user_id=12345,
+            chat_id=-1001,
+            thread_id=77,
+        )
+    )
+    message.delete.assert_awaited_once_with()
+    message.edit_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resend_callback_does_not_modify_panel_for_wrong_actor(
+    make_message,
+    make_user,
+) -> None:
+    message = make_message(text="Delivery uncertain", chat_id=-1001)
+    callback = MagicMock(spec=CallbackQuery)
+    callback.message = message
+    callback.from_user = make_user(id=999)
+    callback.answer = AsyncMock()
+    service = MagicMock(spec=DeliveryService)
+    service.resend_from_callback = AsyncMock(
+        side_effect=DeliveryAuthorizationError("invalid")
+    )
+
+    await resend_image_delivery(
+        callback,
+        DeliveryResendCallback(token=RESEND_TOKEN),
+        service,
+    )
+
+    callback.answer.assert_awaited_once_with()
+    message.edit_text.assert_not_awaited()
