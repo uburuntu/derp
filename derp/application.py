@@ -26,6 +26,7 @@ from derp.config import Settings
 from derp.db import DatabaseManager, init_db_manager
 from derp.delivery import (
     MAX_TELEGRAM_PHOTO_BYTES,
+    DeliveryMaintenanceWorker,
     DeliveryService,
     ResendTokenCodec,
 )
@@ -162,6 +163,7 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
                 OperationReconciler(db.session, delivery_service)
             )
         )
+        await stack.enter_async_context(DeliveryMaintenanceWorker(delivery_service))
         yield Runtime(
             bot=bot,
             db=db,

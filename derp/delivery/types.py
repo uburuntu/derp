@@ -144,10 +144,19 @@ class DeliveryReconciliation:
     """Operations changed or settled by one bounded reconciliation pass."""
 
     operation_ids: tuple[OperationId, ...]
+    failed_count: int = 0
 
     def __post_init__(self) -> None:
         if any(not isinstance(value, OperationId) for value in self.operation_ids):
             raise TypeError("reconciliation IDs must be OperationId values")
+        if (
+            isinstance(self.failed_count, bool)
+            or not isinstance(self.failed_count, int)
+            or not 0 <= self.failed_count <= len(self.operation_ids)
+        ):
+            raise ValueError(
+                "reconciliation failures must not exceed reconciled operations"
+            )
 
     @property
     def reconciled_count(self) -> int:

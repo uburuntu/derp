@@ -8,7 +8,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -16,7 +16,7 @@ import pytest_asyncio
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from derp.artifacts import ArtifactTooLargeError, FilesystemArtifactStore
@@ -25,6 +25,7 @@ from derp.delivery import (
     Delivered,
     DeliveryAuthorizationError,
     DeliveryFailed,
+    DeliveryMaintenanceWorker,
     DeliveryService,
     DeliveryState,
     DeliveryStateError,
@@ -188,6 +189,13 @@ def _message(message_id: int) -> MagicMock:
     message = MagicMock(spec=Message)
     message.message_id = message_id
     return message
+
+
+async def _clear_delivery_operations(env: DeliveryEnvironment) -> None:
+    """Remove committed rows left by this module's independent service sessions."""
+    async with env.transactions() as session:
+        await session.execute(delete(DeliveryIntent))
+        await session.execute(delete(PaidOperation))
 
 
 async def test_delivery_acknowledgement_is_persisted_and_retry_is_idempotent(
@@ -577,3 +585,145 @@ async def test_expired_artifact_cleanup_is_bounded_to_terminal_deliveries(
     assert cleanup.purged_count >= 1
     assert cleanup.failed_count == 0
     assert (await delivery_env.service.inspect(operation_id)).artifact_count == 0
+
+
+async def test_maintenance_recovers_only_safe_pending_delivery_and_cleans_due_state(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    await _clear_delivery_operations(delivery_env)
+    expired = await _operation(delivery_env)
+    terminal = await _operation(delivery_env)
+    await _prepare_and_capture(delivery_env, expired)
+    await _prepare_and_capture(delivery_env, terminal)
+    async with delivery_env.transactions() as session:
+        intent = await session.scalar(
+            select(DeliveryIntent).where(DeliveryIntent.operation_id == terminal.value)
+        )
+        assert intent is not None
+        intent.state = DeliveryState.DELIVERED.value
+        intent.delivered_at = delivery_env.clock()
+
+    delivery_env.clock.now += timedelta(hours=2)
+    stale = await _operation(delivery_env)
+    pending = await _operation(delivery_env)
+    uncertain = await _operation(delivery_env)
+    await _prepare_and_capture(delivery_env, stale)
+    await _prepare_and_capture(delivery_env, pending)
+    await _prepare_and_capture(delivery_env, uncertain)
+    async with delivery_env.transactions() as session:
+        stale_intent = await session.scalar(
+            select(DeliveryIntent).where(DeliveryIntent.operation_id == stale.value)
+        )
+        uncertain_intent = await session.scalar(
+            select(DeliveryIntent).where(DeliveryIntent.operation_id == uncertain.value)
+        )
+        assert stale_intent is not None and uncertain_intent is not None
+        stale_intent.state = DeliveryState.DELIVERING.value
+        stale_intent.updated_at = delivery_env.clock() - timedelta(minutes=5)
+        uncertain_intent.state = DeliveryState.UNCERTAIN.value
+        uncertain_intent.uncertain_at = delivery_env.clock()
+        uncertain_intent.last_error_code = "timeout"
+    delivery_env.bot.send_photo.return_value = _message(404)
+
+    report = await DeliveryMaintenanceWorker(
+        delivery_env.service,
+        stale_after=timedelta(minutes=1),
+        clock=delivery_env.clock,
+    ).sweep()
+
+    assert report.interrupted_count == 1
+    assert report.retry_candidate_count == report.delivered_count == 1
+    assert report.uncertain_count == 0
+    assert report.expired_count == 1
+    assert report.artifact_examined_count == report.artifact_purged_count == 1
+    delivery_env.bot.send_photo.assert_awaited_once()
+    delivery_env.reversal.reverse.assert_awaited_once_with(
+        expired,
+        reason="delivery_artifact_expired",
+    )
+    assert (await delivery_env.service.inspect(stale)).state is DeliveryState.UNCERTAIN
+    assert (
+        await delivery_env.service.inspect(pending)
+    ).state is DeliveryState.DELIVERED
+    assert (
+        await delivery_env.service.inspect(uncertain)
+    ).state is DeliveryState.UNCERTAIN
+    assert (await delivery_env.service.inspect(expired)).state is DeliveryState.EXPIRED
+    assert (await delivery_env.service.inspect(terminal)).artifact_count == 0
+
+
+async def test_concurrent_maintenance_workers_never_duplicate_pending_send(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    await _clear_delivery_operations(delivery_env)
+    operation_id = await _operation(delivery_env)
+    await _prepare_and_capture(delivery_env, operation_id)
+    send_started = asyncio.Event()
+    release_send = asyncio.Event()
+
+    async def blocking_send(**_kwargs) -> Message:
+        send_started.set()
+        await release_send.wait()
+        return _message(405)
+
+    delivery_env.bot.send_photo.side_effect = blocking_send
+    first_worker = DeliveryMaintenanceWorker(
+        delivery_env.service,
+        clock=delivery_env.clock,
+    )
+    second_worker = DeliveryMaintenanceWorker(
+        delivery_env.service,
+        clock=delivery_env.clock,
+    )
+
+    first = asyncio.create_task(first_worker.sweep())
+    await asyncio.wait_for(send_started.wait(), timeout=1)
+    second = asyncio.create_task(second_worker.sweep())
+    second_report = await asyncio.wait_for(second, timeout=1)
+    release_send.set()
+    first_report = await asyncio.wait_for(first, timeout=1)
+
+    assert first_report.retry_candidate_count == first_report.delivered_count == 1
+    assert second_report.retry_candidate_count == 0
+    delivery_env.bot.send_photo.assert_awaited_once()
+    assert (
+        await delivery_env.service.inspect(operation_id)
+    ).state is DeliveryState.DELIVERED
+
+
+async def test_expiry_reconciliation_isolates_per_operation_failures(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    await _clear_delivery_operations(delivery_env)
+    operation_ids = [await _operation(delivery_env) for _ in range(2)]
+    for operation_id in operation_ids:
+        await _prepare_and_capture(delivery_env, operation_id)
+    delivery_env.clock.now += timedelta(hours=2)
+    private_error = RuntimeError("private wallet detail")
+    delivery_env.reversal.reverse.side_effect = [private_error, None]
+
+    with patch("derp.delivery.service.report_exception") as report_exception:
+        report = await delivery_env.service.reconcile_expired()
+
+    assert set(report.operation_ids) == set(operation_ids)
+    assert report.failed_count == 1
+    assert delivery_env.reversal.reverse.await_count == 2
+    report_exception.assert_called_once_with(
+        "delivery_maintenance_operation_failed",
+        exception=private_error,
+        level="warning",
+        phase="spend_reversal",
+        failure_count=1,
+    )
+    safe_context = {
+        key: value
+        for key, value in report_exception.call_args.kwargs.items()
+        if key != "exception"
+    }
+    assert "private wallet detail" not in repr(
+        (report_exception.call_args.args, safe_context)
+    )
+    for operation_id in operation_ids:
+        inspection = await delivery_env.service.inspect(operation_id)
+        assert inspection.state is DeliveryState.EXPIRED
+        assert inspection.artifact_count == 0

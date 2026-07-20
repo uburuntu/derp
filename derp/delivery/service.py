@@ -51,6 +51,7 @@ from derp.models import (
     PaidOperation,
     User,
 )
+from derp.observability import report_exception
 from derp.operations import OperationId, OperationState
 
 type TransactionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
@@ -387,6 +388,33 @@ class DeliveryService:
             )
         return DeliveryReconciliation(operation_ids)
 
+    async def pending_operation_ids(
+        self,
+        *,
+        limit: int = 100,
+    ) -> tuple[OperationId, ...]:
+        """Return one bounded batch that is safe for an initial send attempt."""
+        self._require_limit(limit)
+        now = self._aware_now()
+        async with self._transactions() as session:
+            operation_ids = tuple(
+                await session.scalars(
+                    select(DeliveryIntent.operation_id)
+                    .join(
+                        PaidOperation,
+                        PaidOperation.id == DeliveryIntent.operation_id,
+                    )
+                    .where(
+                        DeliveryIntent.state == DeliveryState.PENDING.value,
+                        DeliveryIntent.expires_at > now,
+                        PaidOperation.state == OperationState.CAPTURED.value,
+                    )
+                    .order_by(DeliveryIntent.updated_at, DeliveryIntent.id)
+                    .limit(limit)
+                )
+            )
+        return tuple(OperationId(value) for value in operation_ids)
+
     async def reconcile_expired(
         self,
         *,
@@ -445,11 +473,38 @@ class DeliveryService:
                         intent.last_error_code or "terminal_delivery_failure"
                     )
 
+        failed_count = 0
         for operation_id in operation_ids:
+            operation_failed = False
             if error_code := reversal_codes.get(operation_id.value):
-                await self._reverse_terminal(operation_id, error_code)
-            await self.cleanup_terminal_artifacts(operation_id)
-        return DeliveryReconciliation(tuple(operation_ids))
+                try:
+                    await self._reverse_terminal(operation_id, error_code)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    report_exception(
+                        "delivery_maintenance_operation_failed",
+                        exception=exc,
+                        level="warning",
+                        phase="spend_reversal",
+                        failure_count=1,
+                    )
+                    operation_failed = True
+            try:
+                await self.cleanup_terminal_artifacts(operation_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                report_exception(
+                    "delivery_maintenance_operation_failed",
+                    exception=exc,
+                    level="warning",
+                    phase="terminal_artifact_cleanup",
+                    failure_count=1,
+                )
+                operation_failed = True
+            failed_count += operation_failed
+        return DeliveryReconciliation(tuple(operation_ids), failed_count)
 
     async def cleanup_terminal_artifacts(
         self,

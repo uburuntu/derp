@@ -1,5 +1,17 @@
 """Durable result delivery boundaries."""
 
+from derp.delivery.maintenance import (
+    DEFAULT_DELIVERY_MAINTENANCE_INTERVAL,
+    DEFAULT_DELIVERY_STALE_AFTER,
+    MAX_DELIVERY_MAINTENANCE_BATCH_SIZE,
+    MAX_DELIVERY_MAINTENANCE_CONCURRENCY,
+    MAX_DELIVERY_MAINTENANCE_INTERVAL,
+    MAX_DELIVERY_STALE_AFTER,
+    MIN_DELIVERY_STALE_AFTER,
+    DeliveryMaintenanceBackend,
+    DeliveryMaintenanceReport,
+    DeliveryMaintenanceWorker,
+)
 from derp.delivery.service import (
     MAX_TELEGRAM_PHOTO_BYTES,
     ArtifactDescriptor,
@@ -32,6 +44,9 @@ __all__ = [
     "Delivered",
     "ArtifactCleanup",
     "DeliveryFailed",
+    "DeliveryMaintenanceBackend",
+    "DeliveryMaintenanceReport",
+    "DeliveryMaintenanceWorker",
     "DeliveryInspection",
     "DeliveryOutcome",
     "DeliveryReconciliation",
@@ -45,6 +60,13 @@ __all__ = [
     "DeliveryService",
     "DeliveryStateError",
     "MAX_TELEGRAM_PHOTO_BYTES",
+    "DEFAULT_DELIVERY_MAINTENANCE_INTERVAL",
+    "DEFAULT_DELIVERY_STALE_AFTER",
+    "MAX_DELIVERY_MAINTENANCE_BATCH_SIZE",
+    "MAX_DELIVERY_MAINTENANCE_CONCURRENCY",
+    "MAX_DELIVERY_MAINTENANCE_INTERVAL",
+    "MAX_DELIVERY_STALE_AFTER",
+    "MIN_DELIVERY_STALE_AFTER",
     "PreparedDelivery",
     "ProgressStage",
     "ResendAuthorization",
