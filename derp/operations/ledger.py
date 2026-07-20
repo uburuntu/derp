@@ -5,7 +5,9 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
+from copy import deepcopy
 from datetime import UTC, datetime
+from types import MappingProxyType
 from typing import Protocol
 
 import logfire
@@ -13,7 +15,8 @@ from sqlalchemy import case, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from derp.catalog import get_google_model
+from derp.catalog import GoogleModelKey, get_google_model
+from derp.execution import Feature
 from derp.models import (
     Chat,
     OperationAllocation,
@@ -27,12 +30,17 @@ from derp.models import (
     WalletLot,
 )
 from derp.operations.types import (
+    ContextBand,
+    DeliveryState,
     FundingAuthorization,
     InventoryAllocation,
     InventoryKind,
     OperationId,
+    OperationSnapshot,
     OperationState,
     Quote,
+    QuoteId,
+    QuoteKey,
     ReservationRejected,
     ReservationRejection,
     ReservationResult,
@@ -90,7 +98,32 @@ class OperationLedger:
         thread_id: int | None,
         pricing_input: Mapping[str, object],
     ) -> OperationId:
-        """Persist immutable quote terms and the corresponding operation once."""
+        """Persist a quote once, preserving the original operation-ID API."""
+        stored = await self.ensure_quote(
+            quote,
+            request_key=request_key,
+            requester_id=requester_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            pricing_input=pricing_input,
+        )
+        return stored.operation_id
+
+    async def ensure_quote(
+        self,
+        quote: Quote,
+        *,
+        request_key: str,
+        requester_id: uuid.UUID,
+        chat_id: uuid.UUID,
+        thread_id: int | None,
+        pricing_input: Mapping[str, object],
+    ) -> Quote:
+        """Create a quote or return the original quote for an equivalent retry.
+
+        Quote IDs and timestamps are attempt-local inputs. The operation and request
+        identities, ownership, scope, and commercial terms must remain identical.
+        """
         if not request_key.strip():
             raise ValueError("request_key must not be blank")
         if thread_id is not None and thread_id <= 0:
@@ -125,10 +158,10 @@ class OperationLedger:
                 .returning(OperationQuote.id)
             )
             if created_quote_id is None:
-                stored_quote = await session.scalar(
-                    select(OperationQuote).where(
-                        OperationQuote.operation_id == quote.operation_id.value
-                    )
+                stored_quote = await self._quote_for_retry(
+                    session,
+                    operation_id=quote.operation_id,
+                    request_key=request_key,
                 )
                 if stored_quote is None or not self._quote_matches(
                     stored_quote, quote_values
@@ -136,20 +169,77 @@ class OperationLedger:
                     raise ImmutableQuoteConflictError(
                         f"Conflicting quote for operation {quote.operation_id}"
                     )
-                quote_id = stored_quote.id
             else:
-                quote_id = created_quote_id
+                stored_quote = await session.get(OperationQuote, created_quote_id)
+                if stored_quote is None:
+                    raise OperationLedgerError("Created operation quote disappeared")
 
-            await session.execute(
+            created_operation_id = await session.scalar(
                 insert(PaidOperation)
                 .values(
                     id=quote.operation_id.value,
-                    quote_id=quote_id,
+                    quote_id=stored_quote.id,
                     state=OperationState.QUOTED.value,
                 )
                 .on_conflict_do_nothing(index_elements=[PaidOperation.id])
+                .returning(PaidOperation.id)
             )
-        return quote.operation_id
+            if created_operation_id is None:
+                operation = await session.get(PaidOperation, quote.operation_id.value)
+                if operation is None or operation.quote_id != stored_quote.id:
+                    raise ImmutableQuoteConflictError(
+                        f"Conflicting operation record for {quote.operation_id}"
+                    )
+            return self._domain_quote(stored_quote)
+
+    async def get_snapshot(self, operation_id: OperationId) -> OperationSnapshot:
+        """Load the durable facts needed to resume without repeating provider work."""
+        async with self._transactions() as session:
+            row = (
+                await session.execute(
+                    select(PaidOperation, OperationQuote)
+                    .join(
+                        OperationQuote,
+                        OperationQuote.id == PaidOperation.quote_id,
+                    )
+                    .where(PaidOperation.id == operation_id.value)
+                )
+            ).one_or_none()
+            if row is None:
+                raise OperationLedgerError(f"Unknown operation {operation_id}")
+            operation, quote = row
+            wallet = (
+                await session.get(Wallet, operation.wallet_id)
+                if operation.wallet_id is not None
+                else None
+            )
+            return OperationSnapshot(
+                operation_id=operation_id,
+                quote=self._domain_quote(quote),
+                provider_model_id=quote.provider_model_id,
+                request_key=quote.request_key,
+                requester_id=quote.requester_id,
+                chat_id=quote.chat_id,
+                thread_id=quote.thread_id,
+                pricing_input=self._frozen_mapping(quote.pricing_input),
+                state=OperationState(operation.state),
+                delivery_state=DeliveryState(operation.delivery_state),
+                wallet_owner=self._wallet_owner(wallet) if wallet is not None else None,
+                funding_authorization=(
+                    FundingAuthorization(operation.funding_authorization)
+                    if operation.funding_authorization is not None
+                    else None
+                ),
+                result_metadata=self._frozen_mapping(operation.result_metadata),
+                terminal_reason=operation.terminal_reason,
+                reserved_at=operation.reserved_at,
+                execution_started_at=operation.execution_started_at,
+                captured_at=operation.captured_at,
+                released_at=operation.released_at,
+                reversed_at=operation.reversed_at,
+                created_at=operation.created_at,
+                updated_at=operation.updated_at,
+            )
 
     async def reserve(
         self,
@@ -222,7 +312,7 @@ class OperationLedger:
                 return ReservationRejected(operation_id, reason)
 
     async def mark_executing(self, operation_id: OperationId) -> SettlementResult:
-        """Close the reservation transaction before provider execution begins."""
+        """Atomically claim provider work, which only ``changed=True`` authorizes."""
         async with self._transactions() as session:
             operation = await self._locked_operation(session, operation_id)
             if operation.state == OperationState.EXECUTING.value:
@@ -234,6 +324,37 @@ class OperationLedger:
             operation.state = OperationState.EXECUTING.value
             operation.execution_started_at = self._aware_now()
             return SettlementResult(operation_id, OperationState.EXECUTING, True)
+
+    async def cancel(
+        self,
+        operation_id: OperationId,
+        *,
+        reason: str,
+    ) -> SettlementResult:
+        """Cancel pre-execution work without releasing an in-flight provider claim."""
+        if not reason.strip():
+            raise ValueError("cancellation reason must not be blank")
+        now = self._aware_now()
+        async with self._transactions() as session:
+            operation = await self._locked_operation(session, operation_id)
+            if operation.state == OperationState.CANCELED.value:
+                return SettlementResult(operation_id, OperationState.CANCELED, False)
+            if operation.state == OperationState.RELEASED.value:
+                return SettlementResult(operation_id, OperationState.RELEASED, False)
+            if operation.state == OperationState.QUOTED.value:
+                operation.state = OperationState.CANCELED.value
+                operation.terminal_reason = reason
+                return SettlementResult(operation_id, OperationState.CANCELED, True)
+            if operation.state == OperationState.RESERVED.value:
+                return await self._release_locked(session, operation, reason, now)
+            if operation.state == OperationState.EXECUTING.value:
+                raise InvalidOperationTransitionError(
+                    "Cannot cancel an executing operation until provider termination "
+                    "is confirmed; release it after a definitive failure"
+                )
+            raise InvalidOperationTransitionError(
+                f"Cannot cancel operation in {operation.state}"
+            )
 
     async def capture(self, operation_id: OperationId) -> SettlementResult:
         """Convert an existing reservation to consumed inventory once."""
@@ -287,27 +408,45 @@ class OperationLedger:
                 raise InvalidOperationTransitionError(
                     f"Cannot release operation in {operation.state}"
                 )
-            wallet, allocations = await self._locked_allocations(session, operation)
-            for allocation, lot in allocations:
-                if lot.reserved_credits < allocation.amount_credits:
-                    raise OperationLedgerError("Reserved lot balance is inconsistent")
-                lot.reserved_credits -= allocation.amount_credits
-                await self._return_to_source(
-                    session, wallet, lot, allocation.amount_credits, now
-                )
-                self._record_lot_event(
-                    session,
-                    wallet,
-                    lot,
-                    operation,
-                    "release",
-                    allocation.amount_credits,
-                    reason=reason,
-                )
-            operation.state = OperationState.RELEASED.value
-            operation.released_at = now
-            operation.terminal_reason = reason
-            return SettlementResult(operation_id, OperationState.RELEASED, True)
+            return await self._release_locked(session, operation, reason, now)
+
+    async def _release_locked(
+        self,
+        session: AsyncSession,
+        operation: PaidOperation,
+        reason: str,
+        now: datetime,
+    ) -> SettlementResult:
+        """Release a locked reserved operation inside the caller's transaction."""
+        operation_id = OperationId(operation.id)
+        if operation.state not in {
+            OperationState.RESERVED.value,
+            OperationState.EXECUTING.value,
+        }:
+            raise InvalidOperationTransitionError(
+                f"Cannot release operation in {operation.state}"
+            )
+        wallet, allocations = await self._locked_allocations(session, operation)
+        for allocation, lot in allocations:
+            if lot.reserved_credits < allocation.amount_credits:
+                raise OperationLedgerError("Reserved lot balance is inconsistent")
+            lot.reserved_credits -= allocation.amount_credits
+            await self._return_to_source(
+                session, wallet, lot, allocation.amount_credits, now
+            )
+            self._record_lot_event(
+                session,
+                wallet,
+                lot,
+                operation,
+                "release",
+                allocation.amount_credits,
+                reason=reason,
+            )
+        operation.state = OperationState.RELEASED.value
+        operation.released_at = now
+        operation.terminal_reason = reason
+        return SettlementResult(operation_id, OperationState.RELEASED, True)
 
     async def reverse(
         self,
@@ -746,12 +885,58 @@ class OperationLedger:
             "pricing_version",
             "catalog_verified_on",
             "pricing_input",
-            "expires_at",
-            "created_at",
         )
         return all(
             getattr(stored, field) == values[field] for field in immutable_fields
         )
+
+    @staticmethod
+    async def _quote_for_retry(
+        session: AsyncSession,
+        *,
+        operation_id: OperationId,
+        request_key: str,
+    ) -> OperationQuote | None:
+        by_operation = await session.scalar(
+            select(OperationQuote).where(
+                OperationQuote.operation_id == operation_id.value
+            )
+        )
+        by_request = await session.scalar(
+            select(OperationQuote).where(OperationQuote.request_key == request_key)
+        )
+        if (
+            by_operation is not None
+            and by_request is not None
+            and by_operation.id != by_request.id
+        ):
+            raise ImmutableQuoteConflictError(
+                f"Operation {operation_id} and request key identify different quotes"
+            )
+        return by_operation or by_request
+
+    @staticmethod
+    def _domain_quote(stored: OperationQuote) -> Quote:
+        return Quote(
+            id=QuoteId(stored.id),
+            operation_id=OperationId(stored.operation_id),
+            key=QuoteKey(
+                feature=Feature(stored.feature),
+                model_key=GoogleModelKey(stored.model_key),
+                context_band=ContextBand(stored.context_band),
+                variant=stored.variant,
+            ),
+            credits=stored.amount_credits,
+            estimated_provider_cost_usd=stored.estimated_provider_cost_usd,
+            created_at=stored.created_at,
+            expires_at=stored.expires_at,
+            pricing_version=stored.pricing_version,
+            catalog_verified_on=stored.catalog_verified_on,
+        )
+
+    @staticmethod
+    def _frozen_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
+        return MappingProxyType(deepcopy(dict(value)))
 
     def _aware_now(self) -> datetime:
         now = self._clock()

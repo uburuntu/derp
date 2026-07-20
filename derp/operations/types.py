@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -237,6 +238,48 @@ class SettlementResult:
     operation_id: OperationId
     state: OperationState
     changed: bool
+
+    @property
+    def execution_claimed(self) -> bool:
+        """Return whether this result grants permission to call the provider."""
+        return self.state is OperationState.EXECUTING and self.changed
+
+
+@dataclass(frozen=True, slots=True)
+class OperationSnapshot:
+    """Read-only operation state used to resume work after retries or restarts."""
+
+    operation_id: OperationId
+    quote: Quote
+    provider_model_id: str
+    request_key: str
+    requester_id: uuid.UUID
+    chat_id: uuid.UUID
+    thread_id: int | None
+    pricing_input: Mapping[str, object]
+    state: OperationState
+    delivery_state: DeliveryState
+    wallet_owner: WalletOwner | None
+    funding_authorization: FundingAuthorization | None
+    result_metadata: Mapping[str, object]
+    terminal_reason: str | None
+    reserved_at: datetime | None
+    execution_started_at: datetime | None
+    captured_at: datetime | None
+    released_at: datetime | None
+    reversed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    @property
+    def can_claim_execution(self) -> bool:
+        """Return whether a worker may atomically try to claim provider work."""
+        return self.state is OperationState.RESERVED
+
+    @property
+    def provider_execution_claimed(self) -> bool:
+        """Return whether provider work may already have happened."""
+        return self.execution_started_at is not None
 
 
 @dataclass(frozen=True, slots=True)

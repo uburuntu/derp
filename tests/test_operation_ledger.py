@@ -27,11 +27,15 @@ from derp.models import (
     WalletLot,
 )
 from derp.operations import (
+    DeliveryState,
     FundingAuthorization,
     ImageGenerateQuoteInput,
     ImmutableQuoteConflictError,
+    InvalidOperationTransitionError,
     OperationId,
     OperationLedger,
+    OperationState,
+    Quote,
     QuoteEngine,
     QuoteId,
     ReservationRejected,
@@ -185,13 +189,7 @@ async def _register_image_operation(
     chat_id: UUID,
 ) -> tuple[OperationId, int]:
     operation_id = OperationId(uuid4())
-    quote = QuoteEngine().quote(
-        quote_id=QuoteId.new(),
-        operation_id=operation_id,
-        plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
-        quote_input=ImageGenerateQuoteInput(500, ImageResolution.ONE_K),
-        created_at=env.clock(),
-    )
+    quote = _image_quote(operation_id, created_at=env.clock())
     await env.ledger.register_quote(
         quote,
         request_key=f"test:{operation_id}",
@@ -201,6 +199,21 @@ async def _register_image_operation(
         pricing_input={"input_tokens": 500, "resolution": "1K"},
     )
     return operation_id, quote.credits
+
+
+def _image_quote(
+    operation_id: OperationId,
+    *,
+    created_at: datetime,
+    resolution: ImageResolution = ImageResolution.ONE_K,
+) -> Quote:
+    return QuoteEngine().quote(
+        quote_id=QuoteId.new(),
+        operation_id=operation_id,
+        plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
+        quote_input=ImageGenerateQuoteInput(500, resolution),
+        created_at=created_at,
+    )
 
 
 async def test_reserve_uses_allowance_then_purchase_and_all_transitions_are_idempotent(
@@ -412,3 +425,205 @@ async def test_register_quote_rejects_conflicting_retry(
             thread_id=None,
             pricing_input={"input_tokens": 500, "resolution": "4K"},
         )
+
+
+async def test_ensure_quote_returns_original_for_later_clock_and_quote_id(
+    ledger_env: LedgerEnvironment,
+) -> None:
+    user_id, chat_id = await _create_scope(ledger_env)
+    operation_id = OperationId(uuid4())
+    request_key = f"test:{operation_id}"
+    original = _image_quote(operation_id, created_at=ledger_env.clock())
+    stored = await ledger_env.ledger.ensure_quote(
+        original,
+        request_key=request_key,
+        requester_id=user_id,
+        chat_id=chat_id,
+        thread_id=None,
+        pricing_input={"input_tokens": 500, "resolution": "1K"},
+    )
+
+    ledger_env.clock.now += timedelta(minutes=4)
+    retry = _image_quote(operation_id, created_at=ledger_env.clock())
+    recovered = await ledger_env.ledger.ensure_quote(
+        retry,
+        request_key=request_key,
+        requester_id=user_id,
+        chat_id=chat_id,
+        thread_id=None,
+        pricing_input={"input_tokens": 500, "resolution": "1K"},
+    )
+
+    assert retry.id != original.id
+    assert retry.created_at != original.created_at
+    assert recovered == stored
+    assert recovered.id == original.id
+    assert recovered.created_at == original.created_at
+    assert recovered.expires_at == original.expires_at
+
+
+async def test_concurrent_equivalent_quote_registration_returns_one_original(
+    ledger_env: LedgerEnvironment,
+) -> None:
+    user_id, chat_id = await _create_scope(ledger_env)
+    operation_id = OperationId(uuid4())
+    request_key = f"test:{operation_id}"
+    candidates = (
+        _image_quote(operation_id, created_at=ledger_env.clock()),
+        _image_quote(
+            operation_id,
+            created_at=ledger_env.clock() + timedelta(seconds=1),
+        ),
+    )
+
+    results = await asyncio.gather(
+        *(
+            ledger_env.ledger.ensure_quote(
+                quote,
+                request_key=request_key,
+                requester_id=user_id,
+                chat_id=chat_id,
+                thread_id=None,
+                pricing_input={"input_tokens": 500, "resolution": "1K"},
+            )
+            for quote in candidates
+        )
+    )
+
+    assert results[0] == results[1]
+    assert results[0].id in {quote.id for quote in candidates}
+    assert results[0].created_at in {quote.created_at for quote in candidates}
+
+
+async def test_ensure_quote_rejects_scope_owner_and_request_identity_conflicts(
+    ledger_env: LedgerEnvironment,
+) -> None:
+    user_id, chat_id = await _create_scope(ledger_env)
+    other_user_id, other_chat_id = await _create_scope(ledger_env)
+    operation_id = OperationId(uuid4())
+    request_key = f"test:{operation_id}"
+    original = _image_quote(operation_id, created_at=ledger_env.clock())
+    await ledger_env.ledger.ensure_quote(
+        original,
+        request_key=request_key,
+        requester_id=user_id,
+        chat_id=chat_id,
+        thread_id=None,
+        pricing_input={"input_tokens": 500, "resolution": "1K"},
+    )
+    retry = _image_quote(
+        operation_id,
+        created_at=ledger_env.clock() + timedelta(seconds=1),
+    )
+
+    conflicting_inputs = (
+        (f"changed:{operation_id}", user_id, chat_id, retry),
+        (request_key, other_user_id, chat_id, retry),
+        (request_key, user_id, other_chat_id, retry),
+        (
+            request_key,
+            user_id,
+            chat_id,
+            _image_quote(
+                OperationId(uuid4()),
+                created_at=ledger_env.clock() + timedelta(seconds=1),
+            ),
+        ),
+    )
+    for (
+        conflicting_key,
+        conflicting_user,
+        conflicting_chat,
+        conflicting_quote,
+    ) in conflicting_inputs:
+        with pytest.raises(ImmutableQuoteConflictError):
+            await ledger_env.ledger.ensure_quote(
+                conflicting_quote,
+                request_key=conflicting_key,
+                requester_id=conflicting_user,
+                chat_id=conflicting_chat,
+                thread_id=None,
+                pricing_input={"input_tokens": 500, "resolution": "1K"},
+            )
+
+
+async def test_snapshot_and_execution_claim_prevent_provider_rerun(
+    ledger_env: LedgerEnvironment,
+) -> None:
+    user_id, chat_id = await _create_scope(ledger_env)
+    wallet = await _wallet(ledger_env, user_id=user_id)
+    operation_id, price = await _register_image_operation(
+        ledger_env, user_id=user_id, chat_id=chat_id
+    )
+    await _add_purchase(ledger_env, wallet.id, price)
+
+    quoted = await ledger_env.ledger.get_snapshot(operation_id)
+    assert quoted.state is OperationState.QUOTED
+    assert quoted.delivery_state is DeliveryState.NOT_READY
+    assert (
+        quoted.provider_model_id
+        == plan_execution(
+            Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE
+        ).model.provider_model_id
+    )
+    assert not quoted.can_claim_execution
+    assert not quoted.provider_execution_claimed
+    assert quoted.pricing_input == {"input_tokens": 500, "resolution": "1K"}
+
+    reserved = await ledger_env.ledger.reserve(operation_id)
+    assert isinstance(reserved, ReservedOperation)
+    reserved_snapshot = await ledger_env.ledger.get_snapshot(operation_id)
+    assert reserved_snapshot.can_claim_execution
+    assert reserved_snapshot.wallet_owner == reserved.allocation.owner
+
+    claims = await asyncio.gather(
+        ledger_env.ledger.mark_executing(operation_id),
+        ledger_env.ledger.mark_executing(operation_id),
+    )
+    assert sum(claim.execution_claimed for claim in claims) == 1
+    assert sum(claim.changed for claim in claims) == 1
+
+    executing = await ledger_env.ledger.get_snapshot(operation_id)
+    assert executing.state is OperationState.EXECUTING
+    assert executing.provider_execution_claimed
+    assert not executing.can_claim_execution
+    with pytest.raises(InvalidOperationTransitionError):
+        await ledger_env.ledger.cancel(operation_id, reason="user_canceled")
+
+    released = await ledger_env.ledger.release(
+        operation_id, reason="provider_definitively_stopped"
+    )
+    assert released.state is OperationState.RELEASED
+    assert released.changed
+
+
+async def test_cancel_is_idempotent_before_execution_and_releases_reservation(
+    ledger_env: LedgerEnvironment,
+) -> None:
+    user_id, chat_id = await _create_scope(ledger_env)
+    quoted_id, _ = await _register_image_operation(
+        ledger_env, user_id=user_id, chat_id=chat_id
+    )
+
+    canceled = await ledger_env.ledger.cancel(quoted_id, reason="user_canceled")
+    canceled_again = await ledger_env.ledger.cancel(quoted_id, reason="user_canceled")
+    assert canceled.state is OperationState.CANCELED and canceled.changed
+    assert canceled_again.state is OperationState.CANCELED
+    assert not canceled_again.changed
+
+    wallet = await _wallet(ledger_env, user_id=user_id)
+    reserved_id, price = await _register_image_operation(
+        ledger_env, user_id=user_id, chat_id=chat_id
+    )
+    await _add_purchase(ledger_env, wallet.id, price)
+    reservation = await ledger_env.ledger.reserve(reserved_id)
+    assert isinstance(reservation, ReservedOperation)
+
+    released = await ledger_env.ledger.cancel(reserved_id, reason="user_canceled")
+    released_again = await ledger_env.ledger.cancel(reserved_id, reason="user_canceled")
+    assert released.state is OperationState.RELEASED and released.changed
+    assert released_again.state is OperationState.RELEASED
+    assert not released_again.changed
+    balance = await ledger_env.ledger.balance(reservation.allocation.owner)
+    assert balance.spendable == price
+    assert balance.reserved == 0
