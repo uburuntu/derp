@@ -1,409 +1,736 @@
-# Architecture Roadmap
+# Derp Product and Architecture Vision
 
-This document is the handoff from repository cleanup to product development. It
-records work that is too behavioral, cross-cutting, or migration-sensitive for
-the chore tranche.
+This document is the source of truth for Derp's next product phase. It combines
+the owner decisions, the intended Telegram experience, the target architecture,
+and a dependency-correct delivery plan. The architecture issue register is a
+risk map, not a second backlog and not a list of unanswered product questions.
 
-## Product invariants
+The product is a fun, group-first pet project. It should be engineered
+carefully, but it does not need enterprise ceremony. When experience and a
+small amount of marginal provider cost conflict, prefer the better experience
+and keep an explicit economic guardrail.
 
-- Pydantic AI remains the agent runtime.
-- Aiogram remains the Telegram runtime.
-- PostgreSQL remains the durable source of truth.
-- Handlers should be thin transport adapters; domain operations own policy.
-- Provider work and Telegram delivery must not occur inside database
-  transactions.
-- Charging, quota use, and payment fulfillment must be explicit, atomic, and
-  auditable.
-- Shared-chat features must define their authorization and topic-isolation
-  semantics.
+## Product vision
+
+Derp should feel like the sharp friend already in the chat: easy to summon,
+aware of the obvious context, capable with text and media, quiet until invited,
+and honest about money and privacy.
+
+The interface is Telegram itself. Replies, message edits, inline keyboards,
+chat actions, albums, command menus, and Stars invoices should cover the whole
+experience. There is no companion dashboard and no onboarding wizard.
+
+### Experience principles
+
+- **Continuity before ceremony.** Users should not restate context, re-upload
+  media, or repeat a failed request when Derp can safely recover it.
+- **Quiet machinery.** Routine model selection, quoting, charging, retries, and
+  cache behavior stay invisible. Surface them only for consent, progress,
+  recovery, or an explicit balance request.
+- **Native Telegram interaction.** Prefer replies, edits, familiar buttons, and
+  scoped commands over command syntax, explanatory walls of text, or external
+  pages.
+- **Consent at meaningful boundaries.** Do not confirm ordinary turns. Confirm
+  expensive tools, first-time personal fallback in a group, purchases, and
+  destructive privacy actions.
+- **Honest progress.** Acknowledge work immediately, show real stages rather
+  than invented percentages, and always reach a clear delivered, failed,
+  canceled, or refunded state.
+- **Visible and reversible privacy.** Context state is easy to inspect, admins
+  can disable ambient capture, and each user can remove their own stored
+  history without needing an administrator.
+- **Spend complexity on delight, not infrastructure.** Absorb small retry,
+  media-context, and delivery costs when they remove friction. Defer generalized
+  platforms, workflow engines, and provider abstractions until evidence demands
+  them.
+
+## Telegram experience contract
+
+This section is the acceptance contract for product work. Architecture exists
+to make these flows reliable.
+
+### Invocation and first use
+
+- Private chats treat every user message as an invocation.
+- In groups, Derp responds only to a mention, the configured whole-word name, a
+  reply to Derp, or a command. Ambient context never means unsolicited replies.
+- Derp replies to the triggering message in the same chat and forum topic.
+- On joining a group, Derp sends one compact status panel with invocation,
+  context, and settings controls. If join handling cannot send it, the panel is
+  shown on the first observed invocation.
+- Ambient history is on by default after that visible notice. Admins can turn
+  it off. Existing groups receive the same one-time notice before ambient
+  capture begins.
+- When Telegram reports new members in an ambient-enabled group, coalesce a
+  compact, rate-limited context and retention notice so disclosure is not
+  limited to the members present when Derp joined.
+- Telegram privacy mode or missing permissions can prevent ambient delivery to
+  the bot. In that case the panel shows `Mentions only`; it must never claim
+  that ambient context is active when Derp cannot receive it.
+- The initial panel uses a few direct controls such as `Try Derp`,
+  `Context: On`, and `Settings`. It is not a feature tour.
+
+### Conversation continuity
+
+- Derp receives a coherent recent conversation, not a flattened diagnostic
+  dump. Roles, chronology, replies, topics, tool calls, and assistant messages
+  remain distinguishable.
+- Context never crosses chats. Forum history and memory are isolated by
+  `(chat_id, thread_id)` and inherit only explicit chat policy.
+- A later invocation in the same chat or topic may use any still-active recent
+  context, regardless of which member invokes Derp. That matches what members
+  can already see in the room.
+- Natural follow-ups should work without requiring a reply when the referent is
+  unambiguous. Ask a focused clarification only when choosing incorrectly would
+  materially change the result or spend.
+- Responses remain in the original reply chain even when broader ambient
+  context was used to understand the request.
+- Chat-user preferences apply only to that user in that chat and are never
+  treated as instructions for other members.
+
+### Media continuity
+
+- Store a normalized Telegram snapshot and stable attachment references. Never
+  persist source-media bytes, signed Telegram download URLs, or duplicated
+  nested reply payloads as conversation history.
+- Ambient attachments retain captions, type, dimensions or duration, Telegram
+  `file_id` and `file_unique_id`, and their relationship to the source message.
+  Media is downloaded only when an invocation needs it.
+- Once Derp inspects media, that media stays in its originating logical turn and
+  is rehydrated on demand while the turn remains inside the prompt window. It
+  has no separate two-turn timer and no chat-wide `latest image` slot.
+- Media leaves context when token-aware history trimming evicts the complete
+  logical turn. Trimming must preserve request/response and tool-call/result
+  pairs.
+- Multiple recent images remain available while they fit the prompt budget.
+  Under pressure, evict the oldest complete turns instead of silently replacing
+  or mixing media.
+- Albums remain grouped and generated output is delivered as native Telegram
+  media, not a temporary external link.
+- Generated artifacts are the narrow exception to the durable-byte rule. Keep
+  them in a private, size-bounded artifact store with a short TTL only for
+  delivery retry, then delete them after delivery, spend reversal, or expiry.
+- A short-lived in-process byte cache may avoid repeated Telegram downloads
+  during one operation. It is an optimization, not durable storage.
+- If later hydration fails, retain the caption and attachment marker, continue
+  when possible, and offer the smallest useful recovery action.
+
+This intentionally spends slightly more input bandwidth and tokens for natural
+follow-ups. For the configured Flash models, carrying one ordinary image across
+the current history windows costs at most a few cents before cache discounts;
+latency and bandwidth are the more important measurements.
+
+### Spending and purchases
+
+- Routine chat turns and inexpensive operations run without confirmation when
+  an eligible balance is already available.
+- Expensive tools show one exact fixed quote with `Run` and `Cancel`. The quote
+  names the capability and price; provider token variance and system retries
+  cannot increase it.
+- A natural-language tool may need the agent to discover validated arguments
+  before its exact quote exists. End that run with a deferred tool request,
+  persist its tool-call ID, validated arguments, original history, requester,
+  chat/topic, quote, and expiry, then bind the `Run` callback to that record.
+  Approval resumes the original run with Pydantic AI deferred tool results; it
+  must not rerun discovery or charge the base turn again. Denial and expiry do
+  not charge the tool. The discovery turn follows its ordinary base quote; the
+  tool quote includes the finishing model call after approval.
+- Shared chat funds are tried first. If they cannot cover the whole operation,
+  ask once with `Use mine once`, `Always here`, and `Buy for chat`. Never fall
+  back to personal funds silently.
+- `Always here` is per user and per chat, can be revoked from settings, and does
+  not grant another member access to that user's wallet.
+- Ordinary successful turns do not produce receipt spam. Purchases, explicit
+  balance views, expensive operations, failures, releases, and refunds show the
+  relevant balance effect.
+- Failure copy explicitly says `Not charged` or `Refunded` when applicable.
+- Stars invoices identify the pack and whether credits go to the buyer or the
+  current chat. Payment fulfillment is idempotent and never asks a payer to buy
+  again after Telegram has charged them.
+- `/credits` shows monthly allowance, purchased credits, reset behavior, chat
+  credits when relevant, and recent exceptional charges or refunds.
+- `Manage plan` exposes cancel or re-enable renewal without leaving Telegram.
+
+### Progress, delivery, and recovery
+
+- Near-instant work uses Telegram chat actions only. Longer work gets one
+  editable status message with honest stages such as `Preparing`,
+  `Generating`, and `Delivering`.
+- Do not show fake percentages. Show `Cancel` only while cancellation can still
+  stop work or prevent a charge.
+- Results arrive in the original chat or topic as a reply to the requester. A
+  temporary progress message is edited into the result or removed after native
+  media delivery.
+- Provider success and Telegram delivery are separate states. Persist a result
+  long enough to retry delivery; reverse captured spend automatically if
+  delivery becomes permanently impossible and show that as `Refunded`.
+- Invalid input, policy rejection, cancellation before billable work, provider
+  failure, and unusable output are not charged.
+- Provider calls, settlement, and unambiguously failed Telegram calls retry
+  idempotently. A retry never creates another reservation or charge.
+- Telegram send methods have no idempotency key. Record delivery intent before
+  sending and prefer editing a known progress-message ID. If a native-media send
+  times out after Telegram may have accepted it, do not blindly resend. Mark
+  delivery uncertain and offer `Send again` at no additional charge; reverse
+  captured spend if the artifact expires without confirmed delivery.
+- Recoverable failures preserve the request, media references, quote, and
+  operation identity, then offer a relevant action such as `Retry`,
+  `Choose media`, `Buy credits`, or `Settings`.
+- V1 does not add a durable workflow engine. If the process dies during paid
+  provider work before a completed artifact is recorded, startup reconciliation
+  releases its reservation or reverses captured spend, and the user can retry.
+  A completed TTL-bound artifact may survive restart only for delivery
+  reconciliation; provider generation itself never resumes. Derp absorbs any
+  orphaned provider cost.
+
+### Help, settings, and privacy
+
+- `/help` is the entry point to one context-aware inline menu. It shows only
+  relevant actions and links to creation, credits, privacy, and settings.
+- `/settings` may alias the same menu. Members can inspect group state; only
+  admins receive group mutation controls.
+- Admin controls cover ambient context, `7/30/90` day retention, shared-memory
+  permissions, shared-credit spending, expensive-tool access, clearing the
+  current chat or topic history, and forgetting approved shared facts. The
+  default retention is 30 days.
+- Personal controls cover per-chat spending fallback, chat-user preferences,
+  balances, and deletion of the user's stored messages in that chat.
+- Group capture mode remains admin-controlled in v1. A member cannot disable
+  capture for everyone, but can inspect the setting and delete their own stored
+  messages at any time.
+- `Privacy and history` -> `Delete my messages from this chat` uses a compact
+  destructive confirmation. Replying `/forget` to one of the user's own
+  messages is the precise shortcut.
+- Deletion scrubs source content, attachment references, history DTOs,
+  canonical projections, summaries, application-managed explicit caches, and
+  direct stored quotes. It leaves an anonymous `[message deleted]` tombstone to
+  preserve chronology and reply structure.
+- Implicit provider caches and external telemetry have no per-message deletion
+  handle. Production telemetry therefore stores no message or binary content;
+  provider and development telemetry follow disclosed bounded retention rather
+  than claiming deletion Derp cannot enforce.
+- Tombstones contain no author or content and expire on the deleted message's
+  original retention schedule.
+- Disabling ambient context stops future ambient capture and purges prior
+  ambient-only snapshots and derived artifacts. Explicit Derp interactions and
+  approved shared facts remain until an admin separately chooses `Clear
+  history` or `Forget shared facts` from the same menu.
+- Derp cannot remove Telegram's own message history or unattributed text copied
+  into another member's message. The deletion confirmation states that limit
+  plainly.
+- Telegram's scoped command menu is the command index. Free-form conversation
+  remains the primary interface.
+
+## Resolved product contract
+
+Everything in this section is decided. Numeric tuning can be derived during
+implementation without reopening the product design.
+
+### Product scope
+
+- Derp is group-first. Private chats remain fully supported.
+- Pydantic AI remains the agent runtime, aiogram remains the Telegram runtime,
+  and PostgreSQL remains the durable source of truth.
+- Google is the only implemented model provider in v1. A single model catalog
+  keeps the execution boundary replaceable without building a multi-provider
+  framework.
+- Derp speaks only when invoked. Ambient history improves understanding; it
+  never grants permission to join conversations automatically.
+
+### Wallets, subscriptions, and quotes
+
+- A personal wallet has two inventories: a renewing monthly subscription
+  allowance and non-expiring purchased credits.
+- A chat wallet has purchased shared credits in v1. Chat subscriptions are
+  deferred.
+- Within one wallet, spend expiring allowance before purchased credits. One
+  operation may use both inventories of that wallet when needed.
+- One operation is funded by exactly one wallet owner: the chat first, otherwise
+  the caller after per-chat consent. A charge never splits across chat and
+  personal wallets.
+- All members may spend chat credits, subject to admin controls for shared
+  spending and expensive tools.
+- The base agent turn and each paid tool receive independent fixed pre-run
+  quotes. The quote is keyed by resolved model or capability and a context band.
+- Operation release and spend reversal return a reservation or captured charge
+  to its original inventories and are always non-negative ledger credits.
+- A Telegram payment refund is a separate clawback: revoke unspent credits or
+  allowance from that purchase or cycle. If some were already consumed, record
+  explicit credit debt and block further paid use until reconciled; never make
+  a spendable inventory negative.
+- Fully consuming any subscription allowance must cost no more than net payment
+  revenue after Telegram and Stars fees. The owner's `$25/month` risk tolerance
+  is a global project loss ceiling, not a per-subscriber subsidy.
+- Free or subsidized inference is upside only and never part of the price
+  assumption.
+- Initial tier prices and allowance sizes are an engineering calibration task:
+  correct the model catalog, measure real usage bands, apply the margin and
+  global loss guardrail, then launch the smallest understandable set of one
+  personal plan and a few top-up packs.
+- The personal plan is a recurring 30-day Telegram Stars subscription. Each
+  successful payment creates one idempotent, versioned allowance cycle anchored
+  to Telegram's subscription expiration time in UTC. Allowance does not roll
+  over.
+- One user may have at most one active Derp plan. Invoice creation and renewal
+  handling reject or reconcile duplicate active subscriptions rather than
+  stacking allowances.
+- Canceling or failing renewal prevents the next cycle but leaves the current
+  cycle active until expiry. V1 has one plan, no upgrades, no proration, and no
+  grace period. Purchased credits are unaffected by subscription cancellation.
+- Refunding a subscription payment applies the payment-clawback rule to that
+  cycle. `/credits` shows current-cycle allowance, expiration or renewal state,
+  purchased credits, and any debt.
+
+### Authorization and memory
+
+- Authorization is deterministic. Telegram role defines the maximum
+  entitlement; the effective toolset is the intersection of that role, typed
+  chat policy, and enabled product features. Wallet sufficiency is checked at
+  execution time rather than encoded as prompt authority.
+- Admin-only or disabled tools are absent from the run. Prompt or memory text
+  can never grant a capability.
+- Roles may be cached briefly but are revalidated for privileged mutations.
+- Platform instructions and explicit admin chat policy are trusted
+  instructions. History, summaries, preferences, factual memory, and media are
+  always untrusted data.
+- Chat policy is structured settings plus one bounded admin-authored paragraph,
+  stored separately from factual memory.
+- Members propose shared facts and admins approve them by default. A chat
+  setting may allow members to edit shared facts directly, but never policy or
+  another user's preferences.
+- No third-party personal facts and no cross-chat personalization in v1.
+
+### History data model
+
+- Persist three related forms with explicit schema versions:
+  1. a normalized Telegram source-event snapshot for audit and reprocessing;
+  2. an application history DTO mirroring Pydantic AI request, response, and
+     tool-pair semantics while carrying application media references;
+  3. a canonical role/text/tool projection for indexing and migration.
+- Materialize the history DTO into native Pydantic AI messages at the execution
+  edge. Durable media references become ephemeral `BinaryContent` only after
+  hydration; custom application references are not native Pydantic AI parts.
+- The normalized snapshot allowlists conversational fields: text, caption,
+  entities, sender identity, timestamps, edit state, topic and reply IDs,
+  content-specific metadata, and attachment references.
+- Payment, passport, authentication, contact, location, and web-app payload
+  bodies are not copied into conversational history.
+- The current inbound event is excluded from prior history by construction and
+  appended exactly once as the current request.
+- History processing is token-aware and removes complete logical turns while
+  preserving tool-call/result pairs. Paid windows should be generous; free
+  windows may be smaller but still preserve a coherent exchange.
+- Raw snapshots and attachment references follow the admin-selected retention
+  period. Prompt windows are independent, tier-aware views over that data.
+- Message edits replace the stored snapshot and invalidate derived artifacts;
+  old revisions are not retained.
+
+### Prompt assembly and caching
+
+- Build deterministic prefixes in this order: platform instructions, role
+  appropriate tool schemas, admin policy, untrusted memory snapshot, and prior
+  materialized history. Add chat-user preference, current message, and current
+  media at the end.
+- Canonicalize encoding, whitespace, stable identifiers, JSON key ordering, and
+  item ordering. Cover the renderer with golden tests tied to the Pydantic AI
+  and provider-adapter versions.
+- Record total, cached, and uncached input tokens plus provider cost per run.
+- V1 does not persist context epochs and does not pre-create provider caches.
+  Let deterministic prefixes benefit from implicit caching and optimize only
+  after telemetry proves a worthwhile hot scope.
+
+### Operation and transaction model
+
+- A small set of domain values drives every paid path: `ExecutionPlan`,
+  `Quote`, `OperationId`, typed `Outcome`, `DeliveryState`, and a pending
+  deferred-tool record.
+- The operation lifecycle is quote -> reserve -> provider execution -> capture
+  or release -> delivery -> retry or spend reversal. Payment refunds use a
+  distinct purchase-clawback lifecycle.
+- Database transactions cover only state changes. Provider work and Telegram
+  delivery never run inside a database transaction.
+- Command handlers and agent tools are adapters over the same feature service.
+  They cannot choose different models, prices, idempotency keys, or settlement
+  behavior.
+- Provider executors return typed outcomes such as `Succeeded`, `Rejected`, and
+  `Failed`. Settlement never infers policy from human-readable strings.
+- Every billable side effect has a unique operation ID. Agent tool invocations
+  incorporate `ctx.tool_call_id`; command routes generate an equivalent ID.
+- Deferred-tool callbacks authenticate the actor, load immutable validated
+  arguments and quote state server-side, expire closed, and resume the stored
+  Pydantic AI history with matching `DeferredToolResults`.
+- Logs and spans use operation IDs and settlement state, exclude message and
+  binary content in production, and log failures once at the owning boundary.
+
+## Target system shape
+
+Keep the design small and explicit:
+
+```text
+Telegram update
+  -> thin handler / tool adapter
+  -> application service
+       -> model catalog + quote service
+       -> wallet + operation service
+       -> context/history service
+       -> feature executor
+  -> delivery service
+       -> Telegram API
+```
+
+The boundaries are earned by current duplication and correctness risks:
+
+- **Model catalog:** one source for provider model ID, capabilities, context
+  limits, lifecycle, and current provider pricing.
+- **Quote and wallet service:** fixed quotes, balance selection, reservations,
+  capture, release, spend reversal, purchase clawback, purchases, and debt.
+- **Context/history service:** scope, normalized snapshots, native history,
+  memory authority, token-aware trimming, media-reference hydration, and
+  deletion propagation.
+- **Feature services:** one each for image/editing, thinking, video, and TTS;
+  no Telegram sending and no billing policy inside provider executors.
+- **Media gateway:** shared HTTP client, streaming limits, MIME validation,
+  sensitive URL redaction, temporary bytes, and Telegram file hydration.
+- **Delivery service:** reply targeting, text splitting, albums, editable
+  progress, retries, terminal delivery state, and spend-reversal handoff.
+
+Do not create a generic service framework. Plain typed functions and small
+classes are sufficient until repetition proves otherwise.
+
+## Delivery plan
+
+Milestones are vertical outcomes, not layers to perfect indefinitely. Each
+milestone must leave the bot releasable and remove the obsolete path it
+replaces.
+
+### Milestone 0: Contain and characterize
+
+Goal: stop known unsafe behavior from expanding and establish trustworthy
+baselines.
+
+- Disable `/buy` and `/buy_chat` until durable purchase intents and end-to-end
+  Stars validation ship in Milestone 2. Do not advertise disabled or unfinished
+  capabilities in `/help`.
+- Add characterization tests for current-message duplication, forum-topic
+  leakage, model/price drift, repeated same-message tool calls, payment payload
+  validation, and Telegram sender constraints.
+- Test PostgreSQL from Alembic migrations only; stop using ORM metadata creation
+  to conceal schema drift.
+- Create the single Google model catalog before building quotes. Replace the
+  stale Flash Lite and Flash prices and remove the duplicate runtime tier map.
+- Introduce the minimal `ExecutionPlan` and typed outcome vocabulary without a
+  broad framework.
+
+Exit criteria:
+
+- Current critical behavior has regression coverage.
+- Billing and runtime resolve the same concrete model and current price.
+- No provider request or Telegram send is needed to construct a quote or typed
+  outcome.
+- `/buy` and `/buy_chat` cannot create an invoice before Milestone 2's payment
+  exit criteria pass.
+
+### Milestone 1: Conversation that feels continuous
+
+Goal: make everyday chat excellent before adding more premium surface area.
+
+- Store normalized source events with explicit role, direction, topic, reply,
+  edit, and attachment fields.
+- Exclude the current event from prior context and isolate every forum topic.
+- Materialize native Pydantic AI messages from the application history DTO and
+  apply token-aware complete-turn trimming.
+- Ship ambient-by-default group onboarding, honest context state, and the
+  unified help/settings panel, including rate-limited new-member disclosure.
+- Add media references, on-demand hydration, natural in-window media
+  continuity, graceful degradation, and the minimum safe media gateway: shared
+  HTTP client, size and time limits, MIME validation, and sensitive URL
+  redaction.
+- Render history and factual memory as untrusted data. Build deterministic
+  role-and-policy-derived toolsets and the admin approval path for shared facts.
+- Ship per-user deletion, anonymous tombstones, admin retention controls, and
+  ambient opt-out cleanup. Add separate admin actions for clearing chat/topic
+  history and forgetting approved shared facts.
+
+Exit criteria:
+
+- Private, group mention/reply, ambient follow-up, and forum-topic journeys pass
+  automated tests and manual Telegram smoke tests.
+- A user can refer naturally to a recent inspected image without re-uploading
+  it.
+- No context, media, memory, or preference crosses a chat or forum topic.
+- Context state and deletion are discoverable without memorizing commands.
+- Admins can clear history and shared facts independently without affecting the
+  other store.
+
+### Milestone 2: Paid operations people can trust
+
+Goal: make charging, purchases, and failures boringly predictable.
+
+- Implement personal allowance and purchased inventories plus purchased chat
+  credits.
+- Implement recurring 30-day cycle creation, renewal, cancellation, expiry,
+  non-rollover, and subscription payment clawback.
+- Add immutable quotes and atomic reserve/capture/release/spend-reversal using
+  unique operation IDs and short units of work.
+- Implement chat-first wallet selection and one-time personal fallback consent.
+- Add opaque durable purchase intents and strict payer, target, currency,
+  amount, expiry, pack-version, and charge-ID validation.
+- Migrate one valuable vertical slice, image generation/editing, through the
+  complete quote -> operation -> outcome -> delivery path before generalizing.
+- Persist and resume expensive natural-language tool approvals with validated
+  arguments, exact quotes, authenticated callbacks, expiry, original history,
+  and Pydantic AI deferred tool results.
+- Add `/credits`, expensive-operation confirmation, purchase targeting, and
+  clear not-charged/refunded terminal copy.
+
+Exit criteria:
+
+- Concurrent requests cannot overspend a wallet or quota.
+- Duplicate tool, callback, pre-checkout, payment, capture, release, spend
+  reversal, and purchase-clawback events are harmless.
+- A real debug Stars purchase fulfills once to the intended target.
+- Command and natural-language image paths produce the same plan, charge, and
+  outcome.
+- An ambiguous Telegram media-send timeout never triggers a blind duplicate;
+  the existing operation can resend without another charge or expire into a
+  spend reversal.
+
+### Milestone 3: One polished premium experience
+
+Goal: give every expensive feature the same low-friction interaction quality.
+
+- Extract feature services for image/editing, thinking, video, and TTS one at a
+  time. Delete each duplicated command/tool implementation as it migrates.
+- Add bounded media transport, provider timeouts, typed rejection/failure
+  behavior, and provider-independent results.
+- Add editable progress, meaningful cancellation, native Telegram delivery,
+  retry actions, a private size-bounded artifact store with TTL cleanup, and
+  automatic delivery spend reversals.
+- Do not migrate all features simultaneously. Finish and validate one before
+  exposing the next.
+
+Exit criteria:
+
+- Exposed premium features share the same consent, progress, delivery, and
+  user-facing refund contract backed by explicit spend reversal.
+- Provider executors cannot send Telegram messages or mutate balances.
+- The bot never leaves an accepted paid operation in an ambiguous visible
+  state.
+
+### Milestone 4: Efficiency and pragmatic hardening
+
+Goal: reduce cost and operational risk using evidence from the finished flows.
+
+- Measure prompt bands, image hydration, cached/uncached tokens, latency, and
+  provider cost. Tune generous windows without making follow-ups brittle.
+- Add explicit provider caches only when observed hot scopes beat their storage
+  and invalidation cost.
+- Remove handler-wide database sessions, scope dependency loading to matched
+  routes, and tune bounded concurrency against the database and provider.
+- Add privacy regression tests for logs and traces, concurrent database tests,
+  migration parity, Docker configuration, and build validation.
+- Keep deployment simple: immutable images, migration status checks, a verified
+  backup before destructive changes, readiness, and a documented rollback
+  constraint. Do not build blue/green orchestration for a pet project.
+
+Exit criteria:
+
+- Costs and cache behavior are observable by model, context band, capability,
+  and outcome.
+- Production telemetry contains neither message text nor binary media.
+- Startup reconciliation closes incomplete reservations after a crash.
+- The documented release path is repeatable without bespoke infrastructure.
+
+## Architecture issue register
+
+The register preserves why the milestones exist. Resolved product semantics
+above take precedence over older code or copy.
+
+### AR-001: Pricing and credit behavior diverge
+
+Current code unlocks a model from a positive balance without consistently
+charging turns, and displayed tool costs can differ from registry-derived
+costs. Milestones 0 and 2 replace this with one model catalog, immutable quotes,
+and the resolved wallet contract.
+
+### AR-002: Charging is not a transaction protocol
+
+Checks happen before provider work and deductions happen afterward, so
+concurrent requests can overspend and retries can double-charge. Milestone 2
+implements reserve/capture/release/spend-reversal with unique operation IDs.
+
+### AR-003: Tool strings cannot express settlement policy
+
+Success, refusal, missing input, and infrastructure failure currently share a
+string return channel. Milestones 0 and 3 introduce typed domain outcomes and
+translate them only at Telegram and model boundaries.
+
+### AR-004: Feature execution is duplicated
+
+Command and agent-tool paths choose models, charge, execute, send, and recover
+differently. Milestones 2 and 3 move each capability behind one feature service
+and delete the replaced paths incrementally.
+
+### AR-005: Model selection has two sources of truth
+
+`derp/llm/providers.py` and `derp/credits/models.py` can price and execute
+different models, and the current registry contains stale TODO prices.
+Milestone 0 creates one Google-only catalog used unchanged by quoting and
+execution.
+
+### AR-006: Payment fulfillment lacks a durable intent
+
+Pre-checkout does not fully bind payer, target, amount, currency, and immutable
+credits. Fulfilled purchases do have a `CreditTransaction` keyed by Telegram
+charge ID, but there is no durable intent or charged-but-unfulfilled recovery
+path. Milestone 2 preserves that idempotency record while adding opaque
+expiring intents and reconciliation.
+
+### AR-007: Database sessions cross external effects
+
+Handler and tool sessions can stay open through provider calls and Telegram
+sends. Milestones 2 and 4 replace them with short query/command units that
+return plain domain values across effect boundaries.
+
+### AR-008: Conversation history has no canonical role model
+
+Current context can duplicate the inbound message, lose assistant identity,
+flatten history into text, and leak across forum topics. Milestone 1 implements
+the resolved source/native/canonical model and complete-turn processing.
+
+### AR-009: Shared memory is a privileged prompt channel
+
+Any member can currently write memory that is injected with instruction-level
+authority. Milestone 1 separates admin policy from untrusted facts, derives
+tools from role plus typed policy and feature state, and gives fact proposals
+an explicit approval path.
+
+### AR-010: Dependency injection is redundant and broad
+
+Every update can pay for model and credit context it does not use, including
+latency-sensitive payments. Milestone 4 injects static services through aiogram
+workflow data and loads domain context at the narrowest route.
+
+### AR-011: Runtime and long-operation behavior are unclear
+
+Concurrency is globally bounded but not tuned, and long operations lack clear
+timeouts and crash outcomes. Milestones 3 and 4 add timeouts, cancellation,
+idempotency, and crash spend reversals without a durable workflow engine in v1.
+
+### AR-012: Media transport and delivery are coupled
+
+Downloads buffer files with ad hoc clients, sensitive URLs can reach tracing,
+and tools mix generation with Telegram sending. Milestones 1 and 3 establish
+media-reference hydration, bounded transport, and a delivery boundary.
+
+### AR-013: Schema, models, and tests can disagree
+
+ORM metadata creation can hide migration drift, and credit concurrency lacks
+real PostgreSQL coverage. Milestones 0, 2, and 4 make Alembic authoritative and
+add parity, idempotency, and concurrency tests.
+
+### AR-014: Deployment hardening exceeds present needs
+
+The current release path can stop the old bot before migration success, but a
+full transactional release platform is disproportionate. Milestone 4 adopts
+backups, migration checks, readiness, immutable images, and explicit rollback
+limits only.
+
+### AR-015: Observability can violate privacy
+
+HTTP traces, tool arguments, update payloads, and duplicated exception logging
+can expose content or sensitive Telegram URLs. Every milestone keeps content
+out of production telemetry and limits deletion promises to controlled stores;
+Milestone 4 adds regression tests and verifies Pydantic AI v5 usage attributes.
+
+### AR-016: Prompt assembly defeats caching
+
+Current code rebuilds chat metadata, sliding history, memory, and the current
+message as one changing string. Milestones 1 and 4 build deterministic native
+history and stable prefixes, measure real cache hits, and deliberately avoid
+persisted epochs until the data justifies them.
+
+## Deferred by design
+
+- Chat subscriptions. V1 supports personal subscriptions and purchased chat
+  credits.
+- Cross-chat memory, global user profiles, and third-party personal facts.
+- Automatic unsolicited participation in group conversations.
+- Multi-provider execution beyond a replaceable Google boundary.
+- Persisted context epochs and explicit provider caches without measured need.
+- A durable workflow engine and crash-resuming provider jobs.
+- Provider choice based on shared-prompt or free-inference terms without a
+  separate product and privacy review.
+- Gifting, remote chat purchases, a companion dashboard, and a large command
+  surface.
+- Blue/green deployment, generalized media infrastructure, and load-testing
+  programs beyond the observed scale.
+
+## Framework constraints
+
+### Pydantic AI
+
+- Keep `AgentDeps` run-scoped and typed; never store Telegram or database state
+  on shared agents.
+- Use `instructions` for run-specific guidance. Persist a `system_prompt` only
+  when its presence in native history is intentional.
+- Group tools with `FunctionToolset`; derive the provided toolset from role and
+  never register a second unmetered path directly on the agent.
+- Use `ModelRetry` only for arguments the model can correct. Provider,
+  infrastructure, and programming failures reach the application boundary.
+- Bound model requests, tool calls, input and output tokens, and external-tool
+  duration independently.
+- Use `capabilities=[ProcessHistory(...)]` for token-aware logical-turn
+  processing. Preserve tool-call/result pairs and never slice raw model
+  messages naively.
+- Persist a versioned application history DTO and materialize it into native
+  messages for each run. Exact `BinaryContent` JSON base64-embeds bytes and is
+  not the durable format.
+- Use `DeferredToolRequests` and `DeferredToolResults` with original message
+  history for approval that must leave and later resume through Telegram.
+- Use `ctx.tool_call_id` as part of agent operation identity.
+- Use `TestModel`, `FunctionModel`, `Agent.override`, and
+  `ALLOW_MODEL_REQUESTS=False` in tests.
+- Keep instrumentation v5 explicit and exclude binary and message content from
+  production telemetry.
+
+### Aiogram
+
+- Use typed `CallbackData` and typed `MiddlewareData`.
+- Inject static services through dispatcher workflow data and load expensive
+  domain state only for matched routes.
+- Attach flags to registered handler objects; decorating a class handler's
+  `handle()` method does not attach a router flag to the class.
+- Keep session retry/fallback outside delivery persistence so only successful
+  Telegram actions are stored.
+- Answer pre-checkout within Telegram's deadline without unrelated middleware
+  work.
+- Keep polling concurrency finite and close bot and database resources even
+  when startup fails.
 
 ## Upstream reference baseline
 
 Gitignored source checkouts matching the dependency lock are available locally:
 
-- `references/pydantic-ai` — Pydantic AI v2.9.1
-- `references/aiogram` — aiogram v3.29.1
+- `references/pydantic-ai` at Pydantic AI v2.9.1
+- `references/aiogram` at aiogram v3.29.1
 
-Recreate the ignored checkouts after a fresh clone:
+Recreate them after a fresh clone:
 
 ```bash
 git clone --depth 1 --branch v2.9.1 https://github.com/pydantic/pydantic-ai.git references/pydantic-ai
 git clone --depth 1 --branch v3.29.1 https://github.com/aiogram/aiogram.git references/aiogram
 ```
 
-Update these commands and the checkouts whenever the locked versions change.
-
-Read these before changing the corresponding boundary:
-
-- Pydantic AI: `docs/changelog.md`, `docs/version-policy.md`, `docs/agent.md`,
-  `docs/capabilities.md`, `docs/dependencies.md`, `docs/tools.md`,
-  `docs/tools-advanced.md`, `docs/toolsets.md`, `docs/output.md`,
-  `docs/message-history.md`, `docs/retries.md`, `docs/testing.md`,
-  `docs/logfire.md`, and `docs/durable_execution/overview.md`.
-- Aiogram: `docs/dispatcher/dependency_injection.rst`,
-  `docs/dispatcher/middlewares.rst`, `docs/dispatcher/router.rst`,
-  `docs/dispatcher/long_polling.rst`, `docs/dispatcher/flags.rst`,
-  `docs/dispatcher/filters/callback_data.rst`,
-  `docs/utils/chat_action.rst`, and `docs/api/session/middleware.rst`.
-
-## Framework rules for new work
-
-### Pydantic AI
-
-- Keep dependencies run-scoped and typed with `AgentDeps`; do not store
-  Telegram or database state on shared agents.
-- Use `object`, not `None`, as the dependency type for agents that have no
-  runtime dependencies.
-- Prefer `instructions` for run-specific guidance. Use `system_prompt` only
-  when its persistence through native Pydantic AI message history is intended.
-- Treat Pydantic AI v2 `Capability` as the primary composable unit for tools,
-  instructions, settings, and lifecycle hooks. Use `FunctionToolset` to group
-  function tools; `.tool()` requires `RunContext`, while `.tool_plain()` is for
-  context-free functions.
-- Do not register a second, unmetered implementation directly on the agent.
-- Use `ModelRetry` only when the model can correct its arguments. Let provider,
-  infrastructure, and programming failures reach an application boundary.
-- Bound tool calls, model requests, input tokens, output tokens, and long tool
-  execution independently.
-- Choose `end_strategy` explicitly when output tools coexist with side-effecting
-  function tools. A tool's `sequential=True` is a barrier, not full-run
-  serialization.
-- Use `ctx.tool_call_id` when an operation needs per-invocation identity.
-- Use `TestModel` or `FunctionModel`, `Agent.override`, and
-  `ALLOW_MODEL_REQUESTS=False` in tests.
-- If native message history is adopted, persist Pydantic AI message JSON and
-  preserve request/response and tool-call/tool-result pairs when trimming it;
-  use `capabilities=[ProcessHistory(...)]` for history processing.
-- Configure instrumentation v5 explicitly, exclude binary content, choose
-  prompt/completion capture by environment, and expect run-level usage under
-  `gen_ai.aggregated_usage.*`.
-- Apply durable execution only to workflows that need recovery across process
-  loss, such as long-running video generation. Retries must not repeat billable
-  or user-visible side effects.
-- Minor releases may add message parts or change telemetry attributes; consume
-  both defensively.
-
-### Aiogram
-
-- Use typed `CallbackData` for callback payloads instead of hand-splitting
-  colon-delimited strings.
-- Treat update-inner middleware as running for every update; scope expensive
-  model and credit loading closer to matched handlers.
-- Use aiogram's workflow data and typed `MiddlewareData` for dependency
-  injection instead of rediscovering the event context.
-- Set a finite `tasks_concurrency_limit` for polling. Decide separately whether
-  work should be serialized per user, chat, or topic.
-- Attach flags to the registered handler object. For class-based handlers,
-  decorating `handle()` does not attach a router flag to the class.
-- Keep request-session middleware ordered as retry/fallback outside
-  persistence, so only successful Telegram actions are stored.
-- Validate and answer pre-checkout queries within Telegram's ten-second
-  deadline; skip unrelated middleware work on this path.
-- Use a lifecycle boundary that closes the bot session and database even when
-  setup fails before polling starts.
-
-## Architecture issue register
-
-### AR-001 — Credit semantics are undefined
-
-Evidence:
-
-- User-facing copy says one credit buys one better-model message.
-- A positive balance currently unlocks the standard model, but ordinary chat
-  turns do not deduct model credits.
-- Tool prices shown to users do not match effective registry-derived prices.
-
-Required decision:
-
-- Choose one contract: per-operation currency, subscription-like unlock, or a
-  hybrid with explicit entitlements.
-
-Target:
-
-- A single pricing service returns an immutable execution quote containing the
-  exact capability, model, units, price, and balance source.
-- UI, access checks, ledger entries, and observability all consume that quote.
-
-### AR-002 — Charging is not a transaction protocol
-
-Evidence:
-
-- Access is checked before provider work and deducted afterward.
-- Concurrent calls can all pass a balance or free-quota check.
-- Some tools send output before deduction; command handlers may deduct before
-  delivery.
-- The current idempotency key merges distinct calls to the same tool in one
-  Telegram message.
-
-Target:
-
-1. Atomically reserve credits or quota using a unique operation ID.
-2. Execute provider work outside the transaction.
-3. Capture the reservation after successful provider completion.
-4. Record delivery independently.
-5. Release or refund reservations on classified failures.
-
-Use `ctx.tool_call_id` for agent tool invocations and a generated operation ID
-for command handlers. Temporarily serialize side-effecting tools until this
-protocol exists.
-
-### AR-003 — Tool outcomes cannot express policy
-
-Evidence:
-
-- Tool functions return strings for success, refusal, missing input, and
-  infrastructure failure.
-- The wrapper interprets every normal return as billable success.
-- Broad exception conversion hides programmer failures and can expose internal
-  exception text to the model.
-
-Target:
-
-- Provider executors return typed domain outcomes such as `Succeeded`,
-  `Rejected`, and `Failed`.
-- Command and agent adapters translate those outcomes to Telegram or model
-  text.
-- Settlement uses the outcome type, not string inspection.
-- Retryable argument errors use `ModelRetry`; infrastructure failures propagate
-  to the application boundary.
-
-### AR-004 — Feature execution is duplicated
-
-Evidence:
-
-- Image, edit, think, video, and TTS command paths duplicate parts of their
-  agent-tool paths.
-- Tool names, model selection, quota keys, idempotency, sending, and failure
-  behavior have drifted.
-
-Target:
-
-- One domain service per feature owns input validation, model resolution,
-  provider execution, and typed results.
-- Slash commands and Pydantic AI tools are thin adapters over the same service.
-- Telegram delivery is an adapter, not part of the provider executor.
-
-### AR-005 — Model and provider selection has two sources of truth
-
-Evidence:
-
-- `derp/llm/providers.py` and `derp/credits/models.py` define separate tier and
-  model mappings.
-- Credit checks can price one model while runtime code executes another.
-- Configuration previously advertised providers that runtime code never used.
-
-Target:
-
-- A single model catalog owns provider, model ID, capabilities, context limits,
-  and pricing.
-- Resolution produces an execution plan consumed unchanged by billing and the
-  provider adapter.
-- Provider support is either genuinely pluggable and tested or explicitly
-  Google-only.
-
-### AR-006 — Payment fulfillment lacks a durable purchase intent
-
-Evidence:
-
-- Chat purchase callback parsing is broken.
-- Pre-checkout validates only a pack identifier.
-- Currency, Stars amount, payer, target type, and target ID are not fully
-  validated.
-- Successful payment ignores part of the payload and uses current pack values.
-- There is no durable record to reconcile failed fulfillment.
-
-Target:
-
-- Create an opaque, expiring purchase intent before the invoice.
-- Persist payer policy, target, currency, Stars amount, immutable credit amount,
-  pack version, and status.
-- Pre-checkout performs a fast indexed validation and fails closed.
-- Successful payment atomically fulfills the intent using Telegram's charge ID.
-- Duplicate delivery, refund messages, and manual reconciliation are supported.
-
-### AR-007 — Database sessions cross external effects
-
-Evidence:
-
-- Credit middleware keeps a transactional session open around complete
-  handlers.
-- Tool wrappers keep sessions open during provider calls and Telegram sends.
-- A commit can fail after output or a payment confirmation was delivered.
-
-Target:
-
-- Replace handler-wide sessions with short query/command units of work.
-- Return plain domain values across session boundaries, not detached ORM
-  objects.
-- Make commit points explicit before emitting confirmations.
-- Configure pool limits from deployment settings and load-test under the
-  polling concurrency limit.
-
-### AR-008 — Conversation history has no canonical role model
-
-Evidence:
-
-- The current inbound message is persisted before context construction and can
-  be included again as the current message.
-- Outbound records can lose assistant identity.
-- History is serialized as text rather than native Pydantic AI messages.
-- Forum topics can share chat-wide history and memory.
-
-Required decisions:
-
-- Is history chat-wide or topic-scoped?
-- Is native Pydantic AI history required for tool-call continuity?
-- What retention and token budget apply to each paid tier?
-
-Target:
-
-- Store explicit role, direction, topic, chronology, and provider message data.
-- Exclude the current event from prior history by construction.
-- Apply token-aware `ProcessHistory` handlers that preserve tool-call pairs.
-
-### AR-009 — Shared memory is an unguarded privileged channel
-
-Evidence:
-
-- Any group member can write persistent chat memory.
-- Memory is injected with system-level authority.
-- Command and agent-tool paths apply different limits and policy.
-
-Target:
-
-- Define owner/admin/member permissions and topic scope.
-- Store memory as structured facts with author, provenance, and revision.
-- Render it as untrusted context unless an administrator explicitly creates a
-  policy.
-- Share one service between commands and tools.
-
-### AR-010 — Telegram dependency injection is redundant and over-broad
-
-Evidence:
-
-- Custom event-context middleware repeats aiogram's built-in context work.
-- Database models and a credit session are loaded for updates that do not need
-  them, including latency-sensitive payment updates.
-- Several injected aliases have no consumers.
-
-Target:
-
-- Inject static services through dispatcher workflow data.
-- Define typed middleware data.
-- Load domain context at the narrowest router or handler scope.
-- Keep pre-checkout validation fast and independent from LLM-related context.
-
-### AR-011 — Runtime serialization and long jobs are undefined
-
-Evidence:
-
-- Polling now has a global concurrency limit, but it has not been load-tested or
-  tuned against database and provider capacity.
-- User throttling exists but is not part of the runtime.
-- Video polling has no deadline and cannot recover after process loss.
-- Synchronous or CPU-heavy work has historically leaked onto the event loop.
-
-Target:
-
-- Validate and tune the global concurrency bound.
-- Define serialization keys for user, chat, and topic work.
-- Give every external operation a timeout and cancellation policy.
-- Move recoverable long jobs to a durable workflow or persisted job model.
-- Ensure every billable side effect is idempotent under retry.
-
-### AR-012 — Media transport and delivery need a boundary
-
-Evidence:
-
-- Downloads buffer entire files, create clients ad hoc, and lack size limits.
-- Token-bearing Telegram file URLs may be visible to HTTP instrumentation.
-- Sender composition can form invalid one-item media groups.
-- Generation and delivery are coupled inside tools.
-
-Target:
-
-- A media gateway owns streaming, limits, MIME validation, redaction, client
-  reuse, and temporary storage.
-- A delivery service handles Telegram constraints, caption splitting, albums,
-  retries, and persistence.
-- Provider results remain independent from Telegram sending.
-
-### AR-013 — Schema, models, and tests can disagree
-
-Evidence:
-
-- ORM credit constraints are absent from the migration chain.
-- Database tests create ORM metadata after migrations, which can hide drift.
-- Credit, refund, idempotency, and concurrency paths lack real database tests.
-
-Target:
-
-- Test a database created only by Alembic.
-- Add schema-drift checks in CI.
-- Reconcile existing production data before adding non-negative constraints.
-- Define whether refunds can create debt before enforcing a balance invariant.
-- Add concurrent integration tests for reservations and duplicate payments.
-
-### AR-014 — Deployment is not a transactional release process
-
-Evidence:
-
-- Migration failure can leave the previous bot stopped.
-- Rollback may run an old binary against a forward-migrated schema.
-- Readiness is inferred from container state.
-- Backup and restore tooling is not continuously verified.
-
-Target:
-
-- Use immutable image references.
-- Back up and verify restore before risky migrations.
-- Adopt expand/contract migrations.
-- Keep the prior instance available until migration and readiness gates pass.
-- Add an application readiness signal and tested rollback compatibility.
-
-### AR-015 — Observability and privacy policy are mixed
-
-Evidence:
-
-- Pydantic AI instrumentation is explicitly v5, excludes binary content, and
-  disables message content in production, but this policy lacks a regression
-  test.
-- Development HTTP tracing may observe token-bearing file URLs.
-- Some logs include tool arguments or complete update payloads.
-- Error logging responsibilities are duplicated at several boundaries.
-- Run-level usage moved to `gen_ai.aggregated_usage.*`; dashboards have not been
-  checked for that schema.
-
-Target:
-
-- Define field-level redaction and environment-specific content capture.
-- Test that production spans contain neither message nor binary content.
-- Log once at the owning boundary with operation IDs and settlement status.
-- Keep provider auto-instrumentation; add spans only around domain operations
-  and external effects not already covered.
-
-## Recommended development order
-
-1. Write characterization tests for payments, model resolution, tool outcomes,
-   prompt history, and sender constraints.
-2. Decide credit semantics and refund debt policy.
-3. Introduce operation IDs and reserve/capture/release settlement.
-4. Build shared domain services and remove command/tool duplication.
-5. Unify the model catalog and execution plan.
-6. Add durable purchase intents and strict Stars validation.
-7. Shorten database units of work and tune bounded concurrency.
-8. Redesign conversation history and shared memory.
-9. Extract media and delivery gateways.
-10. Enforce migration parity and harden deployment.
-
-## Decisions required before implementation
-
-- Does one credit buy one standard chat turn, or unlock the tier?
-- May a charge draw from both chat and user balances, or exactly one pool?
-- Can a refund create debt after purchased credits were spent?
-- Are forum history and memory isolated by topic?
-- Who may write shared memory, and with what prompt authority?
-- Can users buy for a chat they are not currently in or gift another user?
-- Which long operations must survive deploys and process crashes?
-- Is multi-provider execution a real near-term requirement?
-- What content may be retained in Logfire in development and production?
+Update the checkouts and commands when the lock changes. Consult the matching
+sources before changing routers, middleware, payments, session behavior,
+agents, capabilities, tools, native history, retries, or instrumentation.
+
+## Decision policy
+
+There are no remaining owner questions blocking implementation. The agent
+should choose reversible numeric defaults, derive prices from current provider
+costs, validate them with telemetry, and record material changes here. Escalate
+only a genuinely irreversible product choice, legal or provider-terms change,
+new external spend commitment, or privacy behavior that contradicts this
+contract.

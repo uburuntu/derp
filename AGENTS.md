@@ -147,6 +147,10 @@ async def handler(...):
 
 Note: this section is descriptive, not prescriptive. It reflects the current implementation and is not set in stone. If requirements change, evolve the architecture.
 
+`docs/architecture-roadmap.md` is the target product and architecture contract.
+For cross-cutting work, follow its milestone order and delete each legacy path
+only when its replacement is covered and working.
+
 - **Runtime Core:** `aiogram` v3 with a single `Dispatcher` and in‑memory FSM storage. Entry is `derp/__main__.py` which wires logging, i18n, DB client, middlewares, and routers, then starts long‑polling.
 - **Update Flow:** Telegram Update → outer middlewares (logging + DB) → filters → inner middlewares (context + chat settings + chat actions) → matched handler router.
 - **Concerns Split:**
@@ -199,7 +203,10 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 
 **Docstrings:** Google style. First line = tool description for model. `Args:` = parameter descriptions (omit `ctx`).
 
-**Return values:** Strings only. Direct-sending tools return `"[Sent directly to chat. Do not output anything else unless the user asked a follow-up question.]"`.
+**Return values:** Existing direct-sending tools use string sentinels for
+compatibility. New or migrated feature executors return typed domain outcomes
+and never send Telegram messages; thin command/tool adapters translate those
+outcomes. Do not add another direct-sending implementation.
 
 **Limits:** `UsageLimits(tool_calls_limit=3)` on agent runs to prevent abuse.
 
@@ -224,7 +231,9 @@ The bot uses a credit-based monetization system with tiered access to features.
 
 ### Core Concepts
 
-- **Two Credit Pools:** Users have personal credits; chats (groups) have shared pool credits. Chat credits are consumed first, then personal credits.
+- **Two Credit Pools:** Users have personal credits; chats have shared credits.
+  Current code checks chat then personal balances. The target requires explicit
+  per-user, per-chat consent before personal fallback; never add silent fallback.
 - **Model Tiers:** LLM models are abstracted into quality tiers (CHEAP, STANDARD, PREMIUM, IMAGE) rather than specific model names. This allows swapping providers without changing business logic.
 - **Free Tier:** Users without credits use the CHEAP tier with reduced context length and no premium tools.
 - **Paid Tier:** Users/chats with credits > 0 unlock STANDARD tier, longer context, and premium tools.
@@ -259,9 +268,14 @@ derp/credits/
 
 ### Extending
 
-- **Add a model:** Add entry to `MODEL_REGISTRY` with provider, tier, and pricing. Tests will fail if tier hierarchy is violated.
-- **Add a tool:** Add entry to `TOOL_REGISTRY` with base cost and daily limits. Wrap function with `credit_aware_tool`.
-- **Change pricing:** Update registry entries; credit costs are derived automatically from provider costs.
+- **Add a model:** Do not add another mapping before the roadmap's unified
+  catalog. During migration, runtime resolution and verified provider pricing
+  must change together and remain covered by drift tests.
+- **Add a paid tool:** Reuse the quote/operation service and typed feature
+  outcome. The legacy `TOOL_REGISTRY` and `credit_aware_tool` path is
+  transitional, not a pattern to duplicate.
+- **Change pricing:** Verify current provider pricing, then update the single
+  catalog and quote tests. Existing TODO prices are not authoritative.
 
 ## Media & Extraction
 
@@ -292,8 +306,11 @@ derp/credits/
 - Use `@logfire.instrument()` for standalone functions that warrant tracing; prefer explicit `with logfire.span(...)` in async contexts.
 
 **Auto-instrumentation:**
-- Gemini calls are auto-instrumented via `logfire.instrument_google_genai()`. Do not create manual `genai.generate` spans.
-- Token usage (`gen_ai.usage.*`) and model details are captured automatically; avoid manual tracking.
+- Pydantic AI instrumentation is configured through `Agent.instrument_all(...)`;
+  do not add duplicate manual provider-generation spans.
+- Run-level token usage is captured under `gen_ai.aggregated_usage.*`; provider
+  spans may expose more specific `gen_ai.usage.*` attributes. Avoid duplicate
+  manual token tracking.
 - Metrics are aggregated within spans via `MetricsOptions(collect_in_spans=True)`.
 
 **Structured attributes:**
@@ -327,7 +344,10 @@ derp/credits/
 
 ## Major Libraries
 
-When generating code, setting up configuration, or needing API documentation for any of these libraries, use the Context7 MCP tools (`resolve-library-id` and `get-library-docs`) automatically to get up-to-date references.
+When generating code, setting up configuration, or needing API documentation,
+use the `ctx7` CLI workflow defined at the top of this file. For aiogram and
+pydantic-ai, inspect the lock-matched `references/` checkout as the primary
+source for repository-specific changes.
 
 - **aiogram 3.x:** Telegram runtime. Consult `references/aiogram` before changing routers, middleware, dependency injection, polling, flags, payments, or session middleware.
 - **pydantic-ai 2.x:** Agent runtime. Consult its upgrade guide and `references/pydantic-ai` before changing agents, capabilities, tools, history, retries, instrumentation, or durable execution.
@@ -348,8 +368,12 @@ When generating code, setting up configuration, or needing API documentation for
 - **Add a database migration:** Run `make db-revision MSG="description"` (**never create migration files manually**).
 - **Add a model:** Create in `derp/models/`, add to `derp/models/__init__.py`, generate migration.
 - **Add a query:** Add function to `derp/db/queries.py`, add tests in `tests/test_db_queries.py`.
-- **Add a tool for LLM:** Write a function with `RunContext[AgentDeps]` as first param; add to `derp/tools/`, register in toolset, wrap with `credit_aware_tool` if it costs credits.
-- **Add a credit pack:** Add entry to `CREDIT_PACKS` in `payments.py`.
+- **Add an LLM capability:** Build or reuse a feature service with typed outcomes,
+  then expose it through a thin `RunContext[AgentDeps]` tool adapter and a
+  role/policy-derived toolset. Do not add a second billing or direct-sending path.
+- **Add a credit pack:** Wait for the roadmap's durable purchase-intent flow,
+  then add an immutable, versioned pack consumed by invoice creation and
+  fulfillment.
 - **Add a debug command:** Add to `derp/handlers/debug.py` (admin-only filter is already applied).
 
 ---
