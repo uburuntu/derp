@@ -14,14 +14,14 @@ from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
 
 from derp.common.sender import MessageSender
-from derp.credits import CreditService
 from derp.credits.purchase_suspension import (
     PurchaseIntakeSource,
     reject_purchase_command,
 )
-from derp.db.credits import get_balances
+from derp.handlers.context_settings import build_credit_panel
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.operations import OperationLedger, WalletOwner, WalletOwnerKind
 
 router = Router(name="credit_cmds")
 
@@ -30,7 +30,7 @@ router = Router(name="credit_cmds")
 async def show_credits(
     message: Message,
     sender: MessageSender,
-    credit_service: CreditService,
+    operation_ledger: OperationLedger,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
 ) -> Message:
@@ -38,50 +38,36 @@ async def show_credits(
     if not user_model:
         return await message.reply(_("😅 Could not find your user info."))
 
-    if chat_model:
-        chat_credits, user_credits = await get_balances(
-            credit_service.session, user_model.telegram_id, chat_model.telegram_id
+    personal = await operation_ledger.balance(
+        WalletOwner(WalletOwnerKind.USER, user_model.id)
+    )
+    shared = None
+    consent_enabled = False
+    if chat_model and chat_model.type != "private":
+        shared = await operation_ledger.balance(
+            WalletOwner(WalletOwnerKind.CHAT, chat_model.id)
         )
-    else:
-        chat_credits, user_credits = await get_balances(
-            credit_service.session, user_model.telegram_id, None
+        consent_enabled = await operation_ledger.personal_consent_enabled(
+            user_model.id, chat_model.id
         )
-        chat_credits = 0  # No chat context
 
     logfire.info(
         "credits_checked",
         user_id=user_model.telegram_id,
         chat_id=chat_model and chat_model.telegram_id,
-        user_credits=user_credits,
-        chat_credits=chat_credits,
+        user_allowance=personal.allowance_available,
+        user_purchased=personal.purchased_available,
+        chat_purchased=shared and shared.purchased_available,
     )
-
-    # Build response message
-    parts = [_("💰 **Your Credits**\n")]
-
-    if chat_model and chat_model.type != "private":
-        parts.append(
-            _("🏠 Chat pool: **{credits}** credits").format(credits=chat_credits)
-        )
-        parts.append(
-            _("👤 Personal: **{credits}** credits\n").format(credits=user_credits)
-        )
-        if chat_credits > 0:
-            parts.append(_("✅ Chat credits will be used first."))
-        elif user_credits > 0:
-            parts.append(_("✅ Your personal credits will be used."))
-        else:
-            parts.append(_("No credits available. Free features still work."))
-    else:
-        parts.append(
-            _("👤 Balance: **{credits}** credits\n").format(credits=user_credits)
-        )
-        if user_credits > 0:
-            parts.append(_("✅ You have credits for premium features!"))
-        else:
-            parts.append(_("No credits available. Free features still work."))
-
-    return await sender.reply("\n".join(parts))
+    text, markup = build_credit_panel(
+        personal,
+        shared=shared,
+        shared_spending_enabled=bool(
+            chat_model and chat_model.shared_credit_spending_enabled
+        ),
+        personal_fallback_enabled=consent_enabled,
+    )
+    return await sender.reply(text, reply_markup=markup)
 
 
 @router.message(Command("buy", "purchase", "shop"))

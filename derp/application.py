@@ -41,6 +41,7 @@ from derp.middlewares.database_logger import DatabaseLoggerMiddleware
 from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
+from derp.middlewares.operation_ledger import OperationLedgerMiddleware
 from derp.middlewares.sender import MessageSenderMiddleware
 from derp.tools.authorization import ActorRoleResolver
 
@@ -144,6 +145,7 @@ def create_dispatcher(
 
     dispatcher.update.middleware(EventContextMiddleware(db=db))
     dispatcher.update.middleware(DatabaseModelMiddleware(db=db))
+    dispatcher.update.middleware(OperationLedgerMiddleware(db=db))
     dispatcher.update.middleware(CreditServiceMiddleware(db=db))
     dispatcher.message.middleware(MessageSenderMiddleware())
     dispatcher.callback_query.middleware(MessageSenderMiddleware())

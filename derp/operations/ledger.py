@@ -351,6 +351,7 @@ class OperationLedger:
 
     async def balance(self, owner: WalletOwner) -> WalletBalance:
         """Return inventory totals without mutating or silently expiring credits."""
+        now = self._aware_now()
         async with self._transactions() as session:
             owner_column = (
                 Wallet.user_id if owner.kind is WalletOwnerKind.USER else Wallet.chat_id
@@ -364,7 +365,16 @@ class OperationLedger:
                 await session.execute(
                     select(
                         WalletLot.kind,
-                        func.sum(WalletLot.available_credits),
+                        func.sum(
+                            case(
+                                (
+                                    (WalletLot.expires_at.is_(None))
+                                    | (WalletLot.expires_at > now),
+                                    WalletLot.available_credits,
+                                ),
+                                else_=0,
+                            )
+                        ),
                         func.sum(WalletLot.reserved_credits),
                         func.sum(WalletLot.consumed_credits),
                     )
@@ -386,6 +396,13 @@ class OperationLedger:
                 consumed=allowance[2] + purchased[2],
                 debt=wallet.debt_credits,
             )
+
+    async def personal_consent_enabled(
+        self, user_id: uuid.UUID, chat_id: uuid.UUID
+    ) -> bool:
+        """Return whether durable personal fallback is enabled in one chat."""
+        async with self._transactions() as session:
+            return await self._has_personal_consent(session, user_id, chat_id)
 
     async def grant_personal_consent(
         self, user_id: uuid.UUID, chat_id: uuid.UUID

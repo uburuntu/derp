@@ -12,6 +12,7 @@ from derp.handlers.context_settings import (
     ContextCallback,
     ambient_delivery_available,
     build_context_panel,
+    build_credit_panel,
     build_privacy_panel,
     change_policy_flag,
     delete_my_history,
@@ -20,8 +21,10 @@ from derp.handlers.context_settings import (
     review_shared_fact_proposal,
     save_admin_policy,
     toggle_context,
+    toggle_personal_spend,
 )
 from derp.history.policy import ChatPolicyFlag
+from derp.operations import WalletBalance, WalletOwner, WalletOwnerKind
 from derp.tools.shared_facts import SharedFactAction, SharedFactCallback
 
 
@@ -65,6 +68,77 @@ def test_privacy_panel_exposes_personal_deletion_to_non_admin(
     labels = [button.text for row in markup.inline_keyboard for button in row]
     assert "Delete my messages" in labels
     assert "Clear this chat" not in labels
+
+
+def test_credit_panel_shows_inventories_debt_and_personal_preference() -> None:
+    personal = WalletBalance(
+        WalletOwner(WalletOwnerKind.USER, UUID(int=1)),
+        allowance_available=12,
+        purchased_available=34,
+        reserved=5,
+        consumed=6,
+        debt=7,
+    )
+    shared = WalletBalance(
+        WalletOwner(WalletOwnerKind.CHAT, UUID(int=2)),
+        allowance_available=0,
+        purchased_available=56,
+        reserved=8,
+        consumed=9,
+        debt=0,
+    )
+
+    text, markup = build_credit_panel(
+        personal,
+        shared=shared,
+        shared_spending_enabled=False,
+        personal_fallback_enabled=True,
+    )
+
+    assert "Monthly allowance: 12" in text
+    assert "Purchased: 34" in text
+    assert "Payment debt: 7" in text
+    assert "Shared purchased: 56 · paused by admins" in text
+    assert markup.inline_keyboard[0][0].text == "Personal fallback: Always"
+
+
+@pytest.mark.asyncio
+async def test_personal_fallback_toggle_is_scoped_to_callback_actor(
+    make_message,
+    make_user,
+    mock_chat_model,
+    mock_user_model,
+) -> None:
+    message = make_message(text="panel", chat_type="supergroup")
+    message.edit_text = AsyncMock()
+    query = MagicMock(spec=CallbackQuery)
+    query.message = message
+    query.from_user = make_user(id=42)
+    query.answer = AsyncMock()
+    user = mock_user_model(user_id=UUID(int=1), telegram_id=42)
+    chat = mock_chat_model(chat_id=UUID(int=2))
+    ledger = MagicMock()
+    ledger.grant_personal_consent = AsyncMock()
+    ledger.revoke_personal_consent = AsyncMock()
+    ledger.personal_consent_enabled = AsyncMock(return_value=True)
+    ledger.balance = AsyncMock(
+        side_effect=[
+            WalletBalance(WalletOwner(WalletOwnerKind.USER, user.id), 0, 10, 0, 0, 0),
+            WalletBalance(WalletOwner(WalletOwnerKind.CHAT, chat.id), 0, 20, 0, 0, 0),
+        ]
+    )
+
+    await toggle_personal_spend(
+        query,
+        ContextCallback(action=ContextAction.PERSONAL_SPEND, value=1),
+        ledger,
+        user,
+        chat,
+    )
+
+    ledger.grant_personal_consent.assert_awaited_once_with(user.id, chat.id)
+    ledger.revoke_personal_consent.assert_not_awaited()
+    assert "Personal fallback updated" in query.answer.await_args.args[0]
 
 
 @pytest.mark.asyncio

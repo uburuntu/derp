@@ -7,6 +7,25 @@ from aiogram.types import Update
 
 from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
+from derp.middlewares.operation_ledger import OperationLedgerMiddleware
+from derp.operations import OperationLedger
+
+
+@pytest.mark.asyncio
+async def test_operation_ledger_middleware_injects_without_opening_transaction(
+    mock_db_client,
+) -> None:
+    middleware = OperationLedgerMiddleware(mock_db_client)
+    handler = AsyncMock(return_value="handled")
+    event = MagicMock(spec=Update)
+    data = {}
+
+    result = await middleware(handler, event, data)
+
+    assert result == "handled"
+    assert isinstance(data["operation_ledger"], OperationLedger)
+    mock_db_client.session.assert_not_called()
+    handler.assert_awaited_once_with(event, data)
 
 
 class TestEventContextMiddleware:

@@ -6,6 +6,7 @@ from derp.middlewares.database_logger import DatabaseLoggerMiddleware
 from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
+from derp.middlewares.operation_ledger import OperationLedgerMiddleware
 from derp.middlewares.sender import MessageSenderMiddleware
 from derp.middlewares.throttle_users import ThrottleUsersMiddleware
 
@@ -15,6 +16,7 @@ __all__ = [
     "DatabaseModelMiddleware",
     "EventContextMiddleware",
     "LogUpdatesMiddleware",
+    "OperationLedgerMiddleware",
     "MessageSenderMiddleware",
     "PersistBotActionsMiddleware",
     "ThrottleUsersMiddleware",

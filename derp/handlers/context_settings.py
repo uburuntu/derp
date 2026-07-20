@@ -42,6 +42,12 @@ from derp.history.policy import CONTEXT_NOTICE_VERSION, ChatPolicyFlag
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
+from derp.operations import (
+    OperationLedger,
+    WalletBalance,
+    WalletOwner,
+    WalletOwnerKind,
+)
 from derp.tools.shared_facts import SharedFactAction, SharedFactCallback
 
 router = Router(name="context_settings")
@@ -67,6 +73,8 @@ class ContextAction(StrEnum):
     SHARED_SPEND = "shared_spend"
     EXPENSIVE_TOOLS = "expensive_tools"
     ADMIN_POLICY = "admin_policy"
+    CREDITS = "credits"
+    PERSONAL_SPEND = "personal_spend"
 
 
 class ContextCallback(CallbackData, prefix="ctx"):
@@ -237,12 +245,71 @@ def build_context_panel(
                 callback_data=ContextCallback(action=ContextAction.PRIVACY).pack(),
             ),
             InlineKeyboardButton(
-                text="Settings",
-                callback_data=ContextCallback(action=ContextAction.MENU).pack(),
+                text="Credits",
+                callback_data=ContextCallback(action=ContextAction.CREDITS).pack(),
             ),
         ]
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_credit_panel(
+    personal: WalletBalance,
+    *,
+    shared: WalletBalance | None,
+    shared_spending_enabled: bool,
+    personal_fallback_enabled: bool,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build a truthful balance and per-chat funding preference surface."""
+    lines = [
+        "<b>Credits</b>",
+        "",
+        "<b>Personal</b>",
+        f"Monthly allowance: {personal.allowance_available}",
+        f"Purchased: {personal.purchased_available}",
+    ]
+    if personal.reserved:
+        lines.append(f"In progress: {personal.reserved}")
+    if personal.debt:
+        lines.append(f"Payment debt: {personal.debt} · paid use is paused")
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if shared is not None:
+        state = "available" if shared_spending_enabled else "paused by admins"
+        lines.extend(
+            [
+                "",
+                "<b>This chat</b>",
+                f"Shared purchased: {shared.purchased_available} · {state}",
+            ]
+        )
+        if shared.reserved:
+            lines.append(f"Shared in progress: {shared.reserved}")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "Personal fallback: Always"
+                        if personal_fallback_enabled
+                        else "Personal fallback: Ask me"
+                    ),
+                    callback_data=ContextCallback(
+                        action=ContextAction.PERSONAL_SPEND,
+                        value=0 if personal_fallback_enabled else 1,
+                    ).pack(),
+                )
+            ]
+        )
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Back",
+                callback_data=ContextCallback(action=ContextAction.MENU).pack(),
+            )
+        ]
+    )
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_privacy_panel(
@@ -430,6 +497,81 @@ async def refresh_context_menu(
     )
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer()
+
+
+async def _credit_panel_for(
+    operation_ledger: OperationLedger,
+    user_model: UserModel,
+    chat_model: ChatModel | None,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Load one user's exact wallet view without exposing ledger internals."""
+    personal = await operation_ledger.balance(
+        WalletOwner(WalletOwnerKind.USER, user_model.id)
+    )
+    shared = None
+    consent_enabled = False
+    if chat_model and chat_model.type != "private":
+        shared = await operation_ledger.balance(
+            WalletOwner(WalletOwnerKind.CHAT, chat_model.id)
+        )
+        consent_enabled = await operation_ledger.personal_consent_enabled(
+            user_model.id, chat_model.id
+        )
+    return build_credit_panel(
+        personal,
+        shared=shared,
+        shared_spending_enabled=bool(
+            chat_model and chat_model.shared_credit_spending_enabled
+        ),
+        personal_fallback_enabled=consent_enabled,
+    )
+
+
+@router.callback_query(ContextCallback.filter(F.action == ContextAction.CREDITS))
+async def show_credit_menu(
+    query: CallbackQuery,
+    operation_ledger: OperationLedger,
+    user_model: UserModel | None,
+    chat_model: ChatModel | None,
+) -> None:
+    """Show personal and shared inventories from the authoritative ledger."""
+    if not isinstance(query.message, Message) or not user_model:
+        return await query.answer("Credits are unavailable", show_alert=True)
+    text, markup = await _credit_panel_for(operation_ledger, user_model, chat_model)
+    await query.message.edit_text(text, reply_markup=markup)
+    await query.answer()
+
+
+@router.callback_query(ContextCallback.filter(F.action == ContextAction.PERSONAL_SPEND))
+async def toggle_personal_spend(
+    query: CallbackQuery,
+    callback_data: ContextCallback,
+    operation_ledger: OperationLedger,
+    user_model: UserModel | None,
+    chat_model: ChatModel | None,
+) -> None:
+    """Change only the callback actor's durable personal fallback preference."""
+    if (
+        not isinstance(query.message, Message)
+        or not user_model
+        or not chat_model
+        or chat_model.type == "private"
+    ):
+        return await query.answer("This preference applies to groups", show_alert=True)
+    if user_model.telegram_id != query.from_user.id or callback_data.value not in {
+        0,
+        1,
+    }:
+        return await query.answer("Invalid preference", show_alert=True)
+
+    enabled = bool(callback_data.value)
+    if enabled:
+        await operation_ledger.grant_personal_consent(user_model.id, chat_model.id)
+    else:
+        await operation_ledger.revoke_personal_consent(user_model.id, chat_model.id)
+    text, markup = await _credit_panel_for(operation_ledger, user_model, chat_model)
+    await query.message.edit_text(text, reply_markup=markup)
+    await query.answer("Personal fallback updated")
 
 
 @router.callback_query(ContextCallback.filter(F.action == ContextAction.PRIVACY))
@@ -858,6 +1000,7 @@ __all__ = [
     "ContextCallback",
     "actor_can_manage",
     "ambient_delivery_available",
+    "build_credit_panel",
     "build_context_panel",
     "build_destructive_confirmation",
     "build_privacy_panel",
