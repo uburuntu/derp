@@ -12,6 +12,16 @@ def test_default_catalog_has_versioned_topups_and_one_personal_plan() -> None:
     catalog = DEFAULT_PRODUCT_CATALOG
 
     assert set(catalog.current_top_ups) == {"starter", "basic", "standard", "bulk"}
+    assert catalog.debug_top_up.id not in catalog.current_top_ups
+    assert catalog.debug_top_up.stars == 1
+    assert (
+        catalog.resolve(
+            ProductKind.TOP_UP,
+            catalog.debug_top_up.id,
+            catalog.debug_top_up.version,
+        )
+        is catalog.debug_top_up
+    )
     assert all(product.kind is ProductKind.TOP_UP for product in catalog.top_ups)
     assert catalog.subscription_plan.kind is ProductKind.SUBSCRIPTION
     assert catalog.subscription_plan.period_seconds == 30 * 24 * 60 * 60

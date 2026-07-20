@@ -50,7 +50,6 @@ from derp.tools.authorization import ActorRoleResolver
 logger = logging.getLogger(__name__)
 
 APPLICATION_ROUTERS = (
-    debug.reconciliation_router,
     debug.router,
     context_settings.router,
     basic.router,

@@ -70,6 +70,19 @@ class PurchaseIntentService:
             raise UnknownProductError("Unknown current top-up product")
         return await self._create_intent(payer_user_id, target, product)
 
+    async def create_admin_debug_top_up_intent(
+        self,
+        *,
+        payer_user_id: uuid.UUID,
+        target: PurchaseTarget,
+    ) -> PurchaseIntentHandle:
+        """Create the catalog's hidden one-Star intent for admin diagnostics."""
+        return await self._create_intent(
+            payer_user_id,
+            target,
+            self._catalog.debug_top_up,
+        )
+
     async def create_subscription_intent(
         self,
         *,

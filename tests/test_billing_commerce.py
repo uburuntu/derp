@@ -26,6 +26,7 @@ from derp.billing import (
     PreCheckoutRequest,
     PurchaseIntentService,
     PurchaseTarget,
+    UnknownProductError,
 )
 from derp.billing.payloads import hash_invoice_payload
 from derp.models import (
@@ -178,6 +179,44 @@ async def test_intent_is_hashed_and_precheckout_validates_every_payment_field(
         assert handle.invoice_payload not in repr(intent.token_hash)
         assert intent.product_version == handle.product_version
         assert intent.status == "prechecked"
+
+
+async def test_hidden_debug_product_requires_explicit_intake_and_normal_settlement(
+    commerce_env: CommerceEnvironment,
+) -> None:
+    user_id, telegram_id = await _create_user(commerce_env)
+    product = DEFAULT_PRODUCT_CATALOG.debug_top_up
+
+    with pytest.raises(UnknownProductError):
+        await commerce_env.intents.create_top_up_intent(
+            payer_user_id=user_id,
+            target=PurchaseTarget.user(user_id),
+            product_id=product.id,
+        )
+
+    handle = await commerce_env.intents.create_admin_debug_top_up_intent(
+        payer_user_id=user_id,
+        target=PurchaseTarget.user(user_id),
+    )
+    decision = await commerce_env.intents.validate_pre_checkout(
+        PreCheckoutRequest(
+            invoice_payload=handle.invoice_payload,
+            payer_telegram_id=telegram_id,
+            currency="XTR",
+            total_amount=1,
+        )
+    )
+    result = await commerce_env.settlement.fulfill(
+        _top_up_payment(handle, telegram_id, "debug-one-star")
+    )
+
+    assert decision.approved
+    assert handle.product_id == product.id
+    assert handle.stars == 1
+    assert handle.credits == product.credits
+    assert handle.invoice_payload.startswith("dpi1_")
+    assert result.state is FulfillmentState.FULFILLED
+    assert result.available_credits == product.credits
 
 
 async def test_expired_intent_fails_closed(

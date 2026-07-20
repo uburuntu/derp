@@ -1,12 +1,17 @@
-"""Tests for debug handler commands."""
+"""Tests for admin diagnostics and the durable one-Star purchase path."""
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 import pytest
+from aiogram.types import CallbackQuery
 
+from derp.billing import PurchaseIntentHandle, PurchaseTarget
+from derp.billing.products import DEFAULT_PRODUCT_CATALOG
+from derp.billing.telegram import PurchaseTargetCode
 from derp.handlers.debug import (
-    DEBUG_PACKS,
-    DebugPayload,
+    DebugPurchaseCallback,
     debug_add_credits,
     debug_buy_command,
     debug_help,
@@ -14,47 +19,46 @@ from derp.handlers.debug import (
     debug_status,
     debug_tools,
     handle_debug_buy_callback,
-    handle_debug_pre_checkout,
-    handle_debug_successful_payment,
+    reject_legacy_debug_buy_callback,
 )
 
-
-class TestDebugPayload:
-    """Tests for DebugPayload model."""
-
-    def test_payload_creation(self):
-        """Test creating a debug payload."""
-        payload = DebugPayload(
-            pack_id="test_small", target_type="user", target_id=12345
-        )
-        assert payload.kind == "debug_credits"
-        assert payload.pack_id == "test_small"
-        assert payload.target_type == "user"
-        assert payload.target_id == 12345
-
-    def test_payload_serialization(self):
-        """Test payload serializes with aliases."""
-        payload = DebugPayload(
-            pack_id="test_small", target_type="user", target_id=12345
-        )
-        json_str = payload.model_dump_json(by_alias=True)
-        assert '"k":"debug_credits"' in json_str
-        assert '"p":"test_small"' in json_str
+NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 
 
-class TestDebugPacks:
-    """Tests for debug credit packs."""
+def _debug_handle(target: PurchaseTarget) -> PurchaseIntentHandle:
+    product = DEFAULT_PRODUCT_CATALOG.debug_top_up
+    return PurchaseIntentHandle(
+        intent_id=UUID(int=10),
+        invoice_payload="dpi1_debug-opaque-token",
+        product_kind=product.kind,
+        product_id=product.id,
+        product_version=product.version,
+        target=target,
+        credits=product.credits,
+        stars=product.stars,
+        currency=product.currency,
+        expires_at=NOW,
+        subscription_period_seconds=None,
+    )
 
-    def test_packs_exist(self):
-        """Test that debug packs are defined."""
-        assert "test_small" in DEBUG_PACKS
-        assert "test_medium" in DEBUG_PACKS
-        assert "test_large" in DEBUG_PACKS
 
-    def test_packs_cost_one_star(self):
-        """All debug packs should cost 1 star."""
-        for pack in DEBUG_PACKS.values():
-            assert pack.stars == 1
+def _purchase_intents(handle: PurchaseIntentHandle | None = None) -> MagicMock:
+    service = MagicMock()
+    service.create_admin_debug_top_up_intent = AsyncMock(return_value=handle)
+    return service
+
+
+def _callback(make_message, make_user) -> CallbackQuery:
+    callback = MagicMock(spec=CallbackQuery)
+    callback.message = make_message(text="debug purchase")
+    callback.message.business_connection_id = "business-1"
+    callback.from_user = make_user(id=12345)
+    callback.bot = MagicMock()
+    callback.bot.create_invoice_link = AsyncMock(
+        return_value="https://t.me/$debug-invoice"
+    )
+    callback.answer = AsyncMock()
+    return callback
 
 
 def _get_text_from_call_args(call_args):
@@ -67,18 +71,46 @@ def _get_text_from_call_args(call_args):
 
 
 @pytest.mark.asyncio
-async def test_debug_buy_command(make_message, mock_sender):
-    """Test /debug_buy is suspended without exposing a keyboard."""
+async def test_debug_buy_command_shows_only_personal_target_in_private_chat(
+    make_message,
+    mock_sender,
+    mock_chat_model,
+):
     message = make_message(text="/debug_buy")
     sender = mock_sender(message=message)
+    chat = mock_chat_model(telegram_id=message.chat.id, chat_type="private")
 
-    await debug_buy_command(message, sender)
+    await debug_buy_command(message, sender, chat)
 
     sender.reply.assert_awaited_once()
     call_args = sender.reply.call_args
     text = _get_text_from_call_args(call_args)
-    assert "temporarily unavailable" in text
-    assert call_args.kwargs.get("reply_markup") is None
+    assert "1 Star" in text
+    buttons = call_args.kwargs["reply_markup"].inline_keyboard
+    assert len(buttons) == 1
+    callback = DebugPurchaseCallback.unpack(buttons[0][0].callback_data)
+    assert callback.product_id == DEFAULT_PRODUCT_CATALOG.debug_top_up.id
+    assert callback.target is PurchaseTargetCode.USER
+
+
+@pytest.mark.asyncio
+async def test_debug_buy_command_includes_current_shared_chat(
+    make_message,
+    mock_sender,
+    mock_chat_model,
+):
+    message = make_message(text="/debug_buy")
+    sender = mock_sender(message=message)
+    chat = mock_chat_model(telegram_id=message.chat.id, chat_type="supergroup")
+
+    await debug_buy_command(message, sender, chat)
+
+    buttons = sender.reply.await_args.kwargs["reply_markup"].inline_keyboard
+    callbacks = [DebugPurchaseCallback.unpack(row[0].callback_data) for row in buttons]
+    assert [callback.target for callback in callbacks] == [
+        PurchaseTargetCode.USER,
+        PurchaseTargetCode.CHAT,
+    ]
 
 
 @pytest.mark.asyncio
@@ -202,93 +234,127 @@ async def test_debug_help(make_message, mock_sender):
     sender.reply.assert_awaited_once()
     response = _get_text_from_call_args(sender.reply.call_args)
     assert "Debug Commands" in response
-    assert "/debug_buy" not in response
+    assert "/debug_buy" in response
     assert "/debug_credits" in response
 
 
 @pytest.mark.asyncio
-async def test_handle_debug_buy_callback():
-    """Test stale debug buy callback cannot create an invoice."""
-    callback = MagicMock()
-    callback.data = "dbuy:test_small:user"
-    callback.from_user.id = 12345
-    callback.message = MagicMock()
-    callback.message.answer_invoice = AsyncMock()
-    callback.answer = AsyncMock()
-
-    await handle_debug_buy_callback(callback)
-
-    callback.message.answer_invoice.assert_not_awaited()
-    assert "temporarily unavailable" in callback.answer.await_args.args[0]
-    assert callback.answer.await_args.kwargs == {"show_alert": True}
-
-
-@pytest.mark.asyncio
-async def test_handle_debug_buy_callback_invalid_pack():
-    """Test malformed legacy debug callbacks fail closed identically."""
-    callback = MagicMock()
-    callback.data = "dbuy:invalid_pack:user"
-    callback.from_user.id = 12345
-    callback.message = MagicMock()
-    callback.answer = AsyncMock()
-
-    await handle_debug_buy_callback(callback)
-
-    assert "temporarily unavailable" in callback.answer.await_args.args[0]
-    assert callback.answer.await_args.kwargs == {"show_alert": True}
-
-
-@pytest.mark.asyncio
-async def test_handle_debug_pre_checkout():
-    """Test issued debug invoices are rejected before capture."""
-    pre_checkout = MagicMock()
-    pre_checkout.invoice_payload = (
-        '{"k":"debug_credits","p":"test_small","tt":"user","ti":12345}'
-    )
-    pre_checkout.total_amount = 1
-    pre_checkout.from_user.id = 12345
-    pre_checkout.answer = AsyncMock()
-
-    await handle_debug_pre_checkout(pre_checkout)
-
-    assert pre_checkout.answer.await_args.kwargs["ok"] is False
-    assert (
-        "temporarily unavailable"
-        in pre_checkout.answer.await_args.kwargs["error_message"]
-    )
-
-
-@pytest.mark.asyncio
-async def test_handle_debug_successful_payment_still_reconciles(
-    make_message, mock_sender, mock_user_model, mock_credit_service_factory
+async def test_debug_personal_callback_creates_exact_durable_invoice(
+    make_message,
+    make_user,
+    mock_user_model,
 ):
-    message = make_message(text="")
-    sender = mock_sender(message=message)
-    user = mock_user_model(telegram_id=12345)
-    service = mock_credit_service_factory(purchase_result=10)
-    payload = DebugPayload(
-        pack_id="test_small",
-        target_type="user",
-        target_id=12345,
-    )
-    message.successful_payment = MagicMock(
-        invoice_payload=payload.model_dump_json(by_alias=True),
-        telegram_payment_charge_id="debug-charge-123",
-    )
+    user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+    handle = _debug_handle(PurchaseTarget.user(user.id))
+    service = _purchase_intents(handle)
+    callback = _callback(make_message, make_user)
 
-    await handle_debug_successful_payment(
-        message,
-        sender,
+    await handle_debug_buy_callback(
+        callback,
+        DebugPurchaseCallback(
+            product_id=DEFAULT_PRODUCT_CATALOG.debug_top_up.id,
+            target=PurchaseTargetCode.USER,
+        ),
         service,
-        user_model=user,
-        chat_model=None,
+        user,
     )
 
-    service.purchase_credits.assert_awaited_once_with(
-        user,
-        None,
-        10,
-        "debug-charge-123",
-        pack_name="DEBUG:Test Small",
+    service.create_admin_debug_top_up_intent.assert_awaited_once_with(
+        payer_user_id=user.id,
+        target=PurchaseTarget.user(user.id),
     )
-    sender.send.assert_awaited_once()
+    invoice = callback.bot.create_invoice_link.await_args.kwargs
+    assert invoice["payload"] == handle.invoice_payload
+    assert invoice["currency"] == "XTR"
+    assert invoice["provider_token"] == ""
+    assert invoice["subscription_period"] is None
+    assert invoice["business_connection_id"] == "business-1"
+    assert len(invoice["prices"]) == 1
+    assert invoice["prices"][0].amount == 1
+    markup = callback.message.answer.await_args.kwargs["reply_markup"]
+    assert markup.inline_keyboard[0][0].url == "https://t.me/$debug-invoice"
+    callback.answer.assert_awaited_once_with("Debug invoice ready")
+
+
+@pytest.mark.asyncio
+async def test_debug_chat_callback_binds_only_current_shared_chat(
+    make_message,
+    make_user,
+    mock_user_model,
+    mock_chat_model,
+):
+    callback = _callback(make_message, make_user)
+    user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+    chat = mock_chat_model(
+        chat_id=UUID(int=2),
+        telegram_id=callback.message.chat.id,
+        chat_type="supergroup",
+    )
+    handle = _debug_handle(PurchaseTarget.chat(chat.id))
+    service = _purchase_intents(handle)
+
+    await handle_debug_buy_callback(
+        callback,
+        DebugPurchaseCallback(
+            product_id=DEFAULT_PRODUCT_CATALOG.debug_top_up.id,
+            target=PurchaseTargetCode.CHAT,
+        ),
+        service,
+        user,
+        chat,
+    )
+
+    service.create_admin_debug_top_up_intent.assert_awaited_once_with(
+        payer_user_id=user.id,
+        target=PurchaseTarget.chat(chat.id),
+    )
+    assert "this chat" in callback.message.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_debug_chat_callback_rejects_private_or_changed_chat(
+    make_message,
+    make_user,
+    mock_user_model,
+    mock_chat_model,
+):
+    callback = _callback(make_message, make_user)
+    user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+    chat = mock_chat_model(
+        chat_id=UUID(int=2),
+        telegram_id=callback.message.chat.id + 1,
+        chat_type="supergroup",
+    )
+    service = _purchase_intents()
+
+    await handle_debug_buy_callback(
+        callback,
+        DebugPurchaseCallback(
+            product_id=DEFAULT_PRODUCT_CATALOG.debug_top_up.id,
+            target=PurchaseTargetCode.CHAT,
+        ),
+        service,
+        user,
+        chat,
+    )
+
+    service.create_admin_debug_top_up_intent.assert_not_awaited()
+    callback.bot.create_invoice_link.assert_not_awaited()
+    callback.answer.assert_awaited_once_with(
+        "The shared chat target is unavailable",
+        show_alert=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_legacy_debug_callback_fails_closed():
+    callback = MagicMock(spec=CallbackQuery)
+    callback.data = "dbuy:test_small:user"
+    callback.answer = AsyncMock()
+
+    await reject_legacy_debug_buy_callback(callback)
+
+    callback.answer.assert_awaited_once_with(
+        "This debug purchase option expired. Run /debug_buy again.",
+        show_alert=True,
+    )

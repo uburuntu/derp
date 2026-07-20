@@ -66,13 +66,15 @@ type StarsProduct = TopUpProduct | SubscriptionPlan
 
 @dataclass(frozen=True, slots=True)
 class ProductCatalog:
-    """Version-addressable top-ups plus exactly one personal plan."""
+    """Version-addressable public products plus one admin-only debug top-up."""
 
     top_ups: tuple[TopUpProduct, ...]
     subscription_plan: SubscriptionPlan
+    debug_top_up: TopUpProduct
 
     def __post_init__(self) -> None:
-        keys = [(item.kind, item.id, item.version) for item in self.top_ups]
+        products = (*self.top_ups, self.debug_top_up)
+        keys = [(item.kind, item.id, item.version) for item in products]
         if not self.top_ups or len(keys) != len(set(keys)):
             raise ValueError("top-up product versions must be present and unique")
 
@@ -82,7 +84,7 @@ class ProductCatalog:
             if (plan.id, plan.version) == (product_id, version):
                 return plan
         else:
-            for product in self.top_ups:
+            for product in (*self.top_ups, self.debug_top_up):
                 if (product.id, product.version) == (product_id, version):
                     return product
         raise UnknownProductError(f"Unknown {kind.value} product version")
@@ -123,6 +125,13 @@ DEFAULT_PRODUCT_CATALOG: Final = ProductCatalog(
         name="Derp Personal",
         stars=500,
         allowance_credits=1_000,
+    ),
+    debug_top_up=TopUpProduct(
+        id="admin_debug",
+        version=PRODUCT_VERSION,
+        name="Admin Debug",
+        stars=1,
+        credits=10,
     ),
 )
 

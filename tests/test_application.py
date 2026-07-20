@@ -11,14 +11,14 @@ from derp.application import APPLICATION_ROUTERS, open_runtime
 from derp.handlers import debug, donations, payments
 
 
-def test_payment_router_order_preserves_donations_and_reconciliation() -> None:
+def test_payment_router_order_preserves_donations_and_one_reconciliation_path() -> None:
     assert APPLICATION_ROUTERS.index(donations.router) < APPLICATION_ROUTERS.index(
         payments.router
     )
-    assert APPLICATION_ROUTERS.index(
-        debug.reconciliation_router
-    ) < APPLICATION_ROUTERS.index(debug.router)
-    assert debug.reconciliation_router not in debug.router.sub_routers
+    assert APPLICATION_ROUTERS.index(debug.router) < APPLICATION_ROUTERS.index(
+        payments.router
+    )
+    assert payments.reconciliation_router in payments.router.sub_routers
 
 
 class FakeBot:
