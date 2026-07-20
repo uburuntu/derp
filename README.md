@@ -4,7 +4,7 @@ AI-powered Telegram bot built with [aiogram](https://github.com/aiogram/aiogram)
 
 ## Requirements
 
-- Python 3.13+
+- Python 3.14+
 - [uv](https://github.com/astral-sh/uv)
 - Docker (for PostgreSQL)
 - Telegram bot token ([@BotFather](https://t.me/BotFather))
@@ -17,6 +17,10 @@ cp env.example .env   # Configure your credentials
 make dev-setup        # Creates venv, starts DB, runs migrations
 make run              # Start the bot
 ```
+
+The PostgreSQL 18 Compose service uses the `postgres-data-v18` volume. Export
+and restore any data needed from the former `postgres-data` volume before
+removing it; PostgreSQL 17 data directories are not binary-compatible with 18.
 
 ## Configuration
 

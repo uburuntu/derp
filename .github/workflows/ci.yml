@@ -8,20 +8,21 @@ on:
   workflow_call:  # Allow CD to call this workflow
 
 env:
-  PYTHON_VERSION: "3.13"
+  PYTHON_VERSION: "3.14.6"
   DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/derp_test"
 
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           enable-cache: true
+          version: "0.11.29"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -37,10 +38,10 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18.4-alpine3.24@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -54,12 +55,13 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           enable-cache: true
+          version: "0.11.29"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -90,13 +92,12 @@ jobs:
   docker:
     name: Docker
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate Compose configuration
         run: docker compose config --quiet
 
       - name: Build runtime image
         run: docker build --tag derp:test .
-

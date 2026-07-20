@@ -39,7 +39,7 @@ Always run commands instead of creating generated files manually. If Docker/data
 
 ## Coding Style & Naming Conventions
 
-- Python 3.13+, 4‑space indentation, type hints required.
+- Python 3.14+, 4‑space indentation, type hints required.
 - Naming: modules/functions `snake_case`, classes `CamelCase`, constants `UPPER_SNAKE`.
 - Imports: prefer absolute within `derp.*`.
 - Keep handlers small; place cross‑cutting logic in `middlewares/` or `common/`.
@@ -353,7 +353,7 @@ source for repository-specific changes.
 - **pydantic-ai 2.x:** Agent runtime. Consult its upgrade guide and `references/pydantic-ai` before changing agents, capabilities, tools, history, retries, instrumentation, or durable execution.
 - **SQLAlchemy 2.x + asyncpg:** Async PostgreSQL ORM with typed models.
 - **Alembic:** Database migrations.
-- **logfire 4.x:** Structured logging, metrics, instrumentation.
+- **logfire 4.x:** Structured logging, metrics, instrumentation. Consult `references/logfire` before changing configuration, integrations, scrubbing, tracing, metrics, or exporter lifecycle.
 - **pydantic 2.x + pydantic-settings:** Config and validation.
 - **babel/pybabel:** i18n extraction/update/compile.
 - **dev tools:** `uv`, `ruff`, `pytest`, `pytest-asyncio`.

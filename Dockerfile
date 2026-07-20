@@ -1,7 +1,7 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.25.0@sha256:0adf442eae370b6087e08edc7c50b552d80ddf261576f4ebd6421006b2461f12
 
-# Use the official uv image based on Python bookworm slim
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm AS builder
+# Use the lock-matched uv image with the production Python runtime.
+FROM ghcr.io/astral-sh/uv:0.11.29-python3.14-trixie@sha256:cd22b8ef1b9a27e285a0e8ee3416db1c955d7d14c33bb39ec2a41306c68a5500 AS builder
 
 # Set environment variables for uv
 ENV UV_CACHE_DIR=/opt/uv-cache/
@@ -26,7 +26,7 @@ RUN --mount=type=cache,target=/opt/uv-cache/ \
     uv run pybabel compile -d derp/locales -D messages
 
 # Production stage - smaller final image
-FROM python:3.13-slim-bookworm AS runtime
+FROM python:3.14.6-slim-trixie@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6 AS runtime
 
 # Create the runtime identity before named --chown directives.
 RUN groupadd --gid=1000 app && \

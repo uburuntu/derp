@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from derp.models import Chat, Message, User
@@ -105,18 +105,16 @@ class TestUserModel:
     @pytest.mark.asyncio
     async def test_user_timestamps_auto_set(self, db_session):
         """created_at and updated_at should be auto-set."""
-        before = datetime.now(UTC)
-
         user = User(telegram_id=6, is_bot=False, first_name="Timestamp")
         db_session.add(user)
         await db_session.flush()
 
-        after = datetime.now(UTC)
+        database_now = await db_session.scalar(select(func.now()))
 
         assert user.created_at is not None
         assert user.updated_at is not None
-        # Timestamps should be between before and after
-        assert before <= user.created_at.replace(tzinfo=UTC) <= after
+        assert user.created_at == database_now
+        assert user.updated_at == database_now
 
 
 class TestChatModel:

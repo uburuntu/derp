@@ -712,14 +712,16 @@ persisted epochs until the data justifies them.
 
 Gitignored source checkouts matching the dependency lock are available locally:
 
-- `references/pydantic-ai` at Pydantic AI v2.9.1
-- `references/aiogram` at aiogram v3.29.1
+- `references/pydantic-ai` at Pydantic AI v2.13.0
+- `references/aiogram` at aiogram v3.30.0
+- `references/logfire` at Logfire v4.38.0
 
 Recreate them after a fresh clone:
 
 ```bash
-git clone --depth 1 --branch v2.9.1 https://github.com/pydantic/pydantic-ai.git references/pydantic-ai
-git clone --depth 1 --branch v3.29.1 https://github.com/aiogram/aiogram.git references/aiogram
+git clone --depth 1 --branch v2.13.0 https://github.com/pydantic/pydantic-ai.git references/pydantic-ai
+git clone --depth 1 --branch v3.30.0 https://github.com/aiogram/aiogram.git references/aiogram
+git clone --depth 1 --branch v4.38.0 https://github.com/pydantic/logfire.git references/logfire
 ```
 
 Update the checkouts and commands when the lock changes. Consult the matching
