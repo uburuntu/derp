@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import sys
 import traceback
 from collections.abc import Iterator, Mapping, Sequence
@@ -17,6 +19,7 @@ from typing import Literal
 import logfire
 from logfire.types import ExceptionCallbackHelper
 from opentelemetry.context import Context
+from opentelemetry.metrics import MeterProvider
 from opentelemetry.trace import (
     Link,
     Span,
@@ -31,17 +34,61 @@ from opentelemetry.util.types import Attributes, AttributeValue
 
 _CONTENT_FIELD_PATTERN = (
     r"^(?:input|text|caption|prompt|query|content|response|message|memory|"
-    r"args|kwargs|invoice_payload|payload|tool_arguments|tool_response)$"
+    r"args|kwargs|msg|ctx|invoice_payload|payload|tool_arguments|tool_response)$"
 )
 _REDACT_FIELD_PATTERN = (
     r"^(?:telegram_bot_token|google_api_paid_key|logfire_token|"
     r"telegram_charge_id|provider_charge_id|charge_id)$"
 )
 _REDACT_VALUE_PATTERN = r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b"
+_URL_FIELD_PATTERN = r"(?:^|[._ -])(?:url|uri)(?:$|[._ -])"
+_URL_VALUE_PATTERN = r"\b[a-z][a-z0-9+.-]*://[^\s<>\"']+"
+_URL_RE = re.compile(_URL_VALUE_PATTERN, re.IGNORECASE)
 _GENAI_CAPTURE_ENV = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
 _GENAI_EVENTS_ENV = "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT"
 _GENAI_COMPLETION_HOOK_ENV = "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK"
+_GENAI_CONFIG_INCLUDES_ENV = "OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES"
+_GENAI_CONFIG_EXCLUDES_ENV = "OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_EXCLUDES"
 _REDACTED_EXCEPTION_MESSAGE = "Exception details redacted"
+_REDACTED_AI_CONTENT = "[AI content redacted]"
+_REDACTED_URL = "[URL redacted]"
+
+_AI_MESSAGE_ATTRIBUTES = frozenset(
+    {
+        "gen_ai.input.messages",
+        "gen_ai.output.messages",
+        "gen_ai.system_instructions",
+        "pydantic_ai.all_messages",
+    }
+)
+_AI_PRIVATE_ATTRIBUTES = frozenset(
+    {
+        "event_body",
+        "final_result",
+        "gen_ai.agent.description",
+        "gen_ai.tool.call.arguments",
+        "gen_ai.tool.call.result",
+        "metadata",
+        "pydantic_ai.tool.deferral.metadata",
+        "tool_arguments",
+        "tool_response",
+    }
+)
+_AI_MESSAGE_SAFE_KEYS = frozenset(
+    {
+        "builtin",
+        "finish_reason",
+        "id",
+        "mime_type",
+        "modality",
+        "name",
+        "parts",
+        "role",
+        "type",
+    }
+)
+_AI_TEXT_PART_TYPES = frozenset({"text", "thinking"})
+_SENSITIVE_URL_ATTRIBUTES = frozenset({"http.target"})
 
 
 class PrivacySafeLogfireLoggingHandler(logfire.LogfireLoggingHandler):
@@ -54,8 +101,9 @@ class PrivacySafeLogfireLoggingHandler(logfire.LogfireLoggingHandler):
 class RedactingSpan(Span):
     """Delegate span operations while removing exception and status content."""
 
-    def __init__(self, delegate: Span) -> None:
+    def __init__(self, delegate: Span, *, capture_ai_text: bool = False) -> None:
         self._delegate = delegate
+        self._capture_ai_text = capture_ai_text
 
     def __getattr__(self, name: str) -> object:
         return getattr(self._delegate, name)
@@ -67,10 +115,22 @@ class RedactingSpan(Span):
         return self._delegate.get_span_context()
 
     def set_attributes(self, attributes: Mapping[str, AttributeValue]) -> None:
-        self._delegate.set_attributes(_redact_span_attributes(attributes))
+        self._delegate.set_attributes(
+            _redact_span_attributes(
+                attributes,
+                capture_ai_text=self._capture_ai_text,
+            )
+        )
 
     def set_attribute(self, key: str, value: AttributeValue) -> None:
-        self._delegate.set_attribute(key, _redact_span_attribute(key, value))
+        self._delegate.set_attribute(
+            key,
+            _redact_span_attribute(
+                key,
+                value,
+                capture_ai_text=self._capture_ai_text,
+            ),
+        )
 
     def add_event(
         self,
@@ -80,9 +140,19 @@ class RedactingSpan(Span):
     ) -> None:
         if name == "exception":
             attributes = _redact_exception_attributes(attributes)
+        if attributes:
+            attributes = _redact_span_attributes(
+                attributes,
+                capture_ai_text=self._capture_ai_text,
+            )
         self._delegate.add_event(name, attributes, timestamp)
 
     def add_link(self, context: SpanContext, attributes: Attributes = None) -> None:
+        if attributes:
+            attributes = _redact_span_attributes(
+                attributes,
+                capture_ai_text=self._capture_ai_text,
+            )
         self._delegate.add_link(context, attributes)
 
     def update_name(self, name: str) -> None:
@@ -117,7 +187,10 @@ class RedactingSpan(Span):
         )
         self._delegate.record_exception(
             redacted_exception(exception),
-            attributes=_redact_exception_attributes(safe_attributes),
+            attributes=_redact_span_attributes(
+                _redact_exception_attributes(safe_attributes) or {},
+                capture_ai_text=self._capture_ai_text,
+            ),
             timestamp=timestamp,
             escaped=escaped,
         )
@@ -126,8 +199,9 @@ class RedactingSpan(Span):
 class RedactingTracer(Tracer):
     """Wrap every integration span in a privacy-safe span."""
 
-    def __init__(self, delegate: Tracer) -> None:
+    def __init__(self, delegate: Tracer, *, capture_ai_text: bool = False) -> None:
         self._delegate = delegate
+        self._capture_ai_text = capture_ai_text
 
     def start_span(
         self,
@@ -144,13 +218,20 @@ class RedactingTracer(Tracer):
             name,
             context=context,
             kind=kind,
-            attributes=(_redact_span_attributes(attributes) if attributes else None),
-            links=links,
+            attributes=(
+                _redact_span_attributes(
+                    attributes,
+                    capture_ai_text=self._capture_ai_text,
+                )
+                if attributes
+                else None
+            ),
+            links=_redact_links(links, capture_ai_text=self._capture_ai_text),
             start_time=start_time,
             record_exception=record_exception,
             set_status_on_exception=set_status_on_exception,
         )
-        return RedactingSpan(span)
+        return RedactingSpan(span, capture_ai_text=self._capture_ai_text)
 
     @contextmanager
     def start_as_current_span(
@@ -169,17 +250,27 @@ class RedactingTracer(Tracer):
             name,
             context=context,
             kind=kind,
-            attributes=(_redact_span_attributes(attributes) if attributes else None),
-            links=links,
+            attributes=(
+                _redact_span_attributes(
+                    attributes,
+                    capture_ai_text=self._capture_ai_text,
+                )
+                if attributes
+                else None
+            ),
+            links=_redact_links(links, capture_ai_text=self._capture_ai_text),
             start_time=start_time,
             record_exception=False,
             set_status_on_exception=False,
             end_on_exit=end_on_exit,
         ) as span:
-            safe_span = RedactingSpan(span)
+            safe_span = RedactingSpan(
+                span,
+                capture_ai_text=self._capture_ai_text,
+            )
             try:
                 yield safe_span
-            except Exception as exc:
+            except BaseException as exc:
                 if record_exception:
                     safe_span.record_exception(exc, escaped=True)
                 if set_status_on_exception:
@@ -190,8 +281,14 @@ class RedactingTracer(Tracer):
 class RedactingTracerProvider(TracerProvider):
     """Provide redacting tracers over an existing configured provider."""
 
-    def __init__(self, delegate: TracerProvider) -> None:
+    def __init__(
+        self,
+        delegate: TracerProvider,
+        *,
+        capture_ai_text: bool = False,
+    ) -> None:
         self._delegate = delegate
+        self.capture_ai_text = capture_ai_text
 
     def get_tracer(
         self,
@@ -206,7 +303,8 @@ class RedactingTracerProvider(TracerProvider):
                 instrumenting_library_version,
                 schema_url,
                 attributes,
-            )
+            ),
+            capture_ai_text=self.capture_ai_text,
         )
 
 
@@ -257,6 +355,8 @@ def scrubbing_options() -> logfire.ScrubbingOptions:
             _CONTENT_FIELD_PATTERN,
             _REDACT_FIELD_PATTERN,
             _REDACT_VALUE_PATTERN,
+            _URL_FIELD_PATTERN,
+            _URL_VALUE_PATTERN,
         )
     )
 
@@ -303,7 +403,8 @@ def redacted_exception(exception: BaseException) -> RuntimeError:
 
 def _redact_log_record(record: logging.LogRecord) -> logging.LogRecord:
     values = {
-        key: _redact_logging_value(value) for key, value in record.__dict__.items()
+        key: (_REDACTED_URL if _is_url_attribute(key) else _redact_logging_value(value))
+        for key, value in record.__dict__.items()
     }
     if record.exc_info and (exception := record.exc_info[1]) is not None:
         safe_exception = redacted_exception(exception)
@@ -322,29 +423,133 @@ def _redact_log_record(record: logging.LogRecord) -> logging.LogRecord:
 def _redact_logging_value(value: object) -> object:
     if isinstance(value, BaseException):
         return _REDACTED_EXCEPTION_MESSAGE
+    if isinstance(value, str):
+        return _redact_urls(value)
     if type(value) is tuple:
         return tuple(_redact_logging_value(item) for item in value)
     if type(value) is list:
         return [_redact_logging_value(item) for item in value]
     if type(value) is dict:
-        return {key: _redact_logging_value(item) for key, item in value.items()}
+        return {
+            key: (
+                _REDACTED_URL
+                if isinstance(key, str) and _is_url_attribute(key)
+                else _redact_logging_value(item)
+            )
+            for key, item in value.items()
+        }
     return value
 
 
 def _redact_span_attributes(
     attributes: Mapping[str, AttributeValue],
+    *,
+    capture_ai_text: bool = False,
 ) -> dict[str, AttributeValue]:
     return {
-        key: _redact_span_attribute(key, value) for key, value in attributes.items()
+        key: _redact_span_attribute(
+            key,
+            value,
+            capture_ai_text=capture_ai_text,
+        )
+        for key, value in attributes.items()
     }
 
 
-def _redact_span_attribute(key: str, value: AttributeValue) -> AttributeValue:
+def _redact_links(
+    links: Sequence[Link] | None,
+    *,
+    capture_ai_text: bool,
+) -> Sequence[Link] | None:
+    if links is None:
+        return None
+    return [
+        Link(
+            link.context,
+            _redact_span_attributes(
+                link.attributes or {},
+                capture_ai_text=capture_ai_text,
+            ),
+        )
+        for link in links
+    ]
+
+
+def _redact_span_attribute(
+    key: str,
+    value: AttributeValue,
+    *,
+    capture_ai_text: bool = False,
+) -> AttributeValue:
     if key in {"error.message", "exception.message"}:
         return _REDACTED_EXCEPTION_MESSAGE
     if key == "exception.stacktrace":
         return f"Error: {_REDACTED_EXCEPTION_MESSAGE}"
+    if key in _AI_MESSAGE_ATTRIBUTES:
+        return _sanitize_ai_messages(value, include_text=capture_ai_text)
+    if key in _AI_PRIVATE_ATTRIBUTES:
+        return _REDACTED_AI_CONTENT
+    if _is_url_attribute(key):
+        return _REDACTED_URL
+    if isinstance(value, str):
+        return _redact_urls(value)
+    if isinstance(value, tuple | list):
+        redacted = tuple(
+            _redact_urls(item) if isinstance(item, str) else item for item in value
+        )
+        return redacted if isinstance(value, tuple) else list(redacted)
     return value
+
+
+def _sanitize_ai_messages(value: AttributeValue, *, include_text: bool) -> str:
+    if not isinstance(value, str):
+        return _REDACTED_AI_CONTENT
+    try:
+        messages = json.loads(value)
+    except TypeError, ValueError:
+        return _REDACTED_AI_CONTENT
+    return json.dumps(
+        _sanitize_ai_node(messages, include_text=include_text),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+
+
+def _sanitize_ai_node(value: object, *, include_text: bool) -> object:
+    if isinstance(value, list):
+        return [_sanitize_ai_node(item, include_text=include_text) for item in value]
+    if not isinstance(value, dict):
+        return value if isinstance(value, bool | int | float) else None
+
+    part_type = value.get("type")
+    safe: dict[str, object] = {}
+    for key, item in value.items():
+        if key in _AI_MESSAGE_SAFE_KEYS:
+            safe[key] = (
+                _sanitize_ai_node(item, include_text=include_text)
+                if isinstance(item, list | dict)
+                else _redact_urls(item)
+                if isinstance(item, str)
+                else item
+            )
+        elif (
+            key == "content"
+            and include_text
+            and part_type in _AI_TEXT_PART_TYPES
+            and isinstance(item, str)
+        ):
+            safe[key] = _redact_urls(item)
+    return safe
+
+
+def _is_url_attribute(key: str) -> bool:
+    return key.lower() in _SENSITIVE_URL_ATTRIBUTES or bool(
+        re.search(_URL_FIELD_PATTERN, key, re.IGNORECASE)
+    )
+
+
+def _redact_urls(value: str) -> str:
+    return _URL_RE.sub(_REDACTED_URL, value)
 
 
 def _redact_exception_attributes(attributes: Attributes) -> Attributes:
@@ -425,8 +630,14 @@ def configure_observability(config: ObservabilityConfig) -> Observability:
     )
 
     try:
-        instrumentation_tracer_provider = RedactingTracerProvider(
-            client.config.get_tracer_provider()
+        tracer_provider = client.config.get_tracer_provider()
+        meter_provider = client.config.get_meter_provider()
+        pydantic_ai_tracer_provider = RedactingTracerProvider(
+            tracer_provider,
+            capture_ai_text=capture_ai_content,
+        )
+        google_genai_tracer_provider = RedactingTracerProvider(
+            tracer_provider,
         )
         _configure_logging(client, config.environment)
         client.instrument_pydantic_ai(
@@ -434,12 +645,14 @@ def configure_observability(config: ObservabilityConfig) -> Observability:
             include_content=capture_ai_content,
             include_binary_content=False,
             include_model_request_parameters=False,
-            tracer_provider=instrumentation_tracer_provider,
+            tracer_provider=pydantic_ai_tracer_provider,
+            meter_provider=meter_provider,
         )
-        os.environ[_GENAI_CAPTURE_ENV] = "NO_CONTENT"
-        os.environ[_GENAI_EVENTS_ENV] = "false"
-        os.environ.pop(_GENAI_COMPLETION_HOOK_ENV, None)
-        client.instrument_google_genai(tracer_provider=instrumentation_tracer_provider)
+        _instrument_google_genai(
+            client,
+            tracer_provider=google_genai_tracer_provider,
+            meter_provider=meter_provider,
+        )
         client.instrument_system_metrics(base="basic")
     except Exception:
         shutdown_observability(Observability(client))
@@ -448,8 +661,34 @@ def configure_observability(config: ObservabilityConfig) -> Observability:
     return Observability(logfire=client)
 
 
+def _instrument_google_genai(
+    client: logfire.Logfire,
+    *,
+    tracer_provider: TracerProvider,
+    meter_provider: MeterProvider,
+) -> None:
+    _disable_google_genai_content_capture()
+    try:
+        client.instrument_google_genai(
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+        )
+    finally:
+        # opentelemetry-instrumentation-google-genai 1.0b1 enables events while
+        # installing its wrappers, so restore the process-wide privacy policy.
+        _disable_google_genai_content_capture()
+
+
+def _disable_google_genai_content_capture() -> None:
+    os.environ[_GENAI_CAPTURE_ENV] = "NO_CONTENT"
+    os.environ[_GENAI_EVENTS_ENV] = "false"
+    os.environ.pop(_GENAI_COMPLETION_HOOK_ENV, None)
+    os.environ.pop(_GENAI_CONFIG_INCLUDES_ENV, None)
+    os.environ[_GENAI_CONFIG_EXCLUDES_ENV] = "*"
+
+
 def _configure_logging(client: logfire.Logfire, environment: str) -> None:
-    level = logging.DEBUG if environment == "dev" else logging.INFO
+    app_level = logging.DEBUG if environment == "dev" else logging.INFO
     fallback = logging.StreamHandler()
     fallback.setFormatter(
         logging.Formatter(
@@ -458,11 +697,17 @@ def _configure_logging(client: logfire.Logfire, environment: str) -> None:
         )
     )
     handler = PrivacySafeLogfireLoggingHandler(
-        level=level,
+        level=app_level,
         fallback=fallback,
         logfire_instance=client,
     )
-    logging.basicConfig(level=level, handlers=[handler], force=True)
+    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+    logging.getLogger("derp").setLevel(app_level)
 
-    for logger_name in ("httpcore", "httpx", "sqlalchemy.engine"):
+    for logger_name in (
+        "google_genai",
+        "httpcore",
+        "httpx",
+        "sqlalchemy.engine",
+    ):
         logging.getLogger(logger_name).setLevel(logging.WARNING)

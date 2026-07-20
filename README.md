@@ -37,6 +37,9 @@ Key environment variables in `.env`:
 
 See `env.example` for the complete list.
 
+See [docs/observability.md](docs/observability.md) for telemetry ownership,
+content-capture policy, privacy boundaries, and shutdown behavior.
+
 ## Commands
 
 Run `make help` to see all available targets.
