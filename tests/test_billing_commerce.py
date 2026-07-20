@@ -207,7 +207,7 @@ async def test_hidden_debug_product_requires_explicit_intake_and_normal_settleme
         )
     )
     result = await commerce_env.settlement.fulfill(
-        _top_up_payment(handle, telegram_id, "debug-one-star")
+        _top_up_payment(handle, telegram_id, f"debug-one-star:{uuid4().hex}")
     )
 
     assert decision.approved

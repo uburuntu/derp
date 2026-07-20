@@ -30,6 +30,10 @@ pytestmark = pytest.mark.database
 NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 
 
+def _charge_id(label: str) -> str:
+    return f"{label}:{uuid4().hex}"
+
+
 @dataclass(slots=True)
 class MutableClock:
     now: datetime
@@ -160,11 +164,12 @@ async def test_snapshot_uses_first_charge_across_recurring_cycles(
 ) -> None:
     user_id, telegram_id = await _create_user(subscription_env)
     first_end = NOW + timedelta(days=30)
+    first_charge = _charge_id("stable-first-charge")
     payload = await _start_subscription(
         subscription_env,
         user_id,
         telegram_id,
-        charge_id="stable-first-charge",
+        charge_id=first_charge,
         period_end=first_end,
     )
     second_end = first_end + timedelta(days=30)
@@ -172,7 +177,7 @@ async def test_snapshot_uses_first_charge_across_recurring_cycles(
         subscription_env,
         payload,
         telegram_id,
-        charge_id="renewal-charge",
+        charge_id=_charge_id("renewal-charge"),
         period_end=second_end,
     )
 
@@ -183,7 +188,7 @@ async def test_snapshot_uses_first_charge_across_recurring_cycles(
     assert snapshot.status is SubscriptionStatus.ACTIVE
     assert snapshot.renewal_enabled
     assert snapshot.current_period_end == second_end
-    assert snapshot.telegram_payment_charge_id == "stable-first-charge"
+    assert snapshot.telegram_payment_charge_id == first_charge
 
 
 async def test_snapshot_uses_latest_first_charge_after_resubscription(
@@ -195,23 +200,24 @@ async def test_snapshot_uses_latest_first_charge_after_resubscription(
         subscription_env,
         user_id,
         telegram_id,
-        charge_id="former-subscription-charge",
+        charge_id=_charge_id("former-subscription-charge"),
         period_end=first_end,
     )
     subscription_env.clock.now = first_end
     second_end = first_end + timedelta(days=30)
+    current_charge = _charge_id("current-subscription-charge")
     await _start_subscription(
         subscription_env,
         user_id,
         telegram_id,
-        charge_id="current-subscription-charge",
+        charge_id=current_charge,
         period_end=second_end,
     )
 
     snapshot = await subscription_env.management.get_snapshot(user_id)
 
     assert snapshot.current_period_end == second_end
-    assert snapshot.telegram_payment_charge_id == "current-subscription-charge"
+    assert snapshot.telegram_payment_charge_id == current_charge
 
 
 async def test_renewal_control_has_no_transaction_across_provider_io(
@@ -219,11 +225,12 @@ async def test_renewal_control_has_no_transaction_across_provider_io(
 ) -> None:
     user_id, telegram_id = await _create_user(subscription_env)
     period_end = NOW + timedelta(days=30)
+    charge_id = _charge_id("control-charge")
     await _start_subscription(
         subscription_env,
         user_id,
         telegram_id,
-        charge_id="control-charge",
+        charge_id=charge_id,
         period_end=period_end,
     )
     commands: list[SubscriptionRenewalCommand] = []
@@ -242,7 +249,7 @@ async def test_renewal_control_has_no_transaction_across_provider_io(
     assert commands == [
         SubscriptionRenewalCommand(
             payer_telegram_id=telegram_id,
-            telegram_payment_charge_id="control-charge",
+            telegram_payment_charge_id=charge_id,
             enabled=False,
         )
     ]
@@ -265,7 +272,7 @@ async def test_provider_failure_does_not_change_local_renewal_state(
         subscription_env,
         user_id,
         telegram_id,
-        charge_id="failing-control-charge",
+        charge_id=_charge_id("failing-control-charge"),
         period_end=NOW + timedelta(days=30),
     )
 
@@ -286,6 +293,35 @@ async def test_provider_failure_does_not_change_local_renewal_state(
     assert snapshot.status is SubscriptionStatus.ACTIVE
 
 
+async def test_replayed_renewal_state_skips_provider_io(
+    subscription_env: SubscriptionEnvironment,
+) -> None:
+    user_id, telegram_id = await _create_user(subscription_env)
+    await _start_subscription(
+        subscription_env,
+        user_id,
+        telegram_id,
+        charge_id=_charge_id("idempotent-control-charge"),
+        period_end=NOW + timedelta(days=30),
+    )
+    provider_called = False
+
+    class Provider:
+        async def set_renewal(self, command: SubscriptionRenewalCommand) -> None:
+            nonlocal provider_called
+            provider_called = True
+
+    result = await subscription_env.management.set_renewal(
+        user_id,
+        enabled=True,
+        provider=Provider(),
+    )
+
+    assert not provider_called
+    assert not result.changed
+    assert result.renewal_enabled
+
+
 async def test_expired_cycle_is_rejected_before_provider_io(
     subscription_env: SubscriptionEnvironment,
 ) -> None:
@@ -295,7 +331,7 @@ async def test_expired_cycle_is_rejected_before_provider_io(
         subscription_env,
         user_id,
         telegram_id,
-        charge_id="expired-control-charge",
+        charge_id=_charge_id("expired-control-charge"),
         period_end=period_end,
     )
     subscription_env.clock.now = period_end

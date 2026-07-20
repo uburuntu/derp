@@ -119,6 +119,13 @@ class SubscriptionManagementService:
             or snapshot.current_period_end <= now
         ):
             raise SubscriptionStateError("Subscription cycle has expired")
+        if snapshot.renewal_enabled is enabled:
+            return SubscriptionStateResult(
+                snapshot.subscription_id,
+                snapshot.renewal_enabled,
+                snapshot.current_period_end,
+                False,
+            )
         await provider.set_renewal(
             SubscriptionRenewalCommand(
                 payer_telegram_id=snapshot.payer_telegram_id,

@@ -9,7 +9,11 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
-from derp.billing.types import ProductKind, PurchaseIntentHandle
+from derp.billing.types import (
+    ProductKind,
+    PurchaseIntentHandle,
+    SubscriptionRenewalCommand,
+)
 
 
 class PurchaseTargetCode(StrEnum):
@@ -25,6 +29,21 @@ class PurchaseCallback(CallbackData, prefix="buy"):
     kind: ProductKind
     product_id: str
     target: PurchaseTargetCode
+
+
+class TelegramSubscriptionRenewalProvider:
+    """Apply subscription renewal state through Telegram's Stars API."""
+
+    def __init__(self, bot: Bot) -> None:
+        self._bot = bot
+
+    async def set_renewal(self, command: SubscriptionRenewalCommand) -> None:
+        """Cancel or re-enable extension without shortening the paid period."""
+        await self._bot.edit_user_star_subscription(
+            user_id=command.payer_telegram_id,
+            telegram_payment_charge_id=command.telegram_payment_charge_id,
+            is_canceled=not command.enabled,
+        )
 
 
 def build_purchase_panel(
@@ -103,6 +122,7 @@ async def create_stars_invoice_link(
 __all__ = [
     "PurchaseCallback",
     "PurchaseTargetCode",
+    "TelegramSubscriptionRenewalProvider",
     "build_purchase_panel",
     "create_stars_invoice_link",
 ]

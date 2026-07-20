@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram.types import Update
 
-from derp.billing import PaymentSettlementService, PurchaseIntentService
+from derp.billing import (
+    PaymentSettlementService,
+    PurchaseIntentService,
+    SubscriptionManagementService,
+)
 from derp.credits.gateway import CreditServiceGateway
 from derp.middlewares.commerce import CommerceMiddleware
 from derp.middlewares.credit_service import CreditServiceMiddleware
@@ -46,6 +50,7 @@ async def test_commerce_middleware_injects_without_opening_transaction(
     assert result == "handled"
     assert isinstance(data["purchase_intents"], PurchaseIntentService)
     assert isinstance(data["payment_settlement"], PaymentSettlementService)
+    assert isinstance(data["subscription_management"], SubscriptionManagementService)
     mock_db_client.session.assert_not_called()
     handler.assert_awaited_once_with(event, data)
 

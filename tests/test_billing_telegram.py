@@ -8,11 +8,17 @@ from uuid import UUID
 
 import pytest
 
-from derp.billing import ProductKind, PurchaseIntentHandle, PurchaseTarget
+from derp.billing import (
+    ProductKind,
+    PurchaseIntentHandle,
+    PurchaseTarget,
+    SubscriptionRenewalCommand,
+)
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
 from derp.billing.telegram import (
     PurchaseCallback,
     PurchaseTargetCode,
+    TelegramSubscriptionRenewalProvider,
     build_purchase_panel,
     create_stars_invoice_link,
 )
@@ -107,3 +113,27 @@ async def test_invoice_link_uses_exact_immutable_intent_terms(
     assert len(values["prices"]) == 1
     assert values["prices"][0].label == expected_title
     assert values["prices"][0].amount == handle.stars
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_subscription_provider_maps_renewal_to_telegram_cancellation(
+    enabled: bool,
+) -> None:
+    bot = MagicMock()
+    bot.edit_user_star_subscription = AsyncMock(return_value=True)
+    provider = TelegramSubscriptionRenewalProvider(bot)
+
+    await provider.set_renewal(
+        SubscriptionRenewalCommand(
+            payer_telegram_id=12345,
+            telegram_payment_charge_id="subscription-charge",
+            enabled=enabled,
+        )
+    )
+
+    bot.edit_user_star_subscription.assert_awaited_once_with(
+        user_id=12345,
+        telegram_payment_charge_id="subscription-charge",
+        is_canceled=not enabled,
+    )

@@ -16,7 +16,11 @@ from aiogram.utils.chat_action import ChatActionMiddleware
 from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
-from derp.billing import CommercePolicy
+from derp.billing import (
+    CommercePolicy,
+    PaymentSettlementService,
+    SubscriptionExpiryWorker,
+)
 from derp.config import Settings
 from derp.db import DatabaseManager, init_db_manager
 from derp.handlers import (
@@ -29,6 +33,7 @@ from derp.handlers import (
     image,
     inline,
     payments,
+    subscriptions,
     think,
     tts,
     video,
@@ -57,6 +62,7 @@ APPLICATION_ROUTERS = (
     credit_cmds.router,
     think.router,
     payments.router,
+    subscriptions.router,
     image.router,
     video.router,
     tts.router,
@@ -107,6 +113,9 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
         )
         await db.connect()
         await stack.enter_async_context(HistoryRetentionWorker(db))
+        await stack.enter_async_context(
+            SubscriptionExpiryWorker(PaymentSettlementService(db.session))
+        )
         yield Runtime(
             bot=bot,
             db=db,

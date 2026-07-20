@@ -6,7 +6,11 @@ from typing import Any
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 
-from derp.billing import PaymentSettlementService, PurchaseIntentService
+from derp.billing import (
+    PaymentSettlementService,
+    PurchaseIntentService,
+    SubscriptionManagementService,
+)
 from derp.db import DatabaseManager
 
 
@@ -16,6 +20,7 @@ class CommerceMiddleware(BaseMiddleware):
     def __init__(self, db: DatabaseManager) -> None:
         self._purchase_intents = PurchaseIntentService(db.session)
         self._payment_settlement = PaymentSettlementService(db.session)
+        self._subscription_management = SubscriptionManagementService(db.session)
 
     async def __call__(
         self,
@@ -25,4 +30,5 @@ class CommerceMiddleware(BaseMiddleware):
     ) -> Any:
         data["purchase_intents"] = self._purchase_intents
         data["payment_settlement"] = self._payment_settlement
+        data["subscription_management"] = self._subscription_management
         return await handler(event, data)
