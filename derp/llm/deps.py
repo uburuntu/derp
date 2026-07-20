@@ -24,7 +24,9 @@ if TYPE_CHECKING:
     from aiogram import Bot
     from aiogram.types import Message
 
+    from derp.approvals.image_tools import ImageToolRunContext
     from derp.db import DatabaseManager
+    from derp.features import ImageOperationCoordinator, ImageOperationOutcome
     from derp.models import Chat as ChatModel
     from derp.models import User as UserModel
 
@@ -42,7 +44,7 @@ class AgentDeps:
     - model: The exact catalog model used by the parent agent
     """
 
-    message: Message
+    message: Message | None
     db: DatabaseManager
     bot: Bot
     user_model: UserModel | None = None
@@ -63,13 +65,38 @@ class AgentDeps:
             ),
         )
     )
+    image_operation_coordinator: ImageOperationCoordinator | None = None
+    image_tool_context: ImageToolRunContext | None = None
+    image_operation_outcome: ImageOperationOutcome | None = field(
+        default=None,
+        repr=False,
+    )
 
     @property
     def chat_id(self) -> int:
-        """Get the chat ID from the message."""
+        """Get the stable chat ID for live and resumed runs."""
+        if self.image_tool_context is not None:
+            return self.image_tool_context.chat_telegram_id
+        if self.message is None:
+            raise RuntimeError("agent dependencies have no Telegram chat context")
         return self.message.chat.id
 
     @property
     def user_id(self) -> int | None:
-        """Get the user ID from the message sender."""
-        return self.message.from_user.id if self.message.from_user else None
+        """Get the stable user ID for live and resumed runs."""
+        if self.image_tool_context is not None:
+            return self.image_tool_context.requester_telegram_id
+        return (
+            self.message.from_user.id
+            if self.message and self.message.from_user
+            else None
+        )
+
+    @property
+    def message_id(self) -> int:
+        """Get the original inbound message ID, never a callback control message."""
+        if self.image_tool_context is not None:
+            return self.image_tool_context.message_id
+        if self.message is None:
+            raise RuntimeError("agent dependencies have no Telegram message context")
+        return self.message.message_id

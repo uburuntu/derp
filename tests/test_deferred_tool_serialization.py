@@ -21,6 +21,7 @@ from derp.approvals import (
     DeferredToolStatus,
     ResumeLease,
     deserialize_history,
+    durable_message_history,
     serialize_deferred_request,
 )
 from derp.operations import OperationId, QuoteId
@@ -110,6 +111,30 @@ def test_binary_media_is_never_persisted_in_deferred_history() -> None:
         serialize_deferred_request(call, history)
 
     assert sentinel.decode() not in str(raised.value)
+
+
+def test_durable_history_replaces_binary_content_but_preserves_tool_identity() -> None:
+    call = ToolCallPart("generate_image", {"prompt": "draw it"}, "call-1")
+    history: list[ModelMessage] = [
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    [
+                        "Use this reference",
+                        BinaryContent(b"private-image", media_type="image/png"),
+                    ]
+                )
+            ]
+        ),
+        ModelResponse(parts=[call]),
+    ]
+
+    durable = durable_message_history(history)
+    arguments, serialized = serialize_deferred_request(call, durable)
+
+    assert arguments == {"prompt": "draw it"}
+    assert "private-image" not in str(serialized)
+    assert "stable external reference" in str(serialized)
 
 
 def test_resume_input_is_built_from_private_stored_state_without_repr_leaks() -> None:

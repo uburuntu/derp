@@ -47,8 +47,10 @@ from derp.features import (
 )
 from derp.media import MediaFamily
 from derp.operations import (
+    FinishingChatQuoteInput,
     FundingAuthorization,
     ImageGenerateQuoteInput,
+    ImmutableQuoteConflictError,
     InventoryAllocation,
     OperationId,
     OperationLedger,
@@ -331,6 +333,107 @@ async def test_authoritative_original_quote_is_returned_for_funding_action(
     assert REQUEST.prompt not in repr(pricing_input)
     assert env.invocation.caption not in repr(pricing_input)
     env.image_service.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_quote_only_boundary_has_no_reservation_or_provider_effect(
+    env: Environment,
+) -> None:
+    quote = await env.coordinator.ensure_quote(env.invocation, PLAN, REQUEST)
+
+    assert quote.operation_id == OPERATION_ID
+    env.ledger.ensure_quote.assert_awaited_once()
+    env.ledger.reserve.assert_not_awaited()
+    env.ledger.mark_executing.assert_not_awaited()
+    env.image_service.generate.assert_not_awaited()
+    env.delivery_service.persist_result.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_deferred_quote_includes_finishing_call_in_price_and_identity(
+    env: Environment,
+) -> None:
+    finishing_plan = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_ECONOMY)
+    finishing = FinishingChatQuoteInput(GoogleModelKey.CHAT_ECONOMY, 4_096)
+
+    quote = await env.coordinator.ensure_quote(
+        env.invocation,
+        PLAN,
+        REQUEST,
+        finishing_plan=finishing_plan,
+        finishing_quote_input=finishing,
+    )
+
+    assert "finish=chat_economy" in quote.key.variant
+    pricing_input = env.ledger.ensure_quote.await_args.kwargs["pricing_input"]
+    assert pricing_input["finishing_model_key"] == "chat_economy"
+    assert pricing_input["finishing_input_tokens"] == 4_096
+    env.ledger.reserve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_quote_only_retry_uses_identical_immutable_fingerprints(
+    env: Environment,
+) -> None:
+    authoritative = replace(
+        _quote(),
+        id=QuoteId(UUID("41f5d73d-a8d3-4d3e-a331-bb9ccdfeb404")),
+    )
+    env.ledger.ensure_quote.side_effect = None
+    env.ledger.ensure_quote.return_value = authoritative
+
+    first = await env.coordinator.ensure_quote(env.invocation, PLAN, REQUEST)
+    first_call = env.ledger.ensure_quote.await_args
+    env.ledger.ensure_quote.reset_mock()
+    second = await env.coordinator.ensure_quote(env.invocation, PLAN, REQUEST)
+    second_call = env.ledger.ensure_quote.await_args
+
+    assert first is authoritative
+    assert second is authoritative
+    assert first_call.kwargs == second_call.kwargs
+    assert first_call.args[0].operation_id == second_call.args[0].operation_id
+    assert first_call.args[0].key == second_call.args[0].key
+
+
+@pytest.mark.asyncio
+async def test_quote_only_rejects_plan_for_a_different_image_request(
+    env: Environment,
+) -> None:
+    incompatible = plan_execution(Feature.IMAGE_EDIT, GoogleModelKey.IMAGE)
+
+    with pytest.raises(ValueError, match="cannot execute image_generate"):
+        await env.coordinator.ensure_quote(env.invocation, incompatible, REQUEST)
+
+    env.ledger.ensure_quote.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_quote_only_propagates_an_immutable_mismatched_retry(
+    env: Environment,
+) -> None:
+    first_pricing_input: object | None = None
+
+    async def immutable_quote(quote: Quote, **kwargs: object) -> Quote:
+        nonlocal first_pricing_input
+        pricing_input = kwargs["pricing_input"]
+        if first_pricing_input is None:
+            first_pricing_input = pricing_input
+            return quote
+        if pricing_input != first_pricing_input:
+            raise ImmutableQuoteConflictError("mismatched retry")
+        return quote
+
+    env.ledger.ensure_quote.side_effect = immutable_quote
+    await env.coordinator.ensure_quote(env.invocation, PLAN, REQUEST)
+
+    with pytest.raises(ImmutableQuoteConflictError, match="mismatched retry"):
+        await env.coordinator.ensure_quote(
+            env.invocation,
+            PLAN,
+            ImageGenerateRequest("Draw a different observatory", style="linocut"),
+        )
+
+    env.ledger.reserve.assert_not_awaited()
 
 
 @pytest.mark.asyncio

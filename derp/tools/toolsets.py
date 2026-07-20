@@ -7,6 +7,7 @@ from typing import Protocol
 import logfire
 from pydantic_ai import FunctionToolset, Tool
 
+from derp.approvals.image_tools import EDIT_IMAGE_TOOL, GENERATE_IMAGE_TOOL
 from derp.llm.deps import AgentDeps
 from derp.tools.gemini_image import edit_image, generate_image
 from derp.tools.gemini_think import think_deep
@@ -38,9 +39,9 @@ def create_chat_toolset(
 ) -> FunctionToolset[AgentDeps]:
     """Create exactly the tools authorized for one actor and chat policy.
 
-    Credit availability remains an execution-time concern in the existing
-    credit-aware wrappers. ``access.shared_credit_spending_enabled`` is
-    settlement metadata and never changes which tools the model can see.
+    Image calls pause after framework argument validation and execute only from
+    a server-authorized deferred resume. ``access.shared_credit_spending_enabled``
+    is settlement metadata and never changes which tools the model can see.
     """
     toolset: FunctionToolset[AgentDeps] = FunctionToolset()
 
@@ -49,9 +50,9 @@ def create_chat_toolset(
     toolset.tool(web_search)
 
     if access.allows(ChatTool.GENERATE_IMAGE):
-        toolset.tool(generate_image)
+        toolset.tool(generate_image, requires_approval=True)
     if access.allows(ChatTool.EDIT_IMAGE):
-        toolset.tool(edit_image)
+        toolset.tool(edit_image, requires_approval=True)
     if access.allows(ChatTool.VIDEO_GENERATE):
         toolset.tool(video_generate)
     if access.allows(ChatTool.VOICE_TTS):
@@ -82,4 +83,20 @@ def create_chat_toolset(
     return toolset
 
 
-__all__ = ["SharedFactToolProvider", "create_chat_toolset"]
+def create_resumed_image_toolset(tool_name: str) -> FunctionToolset[AgentDeps]:
+    """Expose only the persisted image tool during an authenticated resume."""
+    toolset: FunctionToolset[AgentDeps] = FunctionToolset()
+    if tool_name == GENERATE_IMAGE_TOOL:
+        toolset.tool(generate_image, requires_approval=True)
+    elif tool_name == EDIT_IMAGE_TOOL:
+        toolset.tool(edit_image, requires_approval=True)
+    else:
+        raise ValueError("unsupported deferred image tool")
+    return toolset
+
+
+__all__ = [
+    "SharedFactToolProvider",
+    "create_chat_toolset",
+    "create_resumed_image_toolset",
+]

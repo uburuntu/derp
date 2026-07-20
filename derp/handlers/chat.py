@@ -20,13 +20,15 @@ from aiogram.filters import Command
 from aiogram.handlers import MessageHandler
 from aiogram.types import Message, ReactionTypeEmoji
 from aiogram.utils.i18n import gettext as _
-from pydantic_ai import BinaryContent, UsageLimits
+from pydantic_ai import BinaryContent, DeferredToolRequests, UsageLimits
 from pydantic_ai.exceptions import (
     ModelHTTPError,
     UnexpectedModelBehavior,
     UsageLimitExceeded,
 )
 
+from derp.approvals import DeferredToolApprovalService
+from derp.approvals.image_tools import ImageToolRunContext
 from derp.catalog import GoogleModelKey
 from derp.common.extractor import Extractor
 from derp.config import settings
@@ -38,8 +40,17 @@ from derp.db import (
     store_tool_transcript,
 )
 from derp.execution import Feature, plan_execution
+from derp.features import ImageOperationCoordinator
 from derp.filters import DerpMentionFilter
 from derp.handlers.context_settings import ensure_group_context_notice
+from derp.handlers.tool_approvals import (
+    approval_service,
+    live_image_source,
+    present_image_approvals,
+)
+from derp.handlers.tool_approvals import (
+    router as tool_approvals_router,
+)
 from derp.history.capture import capture_outbound_history
 from derp.history.core import (
     AttachmentReference,
@@ -89,6 +100,7 @@ from derp.tools.policy import (
 from derp.tools.shared_facts import SharedFactTools
 
 router = Router(name="chat")
+router.include_router(tool_approvals_router)
 
 
 @logfire.instrument("extract_media", extract_args=False)
@@ -395,6 +407,12 @@ class ChatAgentHandler(MessageHandler):
         credit_service: CreditService | None = self.data.get("credit_service")
         media_gateway: MediaGateway | None = self.data.get("media_gateway")
         role_resolver: ActorRoleResolver | None = self.data.get("actor_role_resolver")
+        image_operation_coordinator: ImageOperationCoordinator | None = self.data.get(
+            "image_operation_coordinator"
+        )
+        deferred_tool_approval_service: DeferredToolApprovalService | None = (
+            self.data.get("deferred_tool_approval_service")
+        )
 
         await ensure_group_context_notice(
             self.event,
@@ -432,6 +450,19 @@ class ChatAgentHandler(MessageHandler):
         )
         tool_access = derive_chat_tool_access(actor_role, tool_policy)
 
+        image_tool_context: ImageToolRunContext | None = None
+        if user_model is not None and chat_model is not None and self.event.from_user:
+            image_tool_context = ImageToolRunContext(
+                requester_id=user_model.id,
+                requester_telegram_id=self.event.from_user.id,
+                chat_id=chat_model.id,
+                chat_telegram_id=self.event.chat.id,
+                message_id=self.event.message_id,
+                thread_id=self.event.message_thread_id,
+                business_connection_id=self.event.business_connection_id,
+                source=await live_image_source(self.event),
+            )
+
         # Carry the exact selected model into the agent and its tools.
         deps = AgentDeps(
             message=self.event,
@@ -442,6 +473,8 @@ class ChatAgentHandler(MessageHandler):
             model=plan.model,
             history_window=history_window,
             tool_access=tool_access,
+            image_operation_coordinator=image_operation_coordinator,
+            image_tool_context=image_tool_context,
         )
 
         try:
@@ -562,6 +595,24 @@ class ChatAgentHandler(MessageHandler):
                             chat_id=self.event.chat.id,
                             message_id=self.event.message_id,
                         )
+
+                if isinstance(result.output, DeferredToolRequests):
+                    if (
+                        image_operation_coordinator is None
+                        or image_tool_context is None
+                    ):
+                        raise RuntimeError(
+                            "deferred image tools require durable operation context"
+                        )
+                    return await present_image_approvals(
+                        message=self.event,
+                        requests=result.output,
+                        original_history=result.all_messages(),
+                        context=image_tool_context,
+                        image_operations=image_operation_coordinator,
+                        approvals=deferred_tool_approval_service
+                        or approval_service(db),
+                    )
 
                 # Convert to AgentResult and send response
                 agent_result = AgentResult.from_run_result(result)

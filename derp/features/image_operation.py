@@ -36,7 +36,9 @@ from derp.features.image import (
     ImageOutput,
 )
 from derp.operations import (
+    CompositeImageQuoteInput,
     DeliveryState,
+    FinishingChatQuoteInput,
     ImageEditQuoteInput,
     ImageGenerateQuoteInput,
     InvalidOperationTransitionError,
@@ -274,34 +276,23 @@ class ImageOperationCoordinator:
         request: ImageRequest,
         *,
         allow_personal_once: bool = False,
+        finishing_plan: ExecutionPlan | None = None,
+        finishing_quote_input: FinishingChatQuoteInput | None = None,
     ) -> ImageOperationOutcome:
         """Execute only a newly claimed provider call; otherwise resume safely."""
-        feature = self._feature_for(request)
-        if plan.feature is not feature:
-            raise ValueError(f"{plan.feature.value} cannot execute {feature.value}")
-        now = self._aware_now()
-        quote_input = self._quote_input(invocation, request)
-        proposed_quote = self._quote_engine.quote(
-            quote_id=self._quote_id_factory(),
-            operation_id=invocation.operation_id,
-            plan=plan,
-            quote_input=quote_input,
-            created_at=now,
-        )
-        pricing_input = self._pricing_input(invocation, request)
+        feature = self._require_matching_feature(plan, request)
 
         with logfire.span(
             "image.operation",
             operation_id=str(invocation.operation_id),
             feature=feature.value,
         ):
-            quote = await self._ledger.ensure_quote(
-                proposed_quote,
-                request_key=invocation.request_key,
-                requester_id=invocation.requester_id,
-                chat_id=invocation.chat_id,
-                thread_id=invocation.thread_id,
-                pricing_input=pricing_input,
+            quote = await self.ensure_quote(
+                invocation,
+                plan,
+                request,
+                finishing_plan=finishing_plan,
+                finishing_quote_input=finishing_quote_input,
             )
             reservation = await self._ledger.reserve(
                 invocation.operation_id,
@@ -365,6 +356,53 @@ class ImageOperationCoordinator:
                 invocation.operation_id,
                 resend_token=prepared.resend_token,
             )
+
+    async def ensure_quote(
+        self,
+        invocation: ImageInvocation,
+        plan: ExecutionPlan,
+        request: ImageRequest,
+        *,
+        finishing_plan: ExecutionPlan | None = None,
+        finishing_quote_input: FinishingChatQuoteInput | None = None,
+    ) -> Quote:
+        """Persist or recover the exact immutable quote without reserving funds."""
+        self._require_matching_feature(plan, request)
+        if (finishing_plan is None) != (finishing_quote_input is None):
+            raise ValueError("finishing plan and quote input must be provided together")
+        image_quote_input = self._quote_input(invocation, request)
+        if finishing_plan is None or finishing_quote_input is None:
+            proposed_quote = self._quote_engine.quote(
+                quote_id=self._quote_id_factory(),
+                operation_id=invocation.operation_id,
+                plan=plan,
+                quote_input=image_quote_input,
+                created_at=self._aware_now(),
+            )
+        else:
+            proposed_quote = self._quote_engine.quote_composite_image(
+                quote_id=self._quote_id_factory(),
+                operation_id=invocation.operation_id,
+                image_plan=plan,
+                finishing_plan=finishing_plan,
+                quote_input=CompositeImageQuoteInput(
+                    image=image_quote_input,
+                    finishing=finishing_quote_input,
+                ),
+                created_at=self._aware_now(),
+            )
+        return await self._ledger.ensure_quote(
+            proposed_quote,
+            request_key=invocation.request_key,
+            requester_id=invocation.requester_id,
+            chat_id=invocation.chat_id,
+            thread_id=invocation.thread_id,
+            pricing_input=self._pricing_input(
+                invocation,
+                request,
+                finishing_quote_input=finishing_quote_input,
+            ),
+        )
 
     async def _reservation_rejected(
         self,
@@ -474,6 +512,17 @@ class ImageOperationCoordinator:
             return Feature.IMAGE_EDIT
         raise TypeError("request must be an image generate or edit request")
 
+    @classmethod
+    def _require_matching_feature(
+        cls,
+        plan: ExecutionPlan,
+        request: ImageRequest,
+    ) -> Feature:
+        feature = cls._feature_for(request)
+        if plan.feature is not feature:
+            raise ValueError(f"{plan.feature.value} cannot execute {feature.value}")
+        return feature
+
     @staticmethod
     def _quote_input(
         invocation: ImageInvocation,
@@ -491,13 +540,23 @@ class ImageOperationCoordinator:
         cls,
         invocation: ImageInvocation,
         request: ImageRequest,
+        *,
+        finishing_quote_input: FinishingChatQuoteInput | None = None,
     ) -> Mapping[str, object]:
-        return {
+        pricing_input: dict[str, object] = {
             "input_tokens": invocation.input_tokens,
             "resolution": request.resolution.value,
             "request_fingerprint": cls._request_fingerprint(request),
             "delivery_fingerprint": cls._delivery_fingerprint(invocation),
         }
+        if finishing_quote_input is not None:
+            pricing_input.update(
+                {
+                    "finishing_model_key": finishing_quote_input.model_key.value,
+                    "finishing_input_tokens": finishing_quote_input.input_tokens,
+                }
+            )
+        return pricing_input
 
     @staticmethod
     def _request_fingerprint(request: ImageRequest) -> str:

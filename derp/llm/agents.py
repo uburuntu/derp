@@ -9,7 +9,7 @@ Provides factory functions for different agent types:
 from __future__ import annotations
 
 import logfire
-from pydantic_ai import Agent, BinaryImage, RunContext
+from pydantic_ai import Agent, BinaryImage, DeferredToolRequests, RunContext
 from pydantic_ai.capabilities import ProcessHistory
 
 from derp.catalog import GoogleModelKey, GoogleModelSpec
@@ -45,7 +45,7 @@ def create_chat_agent(
     model: ExecutionPlan
     | GoogleModelSpec
     | GoogleModelKey = GoogleModelKey.CHAT_STANDARD,
-) -> Agent[AgentDeps, str]:
+) -> Agent[AgentDeps, str | DeferredToolRequests]:
     """Create the main chat agent with tools and context.
 
     The chat agent is the primary agent for handling messages in chats.
@@ -65,11 +65,11 @@ def create_chat_agent(
     spec = plan.model
     provider_model = create_model(spec)
 
-    agent: Agent[AgentDeps, str] = Agent(
+    agent: Agent[AgentDeps, str | DeferredToolRequests] = Agent(
         provider_model,
         name="chat",
         deps_type=AgentDeps,
-        output_type=str,
+        output_type=[str, DeferredToolRequests],
         capabilities=[ProcessHistory(process_native_history)],
     )
 

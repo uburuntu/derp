@@ -4,6 +4,7 @@ from derp.approvals.serialization import (
     HISTORY_SCHEMA_VERSION,
     DeferredToolSerializationError,
     deserialize_history,
+    durable_message_history,
     serialize_deferred_request,
     validate_tool_call_identity,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "ResumeUnavailable",
     "ResumeUnavailableReason",
     "deserialize_history",
+    "durable_message_history",
     "serialize_deferred_request",
     "validate_tool_call_identity",
 ]

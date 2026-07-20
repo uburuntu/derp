@@ -5,14 +5,22 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from copy import deepcopy
+from dataclasses import replace
 from typing import Final, cast
 
 from pydantic_ai import (
+    BaseToolReturnPart,
+    FilePart,
     ModelMessage,
     ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelRequestPart,
     ModelResponse,
+    TextPart,
     ToolCallPart,
+    UserPromptPart,
 )
+from pydantic_ai.messages import is_multi_modal_content
 from pydantic_core import to_jsonable_python
 
 HISTORY_SCHEMA_VERSION: Final = "pydantic-ai-model-messages-v1"
@@ -28,6 +36,7 @@ _NON_DURABLE_MEDIA_KINDS: Final = frozenset(
         "video-url",
     }
 )
+_DURABLE_MEDIA_PLACEHOLDER: Final = "[media retained by stable external reference]"
 
 
 class DeferredToolSerializationError(ValueError):
@@ -42,6 +51,85 @@ def validate_tool_call_identity(tool_call: ToolCallPart) -> None:
         raise DeferredToolSerializationError("tool name is invalid")
     if not tool_call.tool_call_id.strip() or len(tool_call.tool_call_id) > 255:
         raise DeferredToolSerializationError("tool call ID is invalid")
+
+
+def durable_message_history(
+    original_history: Sequence[ModelMessage],
+) -> tuple[ModelMessage, ...]:
+    """Replace transient media payloads while preserving native message structure."""
+    try:
+        messages: list[ModelMessage] = []
+        for message in original_history:
+            if isinstance(message, ModelRequest):
+                messages.append(
+                    replace(
+                        message,
+                        parts=[_durable_request_part(part) for part in message.parts],
+                    )
+                )
+            elif isinstance(message, ModelResponse):
+                messages.append(
+                    replace(
+                        message,
+                        parts=[
+                            TextPart(_DURABLE_MEDIA_PLACEHOLDER)
+                            if isinstance(part, FilePart)
+                            else deepcopy(part)
+                            for part in message.parts
+                        ],
+                    )
+                )
+            else:  # pragma: no cover - native union currently has two members
+                raise TypeError
+        serialized = to_jsonable_python(
+            messages,
+            bytes_mode="base64",
+        )
+        if not isinstance(serialized, list) or not all(
+            isinstance(message, dict) for message in serialized
+        ):
+            raise TypeError
+        if _contains_non_durable_media(serialized):
+            raise DeferredToolSerializationError(
+                "deferred history contains unsupported transient media"
+            )
+        return tuple(ModelMessagesTypeAdapter.validate_python(serialized))
+    except DeferredToolSerializationError:
+        raise
+    except Exception:
+        raise DeferredToolSerializationError(
+            "deferred history cannot be converted to durable references"
+        ) from None
+
+
+def _durable_request_part(part: ModelRequestPart) -> ModelRequestPart:
+    if isinstance(part, UserPromptPart):
+        if isinstance(part.content, str):
+            return deepcopy(part)
+        return replace(
+            part,
+            content=[
+                _DURABLE_MEDIA_PLACEHOLDER
+                if is_multi_modal_content(item)
+                else deepcopy(item)
+                for item in part.content
+            ],
+        )
+    if isinstance(part, BaseToolReturnPart):
+        content = part.content
+        if is_multi_modal_content(content):
+            return replace(part, content=_DURABLE_MEDIA_PLACEHOLDER)
+        if isinstance(content, list):
+            return replace(
+                part,
+                content=[
+                    _DURABLE_MEDIA_PLACEHOLDER
+                    if is_multi_modal_content(item)
+                    else deepcopy(item)
+                    for item in content
+                ],
+            )
+    return deepcopy(part)
 
 
 def serialize_deferred_request(
@@ -170,6 +258,7 @@ __all__ = [
     "MAX_DEFERRED_HISTORY_BYTES",
     "DeferredToolSerializationError",
     "deserialize_history",
+    "durable_message_history",
     "serialize_deferred_request",
     "validate_tool_call_identity",
 ]

@@ -1,175 +1,133 @@
-"""Image generation and editing tools for Pydantic-AI agents.
-
-These tools use the catalog's current native image model. Images are sent
-directly to the chat.
-
-Reference: https://ai.google.dev/gemini-api/docs/nanobanana
-"""
+"""Pydantic-AI adapters for durable, approval-gated image operations."""
 
 from __future__ import annotations
 
-import logfire
-from pydantic_ai import BinaryContent, BinaryImage, RunContext
+from pydantic_ai import RunContext, ToolCallPart
 
-from derp.common.extractor import Extractor
-from derp.common.sender import MessageSender
-from derp.execution import Feature, require_execution_plan
-from derp.llm.agents import create_image_agent
+from derp.approvals.image_tools import (
+    EDIT_IMAGE_TOOL,
+    GENERATE_IMAGE_TOOL,
+    DeferredImageCall,
+)
+from derp.catalog import GoogleModelKey
+from derp.execution import Feature, plan_execution
+from derp.features import (
+    ImageAwaitingFunding,
+    ImageDelivered,
+    ImageDeliveryUncertain,
+    ImageInProgress,
+    ImageNotCharged,
+    ImageRefunded,
+)
 from derp.llm.deps import AgentDeps
-from derp.observability import report_exception
-from derp.tools.wrapper import credit_aware_tool
+
+_SENT_DIRECTLY = (
+    "[Image delivered directly to chat. Do not output anything else unless the "
+    "user asked a follow-up question.]"
+)
 
 
-@credit_aware_tool("image_generate")
 async def generate_image(
     ctx: RunContext[AgentDeps],
     prompt: str,
     *,
     style: str | None = None,
 ) -> str:
-    """Generate an image based on the given prompt.
+    """Generate an image after the user approves its exact quote.
 
-    Use this tool when the user asks you to create, generate, draw, or
-    make an image. The image will be sent directly to the chat.
+    Use this tool when the user asks you to create, generate, draw, or make an
+    image. The approved image is delivered directly to the original chat.
 
     Args:
         prompt: A detailed description of the image to generate.
-        style: Optional style hint (realistic, cartoon, artistic, etc.)
+        style: Optional visual style hint.
     """
-    deps = ctx.deps
-
-    # Build the full prompt
-    full_prompt = prompt
-    if style:
-        full_prompt = f"{prompt}, {style} style"
-
-    logfire.info(
-        "image_generation_started",
-        prompt_length=len(prompt),
-        has_style=style is not None,
-        chat_id=deps.chat_id,
+    return await _run_approved_image_tool(
+        ctx,
+        ToolCallPart(
+            GENERATE_IMAGE_TOOL,
+            {"prompt": prompt, "style": style},
+            _required_tool_call_id(ctx),
+        ),
     )
 
-    try:
-        # Create image agent and generate
-        agent = create_image_agent(require_execution_plan(Feature.IMAGE_GENERATE))
-        result = await agent.run(full_prompt)
-        output = result.output
 
-        # Handle the output
-        if isinstance(output, BinaryImage):
-            sender = MessageSender.from_message(deps.message)
-            await sender.compose().text(f"🎨 {prompt}").image(output).reply()
-
-            logfire.info(
-                "image_generated_and_sent",
-                chat_id=deps.chat_id,
-                prompt_length=len(prompt),
-            )
-
-            return "[Sent directly to chat. Do not output anything else unless the user asked a follow-up question.]"
-
-        elif isinstance(output, str):
-            # Model returned text instead of image (refusal or error)
-            logfire.warning(
-                "image_generation_text_response",
-                response_chars=len(output),
-                chat_id=deps.chat_id,
-            )
-            return f"I couldn't generate that image: {output}"
-
-        else:
-            logfire.warning(
-                "image_generation_unexpected_output",
-                output_type=type(output).__name__,
-            )
-            return "Something unexpected happened during image generation."
-
-    except Exception as exc:
-        report_exception("image_generation_failed", chat_id=deps.chat_id)
-        return f"Image generation failed: {exc!s}"
-
-
-@credit_aware_tool("image_edit")
 async def edit_image(
     ctx: RunContext[AgentDeps],
     edit_prompt: str,
-    *,
-    use_profile_photo: bool = False,
 ) -> str:
-    """Edit an image that the user has sent.
+    """Edit the image attached to or replied to by the user's request.
 
-    Use this tool when the user sends an image and asks you to modify,
-    edit, or change it in some way. The edited image will be sent to the chat.
+    Use this tool only when the conversation includes an image reference. The
+    exact edit is executed after approval and delivered to the original chat.
 
     Args:
-        edit_prompt: Description of the edits to make to the image.
-        use_profile_photo: Set to True when the user asks to edit "my photo"
-            but hasn't attached an image. Uses their Telegram profile picture.
+        edit_prompt: Description of the requested image changes.
     """
-    deps = ctx.deps
-    message = deps.message
-
-    logfire.info(
-        "image_edit_started",
-        prompt_length=len(edit_prompt),
-        chat_id=deps.chat_id,
+    return await _run_approved_image_tool(
+        ctx,
+        ToolCallPart(
+            EDIT_IMAGE_TOOL,
+            {"edit_prompt": edit_prompt},
+            _required_tool_call_id(ctx),
+        ),
     )
 
-    # Extract the image from the message or replied message, with optional profile fallback
-    photo = await Extractor.photo(message, with_profile_photo=use_profile_photo)
 
-    if not photo:
+async def _run_approved_image_tool(
+    ctx: RunContext[AgentDeps],
+    tool_call: ToolCallPart,
+) -> str:
+    if not ctx.tool_call_approved:
+        raise RuntimeError("image tool execution requires a server-approved call")
+    coordinator = ctx.deps.image_operation_coordinator
+    context = ctx.deps.image_tool_context
+    if coordinator is None or context is None:
+        raise RuntimeError("image tool execution context is unavailable")
+    finishing_quote_input = context.finishing_quote_input
+    if finishing_quote_input is None:
+        raise RuntimeError("image tool finishing quote is unavailable")
+
+    call = DeferredImageCall.parse(tool_call, source=context.source)
+    outcome = ctx.deps.image_operation_outcome
+    if outcome is None:
+        outcome = await coordinator.run(
+            call.invocation(context),
+            plan_execution(call.feature, GoogleModelKey.IMAGE),
+            call.request,
+            allow_personal_once=context.allow_personal_once,
+            finishing_plan=plan_execution(
+                Feature.CHAT,
+                finishing_quote_input.model_key,
+            ),
+            finishing_quote_input=finishing_quote_input,
+        )
+    ctx.deps.image_operation_outcome = outcome
+    if isinstance(outcome, ImageDelivered):
+        return _SENT_DIRECTLY
+    if isinstance(outcome, ImageAwaitingFunding):
         return (
-            "I don't see an image to edit. Please send or reply to an image "
-            "and tell me what changes you'd like."
+            f"Image not generated: {outcome.quote.credits} credits are required. "
+            "The user was not charged."
         )
-
-    try:
-        # Download the image
-        image_data = await photo.download()
-
-        # Create image agent and run with the image + edit prompt
-        agent = create_image_agent(require_execution_plan(Feature.IMAGE_EDIT))
-        result = await agent.run(
-            [
-                BinaryContent(
-                    data=image_data,
-                    media_type=photo.media_type or "image/jpeg",
-                ),
-                f"Edit this image: {edit_prompt}",
-            ]
+    if isinstance(outcome, ImageNotCharged):
+        return "Image generation did not complete. The user was not charged."
+    if isinstance(outcome, ImageRefunded):
+        return "Image delivery failed. The charged credits were refunded."
+    if isinstance(outcome, ImageDeliveryUncertain):
+        return (
+            "Image delivery is uncertain and may already have succeeded. "
+            "Do not request another image automatically."
         )
-        output = result.output
+    if isinstance(outcome, ImageInProgress):
+        return "The approved image operation is still in progress."
+    raise TypeError(f"unsupported image outcome: {type(outcome).__name__}")
 
-        # Handle the output
-        if isinstance(output, BinaryImage):
-            sender = MessageSender.from_message(message)
-            await sender.compose().text(f"✏️ {edit_prompt}").image(output).reply()
 
-            logfire.info(
-                "image_edited_and_sent",
-                chat_id=deps.chat_id,
-                prompt_length=len(edit_prompt),
-            )
+def _required_tool_call_id(ctx: RunContext[AgentDeps]) -> str:
+    if ctx.tool_call_id is None or not ctx.tool_call_id.strip():
+        raise RuntimeError("approved image tool call has no stable ID")
+    return ctx.tool_call_id
 
-            return "[Sent directly to chat. Do not output anything else unless the user asked a follow-up question.]"
 
-        elif isinstance(output, str):
-            logfire.warning(
-                "image_edit_text_response",
-                response_chars=len(output),
-                chat_id=deps.chat_id,
-            )
-            return f"I couldn't edit that image: {output}"
-
-        else:
-            logfire.warning(
-                "image_edit_unexpected_output",
-                output_type=type(output).__name__,
-            )
-            return "Something unexpected happened during image editing."
-
-    except Exception as exc:
-        report_exception("image_edit_failed", chat_id=deps.chat_id)
-        return f"Image editing failed: {exc!s}"
+__all__ = ["edit_image", "generate_image"]
