@@ -26,6 +26,7 @@ from derp.models import (
     PaidOperation,
     PaymentReceipt,
     PersonalSpendConsent,
+    Subscription,
     SubscriptionCycle,
     Wallet,
     WalletLedgerEntry,
@@ -48,9 +49,12 @@ from derp.operations.types import (
     ReservationResult,
     ReservedOperation,
     SettlementResult,
+    WalletActivity,
+    WalletActivityKind,
     WalletBalance,
     WalletOwner,
     WalletOwnerKind,
+    WalletStatement,
 )
 
 type TransactionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
@@ -76,6 +80,16 @@ class InvalidOperationTransitionError(OperationLedgerError):
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+_ACTIVITY_KIND_BY_EVENT: Mapping[str, WalletActivityKind] = MappingProxyType(
+    {
+        "capture": WalletActivityKind.CHARGE,
+        "reversal": WalletActivityKind.REFUND,
+        "clawback": WalletActivityKind.PAYMENT_CLAWBACK,
+        "debt_incurred": WalletActivityKind.DEBT_INCURRED,
+    }
+)
 
 
 class OperationLedger:
@@ -622,49 +636,154 @@ class OperationLedger:
         """Return inventory totals without mutating or silently expiring credits."""
         now = self._aware_now()
         async with self._transactions() as session:
-            owner_column = (
-                Wallet.user_id if owner.kind is WalletOwnerKind.USER else Wallet.chat_id
-            )
-            wallet = await session.scalar(
-                select(Wallet).where(owner_column == owner.id)
-            )
+            _, balance = await self._balance_in_session(session, owner, now)
+            return balance
+
+    async def statement(
+        self,
+        owner: WalletOwner,
+        *,
+        activity_limit: int = 3,
+    ) -> WalletStatement:
+        """Return one consistent, bounded balance statement for Telegram UI."""
+        if (
+            isinstance(activity_limit, bool)
+            or not isinstance(activity_limit, int)
+            or not 0 <= activity_limit <= 10
+        ):
+            raise ValueError("activity_limit must be between zero and ten")
+        now = self._aware_now()
+        async with self._transactions() as session:
+            wallet, balance = await self._balance_in_session(session, owner, now)
             if wallet is None:
-                return WalletBalance(owner, 0, 0, 0, 0, 0)
-            rows = (
-                await session.execute(
-                    select(
-                        WalletLot.kind,
-                        func.sum(
-                            case(
-                                (
-                                    (WalletLot.expires_at.is_(None))
-                                    | (WalletLot.expires_at > now),
-                                    WalletLot.available_credits,
-                                ),
-                                else_=0,
-                            )
-                        ),
-                        func.sum(WalletLot.reserved_credits),
-                        func.sum(WalletLot.consumed_credits),
-                    )
-                    .where(WalletLot.wallet_id == wallet.id)
-                    .group_by(WalletLot.kind)
+                return WalletStatement(balance)
+
+            allowance_period_end = None
+            renewal_enabled = None
+            if owner.kind is WalletOwnerKind.USER:
+                subscription = await session.scalar(
+                    select(Subscription).where(Subscription.user_id == owner.id)
                 )
-            ).all()
-            by_kind = {
-                kind: (int(available), int(reserved), int(consumed))
-                for kind, available, reserved, consumed in rows
-            }
-            allowance = by_kind.get(InventoryKind.ALLOWANCE.value, (0, 0, 0))
-            purchased = by_kind.get(InventoryKind.PURCHASED.value, (0, 0, 0))
-            return WalletBalance(
-                owner=owner,
-                allowance_available=allowance[0],
-                purchased_available=purchased[0],
-                reserved=allowance[1] + purchased[1],
-                consumed=allowance[2] + purchased[2],
-                debt=wallet.debt_credits,
+                if (
+                    subscription is not None
+                    and subscription.status in {"active", "canceled"}
+                    and subscription.current_period_end > now
+                ):
+                    allowance_period_end = subscription.current_period_end
+                    renewal_enabled = bool(
+                        subscription.status == "active" and subscription.renewal_enabled
+                    )
+
+            recent_activity = await self._recent_activity(
+                session,
+                wallet.id,
+                limit=activity_limit,
             )
+            return WalletStatement(
+                balance=balance,
+                allowance_period_end=allowance_period_end,
+                renewal_enabled=renewal_enabled,
+                recent_activity=recent_activity,
+            )
+
+    @staticmethod
+    async def _balance_in_session(
+        session: AsyncSession,
+        owner: WalletOwner,
+        now: datetime,
+    ) -> tuple[Wallet | None, WalletBalance]:
+        owner_column = (
+            Wallet.user_id if owner.kind is WalletOwnerKind.USER else Wallet.chat_id
+        )
+        wallet = await session.scalar(select(Wallet).where(owner_column == owner.id))
+        if wallet is None:
+            return None, WalletBalance(owner, 0, 0, 0, 0, 0)
+        rows = (
+            await session.execute(
+                select(
+                    WalletLot.kind,
+                    func.sum(
+                        case(
+                            (
+                                (WalletLot.expires_at.is_(None))
+                                | (WalletLot.expires_at > now),
+                                WalletLot.available_credits,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    func.sum(WalletLot.reserved_credits),
+                    func.sum(WalletLot.consumed_credits),
+                )
+                .where(WalletLot.wallet_id == wallet.id)
+                .group_by(WalletLot.kind)
+            )
+        ).all()
+        by_kind = {
+            kind: (int(available), int(reserved), int(consumed))
+            for kind, available, reserved, consumed in rows
+        }
+        allowance = by_kind.get(InventoryKind.ALLOWANCE.value, (0, 0, 0))
+        purchased = by_kind.get(InventoryKind.PURCHASED.value, (0, 0, 0))
+        return wallet, WalletBalance(
+            owner=owner,
+            allowance_available=allowance[0],
+            purchased_available=purchased[0],
+            reserved=allowance[1] + purchased[1],
+            consumed=allowance[2] + purchased[2],
+            debt=wallet.debt_credits,
+        )
+
+    @staticmethod
+    async def _recent_activity(
+        session: AsyncSession,
+        wallet_id: uuid.UUID,
+        *,
+        limit: int,
+    ) -> tuple[WalletActivity, ...]:
+        if limit == 0:
+            return ()
+        activity_id = func.coalesce(
+            WalletLedgerEntry.operation_id,
+            WalletLedgerEntry.payment_receipt_id,
+            WalletLedgerEntry.id,
+        )
+        occurred_at = func.max(WalletLedgerEntry.created_at)
+        rows = (
+            await session.execute(
+                select(
+                    WalletLedgerEntry.event_type,
+                    activity_id.label("activity_id"),
+                    func.sum(WalletLedgerEntry.amount_credits).label("credits"),
+                    occurred_at.label("occurred_at"),
+                    func.max(OperationQuote.feature).label("feature"),
+                )
+                .outerjoin(
+                    PaidOperation,
+                    PaidOperation.id == WalletLedgerEntry.operation_id,
+                )
+                .outerjoin(
+                    OperationQuote,
+                    OperationQuote.id == PaidOperation.quote_id,
+                )
+                .where(
+                    WalletLedgerEntry.wallet_id == wallet_id,
+                    WalletLedgerEntry.event_type.in_(_ACTIVITY_KIND_BY_EVENT),
+                )
+                .group_by(WalletLedgerEntry.event_type, activity_id)
+                .order_by(occurred_at.desc(), activity_id.desc())
+                .limit(limit)
+            )
+        ).all()
+        return tuple(
+            WalletActivity(
+                kind=_ACTIVITY_KIND_BY_EVENT[row.event_type],
+                credits=int(row.credits),
+                occurred_at=row.occurred_at,
+                feature=Feature(row.feature) if row.feature is not None else None,
+            )
+            for row in rows
+        )
 
     async def personal_consent_enabled(
         self, user_id: uuid.UUID, chat_id: uuid.UUID

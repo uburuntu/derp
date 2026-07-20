@@ -17,8 +17,12 @@ from derp.operations import (
     Quote,
     QuoteId,
     QuoteKey,
+    WalletActivity,
+    WalletActivityKind,
+    WalletBalance,
     WalletOwner,
     WalletOwnerKind,
+    WalletStatement,
 )
 
 
@@ -108,3 +112,28 @@ def test_terminal_states_are_explicit() -> None:
     assert OperationState.REVERSED.terminal is True
     assert DeliveryState.UNCERTAIN.terminal is False
     assert DeliveryState.DELIVERED.terminal is True
+
+
+def test_wallet_statement_keeps_activity_typed_and_content_free() -> None:
+    now = datetime(2026, 7, 20, tzinfo=UTC)
+    owner = WalletOwner(WalletOwnerKind.USER, UUID(int=1))
+    balance = WalletBalance(owner, 10, 20, 0, 5, 0)
+    activity = WalletActivity(
+        WalletActivityKind.CHARGE,
+        5,
+        now,
+        Feature.IMAGE_GENERATE,
+    )
+
+    statement = WalletStatement(
+        balance,
+        allowance_period_end=now + timedelta(days=30),
+        renewal_enabled=True,
+        recent_activity=(activity,),
+    )
+
+    assert statement.recent_activity == (activity,)
+    with pytest.raises(ValueError, match="renewal state"):
+        WalletStatement(balance, renewal_enabled=True)
+    with pytest.raises(ValueError, match="positive"):
+        WalletActivity(WalletActivityKind.REFUND, 0, now)

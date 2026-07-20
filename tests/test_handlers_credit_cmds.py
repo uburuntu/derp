@@ -13,7 +13,12 @@ from derp.handlers.credit_cmds import (
     show_buy_options,
     show_credits,
 )
-from derp.operations import WalletBalance, WalletOwner, WalletOwnerKind
+from derp.operations import (
+    WalletBalance,
+    WalletOwner,
+    WalletOwnerKind,
+    WalletStatement,
+)
 
 OPEN_COMMERCE = CommercePolicy(public_intake_enabled=True)
 
@@ -33,21 +38,23 @@ def _balance(
     *,
     allowance: int = 0,
     purchased: int = 0,
-) -> WalletBalance:
-    return WalletBalance(
-        owner=WalletOwner(kind, owner_id),
-        allowance_available=allowance,
-        purchased_available=purchased,
-        reserved=0,
-        consumed=0,
-        debt=0,
+) -> WalletStatement:
+    return WalletStatement(
+        WalletBalance(
+            owner=WalletOwner(kind, owner_id),
+            allowance_available=allowance,
+            purchased_available=purchased,
+            reserved=0,
+            consumed=0,
+            debt=0,
+        )
     )
 
 
 @pytest.fixture
 def mock_operation_ledger():
     ledger = MagicMock()
-    ledger.balance = AsyncMock()
+    ledger.statement = AsyncMock()
     ledger.personal_consent_enabled = AsyncMock(return_value=False)
     return ledger
 
@@ -67,7 +74,7 @@ async def test_show_credits_with_chat(make_message, mock_sender, mock_operation_
     chat_model.telegram_id = -100123
     chat_model.type = "supergroup"
     chat_model.shared_credit_spending_enabled = True
-    mock_operation_ledger.balance.side_effect = [
+    mock_operation_ledger.statement.side_effect = [
         _balance(WalletOwnerKind.USER, user_model.id, purchased=25),
         _balance(WalletOwnerKind.CHAT, chat_model.id, purchased=50),
     ]
@@ -95,7 +102,7 @@ async def test_show_credits_private_chat(
 
     chat_model = None  # No chat in private
 
-    mock_operation_ledger.balance.return_value = _balance(
+    mock_operation_ledger.statement.return_value = _balance(
         WalletOwnerKind.USER, user_model.id, allowance=40, purchased=60
     )
     await show_credits(message, sender, mock_operation_ledger, user_model, chat_model)
@@ -112,7 +119,7 @@ async def test_show_credits_keeps_purchase_controls_out_of_balance_copy(
     message = make_message(text="/credits")
     sender = mock_sender(message=message)
     user_model = MagicMock(id=UUID(int=1), telegram_id=12345)
-    mock_operation_ledger.balance.return_value = _balance(
+    mock_operation_ledger.statement.return_value = _balance(
         WalletOwnerKind.USER, user_model.id
     )
 

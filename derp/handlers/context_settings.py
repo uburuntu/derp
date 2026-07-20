@@ -44,9 +44,11 @@ from derp.models import User as UserModel
 from derp.observability import report_exception
 from derp.operations import (
     OperationLedger,
-    WalletBalance,
+    WalletActivity,
+    WalletActivityKind,
     WalletOwner,
     WalletOwnerKind,
+    WalletStatement,
 )
 from derp.tools.shared_facts import SharedFactAction, SharedFactCallback
 
@@ -254,37 +256,54 @@ def build_context_panel(
 
 
 def build_credit_panel(
-    personal: WalletBalance,
+    personal: WalletStatement,
     *,
-    shared: WalletBalance | None,
+    shared: WalletStatement | None,
     shared_spending_enabled: bool,
     personal_fallback_enabled: bool,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build a truthful balance and per-chat funding preference surface."""
+    personal_balance = personal.balance
+    allowance_line = f"Monthly allowance: {personal_balance.allowance_available}"
+    if personal.allowance_period_end is not None:
+        renewal = "renews" if personal.renewal_enabled else "ends"
+        allowance_line += (
+            f" · {renewal} {personal.allowance_period_end.strftime('%d %b %Y')}"
+        )
+    elif personal_balance.allowance_available == 0:
+        allowance_line += " · no active plan"
     lines = [
         "<b>Credits</b>",
         "",
         "<b>Personal</b>",
-        f"Monthly allowance: {personal.allowance_available}",
-        f"Purchased: {personal.purchased_available}",
+        allowance_line,
+        f"Purchased: {personal_balance.purchased_available}",
     ]
-    if personal.reserved:
-        lines.append(f"In progress: {personal.reserved}")
-    if personal.debt:
-        lines.append(f"Payment debt: {personal.debt} · paid use is paused")
+    if personal_balance.reserved:
+        lines.append(f"In progress: {personal_balance.reserved}")
+    if personal_balance.debt:
+        lines.append(f"Payment debt: {personal_balance.debt} · paid use is paused")
+    if personal.recent_activity:
+        lines.extend(["", "<b>Recent activity</b>"])
+        lines.extend(_wallet_activity_line(item) for item in personal.recent_activity)
 
     rows: list[list[InlineKeyboardButton]] = []
     if shared is not None:
+        shared_balance = shared.balance
         state = "available" if shared_spending_enabled else "paused by admins"
         lines.extend(
             [
                 "",
                 "<b>This chat</b>",
-                f"Shared purchased: {shared.purchased_available} · {state}",
+                f"Shared purchased: {shared_balance.purchased_available} · {state}",
             ]
         )
-        if shared.reserved:
-            lines.append(f"Shared in progress: {shared.reserved}")
+        if shared_balance.reserved:
+            lines.append(f"Shared in progress: {shared_balance.reserved}")
+        lines.extend(
+            f"Shared {_wallet_activity_line(item).lower()}"
+            for item in shared.recent_activity
+        )
         rows.append(
             [
                 InlineKeyboardButton(
@@ -310,6 +329,26 @@ def build_credit_panel(
         ]
     )
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _wallet_activity_line(activity: WalletActivity) -> str:
+    feature = {
+        "chat": "Chat",
+        "inline_chat": "Inline chat",
+        "deep_think": "Deep thinking",
+        "image_generate": "Image generation",
+        "image_edit": "Image editing",
+        "tts": "Voice",
+        "video_generate": "Video generation",
+    }.get(activity.feature and activity.feature.value, "Paid operation")
+    date = activity.occurred_at.strftime("%d %b")
+    if activity.kind is WalletActivityKind.CHARGE:
+        return f"{feature}: -{activity.credits} · {date}"
+    if activity.kind is WalletActivityKind.REFUND:
+        return f"{feature} refund: +{activity.credits} · {date}"
+    if activity.kind is WalletActivityKind.PAYMENT_CLAWBACK:
+        return f"Payment refund: -{activity.credits} · {date}"
+    return f"Payment debt: {activity.credits} · {date}"
 
 
 def build_privacy_panel(
@@ -505,13 +544,13 @@ async def _credit_panel_for(
     chat_model: ChatModel | None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Load one user's exact wallet view without exposing ledger internals."""
-    personal = await operation_ledger.balance(
+    personal = await operation_ledger.statement(
         WalletOwner(WalletOwnerKind.USER, user_model.id)
     )
     shared = None
     consent_enabled = False
     if chat_model and chat_model.type != "private":
-        shared = await operation_ledger.balance(
+        shared = await operation_ledger.statement(
             WalletOwner(WalletOwnerKind.CHAT, chat_model.id)
         )
         consent_enabled = await operation_ledger.personal_consent_enabled(

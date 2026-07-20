@@ -50,9 +50,12 @@ from derp.operations.types import (
     ReservationResult,
     ReservedOperation,
     SettlementResult,
+    WalletActivity,
+    WalletActivityKind,
     WalletBalance,
     WalletOwner,
     WalletOwnerKind,
+    WalletStatement,
 )
 
 __all__ = [
@@ -100,6 +103,9 @@ __all__ = [
     "MAX_RECONCILIATION_INTERVAL",
     "MIN_OPERATION_STALE_AFTER",
     "WalletBalance",
+    "WalletActivity",
+    "WalletActivityKind",
     "WalletOwner",
     "WalletOwnerKind",
+    "WalletStatement",
 ]

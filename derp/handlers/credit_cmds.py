@@ -41,13 +41,13 @@ async def show_credits(
     if not user_model:
         return await message.reply(_("😅 Could not find your user info."))
 
-    personal = await operation_ledger.balance(
+    personal = await operation_ledger.statement(
         WalletOwner(WalletOwnerKind.USER, user_model.id)
     )
     shared = None
     consent_enabled = False
     if chat_model and chat_model.type != "private":
-        shared = await operation_ledger.balance(
+        shared = await operation_ledger.statement(
             WalletOwner(WalletOwnerKind.CHAT, chat_model.id)
         )
         consent_enabled = await operation_ledger.personal_consent_enabled(
@@ -58,9 +58,9 @@ async def show_credits(
         "credits_checked",
         user_id=user_model.telegram_id,
         chat_id=chat_model and chat_model.telegram_id,
-        user_allowance=personal.allowance_available,
-        user_purchased=personal.purchased_available,
-        chat_purchased=shared and shared.purchased_available,
+        user_allowance=personal.balance.allowance_available,
+        user_purchased=personal.balance.purchased_available,
+        chat_purchased=shared and shared.balance.purchased_available,
     )
     text, markup = build_credit_panel(
         personal,

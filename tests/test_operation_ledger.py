@@ -41,6 +41,7 @@ from derp.operations import (
     ReservationRejected,
     ReservationRejection,
     ReservedOperation,
+    WalletActivityKind,
     WalletOwner,
     WalletOwnerKind,
 )
@@ -258,6 +259,62 @@ async def test_reserve_uses_allowance_then_purchase_and_all_transitions_are_idem
     balance = await ledger_env.ledger.balance(reserved.allocation.owner)
     assert balance.spendable == allowance + 5
     assert balance.reserved == balance.consumed == balance.debt == 0
+
+
+async def test_statement_aggregates_split_lots_and_reports_subscription_end(
+    ledger_env: LedgerEnvironment,
+) -> None:
+    user_id, chat_id = await _create_scope(ledger_env)
+    wallet = await _wallet(ledger_env, user_id=user_id)
+    operation_id, price = await _register_image_operation(
+        ledger_env, user_id=user_id, chat_id=chat_id
+    )
+    period_end = ledger_env.clock() + timedelta(days=10)
+    allowance = max(1, price - 2)
+    await _add_allowance(
+        ledger_env,
+        wallet_id=wallet.id,
+        user_id=user_id,
+        credits=allowance,
+        expires_at=period_end,
+    )
+    await _add_purchase(ledger_env, wallet.id, 5)
+
+    reserved = await ledger_env.ledger.reserve(operation_id)
+    assert isinstance(reserved, ReservedOperation)
+    await ledger_env.ledger.mark_executing(operation_id)
+    await ledger_env.ledger.capture(operation_id)
+
+    statement = await ledger_env.ledger.statement(
+        WalletOwner(WalletOwnerKind.USER, user_id)
+    )
+
+    assert statement.allowance_period_end == period_end
+    assert statement.renewal_enabled is True
+    assert len(statement.recent_activity) == 1
+    charge = statement.recent_activity[0]
+    assert charge.kind is WalletActivityKind.CHARGE
+    assert charge.credits == price
+    assert charge.feature is Feature.IMAGE_GENERATE
+
+    await ledger_env.ledger.reverse(operation_id, reason="delivery_failed")
+    async with ledger_env.transactions() as session:
+        subscription = await session.scalar(
+            select(Subscription).where(Subscription.user_id == user_id)
+        )
+        assert subscription is not None
+        subscription.renewal_enabled = False
+        subscription.status = "canceled"
+
+    updated = await ledger_env.ledger.statement(
+        WalletOwner(WalletOwnerKind.USER, user_id)
+    )
+    assert updated.renewal_enabled is False
+    assert [activity.kind for activity in updated.recent_activity] == [
+        WalletActivityKind.REFUND,
+        WalletActivityKind.CHARGE,
+    ]
+    assert all(activity.credits == price for activity in updated.recent_activity)
 
 
 async def test_group_uses_chat_first_then_requires_explicit_personal_consent(

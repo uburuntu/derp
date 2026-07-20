@@ -1,5 +1,6 @@
 """Context onboarding and settings stay native, truthful, and authorized."""
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -7,6 +8,7 @@ import pytest
 from aiogram import Bot
 from aiogram.types import CallbackQuery, ChatMemberAdministrator, User
 
+from derp.execution import Feature
 from derp.handlers.context_settings import (
     ContextAction,
     ContextCallback,
@@ -24,7 +26,14 @@ from derp.handlers.context_settings import (
     toggle_personal_spend,
 )
 from derp.history.policy import ChatPolicyFlag
-from derp.operations import WalletBalance, WalletOwner, WalletOwnerKind
+from derp.operations import (
+    WalletActivity,
+    WalletActivityKind,
+    WalletBalance,
+    WalletOwner,
+    WalletOwnerKind,
+    WalletStatement,
+)
 from derp.tools.shared_facts import SharedFactAction, SharedFactCallback
 
 
@@ -71,21 +80,35 @@ def test_privacy_panel_exposes_personal_deletion_to_non_admin(
 
 
 def test_credit_panel_shows_inventories_debt_and_personal_preference() -> None:
-    personal = WalletBalance(
-        WalletOwner(WalletOwnerKind.USER, UUID(int=1)),
-        allowance_available=12,
-        purchased_available=34,
-        reserved=5,
-        consumed=6,
-        debt=7,
+    personal = WalletStatement(
+        WalletBalance(
+            WalletOwner(WalletOwnerKind.USER, UUID(int=1)),
+            allowance_available=12,
+            purchased_available=34,
+            reserved=5,
+            consumed=6,
+            debt=7,
+        ),
+        allowance_period_end=datetime(2026, 8, 19, tzinfo=UTC),
+        renewal_enabled=True,
+        recent_activity=(
+            WalletActivity(
+                WalletActivityKind.REFUND,
+                5,
+                datetime(2026, 7, 20, tzinfo=UTC),
+                Feature.IMAGE_GENERATE,
+            ),
+        ),
     )
-    shared = WalletBalance(
-        WalletOwner(WalletOwnerKind.CHAT, UUID(int=2)),
-        allowance_available=0,
-        purchased_available=56,
-        reserved=8,
-        consumed=9,
-        debt=0,
+    shared = WalletStatement(
+        WalletBalance(
+            WalletOwner(WalletOwnerKind.CHAT, UUID(int=2)),
+            allowance_available=0,
+            purchased_available=56,
+            reserved=8,
+            consumed=9,
+            debt=0,
+        )
     )
 
     text, markup = build_credit_panel(
@@ -96,8 +119,10 @@ def test_credit_panel_shows_inventories_debt_and_personal_preference() -> None:
     )
 
     assert "Monthly allowance: 12" in text
+    assert "renews 19 Aug 2026" in text
     assert "Purchased: 34" in text
     assert "Payment debt: 7" in text
+    assert "Image generation refund: +5" in text
     assert "Shared purchased: 56 · paused by admins" in text
     assert markup.inline_keyboard[0][0].text == "Personal fallback: Always"
 
@@ -121,10 +146,18 @@ async def test_personal_fallback_toggle_is_scoped_to_callback_actor(
     ledger.grant_personal_consent = AsyncMock()
     ledger.revoke_personal_consent = AsyncMock()
     ledger.personal_consent_enabled = AsyncMock(return_value=True)
-    ledger.balance = AsyncMock(
+    ledger.statement = AsyncMock(
         side_effect=[
-            WalletBalance(WalletOwner(WalletOwnerKind.USER, user.id), 0, 10, 0, 0, 0),
-            WalletBalance(WalletOwner(WalletOwnerKind.CHAT, chat.id), 0, 20, 0, 0, 0),
+            WalletStatement(
+                WalletBalance(
+                    WalletOwner(WalletOwnerKind.USER, user.id), 0, 10, 0, 0, 0
+                )
+            ),
+            WalletStatement(
+                WalletBalance(
+                    WalletOwner(WalletOwnerKind.CHAT, chat.id), 0, 20, 0, 0, 0
+                )
+            ),
         ]
     )
 

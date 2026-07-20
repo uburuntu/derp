@@ -298,6 +298,60 @@ class WalletBalance:
         return self.allowance_available + self.purchased_available
 
 
+class WalletActivityKind(StrEnum):
+    """User-visible balance movements that are useful outside routine receipts."""
+
+    CHARGE = "charge"
+    REFUND = "refund"
+    PAYMENT_CLAWBACK = "payment_clawback"
+    DEBT_INCURRED = "debt_incurred"
+
+
+@dataclass(frozen=True, slots=True)
+class WalletActivity:
+    """One content-free, lot-aggregated wallet movement."""
+
+    kind: WalletActivityKind
+    credits: int
+    occurred_at: datetime
+    feature: Feature | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, WalletActivityKind):
+            raise TypeError("wallet activity kind must be a WalletActivityKind")
+        if isinstance(self.credits, bool) or not isinstance(self.credits, int):
+            raise TypeError("wallet activity credits must be an integer")
+        if self.credits <= 0:
+            raise ValueError("wallet activity credits must be positive")
+        _require_aware(self.occurred_at, "occurred_at")
+        if self.feature is not None and not isinstance(self.feature, Feature):
+            raise TypeError("wallet activity feature must be a Feature")
+
+
+@dataclass(frozen=True, slots=True)
+class WalletStatement:
+    """A balance plus bounded subscription and exceptional activity context."""
+
+    balance: WalletBalance
+    allowance_period_end: datetime | None = None
+    renewal_enabled: bool | None = None
+    recent_activity: tuple[WalletActivity, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.balance, WalletBalance):
+            raise TypeError("statement balance must be a WalletBalance")
+        if self.allowance_period_end is not None:
+            _require_aware(self.allowance_period_end, "allowance_period_end")
+            if self.balance.owner.kind is not WalletOwnerKind.USER:
+                raise ValueError("only personal wallets have allowance periods")
+        if self.renewal_enabled is not None and self.allowance_period_end is None:
+            raise ValueError("renewal state requires an active allowance period")
+        if not isinstance(self.recent_activity, tuple) or any(
+            not isinstance(item, WalletActivity) for item in self.recent_activity
+        ):
+            raise TypeError("recent activity must be an immutable activity tuple")
+
+
 class OperationState(StrEnum):
     """Durable settlement lifecycle; terminal states never reopen."""
 
