@@ -42,7 +42,7 @@ async def test_handle_think_success(
 
         await handle_think(message, sender, service, user_model=user, chat_model=chat)
 
-        mock_create_agent.assert_called_with(check_result.model)
+        mock_create_agent.assert_called_with(check_result.plan)
         mock_agent.run.assert_awaited_once()
         service.deduct.assert_awaited_once()
         sender.reply.assert_awaited()

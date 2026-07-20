@@ -19,15 +19,11 @@ from google import genai
 from google.genai import types
 from pydantic_ai import RunContext
 
-from derp.catalog import (
-    GoogleModelKey,
-    GoogleModelSpec,
-    VideoPricing,
-    get_google_model,
-)
+from derp.catalog import VideoPricing
 from derp.common.extractor import Extractor
 from derp.common.sender import MessageSender
 from derp.config import settings
+from derp.execution import ExecutionPlan, Feature, require_execution_plan
 from derp.llm.deps import AgentDeps
 from derp.tools.wrapper import credit_aware_tool
 
@@ -59,20 +55,6 @@ class VideoGenerationError(Exception):
         return " | ".join(parts)
 
 
-def _pick_veo_model(*, quality: str, model: GoogleModelSpec | None) -> GoogleModelSpec:
-    """Pick a Veo model id.
-
-    Args:
-        quality: 'fast' or 'standard'
-        model: explicit model override (used by tooling)
-    """
-    if model:
-        return model
-    if quality.lower() == "standard":
-        return get_google_model(GoogleModelKey.VIDEO_STANDARD)
-    return get_google_model(GoogleModelKey.VIDEO_FAST)
-
-
 async def _download_video_to_bytes(client: genai.Client, video: types.Video) -> bytes:
     """Download a generated video to memory using async client.
 
@@ -88,10 +70,9 @@ async def generate_and_send_video(
     deps: AgentDeps,
     *,
     prompt: str,
-    quality: str = "fast",
     duration_seconds: int = 6,
     aspect_ratio: str = "16:9",
-    model: GoogleModelSpec | None = None,
+    plan: ExecutionPlan,
     with_profile_photo: bool = False,
 ) -> None:
     """Generate and send a video to the chat.
@@ -103,14 +84,15 @@ async def generate_and_send_video(
     Args:
         deps: Agent dependencies with message context.
         prompt: Video generation prompt.
-        quality: 'fast' or 'standard' (affects model selection).
         duration_seconds: Video length (4, 6, or 8 seconds).
         aspect_ratio: Video aspect ratio ('16:9', '9:16', '1:1').
-        model: Explicit model override (bypasses quality selection).
+        plan: Exact execution plan selected by access policy.
         with_profile_photo: If True, use user's profile photo as reference
             when no image is attached (for "animate my photo" requests).
     """
-    model_spec = _pick_veo_model(quality=quality, model=model)
+    if plan.feature is not Feature.VIDEO_GENERATE:
+        raise ValueError(f"{plan.feature.value} is not a video plan")
+    model_spec = plan.model
     pricing = model_spec.pricing
     if not isinstance(pricing, VideoPricing):
         raise ValueError(f"{model_spec.key} is not a video model")
@@ -250,9 +232,9 @@ async def video_generate(
     await generate_and_send_video(
         ctx.deps,
         prompt=prompt,
-        quality=quality,
         duration_seconds=duration_seconds,
         aspect_ratio=aspect_ratio,
+        plan=require_execution_plan(Feature.VIDEO_GENERATE),
         with_profile_photo=use_profile_photo,
     )
     return "[Sent directly to chat. Do not output anything else unless the user asked a follow-up question.]"

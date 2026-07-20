@@ -14,6 +14,7 @@ import logfire
 from pydantic_ai import RunContext
 
 from derp.credits.service import CreditService, get_placeholder_message
+from derp.execution import execution_plan_scope
 from derp.observability import report_exception
 
 if TYPE_CHECKING:
@@ -89,6 +90,7 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
                 logfire.info(
                     "tool_invoked",
                     tool=tool_name,
+                    feature=result.plan and result.plan.feature.value,
                     source=result.source,
                     model_key=result.model and result.model.key.value,
                     model=result.model and result.model.provider_model_id,
@@ -99,7 +101,8 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
 
                 # Execute tool
                 try:
-                    output = await func(ctx, *args, **kwargs)
+                    with execution_plan_scope(result.plan):
+                        output = await func(ctx, *args, **kwargs)
 
                     # Deduct credits on success
                     # Use message_id as part of idempotency key
@@ -115,6 +118,8 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
                         metadata={
                             "message_id": deps.message.message_id,
                             "source": result.source,
+                            "feature": result.plan and result.plan.feature.value,
+                            "model": result.model_id,
                         },
                     )
 

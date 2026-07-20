@@ -13,11 +13,12 @@ from google import genai
 from google.genai import types
 from pydantic_ai import RunContext
 
-from derp.catalog import AudioPricing, GoogleModelKey, GoogleModelSpec, get_google_model
+from derp.catalog import AudioPricing
 from derp.common.audio import convert_to_ogg_opus
 from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.credits.tools import TTS_MAX_OUTPUT_SECONDS
+from derp.execution import ExecutionPlan, Feature, require_execution_plan
 from derp.llm.deps import AgentDeps
 from derp.tools.wrapper import credit_aware_tool
 
@@ -29,9 +30,11 @@ async def generate_and_send_tts(
     deps: AgentDeps,
     *,
     text: str,
-    model: GoogleModelSpec | None = None,
+    plan: ExecutionPlan,
 ) -> None:
-    spec = model or get_google_model(GoogleModelKey.TTS)
+    if plan.feature is not Feature.TTS:
+        raise ValueError(f"{plan.feature.value} is not a TTS plan")
+    spec = plan.model
     pricing = spec.pricing
     if not isinstance(pricing, AudioPricing):
         raise ValueError(f"{spec.key} is not an audio model")
@@ -108,5 +111,9 @@ async def voice_tts(
         text: Text for a voice message of up to about 30 seconds. Split longer
             narration into separate requests.
     """
-    await generate_and_send_tts(ctx.deps, text=text)
+    await generate_and_send_tts(
+        ctx.deps,
+        text=text,
+        plan=require_execution_plan(Feature.TTS),
+    )
     return "[Sent directly to chat. Do not output anything else unless the user asked a follow-up question.]"

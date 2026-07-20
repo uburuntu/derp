@@ -69,7 +69,8 @@ async def handle_think(
             + "\n\n"
             + purchase_suspension_message(),
         )
-    model = result.require_model()
+    plan = result.require_plan()
+    model = plan.model
 
     logfire.info(
         "think_command_started",
@@ -78,7 +79,7 @@ async def handle_think(
     )
 
     try:
-        agent = create_chat_agent(model)
+        agent = create_chat_agent(plan)
 
         deps = AgentDeps(
             message=message,

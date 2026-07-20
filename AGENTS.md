@@ -164,6 +164,7 @@ only when its replacement is covered and working.
   - `derp/filters/*`: input shaping (mentions, meta command/hashtag parser).
   - `derp/common/*`: shared services (LLM, extraction, executors, Telegram helpers).
   - `derp/catalog/*`: immutable provider model facts and pricing.
+  - `derp/execution.py`: validated feature/model plans and typed outcomes.
   - `derp/credits/*`: credit economy (feature policy, service, transactions).
   - `derp/db/*`: database session and query functions.
   - `derp/models/*`: SQLAlchemy models (User, Chat, Message, CreditTransaction, DailyUsage).
@@ -193,7 +194,10 @@ only when its replacement is covered and working.
 - **Provider Factory:** `derp/llm/providers.py` accepts an exact catalog spec or
   semantic key and creates the corresponding Google model. Provider switching
   is not currently implemented.
-- **Agent Factories:** `derp/llm/agents.py` provides `create_chat_agent()`, `create_image_agent()`, and `create_inline_agent()`. Chat tools are attached per run through `create_chat_toolset()`.
+- **Agent Factories:** `derp/llm/agents.py` provides `create_chat_agent()`,
+  `create_image_agent()`, and `create_inline_agent()`. They accept validated
+  `ExecutionPlan` objects (or resolve a compatible default plan). Chat tools are
+  attached per run through `create_chat_toolset()`.
 - **Dependencies:** `AgentDeps` dataclass (`derp/llm/deps.py`) injects context
   (message, chat, user, db, bot, exact model spec) into tools and prompts.
 - **Result Wrapper:** `AgentResult` (`derp/llm/result.py`) standardizes agent output and provides `reply_to()` for sending Telegram messages with text, images, code blocks.
@@ -205,6 +209,9 @@ only when its replacement is covered and working.
 - **Tools & Toolsets:**
   - `derp/tools/toolsets.py`: creates `FunctionToolset` instances with registered tools (chat memory, web search, image gen, think).
   - Tools wrapped with `credit_aware_tool` for access control and credit deduction.
+  - The wrapper binds its access-selected `ExecutionPlan` to the invocation;
+    provider-backed tools call `require_execution_plan()` and never select a
+    model independently.
   - Chat memory stored in `chats.llm_memory` column, capped at 1024 chars.
 
 ### Pydantic-AI Tool Best Practices
@@ -267,8 +274,9 @@ derp/credits/
 - **CreditService:** Central service for all credit operations. Accepts SQLAlchemy `UserModel`/`ChatModel` directly (not Telegram IDs). Performs atomic balance updates, records transactions with idempotency keys, and checks tool/model access. Injected via `CreditServiceMiddleware`.
 - **Catalogs:** `GOOGLE_MODEL_CATALOG` owns provider facts and pricing;
   `TOOL_REGISTRY` owns feature access policy and semantic model selection.
-- **CreditCheckResult:** Returned by access checks; contains the exact immutable
-  model spec, `allowed`, `reject_reason`, source (chat/user), and cost information.
+- **CreditCheckResult:** Returned by legacy access checks; contains the exact
+  immutable `ExecutionPlan`, `allowed`, `reject_reason`, source (chat/user), and
+  cost information. Immutable quotes replace it in Milestone 2.
 
 ### Payment Flow
 

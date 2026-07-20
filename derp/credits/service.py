@@ -14,11 +14,7 @@ from typing import TYPE_CHECKING
 
 import logfire
 
-from derp.catalog import (
-    GoogleModelKey,
-    GoogleModelSpec,
-    get_google_model,
-)
+from derp.catalog import GoogleModelKey
 from derp.credits.tools import TOOL_REGISTRY, get_tool
 from derp.credits.types import CreditCheckResult
 from derp.db.credits import (
@@ -31,6 +27,7 @@ from derp.db.credits import (
     get_transaction_by_idempotency_key,
     increment_daily_usage,
 )
+from derp.execution import ExecutionPlan, Feature, plan_execution
 from derp.observability import telemetry_fingerprint
 
 if TYPE_CHECKING:
@@ -55,8 +52,8 @@ class CreditService:
     Usage:
         service = CreditService(session)
 
-        # Get the exact orchestrator model and context policy.
-        model, context_limit = await service.get_orchestrator_config(user, chat)
+        # Get the exact orchestrator plan and context policy.
+        plan, context_limit = await service.get_orchestrator_config(user, chat)
 
         # Check tool access
         result = await service.check_tool_access(user, chat, "image_generate")
@@ -74,7 +71,7 @@ class CreditService:
         self,
         user: User,
         chat: Chat,
-    ) -> tuple[GoogleModelSpec, int]:
+    ) -> tuple[ExecutionPlan, int]:
         """Get orchestrator configuration based on credit balance.
 
         Args:
@@ -82,29 +79,30 @@ class CreditService:
             chat: Database Chat model.
 
         Returns:
-            Exact catalog model plus the message context limit.
+            Validated chat execution plan plus the message context limit.
         """
         chat_credits, user_credits = await get_balances(
             self.session, user.telegram_id, chat.telegram_id
         )
 
         if chat_credits > 0 or user_credits > 0:
-            model = get_google_model(GoogleModelKey.CHAT_STANDARD)
+            model_key = GoogleModelKey.CHAT_STANDARD
         else:
-            model = get_google_model(GoogleModelKey.CHAT_ECONOMY)
+            model_key = GoogleModelKey.CHAT_ECONOMY
 
-        context_limit = CONTEXT_LIMITS[model.key]
+        plan = plan_execution(Feature.CHAT, model_key)
+        context_limit = CONTEXT_LIMITS[plan.model.key]
 
         logfire.debug(
             "orchestrator_config",
-            model_key=model.key.value,
-            model=model.provider_model_id,
+            model_key=plan.model.key.value,
+            model=plan.model.provider_model_id,
             context_limit=context_limit,
             chat_credits=chat_credits,
             user_credits=user_credits,
         )
 
-        return model, context_limit
+        return plan, context_limit
 
     async def check_tool_access(
         self,
@@ -133,9 +131,8 @@ class CreditService:
         """
         tool = get_tool(tool_name)
         resolved_arguments = arguments or {}
-        model_key = tool.resolve_model_key(resolved_arguments)
-        model = get_google_model(model_key) if model_key else None
-        total_cost = tool.total_cost(tool.model_credit_cost(model, resolved_arguments))
+        plan = tool.resolve_plan(resolved_arguments)
+        total_cost = tool.total_cost(tool.model_credit_cost(plan, resolved_arguments))
 
         # Get balances
         chat_credits, user_credits = await get_balances(
@@ -148,7 +145,7 @@ class CreditService:
             if used < tool.free_daily_limit:
                 return CreditCheckResult(
                     allowed=True,
-                    model=model,
+                    plan=plan,
                     source="free",
                     credits_to_deduct=0,
                     credits_remaining=None,
@@ -158,7 +155,7 @@ class CreditService:
         if total_cost == 0:
             return CreditCheckResult(
                 allowed=False,
-                model=model,
+                plan=plan,
                 source="rejected",
                 credits_to_deduct=0,
                 credits_remaining=None,
@@ -170,7 +167,7 @@ class CreditService:
         if chat_credits >= total_cost:
             return CreditCheckResult(
                 allowed=True,
-                model=model,
+                plan=plan,
                 source="chat",
                 credits_to_deduct=total_cost,
                 credits_remaining=chat_credits - total_cost,
@@ -181,7 +178,7 @@ class CreditService:
         if user_credits >= total_cost:
             return CreditCheckResult(
                 allowed=True,
-                model=model,
+                plan=plan,
                 source="user",
                 credits_to_deduct=total_cost,
                 credits_remaining=user_credits - total_cost,
@@ -191,7 +188,7 @@ class CreditService:
         # Rejected
         return CreditCheckResult(
             allowed=False,
-            model=model,
+            plan=plan,
             source="rejected",
             credits_to_deduct=0,
             credits_remaining=0,
@@ -222,6 +219,16 @@ class CreditService:
             idempotency_key: Optional key to prevent duplicate charges.
             metadata: Optional additional context.
         """
+        if not result.allowed:
+            raise ValueError("Cannot deduct a rejected credit check")
+        tool = get_tool(tool_name)
+        if (result.plan is None) != (tool.feature is None):
+            raise ValueError(f"{tool_name} received an incompatible execution plan")
+        if result.plan and result.plan.feature is not tool.feature:
+            raise ValueError(
+                f"{result.plan.feature.value} cannot settle as {tool_name}"
+            )
+
         # Check idempotency
         if idempotency_key:
             existing = await get_transaction_by_idempotency_key(

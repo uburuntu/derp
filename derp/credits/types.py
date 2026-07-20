@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from derp.catalog import GoogleModelSpec
+from derp.execution import ExecutionPlan
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,7 +18,7 @@ class CreditCheckResult:
     """
 
     allowed: bool
-    model: GoogleModelSpec | None
+    plan: ExecutionPlan | None
     source: Literal["free", "chat", "user", "rejected"]
     credits_to_deduct: int
     credits_remaining: int | None  # None for free tier
@@ -25,15 +26,20 @@ class CreditCheckResult:
     reject_reason: str | None = None
 
     @property
+    def model(self) -> GoogleModelSpec | None:
+        """Exact model selected by the execution plan, when provider-backed."""
+        return self.plan.model if self.plan else None
+
+    @property
     def model_id(self) -> str | None:
         """Concrete provider ID retained for persistence compatibility."""
         return self.model.provider_model_id if self.model else None
 
-    def require_model(self) -> GoogleModelSpec:
-        """Return the provider model for a provider-backed feature."""
-        if self.model is None:
-            raise RuntimeError("Provider-backed feature resolved without a model")
-        return self.model
+    def require_plan(self) -> ExecutionPlan:
+        """Return the plan for a provider-backed feature."""
+        if self.plan is None:
+            raise RuntimeError("Provider-backed feature resolved without a plan")
+        return self.plan
 
     @property
     def is_free_use(self) -> bool:

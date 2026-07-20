@@ -11,7 +11,7 @@ from __future__ import annotations
 import logfire
 from pydantic_ai import RunContext
 
-from derp.catalog import GoogleModelKey
+from derp.execution import Feature, require_execution_plan
 from derp.llm.agents import create_chat_agent
 from derp.llm.deps import AgentDeps
 from derp.observability import report_exception
@@ -58,7 +58,7 @@ async def think_deep(
     )
 
     try:
-        agent = create_chat_agent(GoogleModelKey.CHAT_REASONING)
+        agent = create_chat_agent(require_execution_plan(Feature.DEEP_THINK))
 
         # Run with the thinking prompt and problem
         prompt = f"{THINKING_PROMPT}\n\n**Problem:**\n{problem}"

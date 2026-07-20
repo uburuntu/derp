@@ -562,8 +562,10 @@ implements reserve/capture/release/spend-reversal with unique operation IDs.
 ### AR-003: Tool strings cannot express settlement policy
 
 Success, refusal, missing input, and infrastructure failure currently share a
-string return channel. Milestones 0 and 3 introduce typed domain outcomes and
-translate them only at Telegram and model boundaries.
+string return channel. `derp/execution.py` now defines the minimal frozen
+success, rejection, and failure vocabulary. Milestone 3 adopts those outcomes
+inside feature services and translates them only at Telegram and model
+boundaries.
 
 ### AR-004: Feature execution is duplicated
 

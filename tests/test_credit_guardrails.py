@@ -28,6 +28,7 @@ from derp.credits import service as service_module
 from derp.credits.service import CONTEXT_LIMITS, CreditService
 from derp.credits.tools import TOOL_REGISTRY, get_tool
 from derp.credits.types import CreditCheckResult
+from derp.execution import Feature, plan_execution
 from derp.llm.providers import create_model
 
 EXPECTED_MODELS = {
@@ -239,44 +240,45 @@ class TestCurrentPricing:
 class TestToolCatalogParity:
     def test_every_tool_resolves_to_the_shared_catalog(self) -> None:
         for tool in TOOL_REGISTRY.values():
-            model_key = tool.resolve_model_key({})
-            if model_key is None:
-                assert not tool.required_capabilities
+            plan = tool.resolve_plan({})
+            if plan is None:
+                assert tool.feature is None
                 continue
-            model = get_google_model(model_key)
-            assert tool.required_capabilities <= model.capabilities
+            assert plan.feature is tool.feature
+            assert plan.model is get_google_model(tool.model_key)
 
     def test_provider_free_tools_never_carry_model_cost(self) -> None:
         for tool_name in ("web_search", "update_memory"):
             tool = get_tool(tool_name)
-            assert tool.resolve_model_key({}) is None
+            assert tool.resolve_plan({}) is None
             assert tool.model_credit_cost(None, {}) == 0
 
     def test_video_quality_selects_one_model_for_billing_and_execution(self) -> None:
         tool = get_tool("video_generate")
-        assert tool.resolve_model_key({"quality": "fast"}) is GoogleModelKey.VIDEO_FAST
-        assert (
-            tool.resolve_model_key({"quality": "standard"})
-            is GoogleModelKey.VIDEO_STANDARD
-        )
+        fast = tool.resolve_plan({"quality": "fast"})
+        standard = tool.resolve_plan({"quality": "standard"})
+        assert fast and fast.model.key is GoogleModelKey.VIDEO_FAST
+        assert standard and standard.model.key is GoogleModelKey.VIDEO_STANDARD
 
     def test_video_duration_changes_the_billed_provider_cost(self) -> None:
         tool = get_tool("video_generate")
-        model = get_google_model(GoogleModelKey.VIDEO_FAST)
-        assert tool.model_credit_cost(model, {"duration_seconds": 6}) == 858
-        assert tool.model_credit_cost(model, {"duration_seconds": 8}) == 1143
+        plan = plan_execution(Feature.VIDEO_GENERATE, GoogleModelKey.VIDEO_FAST)
+        assert tool.model_credit_cost(plan, {"duration_seconds": 6}) == 858
+        assert tool.model_credit_cost(plan, {"duration_seconds": 8}) == 1143
         with pytest.raises(ValueError, match="Unsupported video duration"):
-            tool.model_credit_cost(model, {"duration_seconds": 7})
+            tool.model_credit_cost(plan, {"duration_seconds": 7})
 
     def test_tts_pricing_uses_text_size_and_the_bounded_output(self) -> None:
         tool = get_tool("voice_tts")
-        model = get_google_model(GoogleModelKey.TTS)
-        assert tool.model_credit_cost(model, {"text": "hello"}) == 22
-        assert tool.model_credit_cost(model, {"text": "x" * 2_000}) == 25
+        plan = plan_execution(Feature.TTS, GoogleModelKey.TTS)
+        assert tool.model_credit_cost(plan, {"text": "hello"}) == 22
+        assert tool.model_credit_cost(plan, {"text": "x" * 2_000}) == 25
 
     def test_tool_total_cost_includes_current_catalog_estimate(self) -> None:
         tool = get_tool("image_generate")
-        model_cost = calculate_credit_cost(get_google_model(tool.model_key))
+        plan = tool.resolve_plan({})
+        assert plan
+        model_cost = calculate_credit_cost(plan.model)
         assert tool.total_cost(model_cost) == tool.base_credit_cost + model_cost
 
     def test_paid_only_tools_are_marked_premium(self) -> None:
@@ -289,7 +291,7 @@ class TestCreditCheckResult:
     def test_free_use_properties(self) -> None:
         result = CreditCheckResult(
             allowed=True,
-            model=get_google_model(GoogleModelKey.IMAGE),
+            plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
             source="free",
             credits_to_deduct=0,
             credits_remaining=None,
@@ -298,12 +300,12 @@ class TestCreditCheckResult:
         assert result.is_free_use
         assert not result.is_paid
         assert result.model_id == "gemini-3.1-flash-image"
-        assert result.require_model() is result.model
+        assert result.require_plan().model is result.model
 
     def test_rejected_has_reason(self) -> None:
         result = CreditCheckResult(
             allowed=False,
-            model=get_google_model(GoogleModelKey.TTS),
+            plan=plan_execution(Feature.TTS, GoogleModelKey.TTS),
             source="rejected",
             credits_to_deduct=0,
             credits_remaining=0,
@@ -312,6 +314,34 @@ class TestCreditCheckResult:
         )
         assert not result.allowed
         assert result.reject_reason == "Not enough credits"
+
+    @pytest.mark.asyncio
+    async def test_deduction_rejects_illegal_result_and_feature_states(self) -> None:
+        service = CreditService(MagicMock())
+        user = MagicMock()
+        chat = MagicMock()
+        rejected = CreditCheckResult(
+            allowed=False,
+            plan=plan_execution(Feature.TTS, GoogleModelKey.TTS),
+            source="rejected",
+            credits_to_deduct=0,
+            credits_remaining=0,
+            free_remaining=0,
+            reject_reason="No access",
+        )
+        with pytest.raises(ValueError, match="rejected"):
+            await service.deduct(rejected, user, chat, "voice_tts")
+
+        image_generation = CreditCheckResult(
+            allowed=True,
+            plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
+            source="free",
+            credits_to_deduct=0,
+            credits_remaining=None,
+            free_remaining=0,
+        )
+        with pytest.raises(ValueError, match="cannot settle"):
+            await service.deduct(image_generation, user, chat, "image_edit")
 
 
 @pytest.mark.asyncio
@@ -329,6 +359,7 @@ async def test_provider_free_daily_limit_rejects_without_fake_model_charge(
     )
 
     assert not result.allowed
+    assert result.plan is None
     assert result.model is None
     assert result.credits_to_deduct == 0
     assert result.reject_reason == "Daily limit reached for web_search"

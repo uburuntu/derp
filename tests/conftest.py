@@ -677,12 +677,14 @@ def make_credit_check_result():
                 reject_reason="Not enough credits"
             )
     """
-    from derp.catalog import GoogleModelKey, GoogleModelSpec, get_google_model
+    from derp.catalog import GoogleModelKey
     from derp.credits.types import CreditCheckResult
+    from derp.execution import ExecutionPlan, Feature, plan_execution
 
     def _make(
         allowed: bool = True,
-        model: GoogleModelSpec | None = None,
+        plan: ExecutionPlan | None = None,
+        feature: Feature | None = None,
         model_key: GoogleModelKey = GoogleModelKey.CHAT_STANDARD,
         source: str = "user",
         credits_to_deduct: int = 1,
@@ -690,9 +692,19 @@ def make_credit_check_result():
         free_remaining: int = 0,
         reject_reason: str | None = None,
     ) -> CreditCheckResult:
+        default_features = {
+            GoogleModelKey.CHAT_ECONOMY: Feature.CHAT,
+            GoogleModelKey.CHAT_STANDARD: Feature.CHAT,
+            GoogleModelKey.CHAT_REASONING: Feature.DEEP_THINK,
+            GoogleModelKey.IMAGE: Feature.IMAGE_GENERATE,
+            GoogleModelKey.TTS: Feature.TTS,
+            GoogleModelKey.VIDEO_FAST: Feature.VIDEO_GENERATE,
+            GoogleModelKey.VIDEO_STANDARD: Feature.VIDEO_GENERATE,
+        }
         return CreditCheckResult(
             allowed=allowed,
-            model=model or get_google_model(model_key),
+            plan=plan
+            or plan_execution(feature or default_features[model_key], model_key),
             source=source if allowed else "rejected",
             credits_to_deduct=credits_to_deduct if allowed else 0,
             credits_remaining=credits_remaining,
@@ -731,7 +743,7 @@ def mock_credit_service_factory(make_credit_check_result):
         service.deduct = AsyncMock()
         service.purchase_credits = AsyncMock(return_value=purchase_result)
         service.get_orchestrator_config = AsyncMock(
-            return_value=(check_result.model, 100)
+            return_value=(check_result.plan, 100)
         )
         service.refund_credits = AsyncMock(return_value=True)
 

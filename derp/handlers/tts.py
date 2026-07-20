@@ -60,7 +60,8 @@ async def handle_tts(
             + "\n\n"
             + purchase_suspension_message(),
         )
-    model = access.require_model()
+    plan = access.require_plan()
+    model = plan.model
 
     try:
         deps = AgentDeps(
@@ -71,7 +72,7 @@ async def handle_tts(
             chat_model=chat_model,
             model=model,
         )
-        await generate_and_send_tts(deps, text=text, model=model)
+        await generate_and_send_tts(deps, text=text, plan=plan)
 
         idempotency_key = f"voice_tts:{chat_model.telegram_id}:{message.message_id}"
         await credit_service.deduct(

@@ -76,8 +76,8 @@ async def test_handle_video_success(
             "video_generate",
             arguments={"quality": quality, "duration_seconds": 6},
         )
-        assert mock_gen.await_args.kwargs["model"] is check_result.model
-        assert mock_gen.await_args.kwargs["quality"] == quality
+        assert mock_gen.await_args.kwargs["plan"] is check_result.plan
+        assert "quality" not in mock_gen.await_args.kwargs
         assert mock_gen.await_args.kwargs["duration_seconds"] == 6
         assert mock_gen.await_args.kwargs["prompt"] == "a cat"
         service.deduct.assert_awaited_once()

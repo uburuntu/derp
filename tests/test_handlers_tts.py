@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from derp.catalog import GoogleModelKey, get_google_model
+from derp.catalog import GoogleModelKey
+from derp.execution import Feature, plan_execution
 from derp.handlers.tts import handle_tts
 from derp.tools.gemini_tts import generate_and_send_tts
 
@@ -58,7 +59,7 @@ async def test_handle_tts_success(
         service.check_tool_access.assert_awaited_once_with(
             user, chat, "voice_tts", arguments={"text": "hello world"}
         )
-        assert mock_gen.await_args.kwargs["model"] is check_result.model
+        assert mock_gen.await_args.kwargs["plan"] is check_result.plan
         service.deduct.assert_awaited_once()
 
 
@@ -125,7 +126,7 @@ async def test_tts_provider_output_is_capped_to_the_billed_duration() -> None:
         await generate_and_send_tts(
             deps,
             text="hello",
-            model=get_google_model(GoogleModelKey.TTS),
+            plan=plan_execution(Feature.TTS, GoogleModelKey.TTS),
         )
 
     config = client.aio.models.generate_content.await_args.kwargs["config"]

@@ -26,6 +26,7 @@ from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 from derp.catalog import GoogleModelKey
 from derp.common.sender import MessageSender
 from derp.config import settings
+from derp.execution import Feature, plan_execution
 from derp.llm import create_inline_agent
 from derp.observability import report_exception
 
@@ -121,7 +122,9 @@ async def chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bot) -> N
             telegram_user_id=chosen_result.from_user.id,
             query_length=len(chosen_result.query),
         ):
-            agent = create_inline_agent(GoogleModelKey.CHAT_ECONOMY)
+            agent = create_inline_agent(
+                plan_execution(Feature.INLINE_CHAT, GoogleModelKey.CHAT_ECONOMY)
+            )
             result = await agent.run(prompt)
 
             if result.output:

@@ -11,12 +11,8 @@ from __future__ import annotations
 import logfire
 from pydantic_ai import Agent, BinaryImage, RunContext
 
-from derp.catalog import (
-    GoogleModelKey,
-    GoogleModelSpec,
-    ModelCapability,
-    get_google_model,
-)
+from derp.catalog import GoogleModelKey, GoogleModelSpec
+from derp.execution import ExecutionPlan, Feature, plan_execution
 from derp.llm.deps import AgentDeps
 from derp.llm.prompts import (
     IMAGE_SYSTEM_PROMPT,
@@ -26,26 +22,27 @@ from derp.llm.prompts import (
 from derp.llm.providers import create_image_model, create_model
 
 
-def _resolve_capable_model(
-    model: GoogleModelSpec | GoogleModelKey,
-    *required: ModelCapability,
-) -> GoogleModelSpec:
-    """Resolve a catalog model and enforce the agent's runtime contract."""
-    spec = get_google_model(model) if isinstance(model, GoogleModelKey) else model
-    missing = [
-        capability.value
-        for capability in required
-        if capability not in spec.capabilities
-    ]
-    if missing:
-        raise ValueError(
-            f"{spec.key.value} lacks required capabilities: {', '.join(missing)}"
-        )
-    return spec
+def _resolve_plan(
+    model: ExecutionPlan | GoogleModelSpec | GoogleModelKey,
+    *,
+    default_feature: Feature,
+    allowed_features: frozenset[Feature],
+) -> ExecutionPlan:
+    """Resolve a plan and reject plans intended for a different agent kind."""
+    plan = (
+        model
+        if isinstance(model, ExecutionPlan)
+        else plan_execution(default_feature, model)
+    )
+    if plan.feature not in allowed_features:
+        raise ValueError(f"{plan.feature.value} cannot use this agent factory")
+    return plan
 
 
 def create_chat_agent(
-    model: GoogleModelSpec | GoogleModelKey = GoogleModelKey.CHAT_STANDARD,
+    model: ExecutionPlan
+    | GoogleModelSpec
+    | GoogleModelKey = GoogleModelKey.CHAT_STANDARD,
 ) -> Agent[AgentDeps, str]:
     """Create the main chat agent with tools and context.
 
@@ -58,11 +55,12 @@ def create_chat_agent(
     Returns:
         A configured Agent instance for chat interactions.
     """
-    spec = _resolve_capable_model(
+    plan = _resolve_plan(
         model,
-        ModelCapability.TEXT_OUTPUT,
-        ModelCapability.TOOLS,
+        default_feature=Feature.CHAT,
+        allowed_features=frozenset({Feature.CHAT, Feature.DEEP_THINK}),
     )
+    spec = plan.model
     provider_model = create_model(spec)
 
     agent: Agent[AgentDeps, str] = Agent(
@@ -78,6 +76,7 @@ def create_chat_agent(
 
     logfire.debug(
         "chat_agent_created",
+        feature=plan.feature.value,
         model_key=spec.key.value,
         model=spec.provider_model_id,
     )
@@ -86,7 +85,7 @@ def create_chat_agent(
 
 
 def create_image_agent(
-    model: GoogleModelSpec | GoogleModelKey = GoogleModelKey.IMAGE,
+    model: ExecutionPlan | GoogleModelSpec | GoogleModelKey = GoogleModelKey.IMAGE,
 ) -> Agent[object, BinaryImage | str]:
     """Create an agent for image generation and editing.
 
@@ -96,7 +95,12 @@ def create_image_agent(
     Returns:
         A configured Agent instance for image generation.
     """
-    spec = _resolve_capable_model(model, ModelCapability.IMAGE_OUTPUT)
+    plan = _resolve_plan(
+        model,
+        default_feature=Feature.IMAGE_GENERATE,
+        allowed_features=frozenset({Feature.IMAGE_GENERATE, Feature.IMAGE_EDIT}),
+    )
+    spec = plan.model
     provider_model = create_image_model(spec)
 
     agent: Agent[object, BinaryImage | str] = Agent(
@@ -109,6 +113,7 @@ def create_image_agent(
 
     logfire.debug(
         "image_agent_created",
+        feature=plan.feature.value,
         model_key=spec.key.value,
         model=spec.provider_model_id,
     )
@@ -117,7 +122,9 @@ def create_image_agent(
 
 
 def create_inline_agent(
-    model: GoogleModelSpec | GoogleModelKey = GoogleModelKey.CHAT_ECONOMY,
+    model: ExecutionPlan
+    | GoogleModelSpec
+    | GoogleModelKey = GoogleModelKey.CHAT_ECONOMY,
 ) -> Agent[object, str]:
     """Create a lightweight agent for inline queries.
 
@@ -130,7 +137,12 @@ def create_inline_agent(
     Returns:
         A configured Agent instance for inline queries.
     """
-    spec = _resolve_capable_model(model, ModelCapability.TEXT_OUTPUT)
+    plan = _resolve_plan(
+        model,
+        default_feature=Feature.INLINE_CHAT,
+        allowed_features=frozenset({Feature.INLINE_CHAT}),
+    )
+    spec = plan.model
     provider_model = create_model(spec)
 
     agent: Agent[object, str] = Agent(
@@ -142,6 +154,7 @@ def create_inline_agent(
 
     logfire.debug(
         "inline_agent_created",
+        feature=plan.feature.value,
         model_key=spec.key.value,
         model=spec.provider_model_id,
     )

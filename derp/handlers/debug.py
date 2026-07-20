@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 from aiogram.utils.i18n import gettext as _
 from pydantic import BaseModel, ConfigDict, Field
 
-from derp.catalog import GoogleModelKey, get_google_model
+from derp.catalog import GoogleModelKey
 from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.credits import CreditService
@@ -24,6 +24,7 @@ from derp.credits.purchase_suspension import (
     reject_purchase_pre_checkout,
 )
 from derp.db.credits import get_balances
+from derp.execution import Feature, plan_execution
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception, telemetry_fingerprint
@@ -359,18 +360,20 @@ async def debug_status(
         credit_service.session, user_model.telegram_id, chat_id
     )
 
-    # Get orchestrator config (requires both models for the new API)
+    # The shared-chat path requires both database models for balance policy.
     if chat_model:
-        model, context_limit = await credit_service.get_orchestrator_config(
+        plan, context_limit = await credit_service.get_orchestrator_config(
             user_model, chat_model
         )
     else:
-        model = get_google_model(
+        plan = plan_execution(
+            Feature.CHAT,
             GoogleModelKey.CHAT_ECONOMY
             if user_credits == 0
-            else GoogleModelKey.CHAT_STANDARD
+            else GoogleModelKey.CHAT_STANDARD,
         )
         context_limit = 10 if user_credits == 0 else 100
+    model = plan.model
     is_paid = (chat_credits + user_credits) > 0
 
     # Build status report

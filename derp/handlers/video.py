@@ -81,7 +81,8 @@ async def handle_video(
             + "\n\n"
             + purchase_suspension_message(),
         )
-    model = access.require_model()
+    plan = access.require_plan()
+    model = plan.model
 
     try:
         from derp.llm.deps import AgentDeps
@@ -98,9 +99,8 @@ async def handle_video(
         await generate_and_send_video(
             deps_obj,
             prompt=prompt,
-            quality=quality,
             duration_seconds=duration_seconds,
-            model=model,
+            plan=plan,
         )
 
         idempotency_key = (

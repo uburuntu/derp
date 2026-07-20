@@ -13,6 +13,7 @@ from pydantic_ai import BinaryContent, BinaryImage, RunContext
 
 from derp.common.extractor import Extractor
 from derp.common.sender import MessageSender
+from derp.execution import Feature, require_execution_plan
 from derp.llm.agents import create_image_agent
 from derp.llm.deps import AgentDeps
 from derp.observability import report_exception
@@ -51,7 +52,7 @@ async def generate_image(
 
     try:
         # Create image agent and generate
-        agent = create_image_agent()
+        agent = create_image_agent(require_execution_plan(Feature.IMAGE_GENERATE))
         result = await agent.run(full_prompt)
         output = result.output
 
@@ -129,7 +130,7 @@ async def edit_image(
         image_data = await photo.download()
 
         # Create image agent and run with the image + edit prompt
-        agent = create_image_agent()
+        agent = create_image_agent(require_execution_plan(Feature.IMAGE_EDIT))
         result = await agent.run(
             [
                 BinaryContent(

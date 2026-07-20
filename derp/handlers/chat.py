@@ -27,11 +27,12 @@ from pydantic_ai.exceptions import (
     UsageLimitExceeded,
 )
 
-from derp.catalog import GoogleModelKey, get_google_model
+from derp.catalog import GoogleModelKey
 from derp.common.extractor import Extractor
 from derp.config import settings
 from derp.credits import CONTEXT_LIMITS, CreditService
 from derp.db import DatabaseManager, get_db_manager, get_recent_messages
+from derp.execution import Feature, plan_execution
 from derp.filters import DerpMentionFilter
 from derp.llm import (
     RELAXED_SAFETY_SETTINGS,
@@ -246,11 +247,11 @@ class ChatAgentHandler(MessageHandler):
         chat_model: ChatModel | None = self.data.get("chat_model")
         credit_service: CreditService | None = self.data.get("credit_service")
 
-        model = get_google_model(GoogleModelKey.CHAT_ECONOMY)
-        context_limit = CONTEXT_LIMITS[model.key]
+        plan = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_ECONOMY)
+        context_limit = CONTEXT_LIMITS[plan.model.key]
 
         if user_model and chat_model and credit_service:
-            model, context_limit = await credit_service.get_orchestrator_config(
+            plan, context_limit = await credit_service.get_orchestrator_config(
                 user_model, chat_model
             )
 
@@ -261,7 +262,7 @@ class ChatAgentHandler(MessageHandler):
             bot=bot,
             user_model=user_model,
             chat_model=chat_model,
-            model=model,
+            model=plan.model,
         )
 
         try:
@@ -292,7 +293,7 @@ class ChatAgentHandler(MessageHandler):
                 user_prompt.extend(media_parts)
 
                 # Create and run the agent with tools
-                agent = create_chat_agent(deps.model)
+                agent = create_chat_agent(plan)
                 toolset = create_chat_toolset()
 
                 logfire.info(

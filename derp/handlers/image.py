@@ -63,7 +63,7 @@ async def handle_imagine(
             + "\n\n"
             + purchase_suspension_message()
         )
-    model = result.require_model()
+    plan = result.require_plan()
 
     # Create sender bound to target message for reply
     target_sender = MessageSender.from_message(meta.target_message)
@@ -77,7 +77,7 @@ async def handle_imagine(
             prompt_length=len(prompt),
             credit_source=result.source,
         ):
-            agent = create_image_agent(model)
+            agent = create_image_agent(plan)
             run_result = await agent.run(prompt)
             output = run_result.output
 
@@ -193,7 +193,7 @@ async def handle_edit(
             + "\n\n"
             + purchase_suspension_message()
         )
-    model = result.require_model()
+    plan = result.require_plan()
 
     # Create sender bound to target message for reply
     target_sender = MessageSender.from_message(meta.target_message)
@@ -210,7 +210,7 @@ async def handle_edit(
             data = await photo.download()
             logfire.debug("source_image_downloaded", size=len(data))
 
-            agent = create_image_agent(model)
+            agent = create_image_agent(plan)
             user_prompt: list[str | BinaryContent] = [
                 prompt,
                 BinaryContent(data=data, media_type=photo.media_type),
