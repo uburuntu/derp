@@ -481,13 +481,61 @@ class TestGetRecentMessages:
             )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001212121212, limit=10
+            db_session,
+            chat_telegram_id=-1001212121212,
+            thread_id=None,
+            limit=10,
         )
 
         assert len(messages) == 5
         # Should be oldest first
         assert messages[0].text == "Message 1"
         assert messages[4].text == "Message 5"
+
+    @pytest.mark.asyncio
+    async def test_cursor_excludes_current_event_and_later_messages(self, db_session):
+        await upsert_chat(
+            db_session,
+            telegram_id=-1001212121213,
+            chat_type="supergroup",
+            title="Cursor Test",
+        )
+        await upsert_user(
+            db_session, telegram_id=12121213, is_bot=False, first_name="Cursor"
+        )
+        base_time = datetime.now(UTC)
+        for message_id in range(1, 5):
+            await upsert_message(
+                db_session,
+                chat_telegram_id=-1001212121213,
+                user_telegram_id=12121213,
+                telegram_message_id=message_id,
+                thread_id=None,
+                direction="in",
+                content_type="text",
+                text=f"Message {message_id}",
+                telegram_date=base_time,
+            )
+
+        messages = await get_recent_messages(
+            db_session,
+            chat_telegram_id=-1001212121213,
+            thread_id=None,
+            before_telegram_date=base_time,
+            before_telegram_message_id=3,
+        )
+
+        assert [message.telegram_message_id for message in messages] == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_cursor_requires_date_and_message_id(self, db_session):
+        with pytest.raises(ValueError, match="requires both"):
+            await get_recent_messages(
+                db_session,
+                chat_telegram_id=-1,
+                thread_id=None,
+                before_telegram_message_id=1,
+            )
 
     @pytest.mark.asyncio
     async def test_excludes_deleted_messages(self, db_session):
@@ -524,7 +572,10 @@ class TestGetRecentMessages:
         )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001313131313, limit=10
+            db_session,
+            chat_telegram_id=-1001313131313,
+            thread_id=None,
+            limit=10,
         )
 
         assert len(messages) == 2
@@ -559,7 +610,10 @@ class TestGetRecentMessages:
             )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001414141414, limit=5
+            db_session,
+            chat_telegram_id=-1001414141414,
+            thread_id=None,
+            limit=5,
         )
 
         assert len(messages) == 5
@@ -597,7 +651,10 @@ class TestGetRecentMessages:
         )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001515151515, limit=10
+            db_session,
+            chat_telegram_id=-1001515151515,
+            thread_id=None,
+            limit=10,
         )
 
         assert len(messages) == 1
@@ -609,7 +666,10 @@ class TestGetRecentMessages:
     async def test_returns_empty_for_nonexistent_chat(self, db_session):
         """Should return empty list for chat that doesn't exist."""
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-999999999999, limit=10
+            db_session,
+            chat_telegram_id=-999999999999,
+            thread_id=None,
+            limit=10,
         )
 
         assert messages == []
@@ -657,7 +717,10 @@ class TestGetRecentMessages:
         )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001616161616, limit=10
+            db_session,
+            chat_telegram_id=-1001616161616,
+            thread_id=None,
+            limit=10,
         )
 
         assert len(messages) == 2
@@ -732,7 +795,10 @@ class TestMessageWithAttachments:
             )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001818181818, limit=10
+            db_session,
+            chat_telegram_id=-1001818181818,
+            thread_id=None,
+            limit=10,
         )
 
         assert len(messages) == 3
@@ -781,10 +847,18 @@ class TestThreadedMessages:
             telegram_date=datetime.now(UTC),
         )
 
-        messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001919191919, limit=10
+        topic_one = await get_recent_messages(
+            db_session,
+            chat_telegram_id=-1001919191919,
+            thread_id=100,
+            limit=10,
+        )
+        topic_two = await get_recent_messages(
+            db_session,
+            chat_telegram_id=-1001919191919,
+            thread_id=200,
+            limit=10,
         )
 
-        assert len(messages) == 2
-        thread_ids = {m.thread_id for m in messages}
-        assert thread_ids == {100, 200}
+        assert [message.text for message in topic_one] == ["Message in topic 1"]
+        assert [message.text for message in topic_two] == ["Message in topic 2"]

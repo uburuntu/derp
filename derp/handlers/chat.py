@@ -166,7 +166,12 @@ async def build_context_prompt(
     # Recent chat history from messages table (limited by product policy)
     async with db.read_session() as session:
         recent_msgs = await get_recent_messages(
-            session, chat_telegram_id=message.chat.id, limit=context_limit
+            session,
+            chat_telegram_id=message.chat.id,
+            thread_id=message.message_thread_id,
+            limit=context_limit,
+            before_telegram_date=message.date,
+            before_telegram_message_id=message.message_id,
         )
 
     if recent_msgs:

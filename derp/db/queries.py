@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import logfire
-from sqlalchemy import ScalarSelect, select, update
+from sqlalchemy import ScalarSelect, and_, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -256,31 +256,62 @@ async def mark_message_deleted(
 
 async def get_recent_messages(
     session: AsyncSession,
+    *,
     chat_telegram_id: int,
+    thread_id: int | None,
     limit: int = 100,
+    before_telegram_date: datetime | None = None,
+    before_telegram_message_id: int | None = None,
 ) -> list[Message]:
-    """Get recent non-deleted messages for a chat.
+    """Get prior non-deleted messages for one chat/topic scope.
 
     Returns messages in chronological order (oldest first) for building
-    LLM context. Joins directly on telegram_id to avoid N+1 queries.
+    LLM context. A cursor excludes the current event and anything after it.
     """
+    if limit <= 0:
+        raise ValueError("History limit must be positive")
+    if (before_telegram_date is None) != (before_telegram_message_id is None):
+        raise ValueError("History cursor requires both date and message ID")
+
     with logfire.span(
         "db.get_recent_messages",
         **{
             "db.operation": "select",
             "telegram.chat_id": chat_telegram_id,
+            "telegram.thread_id": thread_id,
             "db.limit": limit,
         },
     ) as span:
-        # Single query joining Chat and Message to avoid extra round-trip
+        scope = (
+            Message.thread_id.is_(None)
+            if thread_id is None
+            else Message.thread_id == thread_id
+        )
         stmt = (
             select(Message)
             .join(Chat, Message.chat_id == Chat.id)
-            .where(Chat.telegram_id == chat_telegram_id, Message.deleted_at.is_(None))
-            .order_by(Message.created_at.desc(), Message.telegram_message_id.desc())
+            .where(
+                Chat.telegram_id == chat_telegram_id,
+                scope,
+                Message.deleted_at.is_(None),
+            )
+            .order_by(
+                Message.telegram_date.desc(),
+                Message.telegram_message_id.desc(),
+            )
             .limit(limit)
             .options(selectinload(Message.user))
         )
+        if before_telegram_date is not None and before_telegram_message_id is not None:
+            stmt = stmt.where(
+                or_(
+                    Message.telegram_date < before_telegram_date,
+                    and_(
+                        Message.telegram_date == before_telegram_date,
+                        Message.telegram_message_id < before_telegram_message_id,
+                    ),
+                )
+            )
 
         result = await session.execute(stmt)
         messages = list(result.scalars().all())
