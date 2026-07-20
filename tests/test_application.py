@@ -98,6 +98,18 @@ class FakeDeliveryMaintenanceWorker:
         self.events.append("delivery_maintenance_stop")
 
 
+class FakeDeferredApprovalExpiryWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("approval_expiry_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("approval_expiry_stop")
+
+
 @pytest.mark.asyncio
 async def test_runtime_closes_bot_before_database(tmp_path) -> None:
     events: list[str] = []
@@ -129,6 +141,10 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
             "derp.application.DeliveryMaintenanceWorker",
             return_value=FakeDeliveryMaintenanceWorker(events),
         ) as delivery_maintenance_worker,
+        patch(
+            "derp.application.DeferredApprovalExpiryWorker",
+            return_value=FakeDeferredApprovalExpiryWorker(events),
+        ) as approval_expiry_worker,
     ):
         async with open_runtime(settings) as runtime:
             assert runtime.bot is bot
@@ -147,6 +163,10 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
                 delivery_maintenance_worker.call_args.args[0]
                 is runtime.delivery_service
             )
+            assert (
+                approval_expiry_worker.call_args.args[0]
+                is runtime.deferred_tool_approval_service
+            )
             events.append("running")
 
     assert events == [
@@ -156,7 +176,9 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
         "subscription_expiry_start",
         "operation_reconciliation_start",
         "delivery_maintenance_start",
+        "approval_expiry_start",
         "running",
+        "approval_expiry_stop",
         "delivery_maintenance_stop",
         "operation_reconciliation_stop",
         "subscription_expiry_stop",
@@ -184,6 +206,9 @@ async def test_runtime_cleans_up_after_partial_startup() -> None:
         patch(
             "derp.application.DeliveryMaintenanceWorker"
         ) as delivery_maintenance_worker,
+        patch(
+            "derp.application.DeferredApprovalExpiryWorker"
+        ) as approval_expiry_worker,
         pytest.raises(RuntimeError, match="database unavailable"),
     ):
         async with open_runtime(settings):
@@ -193,6 +218,7 @@ async def test_runtime_cleans_up_after_partial_startup() -> None:
     expiry_worker.assert_not_called()
     reconciliation_worker.assert_not_called()
     delivery_maintenance_worker.assert_not_called()
+    approval_expiry_worker.assert_not_called()
 
     assert events == [
         "bot_enter",

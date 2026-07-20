@@ -16,6 +16,9 @@ from aiogram.utils.chat_action import ChatActionMiddleware
 from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
+from derp.approvals.maintenance import DeferredApprovalExpiryWorker
+from derp.approvals.service import DeferredToolApprovalService
+from derp.approvals.tokens import ApprovalTokenCodec
 from derp.artifacts import FilesystemArtifactStore
 from derp.billing import (
     CommercePolicy,
@@ -98,6 +101,7 @@ class Runtime:
     operation_ledger: OperationLedger
     delivery_service: DeliveryService
     image_operation_coordinator: ImageOperationCoordinator
+    deferred_tool_approval_service: DeferredToolApprovalService
 
 
 def create_bot(settings: Settings) -> Bot:
@@ -154,6 +158,10 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             image_service,
             delivery_service,
         )
+        deferred_tool_approval_service = DeferredToolApprovalService(
+            db.session,
+            ApprovalTokenCodec(settings.callback_signing_key),
+        )
         await stack.enter_async_context(HistoryRetentionWorker(db))
         await stack.enter_async_context(
             SubscriptionExpiryWorker(PaymentSettlementService(db.session))
@@ -164,6 +172,9 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             )
         )
         await stack.enter_async_context(DeliveryMaintenanceWorker(delivery_service))
+        await stack.enter_async_context(
+            DeferredApprovalExpiryWorker(deferred_tool_approval_service)
+        )
         yield Runtime(
             bot=bot,
             db=db,
@@ -173,6 +184,7 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             operation_ledger=operation_ledger,
             delivery_service=delivery_service,
             image_operation_coordinator=image_operation_coordinator,
+            deferred_tool_approval_service=deferred_tool_approval_service,
         )
 
 
@@ -191,6 +203,7 @@ def create_dispatcher(
         operation_ledger=runtime.operation_ledger,
         delivery_service=runtime.delivery_service,
         image_operation_coordinator=runtime.image_operation_coordinator,
+        deferred_tool_approval_service=runtime.deferred_tool_approval_service,
         commerce_policy=CommercePolicy(
             public_intake_enabled=settings.public_purchases_enabled
         ),

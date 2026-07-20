@@ -450,6 +450,7 @@ async def test_m1_dispatch_journey_matrix(
         operation_ledger=MagicMock(),
         delivery_service=MagicMock(),
         image_operation_coordinator=MagicMock(),
+        deferred_tool_approval_service=MagicMock(),
     )
     dispatcher = create_dispatcher(
         runtime,
