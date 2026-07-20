@@ -13,6 +13,8 @@ from sqlalchemy.exc import IntegrityError
 
 from derp.models import Chat, Message, User
 
+pytestmark = pytest.mark.database
+
 
 class TestUserModel:
     """Tests for the User model."""
@@ -90,17 +92,17 @@ class TestUserModel:
         assert user.display_name == "Bob Smith"
 
     @pytest.mark.asyncio
-    async def test_user_telegram_id_unique(self, db_session_committed):
+    async def test_user_telegram_id_unique(self, db_session):
         """telegram_id must be unique."""
         user1 = User(telegram_id=100, is_bot=False, first_name="First")
-        db_session_committed.add(user1)
-        await db_session_committed.commit()
+        db_session.add(user1)
+        await db_session.commit()
 
         user2 = User(telegram_id=100, is_bot=False, first_name="Second")
-        db_session_committed.add(user2)
+        db_session.add(user2)
 
         with pytest.raises(IntegrityError):
-            await db_session_committed.commit()
+            await db_session.commit()
 
     @pytest.mark.asyncio
     async def test_user_timestamps_auto_set(self, db_session):
@@ -204,7 +206,7 @@ class TestChatModel:
         assert chat.display_name == str(-1003333333333)
 
     @pytest.mark.asyncio
-    async def test_chat_llm_memory_max_length(self, db_session_committed):
+    async def test_chat_llm_memory_max_length(self, db_session):
         """llm_memory should enforce 1024 character limit."""
         chat = Chat(
             telegram_id=-1004444444444,
@@ -212,23 +214,23 @@ class TestChatModel:
             title="Memory Limit Test",
             llm_memory="x" * 1025,  # Over limit
         )
-        db_session_committed.add(chat)
+        db_session.add(chat)
 
         with pytest.raises(IntegrityError):
-            await db_session_committed.commit()
+            await db_session.commit()
 
     @pytest.mark.asyncio
-    async def test_chat_telegram_id_unique(self, db_session_committed):
+    async def test_chat_telegram_id_unique(self, db_session):
         """telegram_id must be unique."""
         chat1 = Chat(telegram_id=-1005555555555, type="group", title="First")
-        db_session_committed.add(chat1)
-        await db_session_committed.commit()
+        db_session.add(chat1)
+        await db_session.commit()
 
         chat2 = Chat(telegram_id=-1005555555555, type="group", title="Second")
-        db_session_committed.add(chat2)
+        db_session.add(chat2)
 
         with pytest.raises(IntegrityError):
-            await db_session_committed.commit()
+            await db_session.commit()
 
 
 class TestMessageModel:
@@ -343,14 +345,14 @@ class TestMessageModel:
         assert message2.message_key == f"{chat.id}:789:456"
 
     @pytest.mark.asyncio
-    async def test_message_unique_constraint(self, db_session_committed):
+    async def test_message_unique_constraint(self, db_session):
         """Should enforce unique (chat_id, telegram_message_id)."""
-        # Create entities directly in the committed session
+        # Commit through the savepoint-backed test session.
         chat = Chat(telegram_id=-1001010101010, type="supergroup", title="Test")
         user = User(telegram_id=10101010, is_bot=False, first_name="Test")
-        db_session_committed.add(chat)
-        db_session_committed.add(user)
-        await db_session_committed.commit()
+        db_session.add(chat)
+        db_session.add(user)
+        await db_session.commit()
 
         message1 = Message(
             chat_id=chat.id,
@@ -361,8 +363,8 @@ class TestMessageModel:
             text="First",
             telegram_date=datetime.now(UTC),
         )
-        db_session_committed.add(message1)
-        await db_session_committed.commit()
+        db_session.add(message1)
+        await db_session.commit()
 
         message2 = Message(
             chat_id=chat.id,
@@ -373,10 +375,10 @@ class TestMessageModel:
             text="Duplicate",
             telegram_date=datetime.now(UTC),
         )
-        db_session_committed.add(message2)
+        db_session.add(message2)
 
         with pytest.raises(IntegrityError):
-            await db_session_committed.commit()
+            await db_session.commit()
 
 
 class TestModelRelationships:

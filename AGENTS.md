@@ -124,7 +124,12 @@ async def handler(...):
 - Frameworks: `pytest`, `pytest-asyncio`.
 - Name tests `tests/test_*.py`; use async tests for coroutine code.
 - Database tests use real PostgreSQL via Docker (`make test-db`).
-- Use `db_session` fixture for tests with automatic transaction rollback.
+- Mark PostgreSQL tests with `pytest.mark.database`; `make test` excludes that
+  marker and `make test-db` runs it.
+- Test schemas come only from `alembic upgrade head`; never call
+  `Base.metadata.create_all()` in fixtures.
+- Use `db_session` for automatic outer-transaction rollback. Application code
+  may call `commit()` because the session joins through `create_savepoint`.
 - Use factory fixtures (`user_factory`, `chat_factory`, `message_factory`) to create test data.
 - Prefer reusable fixtures in `conftest.py` over duplicating mocks across test files.
 - Aim to cover filters, handlers' pure logic, database queries, and utilities.

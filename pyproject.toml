@@ -33,6 +33,9 @@ dev = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 norecursedirs = ["references"]
+markers = [
+    "database: tests that require a migrated PostgreSQL database",
+]
 
 [tool.ruff]
 extend-exclude = [

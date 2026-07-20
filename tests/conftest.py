@@ -15,10 +15,11 @@ import pytest
 import pytest_asyncio
 from aiogram.types import Chat, Message, User
 from aiogram.utils.i18n import I18n
+from alembic import command
+from alembic.config import Config
 from pydantic_ai import models
-from sqlalchemy import text
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 # Set up test environment variables before any imports
 os.environ.setdefault("LOGFIRE_IGNORE_NO_CONFIG", "1")
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def database_url() -> str:
     """Get the database URL from environment."""
     url = os.environ.get(
@@ -58,14 +59,30 @@ def database_url() -> str:
     return url
 
 
+@pytest.fixture(scope="session")
+def alembic_config(database_url: str) -> Config:
+    """Build an Alembic config that is independent of application settings."""
+    config = Config("alembic.ini")
+    config.attributes["database_url"] = database_url
+    config.attributes["configure_logger"] = False
+    return config
+
+
+@pytest.fixture(scope="session")
+def migrated_database(alembic_config: Config, database_url: str) -> str:
+    """Upgrade the test database to the sole Alembic head once per run."""
+    command.upgrade(alembic_config, "head")
+    return database_url
+
+
 @pytest_asyncio.fixture
-async def db_engine(database_url: str):
+async def db_engine(migrated_database: str) -> AsyncGenerator[AsyncEngine]:
     """Create a database engine for tests.
 
     Creates a fresh engine for each test to avoid event loop conflicts.
     """
     engine = create_async_engine(
-        database_url,
+        migrated_database,
         echo=False,
         pool_pre_ping=True,
     )
@@ -74,58 +91,26 @@ async def db_engine(database_url: str):
 
 
 @pytest_asyncio.fixture
-async def db_session(db_engine) -> AsyncGenerator[AsyncSession]:
-    """Provide a database session with automatic rollback after each test.
+async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
+    """Join a session to an outer transaction that always rolls back.
 
-    Each test runs in its own transaction that is rolled back at the end,
-    ensuring test isolation without needing to clean up data manually.
+    `create_savepoint` lets application code call commit or rollback without
+    controlling the connection-level transaction owned by the fixture.
     """
-    from derp.models import Base
-
-    # Ensure schema exists
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async_session = async_sessionmaker(
-        db_engine,
-        expire_on_commit=False,
-        class_=AsyncSession,
-    )
-
-    async with async_session() as session:
-        yield session
-        # Rollback any uncommitted changes
-        await session.rollback()
-
-
-@pytest_asyncio.fixture
-async def db_session_committed(db_engine) -> AsyncGenerator[AsyncSession]:
-    """Provide a database session that commits changes.
-
-    Use this when you need to test behavior that requires committed data,
-    such as testing unique constraints or triggers.
-    """
-    from derp.models import Base
-
-    # Ensure schema exists
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async_session = async_sessionmaker(
-        db_engine,
-        expire_on_commit=False,
-        class_=AsyncSession,
-    )
-
-    async with async_session() as session:
-        yield session
-
-    # Clean up after committed tests
-    async with async_session() as cleanup_session:
-        await cleanup_session.execute(
-            text("TRUNCATE users, chats, messages RESTART IDENTITY CASCADE")
+    async with db_engine.connect() as connection:
+        transaction = await connection.begin()
+        session = AsyncSession(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
         )
-        await cleanup_session.commit()
+        try:
+            yield session
+        finally:
+            await session.close()
+            if not transaction.is_active:
+                raise RuntimeError("Database test escaped its outer transaction")
+            await transaction.rollback()
 
 
 # =============================================================================

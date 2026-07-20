@@ -4,6 +4,7 @@
 # Database URLs for different environments
 DATABASE_URL_DEV ?= postgresql+asyncpg://derp:derp@localhost:5432/derp
 DATABASE_URL_TEST ?= postgresql+asyncpg://derp_test:derp_test@localhost:5433/derp_test
+COMPOSE ?= $(shell if docker compose version >/dev/null 2>&1; then echo "docker compose"; else echo "docker-compose"; fi)
 
 ## =============================================================================
 ## ENVIRONMENT & DEPENDENCIES
@@ -48,7 +49,7 @@ format f:
 
 ## Run tests (quick, no database)
 t test:
-	uv run pytest -q --ignore=tests/test_db_queries.py --ignore=tests/test_models.py
+	uv run pytest -q -m "not database"
 
 ## Run tests verbosely
 test-verbose:
@@ -62,7 +63,7 @@ test-all: db-test-up
 ## Run only database tests (requires PostgreSQL)
 test-db: db-test-up
 	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
-		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v tests/test_db_queries.py tests/test_models.py
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v -m database
 
 ## Run tests with coverage
 test-cov: db-test-up
@@ -76,21 +77,22 @@ test-cov: db-test-up
 
 ## Start development PostgreSQL (persistent data)
 db-up:
-	docker compose up -d --wait db
+	$(COMPOSE) up -d --wait db
 	@echo "PostgreSQL is ready at localhost:5432"
 
 ## Stop development PostgreSQL
 db-down:
-	docker compose stop db
+	$(COMPOSE) stop db
 
 ## Start test PostgreSQL (ephemeral, in-memory)
 db-test-up:
-	docker compose --profile test up -d --wait db-test
+	@$(COMPOSE) --profile test rm -sf db-test >/dev/null
+	$(COMPOSE) --profile test up -d --wait --force-recreate db-test
 	@echo "Test PostgreSQL is ready at localhost:5433"
 
 ## Stop test PostgreSQL
 db-test-down:
-	docker compose --profile test rm -sf db-test
+	$(COMPOSE) --profile test rm -sf db-test
 
 ## Run database migrations (development)
 db-migrate:
@@ -155,19 +157,19 @@ i18n-init:
 
 ## Build and start all services with Docker
 docker-up:
-	docker compose up --build -d
+	$(COMPOSE) up --build -d
 
 ## Stop all services
 docker-down:
-	docker compose down
+	$(COMPOSE) down
 
 ## View logs from all services
 docker-logs:
-	docker compose logs -f
+	$(COMPOSE) logs -f
 
 ## Rebuild and restart just the bot
 docker-restart-bot:
-	docker compose up --build -d bot
+	$(COMPOSE) up --build -d bot
 
 ## =============================================================================
 ## DEVELOPMENT HELPERS
@@ -186,7 +188,7 @@ dev-setup: venv i18n-compile db-up db-migrate
 
 ## Clean up development environment
 dev-clean:
-	docker compose down -v
+	$(COMPOSE) down -v
 	rm -rf .venv htmlcov .coverage .pytest_cache __pycache__
 
 ## =============================================================================

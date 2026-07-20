@@ -69,15 +69,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Run database migrations
-        run: uv run alembic upgrade head
-        env:
-          DATABASE_URL: ${{ env.DATABASE_URL }}
-          ENVIRONMENT: dev
-          TELEGRAM_BOT_TOKEN: "123456:TEST_TOKEN_FOR_TESTING"
-          GOOGLE_API_PAID_KEY: "test_key"
-          LOGFIRE_TOKEN: "test_token"
-          LOGFIRE_IGNORE_NO_CONFIG: "1"
+      - name: Run and verify database migrations
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
 
       - name: Run tests with coverage
         run: uv run pytest --no-logfire -v --cov=derp --cov-report=term-missing

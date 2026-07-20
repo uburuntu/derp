@@ -26,7 +26,9 @@ def get_database_url() -> str:
 config.set_main_option("sqlalchemy.url", get_database_url().replace("%", "%%"))
 
 # Setup logging from config file
-if config.config_file_name is not None:
+if config.config_file_name is not None and config.attributes.get(
+    "configure_logger", True
+):
     fileConfig(config.config_file_name)
 
 # Target metadata for 'autogenerate' support

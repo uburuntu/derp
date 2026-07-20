@@ -24,6 +24,8 @@ from derp.db.queries import (
 )
 from derp.models import Message
 
+pytestmark = pytest.mark.database
+
 
 class TestUserQueries:
     """Tests for user-related database queries."""
