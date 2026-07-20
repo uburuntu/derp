@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, CheckConstraint, String
+from sqlalchemy import BigInteger, CheckConstraint, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from derp.models.base import Base, TimestampMixin
@@ -38,7 +38,7 @@ class User(TimestampMixin, Base):
     is_premium: Mapped[bool] = mapped_column(default=False)
 
     # Credit balance for paid features
-    credits: Mapped[int] = mapped_column(default=0)
+    credits: Mapped[int] = mapped_column(default=0, server_default=text("0"))
 
     # Relationships
     messages: Mapped[list[Message]] = relationship(back_populates="user")
