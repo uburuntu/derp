@@ -5,9 +5,10 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from derp.models import (
+    OperationAllocation,
     OperationQuote,
     PaidOperation,
     PaymentReceipt,
@@ -246,8 +247,6 @@ async def test_quote_and_operation_form_a_one_to_one_fk_shape(
     operation = PaidOperation(
         id=operation_id,
         quote_id=quote.id,
-        requester_id=user.id,
-        chat_id=chat.id,
         wallet_id=wallet.id,
         funding_authorization="private",
     )
@@ -259,17 +258,111 @@ async def test_quote_and_operation_form_a_one_to_one_fk_shape(
     assert operation.wallet_id == wallet.id
 
 
-async def test_operation_requires_an_existing_quote(
+async def test_operation_id_must_match_immutable_quote_identity(
     db_session, user_factory, chat_factory
 ) -> None:
-    user = await user_factory(telegram_id=9_300_009)
-    chat = await chat_factory(telegram_id=-9_300_009)
+    user = await user_factory(telegram_id=9_300_013)
+    chat = await chat_factory(telegram_id=-9_300_013)
+    quote = _quote(
+        operation_id=uuid4(),
+        requester_id=user.id,
+        chat_id=chat.id,
+    )
+    db_session.add(quote)
+    await db_session.flush()
+    db_session.add(PaidOperation(id=uuid4(), quote_id=quote.id))
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+async def test_quote_rows_are_database_immutable(
+    db_session, user_factory, chat_factory
+) -> None:
+    user = await user_factory(telegram_id=9_300_014)
+    chat = await chat_factory(telegram_id=-9_300_014)
+    quote = _quote(
+        operation_id=uuid4(),
+        requester_id=user.id,
+        chat_id=chat.id,
+    )
+    db_session.add(quote)
+    await db_session.flush()
+    quote.amount_credits += 1
+
+    with pytest.raises(DBAPIError, match="immutable billing record"):
+        await db_session.flush()
+
+
+async def test_allocation_cannot_cross_wallets(
+    db_session, user_factory, chat_factory
+) -> None:
+    user = await user_factory(telegram_id=9_300_015)
+    other_user = await user_factory(telegram_id=9_300_016)
+    chat = await chat_factory(telegram_id=-9_300_015)
+    wallet = await _create_wallet(db_session, user_id=user.id)
+    other_wallet = await _create_wallet(db_session, user_id=other_user.id)
+    other_lot = WalletLot(
+        wallet_id=other_wallet.id,
+        kind="purchased",
+        granted_credits=10,
+        available_credits=10,
+    )
+    quote = _quote(
+        operation_id=uuid4(),
+        requester_id=user.id,
+        chat_id=chat.id,
+    )
+    db_session.add_all([other_lot, quote])
+    await db_session.flush()
+    operation = PaidOperation(
+        id=quote.operation_id,
+        quote_id=quote.id,
+        wallet_id=wallet.id,
+        funding_authorization="private",
+    )
+    db_session.add(operation)
+    await db_session.flush()
+    db_session.add(
+        OperationAllocation(
+            operation_id=operation.id,
+            wallet_lot_id=other_lot.id,
+            wallet_id=wallet.id,
+            amount_credits=4,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+async def test_allowance_owner_and_expiry_match_subscription_cycle(
+    db_session, user_factory, chat_factory
+) -> None:
+    user = await user_factory(telegram_id=9_300_017)
+    chat = await chat_factory(telegram_id=-9_300_017)
+    chat_wallet = await _create_wallet(db_session, chat_id=chat.id)
+    cycle = await _create_allowance_source(db_session, user.id)
+    db_session.add(
+        WalletLot(
+            wallet_id=chat_wallet.id,
+            kind="allowance",
+            subscription_cycle_id=cycle.id,
+            granted_credits=10,
+            available_credits=10,
+            expires_at=cycle.period_end,
+        )
+    )
+
+    with pytest.raises(IntegrityError, match="allowance lot owner"):
+        await db_session.flush()
+
+
+async def test_operation_requires_an_existing_quote(db_session) -> None:
     db_session.add(
         PaidOperation(
             id=uuid4(),
             quote_id=uuid4(),
-            requester_id=user.id,
-            chat_id=chat.id,
         )
     )
 
@@ -294,8 +387,6 @@ async def test_one_quote_cannot_back_multiple_operations(
         PaidOperation(
             id=operation_id,
             quote_id=quote.id,
-            requester_id=user.id,
-            chat_id=chat.id,
         )
     )
     await db_session.flush()
@@ -303,8 +394,6 @@ async def test_one_quote_cannot_back_multiple_operations(
         PaidOperation(
             id=uuid4(),
             quote_id=quote.id,
-            requester_id=user.id,
-            chat_id=chat.id,
         )
     )
 
@@ -365,4 +454,25 @@ async def test_ledger_idempotency_key_is_unique(db_session, user_factory) -> Non
     db_session.add(WalletLedgerEntry(**values))
 
     with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+async def test_ledger_rows_are_database_append_only(db_session, user_factory) -> None:
+    user = await user_factory(telegram_id=9_300_018)
+    wallet = await _create_wallet(db_session, user_id=user.id)
+    entry = WalletLedgerEntry(
+        wallet_id=wallet.id,
+        event_type="grant",
+        amount_credits=10,
+        available_after=10,
+        reserved_after=0,
+        consumed_after=0,
+        wallet_debt_after=0,
+        idempotency_key=f"ledger:{uuid4()}",
+    )
+    db_session.add(entry)
+    await db_session.flush()
+    entry.amount_credits = 9
+
+    with pytest.raises(DBAPIError, match="immutable billing record"):
         await db_session.flush()

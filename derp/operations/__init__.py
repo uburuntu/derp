@@ -1,5 +1,11 @@
 """Paid-operation domain values shared by billing, features, and delivery."""
 
+from derp.operations.ledger import (
+    ImmutableQuoteConflictError,
+    InvalidOperationTransitionError,
+    OperationLedger,
+    OperationLedgerError,
+)
 from derp.operations.quotes import (
     DEFAULT_QUOTE_POLICY,
     PRICING_VERSION,
@@ -17,6 +23,7 @@ from derp.operations.quotes import (
 from derp.operations.types import (
     ContextBand,
     DeliveryState,
+    FundingAuthorization,
     InventoryAllocation,
     InventoryKind,
     OperationId,
@@ -24,6 +31,12 @@ from derp.operations.types import (
     Quote,
     QuoteId,
     QuoteKey,
+    ReservationRejected,
+    ReservationRejection,
+    ReservationResult,
+    ReservedOperation,
+    SettlementResult,
+    WalletBalance,
     WalletOwner,
     WalletOwnerKind,
 )
@@ -35,12 +48,17 @@ __all__ = [
     "ContextBand",
     "DeepThinkQuoteInput",
     "DeliveryState",
+    "FundingAuthorization",
     "ImageEditQuoteInput",
     "ImageGenerateQuoteInput",
     "InlineChatQuoteInput",
+    "ImmutableQuoteConflictError",
     "InventoryAllocation",
     "InventoryKind",
+    "InvalidOperationTransitionError",
     "OperationId",
+    "OperationLedger",
+    "OperationLedgerError",
     "OperationState",
     "Quote",
     "QuoteEngine",
@@ -48,8 +66,14 @@ __all__ = [
     "QuoteInput",
     "QuoteKey",
     "QuotePolicy",
+    "ReservationRejected",
+    "ReservationRejection",
+    "ReservationResult",
+    "ReservedOperation",
+    "SettlementResult",
     "TtsQuoteInput",
     "VideoGenerateQuoteInput",
+    "WalletBalance",
     "WalletOwner",
     "WalletOwnerKind",
 ]

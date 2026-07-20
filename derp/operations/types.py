@@ -190,6 +190,71 @@ class InventoryAllocation:
         return self.allowance_credits + self.purchased_credits
 
 
+class FundingAuthorization(StrEnum):
+    """Why one operation may use its selected wallet."""
+
+    CHAT = "chat"
+    PRIVATE = "private"
+    ONCE = "once"
+    ALWAYS = "always"
+
+
+class ReservationRejection(StrEnum):
+    """Actionable reasons a quote could not be reserved."""
+
+    QUOTE_EXPIRED = "quote_expired"
+    PERSONAL_CONSENT_REQUIRED = "personal_consent_required"
+    INSUFFICIENT_FUNDS = "insufficient_funds"
+    WALLET_IN_DEBT = "wallet_in_debt"
+    OPERATION_TERMINAL = "operation_terminal"
+
+
+@dataclass(frozen=True, slots=True)
+class ReservedOperation:
+    """A successful atomic reservation from exactly one wallet."""
+
+    operation_id: OperationId
+    allocation: InventoryAllocation
+    authorization: FundingAuthorization
+    idempotent: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ReservationRejected:
+    """A reservation that performed no billable movement."""
+
+    operation_id: OperationId
+    reason: ReservationRejection
+
+
+type ReservationResult = ReservedOperation | ReservationRejected
+
+
+@dataclass(frozen=True, slots=True)
+class SettlementResult:
+    """Result of an idempotent operation-state transition."""
+
+    operation_id: OperationId
+    state: OperationState
+    changed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WalletBalance:
+    """Spendable and committed inventory shown to a wallet owner."""
+
+    owner: WalletOwner
+    allowance_available: int
+    purchased_available: int
+    reserved: int
+    consumed: int
+    debt: int
+
+    @property
+    def spendable(self) -> int:
+        return self.allowance_available + self.purchased_available
+
+
 class OperationState(StrEnum):
     """Durable settlement lifecycle; terminal states never reopen."""
 
