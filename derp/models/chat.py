@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, CheckConstraint, String, Text, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from derp.models.base import Base, TimestampMixin
@@ -26,6 +35,14 @@ class Chat(TimestampMixin, Base):
     __tablename__ = "chats"
     __table_args__ = (
         CheckConstraint("length(llm_memory) <= 1024", name="llm_memory_max_length"),
+        CheckConstraint(
+            "admin_policy IS NULL OR length(admin_policy) <= 2048",
+            name="admin_policy_max_length",
+        ),
+        CheckConstraint(
+            "retention_days = ANY (ARRAY[7, 30, 90])",
+            name="chat_retention_days_allowed",
+        ),
         CheckConstraint("credits >= 0", name="chat_credits_non_negative"),
     )
 
@@ -40,6 +57,28 @@ class Chat(TimestampMixin, Base):
 
     # Chat settings (merged from ChatSettings)
     llm_memory: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admin_policy: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ambient_history_enabled: Mapped[bool] = mapped_column(
+        default=False, server_default=text("false")
+    )
+    context_notice_version: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+    retention_days: Mapped[int] = mapped_column(
+        Integer, default=30, server_default=text("30")
+    )
+    member_notice_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    shared_facts_member_edit: Mapped[bool] = mapped_column(
+        default=False, server_default=text("false")
+    )
+    shared_credit_spending_enabled: Mapped[bool] = mapped_column(
+        default=True, server_default=text("true")
+    )
+    expensive_tools_enabled: Mapped[bool] = mapped_column(
+        default=True, server_default=text("true")
+    )
 
     # Credit balance for group pool (sponsors can fund the group)
     credits: Mapped[int] = mapped_column(default=0, server_default=text("0"))

@@ -136,6 +136,12 @@ class TestChatModel:
         assert chat.id is not None
         assert chat.type == "supergroup"
         assert chat.title == "Test Group"
+        assert chat.ambient_history_enabled is False
+        assert chat.context_notice_version == 0
+        assert chat.retention_days == 30
+        assert chat.shared_facts_member_edit is False
+        assert chat.shared_credit_spending_enabled is True
+        assert chat.expensive_tools_enabled is True
 
     @pytest.mark.asyncio
     async def test_create_private_chat(self, db_session):
@@ -213,6 +219,19 @@ class TestChatModel:
             type="supergroup",
             title="Memory Limit Test",
             llm_memory="x" * 1025,  # Over limit
+        )
+        db_session.add(chat)
+
+        with pytest.raises(IntegrityError):
+            await db_session.commit()
+
+    @pytest.mark.asyncio
+    async def test_chat_policy_constraints(self, db_session):
+        chat = Chat(
+            telegram_id=-1004444444445,
+            type="supergroup",
+            retention_days=14,
+            admin_policy="x" * 2049,
         )
         db_session.add(chat)
 
