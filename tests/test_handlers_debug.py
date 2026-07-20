@@ -131,7 +131,7 @@ async def test_debug_status(
 
     user = mock_user_model(telegram_id=12345)
     chat = mock_chat_model(telegram_id=-100123)
-    chat.llm_memory = "Test memory"
+    chat.admin_policy = "Test policy"
 
     service = mock_credit_service_factory()
 

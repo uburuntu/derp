@@ -22,11 +22,9 @@ from derp.db.history import (
 )
 from derp.db.queries import (
     get_chat_by_telegram_id,
-    get_chat_settings,
     get_recent_messages,
     get_user_by_telegram_id,
     mark_message_deleted,
-    update_chat_memory,
     upsert_chat,
     upsert_message,
     upsert_user,
@@ -235,72 +233,6 @@ class TestChatQueries:
             last_name="Doe",
         )
         assert private_no_username.display_name == "Jane Doe"
-
-
-class TestChatMemoryQueries:
-    """Tests for chat memory (LLM context) operations."""
-
-    @pytest.mark.asyncio
-    async def test_update_chat_memory_sets_memory(self, db_session):
-        """Should set llm_memory for a chat."""
-        await upsert_chat(
-            db_session,
-            telegram_id=-1005555555555,
-            chat_type="supergroup",
-            title="Memory Test",
-        )
-
-        await update_chat_memory(
-            db_session,
-            telegram_id=-1005555555555,
-            llm_memory="Remember: User prefers Python over JavaScript",
-        )
-
-        chat = await get_chat_settings(db_session, -1005555555555)
-        assert chat is not None
-        assert chat.llm_memory == "Remember: User prefers Python over JavaScript"
-
-    @pytest.mark.asyncio
-    async def test_update_chat_memory_clears_memory(self, db_session):
-        """Should clear llm_memory when set to None."""
-        await upsert_chat(
-            db_session,
-            telegram_id=-1006666666666,
-            chat_type="supergroup",
-            title="Clear Test",
-        )
-
-        # Set memory
-        await update_chat_memory(
-            db_session, telegram_id=-1006666666666, llm_memory="Some memory"
-        )
-
-        # Clear memory
-        await update_chat_memory(
-            db_session, telegram_id=-1006666666666, llm_memory=None
-        )
-
-        chat = await get_chat_settings(db_session, -1006666666666)
-        assert chat is not None
-        assert chat.llm_memory is None
-
-    @pytest.mark.asyncio
-    async def test_get_chat_settings_returns_memory(self, db_session):
-        """Should return chat with llm_memory field."""
-        await upsert_chat(
-            db_session,
-            telegram_id=-1007777777777,
-            chat_type="supergroup",
-            title="Settings Test",
-        )
-        await update_chat_memory(
-            db_session, telegram_id=-1007777777777, llm_memory="Context: coding help"
-        )
-
-        settings = await get_chat_settings(db_session, -1007777777777)
-
-        assert settings is not None
-        assert settings.llm_memory == "Context: coding help"
 
 
 class TestContextPolicyQueries:

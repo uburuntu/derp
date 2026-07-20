@@ -27,4 +27,18 @@ def capture_outbound_history() -> Iterator[None]:
         _capture_outbound.reset(token)
 
 
-__all__ = ["capture_outbound_history", "should_capture_outbound"]
+@contextmanager
+def suppress_outbound_history() -> Iterator[None]:
+    """Exclude control-plane messages emitted inside a conversational run."""
+    token = _capture_outbound.set(False)
+    try:
+        yield
+    finally:
+        _capture_outbound.reset(token)
+
+
+__all__ = [
+    "capture_outbound_history",
+    "should_capture_outbound",
+    "suppress_outbound_history",
+]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 from typing import Final
 
 from aiogram.types import Message
@@ -10,6 +11,15 @@ from aiogram.types import Message
 from derp.history.snapshot import CaptureKind
 
 CONTEXT_NOTICE_VERSION: Final = 1
+
+
+class ChatPolicyFlag(StrEnum):
+    """Allowlisted boolean settings that affect authorization or settlement."""
+
+    SHARED_FACTS_MEMBER_EDIT = "shared_facts_member_edit"
+    SHARED_CREDIT_SPENDING = "shared_credit_spending_enabled"
+    EXPENSIVE_TOOLS = "expensive_tools_enabled"
+
 
 _DERP_NAME = re.compile(r"\b(?:derp|дерп)\b", re.IGNORECASE)
 _SENSITIVE_CONTENT_TYPES: Final = frozenset(
@@ -118,6 +128,7 @@ def _mentions_username(
 
 __all__ = [
     "CONTEXT_NOTICE_VERSION",
+    "ChatPolicyFlag",
     "capture_kind_for_message",
     "is_explicit_invocation",
 ]

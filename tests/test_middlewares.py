@@ -216,7 +216,7 @@ class TestDatabaseModelMiddleware:
 
         # Mock the get_chat_settings query
         mock_settings = MagicMock()
-        mock_settings.llm_memory = "test memory"
+        mock_settings.retention_days = 30
 
         with patch(
             "derp.middlewares.db_models.get_chat_settings",
@@ -316,7 +316,7 @@ class TestDatabaseModelMiddleware:
         chat = make_chat(id=12345, type="private")
 
         mock_settings = MagicMock()
-        mock_settings.llm_memory = "private memory"
+        mock_settings.retention_days = 30
 
         with patch(
             "derp.middlewares.db_models.get_chat_settings",
@@ -343,9 +343,9 @@ class TestDatabaseModelMiddleware:
         chat2 = make_chat(id=-100222)
 
         settings1 = MagicMock()
-        settings1.llm_memory = "memory1"
+        settings1.retention_days = 7
         settings2 = MagicMock()
-        settings2.llm_memory = "memory2"
+        settings2.retention_days = 90
 
         with patch(
             "derp.middlewares.db_models.get_chat_settings",

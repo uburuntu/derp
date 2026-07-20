@@ -109,29 +109,50 @@ async def hydrate_media(
     max_total_bytes: int = DEFAULT_HISTORY_MEDIA_BYTES,
     concurrency: int = 3,
 ) -> HydratedMedia:
-    """Hydrate newest references within item, concurrency, and aggregate limits."""
+    """Hydrate a caller-trimmed set of references within an aggregate byte cap.
+
+    Logical-turn selection belongs to the history service. Rejecting an
+    overlarge item set here prevents this transport helper from silently
+    dropping individual attachments out of an otherwise retained turn.
+    """
     if max_items <= 0 or concurrency <= 0:
         raise ValueError("Media hydration limits must be positive")
     if max_total_bytes < 0:
         raise ValueError("Aggregate media byte limit must not be negative")
-    selected = candidates[-max_items:]
-
-    # Reserve declared bytes newest-first. Unknown or zero sizes reserve the
-    # remaining budget so untrusted metadata cannot schedule an unbounded batch.
-    planned: list[HydrationCandidate] = []
-    reserved_bytes = 0
-    for candidate in reversed(selected):
-        remaining = max_total_bytes - reserved_bytes
-        if remaining <= 0:
-            break
-        declared_bytes = candidate.media_reference.metadata.file_size
-        reservation = (
-            declared_bytes if declared_bytes and declared_bytes > 0 else remaining
+    declared_oversize = [
+        candidate
+        for candidate in candidates
+        if (
+            candidate.media_reference.metadata.file_size is not None
+            and candidate.media_reference.metadata.file_size > max_total_bytes
         )
-        if reservation > remaining:
-            continue
-        planned.append(candidate)
-        reserved_bytes += reservation
+    ]
+    planned = [
+        candidate
+        for candidate in reversed(candidates)
+        if candidate not in declared_oversize
+    ]
+    if len(planned) > max_items:
+        raise ValueError(
+            "Media candidates must be trimmed by complete logical turn before hydration"
+        )
+    reserved_bytes = sum(
+        candidate.media_reference.metadata.file_size or max_total_bytes
+        for candidate in planned
+    )
+    if reserved_bytes > max_total_bytes:
+        raise ValueError(
+            "Media candidates must be trimmed by complete logical turn before hydration"
+        )
+
+    # Download newest-first so inaccurate Telegram size metadata degrades the
+    # oldest candidate first while the actual retained byte total remains safe.
+    for candidate in declared_oversize:
+        logfire.warning(
+            "history_media_unavailable",
+            media_type=candidate.history_reference.media_type,
+            error_type="AggregateMediaTooLarge",
+        )
 
     async def hydrate_one(
         candidate: HydrationCandidate,
@@ -164,6 +185,11 @@ async def hydrate_media(
                 continue
             candidate, data = result
             if retained_bytes + len(data) > max_total_bytes:
+                logfire.warning(
+                    "history_media_unavailable",
+                    media_type=candidate.history_reference.media_type,
+                    error_type="AggregateMediaTooLarge",
+                )
                 continue
             content_by_reference[candidate.history_reference] = BinaryContent(
                 data=data,
@@ -171,15 +197,15 @@ async def hydrate_media(
             )
             retained_bytes += len(data)
 
-    # Restore source order after newest-first budget selection.
+    # Restore source order after newest-first hydration.
     content = {
         candidate.history_reference: content_by_reference[candidate.history_reference]
-        for candidate in selected
+        for candidate in candidates
         if candidate.history_reference in content_by_reference
     }
     return HydratedMedia(
         content=content,
-        failures=len(selected) - len(content),
+        failures=len(candidates) - len(content),
         downloaded_bytes=retained_bytes,
     )
 

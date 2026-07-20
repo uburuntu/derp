@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
@@ -19,11 +19,15 @@ from derp.history.core import (
     LogicalTurn,
     Speaker,
     TokenEstimator,
+    ToolCall,
+    ToolResult,
+    ToolRound,
     UserTextTurn,
     materialize_history,
     trim_history,
 )
 from derp.history.media import (
+    DEFAULT_HISTORY_MEDIA_BYTES,
     HydrationCandidate,
     hydrate_media,
     hydration_candidate,
@@ -41,9 +45,19 @@ class HistoryWindow:
     max_tokens: int
     query_limit: int
     max_media: int = 8
+    max_media_bytes: int = DEFAULT_HISTORY_MEDIA_BYTES
 
     def __post_init__(self) -> None:
-        if min(self.max_turns, self.max_tokens, self.query_limit, self.max_media) <= 0:
+        if (
+            min(
+                self.max_turns,
+                self.max_tokens,
+                self.query_limit,
+                self.max_media,
+                self.max_media_bytes,
+            )
+            <= 0
+        ):
             raise ValueError("History window limits must be positive")
         if self.query_limit < self.max_turns:
             raise ValueError("History query limit cannot be smaller than max turns")
@@ -125,11 +139,24 @@ class ConversationHistoryService:
         media_failures = 0
         if self._media_gateway is not None and self._bot is not None:
             candidates = _hydration_candidates(records, turns)
+            turns = trim_history_for_media(
+                turns,
+                candidates=candidates,
+                max_items=window.max_media,
+                max_total_bytes=window.max_media_bytes,
+            )
+            retained_attachments = _attachment_set(turns)
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.history_reference in retained_attachments
+            ]
             media = await hydrate_media(
                 gateway=self._media_gateway,
                 bot=self._bot,
                 candidates=candidates,
                 max_items=window.max_media,
+                max_total_bytes=window.max_media_bytes,
             )
             hydrated = media.content
             media_failures = media.failures
@@ -152,9 +179,15 @@ def logical_turns_from_records(records: Sequence[Message]) -> tuple[LogicalTurn,
     turns: list[LogicalTurn] = []
     root_turn_by_message_id: dict[int, int] = {}
     album_turn_by_media_group_id: dict[str, int] = {}
+    tool_rounds_by_turn: dict[int, tuple[ToolRound, ...]] = {}
     for record in records:
         item = _history_item(record)
         if isinstance(item, UserTextTurn):
+            record_tool_rounds = (
+                _parse_tool_rounds(record.history_dto)
+                if record.direction == "in"
+                else ()
+            )
             if record.media_group_id is not None:
                 turn_index = album_turn_by_media_group_id.get(record.media_group_id)
                 if turn_index is not None:
@@ -164,11 +197,17 @@ def logical_turns_from_records(records: Sequence[Message]) -> tuple[LogicalTurn,
                         request=_combine_user_fragments(turn.request, item),
                     )
                     root_turn_by_message_id[record.telegram_message_id] = turn_index
+                    tool_rounds_by_turn[turn_index] = _merge_tool_rounds(
+                        tool_rounds_by_turn.get(turn_index, ()),
+                        record_tool_rounds,
+                    )
                     continue
 
             turn_index = len(turns)
             turns.append(LogicalTurn(request=item))
             root_turn_by_message_id[record.telegram_message_id] = turn_index
+            if record_tool_rounds:
+                tool_rounds_by_turn[turn_index] = record_tool_rounds
             if record.media_group_id is not None:
                 album_turn_by_media_group_id[record.media_group_id] = turn_index
             continue
@@ -190,9 +229,179 @@ def logical_turns_from_records(records: Sequence[Message]) -> tuple[LogicalTurn,
                 text=f"{response.text}\n{item.text}",
                 attachments=response.attachments + item.attachments,
             )
-        turns[turn_index] = replace(turn, response=combined)
+        turns[turn_index] = replace(
+            turn,
+            response=combined,
+            tool_rounds=_tool_rounds_for_exchange(
+                tool_rounds_by_turn.get(turn_index, ()),
+                request=turn.request,
+                response=combined,
+            ),
+        )
         root_turn_by_message_id[record.telegram_message_id] = turn_index
     return tuple(turns)
+
+
+def _parse_tool_rounds(dto: Mapping[str, object]) -> tuple[ToolRound, ...]:
+    raw_rounds = dto.get("tool_rounds")
+    if not isinstance(raw_rounds, list):
+        return ()
+
+    parsed: list[ToolRound] = []
+    for raw_round in raw_rounds:
+        try:
+            parsed.append(_parse_tool_round(raw_round))
+        except KeyError, TypeError, ValueError:
+            continue
+    return _merge_tool_rounds((), tuple(parsed))
+
+
+def _parse_tool_round(raw: object) -> ToolRound:
+    if not isinstance(raw, Mapping):
+        raise TypeError("Tool round must be an object")
+    raw_calls = raw.get("calls")
+    raw_results = raw.get("results")
+    if not isinstance(raw_calls, list) or not isinstance(raw_results, list):
+        raise TypeError("Tool round calls and results must be arrays")
+
+    calls = tuple(_parse_tool_call(value) for value in raw_calls)
+    results = tuple(_parse_tool_result(value) for value in raw_results)
+    results_by_id = {result.tool_call_id: result for result in results}
+    if len(results_by_id) != len(results):
+        raise ValueError("Tool result IDs must be unique")
+    ordered_results = tuple(results_by_id[call.tool_call_id] for call in calls)
+    return ToolRound(
+        calls=calls,
+        results=ordered_results,
+        called_at=_parse_tool_timestamp(raw.get("called_at")),
+        returned_at=_parse_tool_timestamp(raw.get("returned_at")),
+    )
+
+
+def _parse_tool_call(raw: object) -> ToolCall:
+    if not isinstance(raw, Mapping):
+        raise TypeError("Tool call must be an object")
+    return ToolCall(
+        tool_name=_required_string(raw, "tool_name"),
+        tool_call_id=_required_string(raw, "tool_call_id"),
+        arguments_json=_required_string(raw, "arguments_json"),
+    )
+
+
+def _parse_tool_result(raw: object) -> ToolResult:
+    if not isinstance(raw, Mapping):
+        raise TypeError("Tool result must be an object")
+    return ToolResult(
+        tool_name=_required_string(raw, "tool_name"),
+        tool_call_id=_required_string(raw, "tool_call_id"),
+        content=_required_string(raw, "content"),
+    )
+
+
+def _required_string(value: Mapping[object, object], key: str) -> str:
+    item = value.get(key)
+    if not isinstance(item, str) or not item.strip():
+        raise ValueError(f"{key} must be a non-empty string")
+    return item
+
+
+def _parse_tool_timestamp(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise TypeError("Tool timestamps must be strings")
+    timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("Tool timestamps must be timezone-aware")
+    return timestamp
+
+
+def _merge_tool_rounds(
+    current: Sequence[ToolRound],
+    additional: Sequence[ToolRound],
+) -> tuple[ToolRound, ...]:
+    retained = list(current)
+    seen_call_ids = {call.tool_call_id for round_ in retained for call in round_.calls}
+    last_returned_at = retained[-1].returned_at if retained else None
+    for round_ in additional:
+        call_ids = {call.tool_call_id for call in round_.calls}
+        if call_ids & seen_call_ids:
+            continue
+        if last_returned_at is not None and round_.called_at < last_returned_at:
+            continue
+        retained.append(round_)
+        seen_call_ids.update(call_ids)
+        last_returned_at = round_.returned_at
+    return tuple(retained)
+
+
+def _tool_rounds_for_exchange(
+    rounds: Sequence[ToolRound],
+    *,
+    request: UserTextTurn,
+    response: AssistantTextTurn,
+) -> tuple[ToolRound, ...]:
+    return tuple(
+        round_
+        for round_ in rounds
+        if request.timestamp <= round_.called_at
+        and round_.returned_at <= response.timestamp
+    )
+
+
+def trim_history_for_media(
+    turns: Sequence[LogicalTurn],
+    *,
+    candidates: Sequence[HydrationCandidate],
+    max_items: int,
+    max_total_bytes: int,
+) -> tuple[LogicalTurn, ...]:
+    """Keep newest complete turns whose supported media fit both limits.
+
+    Unknown-size media reserves the complete byte budget. A single declared
+    oversize item stays in its turn as an unavailable marker and is not
+    scheduled. The normalized snapshot is untrusted input, so hydration never
+    schedules an unbounded aggregate download.
+    """
+    if max_items < 0 or max_total_bytes < 0:
+        raise ValueError("Media history limits must not be negative")
+
+    by_reference = {candidate.history_reference: candidate for candidate in candidates}
+    retained_newest_first: list[LogicalTurn] = []
+    retained_items = 0
+    retained_bytes = 0
+    for turn in reversed(turns):
+        turn_reservations: list[int] = []
+        for reference in _turn_attachments(turn):
+            candidate = by_reference.get(reference)
+            if candidate is None:
+                continue
+            reservation = _media_reservation(
+                candidate,
+                max_total_bytes=max_total_bytes,
+            )
+            if reservation is not None:
+                turn_reservations.append(reservation)
+        turn_items = len(turn_reservations)
+        turn_bytes = sum(turn_reservations)
+        if (
+            retained_items + turn_items > max_items
+            or retained_bytes + turn_bytes > max_total_bytes
+        ):
+            break
+        retained_newest_first.append(turn)
+        retained_items += turn_items
+        retained_bytes += turn_bytes
+    return tuple(reversed(retained_newest_first))
+
+
+def _media_reservation(
+    candidate: HydrationCandidate,
+    *,
+    max_total_bytes: int,
+) -> int | None:
+    declared_bytes = candidate.media_reference.metadata.file_size
+    if declared_bytes is not None and declared_bytes > max_total_bytes:
+        return None
+    return declared_bytes or max_total_bytes
 
 
 def _combine_user_fragments(
@@ -357,6 +566,17 @@ def _hydration_candidates(
     return candidates
 
 
+def _turn_attachments(turn: LogicalTurn) -> tuple[AttachmentReference, ...]:
+    response_attachments = turn.response.attachments if turn.response else ()
+    return turn.request.attachments + response_attachments
+
+
+def _attachment_set(
+    turns: Sequence[LogicalTurn],
+) -> set[AttachmentReference]:
+    return {attachment for turn in turns for attachment in _turn_attachments(turn)}
+
+
 __all__ = [
     "HISTORY_WINDOWS",
     "ConversationHistoryService",
@@ -364,4 +584,5 @@ __all__ = [
     "LoadedHistory",
     "logical_turns_from_records",
     "process_native_history",
+    "trim_history_for_media",
 ]

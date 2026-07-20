@@ -392,7 +392,7 @@ async def debug_status(
                 f"**Chat ID:** `{chat_model.telegram_id}`",
                 f"**Chat DB ID:** `{chat_model.id}`",
                 f"**Chat Credits:** {chat_credits}",
-                f"**Chat Memory:** {len(chat_model.llm_memory or '')} chars",
+                f"**Admin Policy:** {len(chat_model.admin_policy or '')} chars",
             ]
         )
 

@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-20 19:31+0100\n"
+"POT-Creation-Date: 2026-07-20 21:53+0100\n"
 "PO-Revision-Date: 2025-04-28 20:27+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ru\n"
@@ -27,109 +27,20 @@ msgstr ""
 "Покупка кредитов временно недоступна, пока мы обновляем платёжную "
 "систему. Уже имеющиеся кредиты и бесплатные функции продолжают работать."
 
-#: derp/handlers/basic.py:14
+#: derp/handlers/basic.py:13
 #, python-brace-format
 msgid ""
-"👋 Hello, {name}!\n"
-"\n"
-"I'm Derp, your AI-powered Telegram assistant powered by Google's Gemini.\n"
-"\n"
-"I can help you with:\n"
-"• 🤖 AI conversations and questions\n"
-"• 🎨 Image generation and editing (premium)\n"
-"• 📝 Code generation and analysis\n"
-"• 🔍 Web search and research\n"
-"• 💭 Chat memory management\n"
-"\n"
-"Type /help to see all available commands, or just start chatting with me!"
+"Hello, {name}. Ask me naturally here, or open /help for context, privacy,"
+" creation, and credit controls."
 msgstr ""
-"👋 Привет, {name}!\n"
-"\n"
-"Я Derp, ваш ИИ-помощник в Telegram, работающий на Google Gemini.\n"
-"\n"
-"Я могу помочь вам с:\n"
-"• 🤖 ИИ-разговорами и вопросами\n"
-"• 🎨 Генерацией и редактированием изображений (премиум)\n"
-"• 📝 Генерацией и анализом кода\n"
-"• 🔍 Поиском в интернете и исследованиями\n"
-"• 💭 Управлением памятью чата\n"
-"\n"
-"Введите /help, чтобы увидеть все доступные команды, или просто начните со"
-" мной общаться!"
 
-#: derp/handlers/basic.py:30
-msgid ""
-"I'm a friendly AI-powered Telegram bot\n"
-"\n"
-"Available commands:\n"
-"• /derp - Trigger AI response\n"
-"• /donate [stars] - Support the bot with Telegram Stars (default 20)\n"
-"• /credits - Check your credit balance\n"
-"• /imagine <prompt> - Generate images with AI (premium)\n"
-"• /edit <prompt> - Edit images with AI (premium)\n"
-"• /video [fast|standard] <prompt> - Generate a video with Veo (premium)\n"
-"• /tts <text> - Generate a voice message (premium)\n"
-"• /settings - Show current chat settings\n"
-"• /set_memory <text> - Set LLM memory for this chat\n"
-"• /clear_memory - Clear LLM memory for this chat\n"
-"• /help - Show this help message\n"
-"\n"
-"You can also:\n"
-"• Mention me (@DerpRobot) in group chats\n"
-"• Reply to my messages\n"
-"• Use me in private chats\n"
-"• Use inline mode: @DerpRobot <query>"
-msgstr ""
-"Я дружелюбный бот, работающий на искусственном интеллекте\n"
-"\n"
-"Доступные команды:\n"
-"• /derp - Запустить ИИ-ответ\n"
-"• /donate [звёзды] - Поддержать бота Telegram Stars (по умолчанию 20)\n"
-"• /credits - Показать баланс кредитов\n"
-"• /imagine <запрос> - Сгенерировать изображение (премиум)\n"
-"• /edit <запрос> - Отредактировать изображение (премиум)\n"
-"• /video [fast|standard] <запрос> - Сгенерировать видео Veo (премиум)\n"
-"• /tts <текст> - Сгенерировать голосовое сообщение (премиум)\n"
-"• /settings - Показать текущие настройки чата\n"
-"• /set_memory <текст> - Установить память ИИ для чата\n"
-"• /clear_memory - Очистить память ИИ для чата\n"
-"• /help - Показать это сообщение помощи\n"
-"\n"
-"Вы также можете:\n"
-"• Упомянуть меня (@DerpRobot) в групповых чатах\n"
-"• Ответить на мои сообщения\n"
-"• Использовать меня в личных чатах\n"
-"• Использовать инлайн-режим: @DerpRobot <запрос>"
-
-#: derp/handlers/basic.py:53
-msgid ""
-"\n"
-"\n"
-"🛠 Debug (admin only):\n"
-"• /debug_credits <n> [chat] - Add credits\n"
-"• /debug_reset [chat] - Reset to 0\n"
-"• /debug_status - Full diagnostic\n"
-"• /debug_refund <id> - Test refund\n"
-"• /debug_tools - List tool pricing\n"
-"• /debug_help - All debug commands"
-msgstr ""
-"\n"
-"\n"
-"🛠 Отладка (только для админа):\n"
-"• /debug_credits <n> [chat] - добавить кредиты\n"
-"• /debug_reset [chat] - сбросить в 0\n"
-"• /debug_status - полная диагностика\n"
-"• /debug_refund <id> - тест возврата\n"
-"• /debug_tools - цены инструментов\n"
-"• /debug_help - все отладочные команды"
-
-#: derp/handlers/chat.py:219
+#: derp/handlers/chat.py:367
 #, python-brace-format
 msgid "Context: {chars} chars, {msgs} messages"
 msgstr "Контекст: {chars} символов, {msgs} сообщений"
 
-#: derp/handlers/chat.py:341 derp/handlers/image.py:133
-#: derp/handlers/image.py:269 derp/handlers/think.py:129
+#: derp/handlers/chat.py:593 derp/handlers/image.py:133
+#: derp/handlers/image.py:269 derp/handlers/think.py:130
 msgid ""
 "⏳ The AI service is overloaded right now.\n"
 "\n"
@@ -139,12 +50,12 @@ msgstr ""
 "\n"
 "Такое бывает в часы пик. Подождите 30-60 секунд и попробуйте снова."
 
-#: derp/handlers/chat.py:348 derp/handlers/chat.py:358
-#: derp/handlers/chat.py:363
+#: derp/handlers/chat.py:600 derp/handlers/chat.py:610
+#: derp/handlers/chat.py:615
 msgid "😅 Something went wrong. I couldn't process that message."
 msgstr "😅 Что-то пошло не так. Я не смог обработать это сообщение."
 
-#: derp/handlers/chat.py:353
+#: derp/handlers/chat.py:605
 msgid "⚠️ Too many tool calls. Please try a simpler request."
 msgstr "⚠️ Слишком много вызовов инструментов. Попробуйте упростить запрос."
 
@@ -187,7 +98,7 @@ msgstr "👤 Баланс: **{credits}** кредитов\n"
 msgid "✅ You have credits for premium features!"
 msgstr "✅ У вас есть кредиты для премиум-функций!"
 
-#: derp/handlers/debug.py:499
+#: derp/handlers/debug.py:504
 msgid ""
 "🛠 **Debug Commands** (admin only)\n"
 "\n"
@@ -416,7 +327,7 @@ msgid "😅 Something went wrong while generating the image. Try again later."
 msgstr "😅 Что-то пошло не так при генерации изображения. Попробуйте позже."
 
 #: derp/handlers/image.py:146 derp/handlers/image.py:282
-#: derp/handlers/inline.py:181
+#: derp/handlers/inline.py:184
 msgid ""
 "⏳ I'm getting too many requests right now. Please try again in about 30 "
 "seconds."
@@ -438,42 +349,42 @@ msgstr ""
 msgid "😅 Something went wrong while editing the image. Try again later."
 msgstr "😅 Что-то пошло не так при редактировании изображения. Попробуйте позже."
 
-#: derp/handlers/inline.py:41 derp/handlers/inline.py:68
+#: derp/handlers/inline.py:42 derp/handlers/inline.py:69
 msgid "🤖 Ask Derp"
 msgstr "🤖 Спросить Derp"
 
-#: derp/handlers/inline.py:42
+#: derp/handlers/inline.py:43
 msgid "Start typing to get an AI-powered response."
 msgstr "Начните печатать, чтобы получить ответ от ИИ."
 
-#: derp/handlers/inline.py:44
+#: derp/handlers/inline.py:45
 msgid "🤖 Please enter a prompt for Derp AI."
 msgstr "🤖 Пожалуйста, введите запрос для Derp AI."
 
-#: derp/handlers/inline.py:50 derp/handlers/inline.py:81
-#: derp/handlers/inline.py:138
+#: derp/handlers/inline.py:51 derp/handlers/inline.py:82
+#: derp/handlers/inline.py:141
 msgid "Add Derp to your chat"
 msgstr "Добавить Derp в ваш чат"
 
-#: derp/handlers/inline.py:69
+#: derp/handlers/inline.py:70
 #, python-brace-format
 msgid "Get an AI-powered response for: {user_input}"
 msgstr "Получить ответ от ИИ на: {user_input}"
 
-#: derp/handlers/inline.py:74
+#: derp/handlers/inline.py:75
 #, python-brace-format
 msgid "🧠 Thinking about: {user_input}"
 msgstr "🧠 Думаю над: {user_input}"
 
-#: derp/handlers/inline.py:91
+#: derp/handlers/inline.py:92
 msgid "Start personal chat"
 msgstr "Начать личный чат"
 
-#: derp/handlers/inline.py:150
+#: derp/handlers/inline.py:153
 msgid "🤯 My circuits are a bit tangled. I couldn't generate a response."
 msgstr "🤯 Мои схемы немного запутались. Не могу сгенерировать ответ."
 
-#: derp/handlers/inline.py:166
+#: derp/handlers/inline.py:169
 msgid ""
 "⏳ The AI service is overloaded right now.\n"
 "\n"
@@ -483,7 +394,7 @@ msgstr ""
 "\n"
 "Подождите 30-60 секунд и попробуйте снова."
 
-#: derp/handlers/inline.py:174 derp/handlers/inline.py:189
+#: derp/handlers/inline.py:177 derp/handlers/inline.py:192
 msgid "😅 Something went wrong. I couldn't process that."
 msgstr "😅 Что-то пошло не так. Не удалось это обработать."
 
@@ -557,7 +468,7 @@ msgstr ""
 "\n"
 "✨ {reason}"
 
-#: derp/handlers/think.py:140 derp/handlers/think.py:148
+#: derp/handlers/think.py:141 derp/handlers/think.py:149
 msgid "😅 Something went wrong during deep thinking. Please try again."
 msgstr "😅 Что-то пошло не так во время глубокого размышления. Попробуйте ещё раз."
 
@@ -576,7 +487,7 @@ msgstr ""
 "\n"
 "✨ {reason}"
 
-#: derp/handlers/tts.py:96
+#: derp/handlers/tts.py:97
 msgid ""
 "😅 Something went wrong while generating the voice message. Try again "
 "later."

@@ -212,20 +212,6 @@ class TestChatModel:
         assert chat.display_name == str(-1003333333333)
 
     @pytest.mark.asyncio
-    async def test_chat_llm_memory_max_length(self, db_session):
-        """llm_memory should enforce 1024 character limit."""
-        chat = Chat(
-            telegram_id=-1004444444444,
-            type="supergroup",
-            title="Memory Limit Test",
-            llm_memory="x" * 1025,  # Over limit
-        )
-        db_session.add(chat)
-
-        with pytest.raises(IntegrityError):
-            await db_session.commit()
-
-    @pytest.mark.asyncio
     async def test_chat_policy_constraints(self, db_session):
         chat = Chat(
             telegram_id=-1004444444445,

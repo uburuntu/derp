@@ -248,7 +248,7 @@ class TestToolCatalogParity:
             assert plan.model is get_google_model(tool.model_key)
 
     def test_provider_free_tools_never_carry_model_cost(self) -> None:
-        for tool_name in ("web_search", "update_memory"):
+        for tool_name in ("web_search",):
             tool = get_tool(tool_name)
             assert tool.resolve_plan({}) is None
             assert tool.model_credit_cost(None, {}) == 0

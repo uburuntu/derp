@@ -5,6 +5,7 @@ from derp.models.chat import Chat
 from derp.models.credit_transaction import CreditTransaction
 from derp.models.daily_usage import DailyUsage
 from derp.models.message import Message
+from derp.models.shared_fact import SharedFact, SharedFactState
 from derp.models.user import User
 
 __all__ = [
@@ -13,6 +14,8 @@ __all__ = [
     "User",
     "Chat",
     "Message",
+    "SharedFact",
+    "SharedFactState",
     "CreditTransaction",
     "DailyUsage",
 ]

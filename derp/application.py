@@ -21,7 +21,6 @@ from derp.db import DatabaseManager, init_db_manager
 from derp.handlers import (
     basic,
     chat,
-    chat_settings,
     context_settings,
     credit_cmds,
     debug,
@@ -43,6 +42,7 @@ from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
 from derp.middlewares.sender import MessageSenderMiddleware
+from derp.tools.authorization import ActorRoleResolver
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,6 @@ APPLICATION_ROUTERS = (
     context_settings.router,
     basic.router,
     donations.router,
-    chat_settings.router,
     credit_cmds.router,
     think.router,
     payments.router,
@@ -71,6 +70,7 @@ class Runtime:
     bot: Bot
     db: DatabaseManager
     media_gateway: MediaGateway
+    actor_role_resolver: ActorRoleResolver
 
 
 def create_bot(settings: Settings) -> Bot:
@@ -105,7 +105,12 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
         )
         await db.connect()
         await stack.enter_async_context(HistoryRetentionWorker(db))
-        yield Runtime(bot=bot, db=db, media_gateway=MediaGateway(media_client))
+        yield Runtime(
+            bot=bot,
+            db=db,
+            media_gateway=MediaGateway(media_client),
+            actor_role_resolver=ActorRoleResolver(bot),
+        )
 
 
 def create_dispatcher(
@@ -119,6 +124,7 @@ def create_dispatcher(
     dispatcher = Dispatcher(
         storage=MemoryStorage(),
         media_gateway=runtime.media_gateway,
+        actor_role_resolver=runtime.actor_role_resolver,
     )
 
     i18n = I18n(path="derp/locales", default_locale="en", domain="messages")

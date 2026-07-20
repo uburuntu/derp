@@ -5,7 +5,6 @@ All premium tools are wrapped with @credit_aware_tool for automatic
 access checking and credit deduction.
 """
 
-from derp.tools.chat_memory import update_chat_memory
 from derp.tools.gemini_image import generate_image
 from derp.tools.gemini_think import think_deep
 from derp.tools.toolsets import create_chat_toolset
@@ -14,7 +13,6 @@ from derp.tools.wrapper import credit_aware_tool
 
 __all__ = [
     # Tool functions
-    "update_chat_memory",
     "web_search",
     "generate_image",
     "think_deep",

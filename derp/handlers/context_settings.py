@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from uuid import UUID
 
 import logfire
-from aiogram import Bot, F, Router
+from aiogram import Bot, F, Router, html
 from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.filters.chat_member_updated import (
@@ -15,6 +16,7 @@ from aiogram.filters.chat_member_updated import (
 from aiogram.types import (
     CallbackQuery,
     ChatMemberUpdated,
+    ForceReply,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -22,18 +24,30 @@ from aiogram.types import (
 
 from derp.db import (
     DatabaseManager,
+    SharedFactDecisionConflictError,
     acknowledge_context_notice,
+    approve_shared_fact,
     claim_member_notice,
     clear_history_scope,
+    forget_approved_shared_facts,
+    reject_shared_fact,
+    remove_disqualified_message,
+    set_admin_policy,
     set_ambient_history,
+    set_chat_policy_flag,
     set_history_retention,
     tombstone_user_messages,
 )
-from derp.history.policy import CONTEXT_NOTICE_VERSION
+from derp.history.policy import CONTEXT_NOTICE_VERSION, ChatPolicyFlag
 from derp.models import Chat as ChatModel
+from derp.models import User as UserModel
 from derp.observability import report_exception
+from derp.tools.shared_facts import SharedFactAction, SharedFactCallback
 
 router = Router(name="context_settings")
+ADMIN_POLICY_PROMPT = (
+    "Reply with one short admin policy paragraph, or reply with clear to remove it."
+)
 
 
 class ContextAction(StrEnum):
@@ -47,6 +61,12 @@ class ContextAction(StrEnum):
     DELETE_MINE = "delete_mine"
     CLEAR_CONFIRM = "clear_confirm"
     CLEAR = "clear"
+    FORGET_FACTS_CONFIRM = "forget_facts_confirm"
+    FORGET_FACTS = "forget_facts"
+    FACT_MEMBER_EDIT = "fact_member_edit"
+    SHARED_SPEND = "shared_spend"
+    EXPENSIVE_TOOLS = "expensive_tools"
+    ADMIN_POLICY = "admin_policy"
 
 
 class ContextCallback(CallbackData, prefix="ctx"):
@@ -54,6 +74,13 @@ class ContextCallback(CallbackData, prefix="ctx"):
 
     action: ContextAction
     value: int = 0
+
+
+_POLICY_FLAGS = {
+    ContextAction.FACT_MEMBER_EDIT: ChatPolicyFlag.SHARED_FACTS_MEMBER_EDIT,
+    ContextAction.SHARED_SPEND: ChatPolicyFlag.SHARED_CREDIT_SPENDING,
+    ContextAction.EXPENSIVE_TOOLS: ChatPolicyFlag.EXPENSIVE_TOOLS,
+}
 
 
 async def ambient_delivery_available(bot: Bot, chat_id: int) -> bool:
@@ -154,6 +181,55 @@ def build_context_panel(
                 for days in (7, 30, 90)
             ]
         )
+    if can_manage and chat:
+        if not is_private:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=(
+                            "Facts: Members"
+                            if chat.shared_facts_member_edit
+                            else "Facts: Admin review"
+                        ),
+                        callback_data=ContextCallback(
+                            action=ContextAction.FACT_MEMBER_EDIT,
+                            value=0 if chat.shared_facts_member_edit else 1,
+                        ).pack(),
+                    ),
+                    InlineKeyboardButton(
+                        text=(
+                            "Shared spend: On"
+                            if chat.shared_credit_spending_enabled
+                            else "Shared spend: Off"
+                        ),
+                        callback_data=ContextCallback(
+                            action=ContextAction.SHARED_SPEND,
+                            value=0 if chat.shared_credit_spending_enabled else 1,
+                        ).pack(),
+                    ),
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "Expensive tools: On"
+                        if chat.expensive_tools_enabled
+                        else "Expensive tools: Off"
+                    ),
+                    callback_data=ContextCallback(
+                        action=ContextAction.EXPENSIVE_TOOLS,
+                        value=0 if chat.expensive_tools_enabled else 1,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Admin policy",
+                    callback_data=ContextCallback(
+                        action=ContextAction.ADMIN_POLICY
+                    ).pack(),
+                ),
+            ]
+        )
     rows.append(
         [
             InlineKeyboardButton(
@@ -196,7 +272,13 @@ def build_privacy_panel(
                     callback_data=ContextCallback(
                         action=ContextAction.CLEAR_CONFIRM
                     ).pack(),
-                )
+                ),
+                InlineKeyboardButton(
+                    text="Forget shared facts",
+                    callback_data=ContextCallback(
+                        action=ContextAction.FORGET_FACTS_CONFIRM
+                    ).pack(),
+                ),
             ]
         )
     rows.append(
@@ -221,13 +303,13 @@ def build_destructive_confirmation(
     *,
     action: ContextAction,
     label: str,
-) -> tuple[str, InlineKeyboardMarkup]:
-    """Build a compact confirmation that states Telegram's deletion boundary."""
-    text = (
-        f"<b>{label}?</b>\n"
+    detail: str = (
         "This removes Derp's stored source, media references, and derived history. "
         "It cannot remove Telegram's copy or text another member copied."
-    )
+    ),
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build a compact confirmation that states Telegram's deletion boundary."""
+    text = f"<b>{label}?</b>\n{detail}"
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -453,6 +535,107 @@ async def clear_current_history(
     await query.answer(f"Cleared {removed} stored messages")
 
 
+@router.callback_query(
+    ContextCallback.filter(F.action == ContextAction.FORGET_FACTS_CONFIRM)
+)
+async def confirm_forget_shared_facts(query: CallbackQuery, bot: Bot) -> None:
+    """Require live admin authority and confirmation before fact deletion."""
+    if not isinstance(query.message, Message):
+        return await query.answer()
+    if not await actor_can_manage(bot, query.message, query.from_user.id):
+        return await query.answer(
+            "Only chat admins can forget shared facts",
+            show_alert=True,
+        )
+    scope = "topic" if query.message.message_thread_id is not None else "chat"
+    text, markup = build_destructive_confirmation(
+        action=ContextAction.FORGET_FACTS,
+        label=f"Forget approved facts in this {scope}",
+        detail=(
+            "This removes approved factual memory in this scope. "
+            "Conversation history is unchanged."
+        ),
+    )
+    await query.message.edit_text(text, reply_markup=markup)
+    await query.answer()
+
+
+@router.callback_query(ContextCallback.filter(F.action == ContextAction.FORGET_FACTS))
+async def forget_current_shared_facts(
+    query: CallbackQuery,
+    db: DatabaseManager,
+    bot: Bot,
+    chat_model: ChatModel | None,
+) -> None:
+    """Delete approved facts without changing conversation history."""
+    if not isinstance(query.message, Message) or not chat_model:
+        return await query.answer("Shared facts are unavailable", show_alert=True)
+    if not await actor_can_manage(bot, query.message, query.from_user.id):
+        return await query.answer(
+            "Only chat admins can forget shared facts",
+            show_alert=True,
+        )
+    async with db.session() as session:
+        removed = await forget_approved_shared_facts(
+            session,
+            chat_id=chat_model.id,
+            thread_id=query.message.message_thread_id,
+        )
+    text, markup = build_privacy_panel(
+        chat_model,
+        can_manage=True,
+        thread_id=query.message.message_thread_id,
+    )
+    await query.message.edit_text(text, reply_markup=markup)
+    await query.answer(f"Forgot {removed} approved facts")
+
+
+@router.callback_query(SharedFactCallback.filter())
+async def review_shared_fact_proposal(
+    query: CallbackQuery,
+    callback_data: SharedFactCallback,
+    db: DatabaseManager,
+    bot: Bot,
+    chat_model: ChatModel | None,
+    user_model: UserModel | None,
+) -> None:
+    """Approve or reject one exact topic-scoped proposal after live authorization."""
+    if not isinstance(query.message, Message) or not chat_model or not user_model:
+        return await query.answer("This proposal is unavailable", show_alert=True)
+    is_admin = await actor_can_manage(bot, query.message, query.from_user.id)
+    if not is_admin and not chat_model.shared_facts_member_edit:
+        return await query.answer("An admin must review this fact", show_alert=True)
+    try:
+        fact_id = UUID(callback_data.fact_id)
+    except ValueError:
+        return await query.answer("Invalid proposal", show_alert=True)
+    try:
+        async with db.session() as session:
+            decide = (
+                approve_shared_fact
+                if callback_data.action is SharedFactAction.APPROVE
+                else reject_shared_fact
+            )
+            fact = await decide(
+                session,
+                fact_id=fact_id,
+                chat_id=chat_model.id,
+                thread_id=query.message.message_thread_id,
+                admin_actor_id=user_model.id,
+            )
+    except (LookupError, SharedFactDecisionConflictError) as exc:
+        return await query.answer(str(exc), show_alert=True)
+
+    state = (
+        "Approved" if callback_data.action is SharedFactAction.APPROVE else "Rejected"
+    )
+    await query.message.edit_text(
+        f"<b>{state} shared fact</b>\n"
+        f"<blockquote>{html.quote(fact.fact_text)}</blockquote>"
+    )
+    await query.answer(state)
+
+
 @router.callback_query(ContextCallback.filter(F.action == ContextAction.TOGGLE))
 async def toggle_context(
     query: CallbackQuery,
@@ -529,6 +712,99 @@ async def change_retention(
     )
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer(f"Retention set to {callback_data.value} days")
+
+
+@router.callback_query(ContextCallback.filter(F.action.in_(set(_POLICY_FLAGS))))
+async def change_policy_flag(
+    query: CallbackQuery,
+    callback_data: ContextCallback,
+    db: DatabaseManager,
+    bot: Bot,
+    chat_model: ChatModel | None,
+) -> None:
+    """Apply one typed policy flag after live admin authorization."""
+    if not isinstance(query.message, Message) or not chat_model:
+        return await query.answer("Settings are unavailable", show_alert=True)
+    if not await actor_can_manage(bot, query.message, query.from_user.id):
+        return await query.answer("Only chat admins can change this", show_alert=True)
+    if callback_data.value not in {0, 1}:
+        return await query.answer("Invalid setting", show_alert=True)
+    flag = _POLICY_FLAGS[callback_data.action]
+    if chat_model.type == "private" and flag is not ChatPolicyFlag.EXPENSIVE_TOOLS:
+        return await query.answer("This setting applies to groups", show_alert=True)
+    enabled = bool(callback_data.value)
+    async with db.session() as session:
+        await set_chat_policy_flag(
+            session,
+            chat_telegram_id=query.message.chat.id,
+            flag=flag,
+            enabled=enabled,
+        )
+    setattr(chat_model, flag.value, enabled)
+    available = query.message.chat.type == "private" or (
+        await ambient_delivery_available(bot, query.message.chat.id)
+    )
+    text, markup = build_context_panel(
+        chat_model,
+        ambient_available=available,
+        can_manage=True,
+    )
+    await query.message.edit_text(text, reply_markup=markup)
+    await query.answer("Setting updated")
+
+
+@router.callback_query(ContextCallback.filter(F.action == ContextAction.ADMIN_POLICY))
+async def request_admin_policy(
+    query: CallbackQuery,
+    bot: Bot,
+) -> None:
+    """Request one bounded trusted policy paragraph through a native reply."""
+    if not isinstance(query.message, Message):
+        return await query.answer()
+    if not await actor_can_manage(bot, query.message, query.from_user.id):
+        return await query.answer("Only chat admins can set policy", show_alert=True)
+    await query.message.answer(
+        ADMIN_POLICY_PROMPT,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="One policy paragraph",
+        ),
+    )
+    await query.answer()
+
+
+@router.message(F.reply_to_message.text == ADMIN_POLICY_PROMPT)
+async def save_admin_policy(
+    message: Message,
+    db: DatabaseManager,
+    bot: Bot,
+    chat_model: ChatModel | None,
+) -> None:
+    """Store admin-authored instructions separately from conversation data."""
+    if not chat_model or not message.from_user:
+        return
+    if not await actor_can_manage(bot, message, message.from_user.id):
+        await message.reply("Only chat admins can set policy.")
+        return
+    submitted = (message.text or "").strip()
+    policy = None if submitted.casefold() == "clear" else submitted
+    try:
+        async with db.session() as session:
+            stored = await set_admin_policy(
+                session,
+                chat_telegram_id=message.chat.id,
+                policy=policy,
+            )
+            await remove_disqualified_message(
+                session,
+                chat_telegram_id=message.chat.id,
+                telegram_message_id=message.message_id,
+            )
+    except ValueError as exc:
+        await message.reply(str(exc))
+        return
+    chat_model.admin_policy = stored
+    await message.reply("Admin policy updated." if stored else "Admin policy cleared.")
 
 
 @router.message(Command("forget"))

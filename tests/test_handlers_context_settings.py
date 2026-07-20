@@ -1,6 +1,7 @@
 """Context onboarding and settings stay native, truthful, and authorized."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import pytest
 from aiogram import Bot
@@ -12,11 +13,16 @@ from derp.handlers.context_settings import (
     ambient_delivery_available,
     build_context_panel,
     build_privacy_panel,
+    change_policy_flag,
     delete_my_history,
     ensure_group_context_notice,
     forget_replied_message,
+    review_shared_fact_proposal,
+    save_admin_policy,
     toggle_context,
 )
+from derp.history.policy import ChatPolicyFlag
+from derp.tools.shared_facts import SharedFactAction, SharedFactCallback
 
 
 def test_panel_never_claims_ambient_context_when_telegram_cannot_deliver(
@@ -275,3 +281,142 @@ async def test_forget_targets_replied_message_and_never_trusts_its_sender(
         telegram_message_id=77,
     )
     assert "does not belong to you" in command.reply.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_policy_flag_requires_live_admin_and_updates_exact_field(
+    make_message,
+    make_user,
+    mock_chat_model,
+) -> None:
+    message = make_message(text="panel")
+    message.edit_text = AsyncMock()
+    query = MagicMock(spec=CallbackQuery)
+    query.message = message
+    query.from_user = make_user(id=42)
+    query.answer = AsyncMock()
+    chat = mock_chat_model(expensive_tools_enabled=True)
+    session = MagicMock()
+    db = MagicMock()
+    db.session.return_value.__aenter__ = AsyncMock(return_value=session)
+    db.session.return_value.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "derp.handlers.context_settings.actor_can_manage",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "derp.handlers.context_settings.ambient_delivery_available",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "derp.handlers.context_settings.set_chat_policy_flag",
+            new_callable=AsyncMock,
+        ) as set_flag,
+    ):
+        await change_policy_flag(
+            query,
+            ContextCallback(action=ContextAction.EXPENSIVE_TOOLS, value=0),
+            db,
+            MagicMock(spec=Bot),
+            chat,
+        )
+
+    set_flag.assert_awaited_once_with(
+        session,
+        chat_telegram_id=message.chat.id,
+        flag=ChatPolicyFlag.EXPENSIVE_TOOLS,
+        enabled=False,
+    )
+    assert chat.expensive_tools_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_shared_fact_review_is_exactly_scoped_and_admin_audited(
+    make_message,
+    make_user,
+    mock_chat_model,
+    mock_user_model,
+) -> None:
+    message = make_message(text="proposal", message_thread_id=77)
+    message.edit_text = AsyncMock()
+    query = MagicMock(spec=CallbackQuery)
+    query.message = message
+    query.from_user = make_user(id=42)
+    query.answer = AsyncMock()
+    chat = mock_chat_model(chat_id=UUID(int=1))
+    user = mock_user_model(user_id=UUID(int=2))
+    session = MagicMock()
+    db = MagicMock()
+    db.session.return_value.__aenter__ = AsyncMock(return_value=session)
+    db.session.return_value.__aexit__ = AsyncMock(return_value=None)
+    fact = MagicMock(fact_text="The release is Friday.")
+
+    with (
+        patch(
+            "derp.handlers.context_settings.actor_can_manage",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "derp.handlers.context_settings.approve_shared_fact",
+            new=AsyncMock(return_value=fact),
+        ) as approve,
+    ):
+        await review_shared_fact_proposal(
+            query,
+            SharedFactCallback(
+                action=SharedFactAction.APPROVE,
+                fact_id=str(UUID(int=3)),
+            ),
+            db,
+            MagicMock(spec=Bot),
+            chat,
+            user,
+        )
+
+    approve.assert_awaited_once_with(
+        session,
+        fact_id=UUID(int=3),
+        chat_id=UUID(int=1),
+        thread_id=77,
+        admin_actor_id=UUID(int=2),
+    )
+    assert "Approved shared fact" in message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_admin_policy_input_is_removed_from_conversation_history(
+    make_message,
+    mock_chat_model,
+) -> None:
+    message = make_message(text="Prefer concise replies.", user_id=42)
+    chat = mock_chat_model()
+    session = MagicMock()
+    db = MagicMock()
+    db.session.return_value.__aenter__ = AsyncMock(return_value=session)
+    db.session.return_value.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "derp.handlers.context_settings.actor_can_manage",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "derp.handlers.context_settings.set_admin_policy",
+            new=AsyncMock(return_value="Prefer concise replies."),
+        ) as set_policy,
+        patch(
+            "derp.handlers.context_settings.remove_disqualified_message",
+            new_callable=AsyncMock,
+        ) as remove,
+    ):
+        await save_admin_policy(message, db, MagicMock(spec=Bot), chat)
+
+    set_policy.assert_awaited_once()
+    remove.assert_awaited_once_with(
+        session,
+        chat_telegram_id=message.chat.id,
+        telegram_message_id=message.message_id,
+    )
+    assert chat.admin_policy == "Prefer concise replies."

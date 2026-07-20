@@ -144,23 +144,8 @@ async def get_chat_by_telegram_id(
 
 
 async def get_chat_settings(session: AsyncSession, telegram_id: int) -> Chat | None:
-    """Get chat with settings by Telegram ID.
-
-    Returns the Chat which includes llm_memory.
-    """
+    """Get chat with structured settings by Telegram ID."""
     return await get_chat_by_telegram_id(session, telegram_id)
-
-
-async def update_chat_memory(
-    session: AsyncSession, telegram_id: int, llm_memory: str | None
-) -> None:
-    """Update the LLM memory for a chat."""
-    stmt = (
-        update(Chat)
-        .where(Chat.telegram_id == telegram_id)
-        .values(llm_memory=llm_memory, updated_at=datetime.now(UTC))
-    )
-    await session.execute(stmt)
 
 
 # -----------------------------------------------------------------------------

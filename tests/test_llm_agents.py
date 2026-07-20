@@ -9,6 +9,11 @@ from derp.llm.agents import (
     create_image_agent,
     create_inline_agent,
 )
+from derp.tools.policy import (
+    ActorRole,
+    ChatToolPolicy,
+    derive_chat_tool_access,
+)
 from derp.tools.toolsets import create_chat_toolset
 
 
@@ -26,13 +31,20 @@ def test_agent_factories_reject_incompatible_catalog_models() -> None:
 
 
 def test_chat_toolset_has_one_policy_aware_tool_per_capability() -> None:
-    toolset = create_chat_toolset()
+    access = derive_chat_tool_access(
+        ActorRole.MEMBER,
+        ChatToolPolicy(
+            expensive_tools_enabled=True,
+            shared_credit_spending_enabled=True,
+            shared_facts_member_edit=False,
+        ),
+    )
+    toolset = create_chat_toolset(access)
 
     assert set(toolset.tools) == {
         "edit_image",
         "generate_image",
         "think_deep",
-        "update_chat_memory",
         "video_generate",
         "voice_tts",
         "web_search",

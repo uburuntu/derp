@@ -31,7 +31,12 @@ from derp.catalog import GoogleModelKey
 from derp.common.extractor import Extractor
 from derp.config import settings
 from derp.credits import CreditService
-from derp.db import DatabaseManager, get_db_manager
+from derp.db import (
+    DatabaseManager,
+    get_db_manager,
+    list_approved_shared_facts,
+    store_tool_transcript,
+)
 from derp.execution import Feature, plan_execution
 from derp.filters import DerpMentionFilter
 from derp.handlers.context_settings import ensure_group_context_notice
@@ -42,6 +47,7 @@ from derp.history.core import (
     UserTextTurn,
     render_user_content,
 )
+from derp.history.facts import ApprovedFact, render_approved_facts
 from derp.history.media import (
     DEFAULT_AGGREGATE_MEDIA_BYTES,
     HydratedMedia,
@@ -62,6 +68,7 @@ from derp.history.snapshot import (
     TelegramMessageSnapshot,
     project_message_snapshot,
 )
+from derp.history.transcript import extract_tool_rounds, serialize_tool_rounds
 from derp.llm import (
     RELAXED_SAFETY_SETTINGS,
     AgentDeps,
@@ -73,6 +80,13 @@ from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
 from derp.tools import create_chat_toolset
+from derp.tools.authorization import ActorRoleResolver
+from derp.tools.policy import (
+    ActorRole,
+    ChatToolPolicy,
+    derive_chat_tool_access,
+)
+from derp.tools.shared_facts import SharedFactTools
 
 router = Router(name="chat")
 
@@ -301,6 +315,7 @@ def _current_user_turn(message: Message) -> UserTextTurn:
 def _current_user_prompt(
     message: Message,
     media_by_reference: Mapping[AttachmentReference, BinaryContent],
+    approved_facts: tuple[ApprovedFact, ...] = (),
 ) -> list[str | BinaryContent]:
     turn = _current_user_turn(message)
     media_parts = [
@@ -308,13 +323,28 @@ def _current_user_prompt(
         for reference in turn.attachments
         if reference in media_by_reference
     ]
-    return [
-        render_user_content(
-            turn,
-            available_attachments=media_by_reference,
-        ),
-        *media_parts,
-    ]
+    current = render_user_content(
+        turn,
+        available_attachments=media_by_reference,
+    )
+    text_parts = [render_approved_facts(approved_facts)] if approved_facts else []
+    return [*text_parts, current, *media_parts]
+
+
+async def _load_approved_facts(
+    db: DatabaseManager,
+    chat_model: ChatModel | None,
+    thread_id: int | None,
+) -> tuple[ApprovedFact, ...]:
+    if chat_model is None:
+        return ()
+    async with db.read_session() as session:
+        facts = await list_approved_shared_facts(
+            session,
+            chat_id=chat_model.id,
+            thread_id=thread_id,
+        )
+    return tuple(ApprovedFact(id=fact.id, text=fact.fact_text) for fact in facts)
 
 
 def _history_media_bytes(history: LoadedHistory) -> int:
@@ -364,6 +394,7 @@ class ChatAgentHandler(MessageHandler):
         chat_model: ChatModel | None = self.data.get("chat_model")
         credit_service: CreditService | None = self.data.get("credit_service")
         media_gateway: MediaGateway | None = self.data.get("media_gateway")
+        role_resolver: ActorRoleResolver | None = self.data.get("actor_role_resolver")
 
         await ensure_group_context_notice(
             self.event,
@@ -380,6 +411,27 @@ class ChatAgentHandler(MessageHandler):
                 user_model, chat_model
             )
 
+        if role_resolver is not None and self.event.from_user is not None:
+            actor_role = await role_resolver.resolve(
+                chat_id=self.event.chat.id,
+                chat_type=self.event.chat.type,
+                user_id=self.event.from_user.id,
+            )
+        elif self.event.chat.type == "private":
+            actor_role = ActorRole.PRIVATE_OWNER
+        else:
+            actor_role = ActorRole.MEMBER
+        tool_policy = (
+            ChatToolPolicy.from_chat(chat_model)
+            if chat_model is not None
+            else ChatToolPolicy(
+                expensive_tools_enabled=True,
+                shared_credit_spending_enabled=True,
+                shared_facts_member_edit=False,
+            )
+        )
+        tool_access = derive_chat_tool_access(actor_role, tool_policy)
+
         # Carry the exact selected model into the agent and its tools.
         deps = AgentDeps(
             message=self.event,
@@ -389,6 +441,7 @@ class ChatAgentHandler(MessageHandler):
             chat_model=chat_model,
             model=plan.model,
             history_window=history_window,
+            tool_access=tool_access,
         )
 
         try:
@@ -418,6 +471,12 @@ class ChatAgentHandler(MessageHandler):
                 span.set_attribute(
                     "derp.history_media_failures", history.media_failures
                 )
+                approved_facts = await _load_approved_facts(
+                    db,
+                    chat_model,
+                    self.event.message_thread_id,
+                )
+                span.set_attribute("derp.approved_shared_facts", len(approved_facts))
 
                 history_media_bytes = _history_media_bytes(history)
                 current_media_budget = max(
@@ -448,11 +507,15 @@ class ChatAgentHandler(MessageHandler):
                 user_prompt = _current_user_prompt(
                     self.event,
                     media_by_reference,
+                    approved_facts,
                 )
 
                 # Create and run the agent with tools
                 agent = create_chat_agent(plan)
-                toolset = create_chat_toolset()
+                toolset = create_chat_toolset(
+                    tool_access,
+                    shared_fact_tools=SharedFactTools(),
+                )
 
                 logfire.info(
                     "running_agent",
@@ -460,6 +523,7 @@ class ChatAgentHandler(MessageHandler):
                     model=deps.model.provider_model_id,
                     history_max_turns=history_window.max_turns,
                     history_estimated_tokens=history.estimated_tokens,
+                    actor_role=actor_role.value,
                     tools=len(toolset.tools),
                 )
 
@@ -477,6 +541,26 @@ class ChatAgentHandler(MessageHandler):
                                 output_tokens_limit=plan.model.output_token_limit,
                             ),
                             model_settings=RELAXED_SAFETY_SETTINGS,
+                        )
+
+                tool_rounds = extract_tool_rounds(result.new_messages())
+                span.set_attribute("derp.tool_rounds", len(tool_rounds))
+                if tool_rounds:
+                    try:
+                        async with db.session() as session:
+                            await store_tool_transcript(
+                                session,
+                                chat_telegram_id=self.event.chat.id,
+                                telegram_message_id=self.event.message_id,
+                                tool_rounds=serialize_tool_rounds(tool_rounds),
+                            )
+                    except Exception as exc:
+                        report_exception(
+                            "tool_transcript_persist_failed",
+                            exception=exc,
+                            level="warning",
+                            chat_id=self.event.chat.id,
+                            message_id=self.event.message_id,
                         )
 
                 # Convert to AgentResult and send response

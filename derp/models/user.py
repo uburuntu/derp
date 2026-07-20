@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from derp.models.credit_transaction import CreditTransaction
     from derp.models.daily_usage import DailyUsage
     from derp.models.message import Message
+    from derp.models.shared_fact import SharedFact
 
 
 class User(TimestampMixin, Base):
@@ -46,6 +47,14 @@ class User(TimestampMixin, Base):
         back_populates="user"
     )
     daily_usages: Mapped[list[DailyUsage]] = relationship(back_populates="user")
+    proposed_shared_facts: Mapped[list[SharedFact]] = relationship(
+        back_populates="proposer",
+        foreign_keys="SharedFact.proposed_by_user_id",
+    )
+    decided_shared_facts: Mapped[list[SharedFact]] = relationship(
+        back_populates="decider",
+        foreign_keys="SharedFact.decided_by_user_id",
+    )
 
     @property
     def full_name(self) -> str:

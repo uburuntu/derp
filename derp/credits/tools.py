@@ -203,15 +203,6 @@ TOOL_REGISTRY: dict[str, ToolConfig] = {
             ("standard", GoogleModelKey.VIDEO_STANDARD),
         ),
     ),
-    # Chat memory (free tool, no model needed)
-    "update_memory": ToolConfig(
-        name="update_memory",
-        description="Update the persistent memory for this chat",
-        model_key=None,
-        feature=None,
-        base_credit_cost=0,  # Free
-        free_daily_limit=100,  # Effectively unlimited
-    ),
 }
 
 

@@ -9,7 +9,7 @@ from aiogram.methods.send_message import SendMessage
 from aiogram.types import Message
 
 from derp.common.update_context import UpdateContext
-from derp.history.capture import capture_outbound_history
+from derp.history.capture import capture_outbound_history, suppress_outbound_history
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
 
 
@@ -146,6 +146,26 @@ class TestPersistBotActionsMiddleware:
         ):
             mock_ctx.get.return_value = mock_context
             await middleware(make_request, mock_bot, method)
+
+        mock_persist.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_nested_control_message_suppresses_conversation_capture(
+        self, middleware, mock_bot, mock_context
+    ):
+        method = SendMessage(chat_id=-100123, text="Approve this fact")
+        make_request = AsyncMock(return_value=MagicMock(spec=Message))
+
+        with (
+            patch("derp.middlewares.api_persist.update_ctx") as mock_ctx,
+            patch(
+                "derp.middlewares.api_persist.upsert_message_from_message",
+                new_callable=AsyncMock,
+            ) as mock_persist,
+        ):
+            mock_ctx.get.return_value = mock_context
+            with capture_outbound_history(), suppress_outbound_history():
+                await middleware(make_request, mock_bot, method)
 
         mock_persist.assert_not_awaited()
 

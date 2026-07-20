@@ -173,7 +173,6 @@ def chat_factory(db_session: AsyncSession):
         first_name: str | None = None,
         last_name: str | None = None,
         is_forum: bool = False,
-        llm_memory: str | None = None,
     ) -> ChatModel:
         chat = ChatModel(
             telegram_id=telegram_id,
@@ -183,7 +182,6 @@ def chat_factory(db_session: AsyncSession):
             first_name=first_name,
             last_name=last_name,
             is_forum=is_forum,
-            llm_memory=llm_memory,
         )
         db_session.add(chat)
         await db_session.flush()
@@ -620,7 +618,6 @@ def mock_chat_model():
         telegram_id: int = -100123456,
         chat_type: str = "supergroup",
         credits: int = 0,
-        llm_memory: str | None = None,
         **kwargs,
     ) -> MagicMock:
         chat = MagicMock()
@@ -628,7 +625,6 @@ def mock_chat_model():
         chat.telegram_id = telegram_id
         chat.type = chat_type
         chat.credits = credits
-        chat.llm_memory = llm_memory
         chat.admin_policy = None
         chat.ambient_history_enabled = False
         chat.context_notice_version = 1

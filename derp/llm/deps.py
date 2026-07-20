@@ -13,6 +13,12 @@ from typing import TYPE_CHECKING
 
 from derp.catalog import GoogleModelKey, GoogleModelSpec, get_google_model
 from derp.history.service import HISTORY_WINDOWS, HistoryWindow
+from derp.tools.policy import (
+    ActorRole,
+    ChatToolAccess,
+    ChatToolPolicy,
+    derive_chat_tool_access,
+)
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -47,6 +53,16 @@ class AgentDeps:
     history_window: HistoryWindow = field(
         default_factory=lambda: HISTORY_WINDOWS[GoogleModelKey.CHAT_STANDARD]
     )
+    tool_access: ChatToolAccess = field(
+        default_factory=lambda: derive_chat_tool_access(
+            ActorRole.MEMBER,
+            ChatToolPolicy(
+                expensive_tools_enabled=True,
+                shared_credit_spending_enabled=True,
+                shared_facts_member_edit=False,
+            ),
+        )
+    )
 
     @property
     def chat_id(self) -> int:
@@ -57,8 +73,3 @@ class AgentDeps:
     def user_id(self) -> int | None:
         """Get the user ID from the message sender."""
         return self.message.from_user.id if self.message.from_user else None
-
-    @property
-    def chat_memory(self) -> str | None:
-        """Get the chat's LLM memory if available."""
-        return self.chat_model.llm_memory if self.chat_model else None

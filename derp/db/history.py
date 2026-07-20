@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
+from typing import Self
 
-from sqlalchemy import delete, or_, select, update
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
+from sqlalchemy import ARRAY, Text, cast, delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from derp.history.policy import CONTEXT_NOTICE_VERSION
+from derp.history.policy import CONTEXT_NOTICE_VERSION, ChatPolicyFlag
 from derp.models import Chat, Message, User
 
 _TOMBSTONE_TEXT = "[message deleted]"
@@ -25,6 +36,80 @@ _TOMBSTONE_CANONICAL: dict[str, object] = {
     "text": _TOMBSTONE_TEXT,
     "attachment_types": [],
 }
+
+
+class _ToolCallRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    tool_name: str = Field(min_length=1)
+    tool_call_id: str = Field(min_length=1)
+    arguments_json: str
+
+    @field_validator("arguments_json")
+    @classmethod
+    def validate_arguments_json(cls, value: str) -> str:
+        try:
+            arguments = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Tool arguments must be valid JSON") from exc
+        if not isinstance(arguments, dict):
+            raise ValueError("Tool arguments must serialize an object")
+        return value
+
+
+class _ToolResultRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    tool_name: str = Field(min_length=1)
+    tool_call_id: str = Field(min_length=1)
+    content: str
+
+
+class _ToolRoundRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    called_at: str = Field(min_length=1)
+    returned_at: str = Field(min_length=1)
+    calls: list[_ToolCallRecord] = Field(min_length=1)
+    results: list[_ToolResultRecord] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_complete_round(self) -> Self:
+        calls = [(call.tool_name, call.tool_call_id) for call in self.calls]
+        results = [(result.tool_name, result.tool_call_id) for result in self.results]
+        if calls != results:
+            raise ValueError("Tool calls and results must form complete ordered pairs")
+        called_at = _parse_transcript_timestamp(self.called_at)
+        returned_at = _parse_transcript_timestamp(self.returned_at)
+        if returned_at < called_at:
+            raise ValueError("Tool result timestamp must not precede its call")
+        return self
+
+
+_TOOL_ROUNDS_ADAPTER = TypeAdapter(list[_ToolRoundRecord])
+
+
+def _parse_transcript_timestamp(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Tool transcript timestamps must be ISO 8601") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("Tool transcript timestamps must include a timezone")
+    return parsed
+
+
+def _validate_tool_rounds(
+    tool_rounds: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    rounds = _TOOL_ROUNDS_ADAPTER.validate_python(tool_rounds, strict=True)
+    call_ids: set[str] = set()
+    for round_ in rounds:
+        for call in round_.calls:
+            if call.tool_call_id in call_ids:
+                raise ValueError("Tool call IDs must be unique across the transcript")
+            call_ids.add(call.tool_call_id)
+    return [round_.model_dump(mode="json") for round_ in rounds]
 
 
 async def lock_chat_history_policy(
@@ -142,6 +227,51 @@ async def set_history_retention(
     )
 
 
+async def set_admin_policy(
+    session: AsyncSession,
+    *,
+    chat_telegram_id: int,
+    policy: str | None,
+) -> str | None:
+    """Store one bounded admin-authored instruction paragraph."""
+    normalized = policy.strip() if policy else None
+    if normalized and len(normalized) > 2048:
+        raise ValueError("Admin policy must be at most 2048 characters")
+    chat = await lock_chat_history_policy(
+        session,
+        chat_telegram_id=chat_telegram_id,
+    )
+    if chat is None:
+        raise LookupError(f"Unknown Telegram chat: {chat_telegram_id}")
+    chat.admin_policy = normalized or None
+    chat.updated_at = datetime.now(UTC)
+    await session.flush()
+    return chat.admin_policy
+
+
+async def set_chat_policy_flag(
+    session: AsyncSession,
+    *,
+    chat_telegram_id: int,
+    flag: ChatPolicyFlag,
+    enabled: bool,
+) -> None:
+    """Mutate one allowlisted typed policy flag under the chat policy lock."""
+    if not isinstance(flag, ChatPolicyFlag):
+        raise TypeError("flag must be a ChatPolicyFlag")
+    if not isinstance(enabled, bool):
+        raise TypeError("enabled must be a bool")
+    chat = await lock_chat_history_policy(
+        session,
+        chat_telegram_id=chat_telegram_id,
+    )
+    if chat is None:
+        raise LookupError(f"Unknown Telegram chat: {chat_telegram_id}")
+    setattr(chat, flag.value, enabled)
+    chat.updated_at = datetime.now(UTC)
+    await session.flush()
+
+
 async def remove_disqualified_message(
     session: AsyncSession,
     *,
@@ -234,6 +364,50 @@ async def clear_history_scope(
     return result.rowcount or 0
 
 
+async def store_tool_transcript(
+    session: AsyncSession,
+    *,
+    chat_telegram_id: int,
+    telegram_message_id: int,
+    tool_rounds: list[dict[str, object]],
+    now: datetime | None = None,
+) -> bool:
+    """Atomically attach complete tool rounds to one live inbound request."""
+    serialized_rounds = _validate_tool_rounds(tool_rounds)
+    timestamp = now or datetime.now(UTC)
+    chat = await lock_chat_history_policy(
+        session,
+        chat_telegram_id=chat_telegram_id,
+    )
+    if chat is None:
+        return False
+
+    result = await session.execute(
+        update(Message)
+        .where(
+            Message.chat_id == chat.id,
+            Message.telegram_message_id == telegram_message_id,
+            Message.direction == "in",
+            Message.role == "user",
+            Message.deleted_at.is_(None),
+            Message.privacy_deleted_at.is_(None),
+            Message.retention_expires_at > timestamp,
+            func.jsonb_typeof(Message.history_dto) == "object",
+        )
+        .values(
+            history_dto=func.jsonb_set(
+                Message.history_dto,
+                cast(["tool_rounds"], ARRAY(Text)),
+                cast(serialized_rounds, JSONB),
+                True,
+            ),
+            updated_at=timestamp,
+        )
+        .returning(Message.id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def claim_member_notice(
     session: AsyncSession,
     *,
@@ -267,7 +441,10 @@ __all__ = [
     "lock_chat_history_policy",
     "purge_expired_history",
     "remove_disqualified_message",
+    "set_admin_policy",
     "set_ambient_history",
+    "set_chat_policy_flag",
     "set_history_retention",
+    "store_tool_transcript",
     "tombstone_user_messages",
 ]

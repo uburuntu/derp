@@ -23,18 +23,14 @@ if TYPE_CHECKING:
     from derp.models.credit_transaction import CreditTransaction
     from derp.models.daily_usage import DailyUsage
     from derp.models.message import Message
+    from derp.models.shared_fact import SharedFact
 
 
 class Chat(TimestampMixin, Base):
-    """Represents a Telegram chat with associated settings.
-
-    Combines the chat entity with chat settings (llm_memory) for simplicity.
-    Supports private chats, groups, supergroups, and channels.
-    """
+    """Represents a Telegram chat with associated structured policy."""
 
     __tablename__ = "chats"
     __table_args__ = (
-        CheckConstraint("length(llm_memory) <= 1024", name="llm_memory_max_length"),
         CheckConstraint(
             "admin_policy IS NULL OR length(admin_policy) <= 2048",
             name="admin_policy_max_length",
@@ -55,8 +51,7 @@ class Chat(TimestampMixin, Base):
     last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_forum: Mapped[bool] = mapped_column(default=False)
 
-    # Chat settings (merged from ChatSettings)
-    llm_memory: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Structured chat policy. Factual memory lives in scoped SharedFact rows.
     admin_policy: Mapped[str | None] = mapped_column(Text, nullable=True)
     ambient_history_enabled: Mapped[bool] = mapped_column(
         default=False, server_default=text("false")
@@ -91,6 +86,9 @@ class Chat(TimestampMixin, Base):
         back_populates="chat"
     )
     daily_usages: Mapped[list[DailyUsage]] = relationship(back_populates="chat")
+    shared_facts: Mapped[list[SharedFact]] = relationship(
+        back_populates="chat", cascade="all, delete-orphan"
+    )
 
     @property
     def display_name(self) -> str:
