@@ -7,7 +7,6 @@ import pytest
 from derp.handlers.debug import (
     DEBUG_PACKS,
     DebugPayload,
-    _build_debug_buy_keyboard,
     debug_add_credits,
     debug_buy_command,
     debug_help,
@@ -16,6 +15,7 @@ from derp.handlers.debug import (
     debug_tools,
     handle_debug_buy_callback,
     handle_debug_pre_checkout,
+    handle_debug_successful_payment,
 )
 
 
@@ -57,23 +57,6 @@ class TestDebugPacks:
             assert pack.stars == 1
 
 
-class TestBuildDebugBuyKeyboard:
-    """Tests for keyboard builder."""
-
-    def test_builds_keyboard_without_chat(self):
-        """Test keyboard without chat context."""
-        keyboard = _build_debug_buy_keyboard(chat_id=None)
-        assert keyboard.inline_keyboard
-        # Should have 3 buttons (one per pack for user only)
-        assert len(keyboard.inline_keyboard) == 3
-
-    def test_builds_keyboard_with_chat(self):
-        """Test keyboard with chat context includes chat buttons."""
-        keyboard = _build_debug_buy_keyboard(chat_id=-100123)
-        # Should have 6 buttons (3 user + 3 chat)
-        assert len(keyboard.inline_keyboard) == 6
-
-
 def _get_text_from_call_args(call_args):
     """Extract text from mock call_args (handles both positional and keyword)."""
     if call_args.args:
@@ -85,20 +68,17 @@ def _get_text_from_call_args(call_args):
 
 @pytest.mark.asyncio
 async def test_debug_buy_command(make_message, mock_sender):
-    """Test /debug_buy command shows menu."""
+    """Test /debug_buy is suspended without exposing a keyboard."""
     message = make_message(text="/debug_buy")
     sender = mock_sender(message=message)
 
-    chat_model = MagicMock()
-    chat_model.telegram_id = -100123
-
-    await debug_buy_command(message, sender, chat_model)
+    await debug_buy_command(message, sender)
 
     sender.reply.assert_awaited_once()
     call_args = sender.reply.call_args
     text = _get_text_from_call_args(call_args)
-    assert "Debug Buy Menu" in text
-    assert call_args.kwargs.get("reply_markup") is not None
+    assert "temporarily unavailable" in text
+    assert call_args.kwargs.get("reply_markup") is None
 
 
 @pytest.mark.asyncio
@@ -224,13 +204,13 @@ async def test_debug_help(make_message, mock_sender):
     sender.reply.assert_awaited_once()
     response = _get_text_from_call_args(sender.reply.call_args)
     assert "Debug Commands" in response
-    assert "/debug_buy" in response
+    assert "/debug_buy" not in response
     assert "/debug_credits" in response
 
 
 @pytest.mark.asyncio
 async def test_handle_debug_buy_callback():
-    """Test debug buy callback creates invoice."""
+    """Test stale debug buy callback cannot create an invoice."""
     callback = MagicMock()
     callback.data = "dbuy:test_small:user"
     callback.from_user.id = 12345
@@ -238,35 +218,31 @@ async def test_handle_debug_buy_callback():
     callback.message.answer_invoice = AsyncMock()
     callback.answer = AsyncMock()
 
-    bot = MagicMock()
+    await handle_debug_buy_callback(callback)
 
-    await handle_debug_buy_callback(callback, bot)
-
-    callback.message.answer_invoice.assert_awaited_once()
-    call_args = callback.message.answer_invoice.call_args
-    assert call_args[1]["currency"] == "XTR"
-    assert call_args[1]["prices"][0].amount == 1  # 1 star
+    callback.message.answer_invoice.assert_not_awaited()
+    assert "temporarily unavailable" in callback.answer.await_args.args[0]
+    assert callback.answer.await_args.kwargs == {"show_alert": True}
 
 
 @pytest.mark.asyncio
 async def test_handle_debug_buy_callback_invalid_pack():
-    """Test debug buy callback with invalid pack."""
+    """Test malformed legacy debug callbacks fail closed identically."""
     callback = MagicMock()
     callback.data = "dbuy:invalid_pack:user"
     callback.from_user.id = 12345
     callback.message = MagicMock()
     callback.answer = AsyncMock()
 
-    bot = MagicMock()
+    await handle_debug_buy_callback(callback)
 
-    await handle_debug_buy_callback(callback, bot)
-
-    callback.answer.assert_awaited_with("Unknown debug pack", show_alert=True)
+    assert "temporarily unavailable" in callback.answer.await_args.args[0]
+    assert callback.answer.await_args.kwargs == {"show_alert": True}
 
 
 @pytest.mark.asyncio
 async def test_handle_debug_pre_checkout():
-    """Test pre-checkout approval."""
+    """Test issued debug invoices are rejected before capture."""
     pre_checkout = MagicMock()
     pre_checkout.invoice_payload = (
         '{"k":"debug_credits","p":"test_small","tt":"user","ti":12345}'
@@ -277,4 +253,44 @@ async def test_handle_debug_pre_checkout():
 
     await handle_debug_pre_checkout(pre_checkout)
 
-    pre_checkout.answer.assert_awaited_with(ok=True)
+    assert pre_checkout.answer.await_args.kwargs["ok"] is False
+    assert (
+        "temporarily unavailable"
+        in pre_checkout.answer.await_args.kwargs["error_message"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_debug_successful_payment_still_reconciles(
+    make_message, mock_sender, mock_user_model, mock_credit_service_factory
+):
+    message = make_message(text="")
+    sender = mock_sender(message=message)
+    user = mock_user_model(telegram_id=12345)
+    service = mock_credit_service_factory(purchase_result=10)
+    payload = DebugPayload(
+        pack_id="test_small",
+        target_type="user",
+        target_id=12345,
+    )
+    message.successful_payment = MagicMock(
+        invoice_payload=payload.model_dump_json(by_alias=True),
+        telegram_payment_charge_id="debug-charge-123",
+    )
+
+    await handle_debug_successful_payment(
+        message,
+        sender,
+        service,
+        user_model=user,
+        chat_model=None,
+    )
+
+    service.purchase_credits.assert_awaited_once_with(
+        user,
+        None,
+        10,
+        "debug-charge-123",
+        pack_name="DEBUG:Test Small",
+    )
+    sender.send.assert_awaited_once()

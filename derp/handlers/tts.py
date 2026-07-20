@@ -15,6 +15,7 @@ from aiogram.utils.i18n import gettext as _
 
 from derp.common.sender import MessageSender
 from derp.credits import CreditService
+from derp.credits.purchase_suspension import purchase_suspension_message
 from derp.db import get_db_manager
 from derp.filters.meta import MetaCommand, MetaInfo
 from derp.llm.deps import AgentDeps
@@ -50,9 +51,11 @@ async def handle_tts(
     )
     if not access.allowed:
         return await sender.reply(
-            _(
-                "🔊 Voice generation requires credits.\n\n✨ {reason}\n\n💡 Use /buy to get credits!"
-            ).format(reason=access.reject_reason or ""),
+            _("🔊 Voice generation requires credits.\n\n✨ {reason}").format(
+                reason=access.reject_reason or ""
+            )
+            + "\n\n"
+            + purchase_suspension_message(),
         )
 
     try:

@@ -42,6 +42,22 @@ from derp.middlewares.sender import MessageSenderMiddleware
 
 logger = logging.getLogger(__name__)
 
+APPLICATION_ROUTERS = (
+    debug.reconciliation_router,
+    debug.router,
+    basic.router,
+    donations.router,
+    chat_settings.router,
+    credit_cmds.router,
+    think.router,
+    payments.router,
+    image.router,
+    video.router,
+    tts.router,
+    inline.router,
+    chat.router,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Runtime:
@@ -108,20 +124,7 @@ def create_dispatcher(
     dispatcher.callback_query.middleware(MessageSenderMiddleware())
     dispatcher.message.middleware(ChatActionMiddleware())
 
-    dispatcher.include_routers(
-        debug.router,
-        basic.router,
-        donations.router,
-        chat_settings.router,
-        credit_cmds.router,
-        think.router,
-        payments.router,
-        image.router,
-        video.router,
-        tts.router,
-        inline.router,
-        chat.router,
-    )
+    dispatcher.include_routers(*APPLICATION_ROUTERS)
     return dispatcher
 
 

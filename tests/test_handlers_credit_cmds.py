@@ -81,6 +81,24 @@ async def test_show_credits_private_chat(
 
 
 @pytest.mark.asyncio
+async def test_show_credits_does_not_advertise_suspended_purchase(
+    make_message, mock_sender, mock_credit_service
+):
+    message = make_message(text="/credits")
+    sender = mock_sender(message=message)
+    user_model = MagicMock(telegram_id=12345)
+
+    with patch(
+        "derp.handlers.credit_cmds.get_balances", new_callable=AsyncMock
+    ) as mock_balances:
+        mock_balances.return_value = (0, 0)
+        await show_credits(message, sender, mock_credit_service, user_model, None)
+
+    response = _get_text_from_call_args(sender.reply.call_args)
+    assert "/buy" not in response
+
+
+@pytest.mark.asyncio
 async def test_show_credits_no_user(make_message, mock_sender, mock_credit_service):
     """Test /credits without user returns error."""
     message = make_message(text="/credits")
@@ -95,87 +113,70 @@ async def test_show_credits_no_user(make_message, mock_sender, mock_credit_servi
 
 @pytest.mark.asyncio
 async def test_show_buy_options(make_message, mock_sender):
-    """Test /buy shows credit packs with keyboard."""
+    """Test /buy rejects without exposing invoice controls."""
     message = make_message(text="/buy")
     sender = mock_sender(message=message)
 
-    user_model = MagicMock()
-    user_model.telegram_id = 12345
-
-    await show_buy_options(message, sender, user_model, None)
+    await show_buy_options(message, sender)
 
     sender.reply.assert_awaited_once()
     call_args = sender.reply.call_args
     response = _get_text_from_call_args(call_args)
 
-    assert "Credit Packs" in response
-    assert "⭐" in response
-    assert call_args.kwargs.get("reply_markup") is not None
+    assert "temporarily unavailable" in response
+    assert call_args.kwargs.get("reply_markup") is None
 
 
 @pytest.mark.asyncio
 async def test_show_buy_options_no_user(make_message, mock_sender):
-    """Test /buy without user returns error."""
+    """Test /buy remains fail closed when model context is unavailable."""
     message = make_message(text="/buy")
     sender = mock_sender(message=message)
 
-    await show_buy_options(message, sender, None, None)
+    await show_buy_options(message, sender)
 
-    message.reply.assert_awaited_once()
-    text = _get_text_from_call_args(message.reply.call_args)
-    assert "Could not find" in text
+    sender.reply.assert_awaited_once()
+    text = _get_text_from_call_args(sender.reply.call_args)
+    assert "temporarily unavailable" in text
 
 
 @pytest.mark.asyncio
 async def test_show_buy_chat_options_in_group(make_message, mock_sender):
-    """Test /buy_chat in group chat shows chat credit options."""
+    """Test /buy_chat rejects without exposing invoice controls."""
     message = make_message(text="/buy_chat")
     sender = mock_sender(message=message)
 
-    user_model = MagicMock()
-    user_model.telegram_id = 12345
-
-    chat_model = MagicMock()
-    chat_model.telegram_id = -100123
-    chat_model.type = "supergroup"
-
-    await show_buy_chat_options(message, sender, user_model, chat_model)
+    await show_buy_chat_options(message, sender)
 
     sender.reply.assert_awaited_once()
     call_args = sender.reply.call_args
     response = _get_text_from_call_args(call_args)
 
-    assert "Chat Credits" in response
-    assert call_args.kwargs.get("reply_markup") is not None
+    assert "temporarily unavailable" in response
+    assert call_args.kwargs.get("reply_markup") is None
 
 
 @pytest.mark.asyncio
 async def test_show_buy_chat_options_private(make_message, mock_sender):
-    """Test /buy_chat in private chat returns error."""
+    """Test /buy_chat is suspended in private chats too."""
     message = make_message(text="/buy_chat")
     sender = mock_sender(message=message)
 
-    user_model = MagicMock()
-    user_model.telegram_id = 12345
+    await show_buy_chat_options(message, sender)
 
-    chat_model = MagicMock()
-    chat_model.type = "private"
-
-    await show_buy_chat_options(message, sender, user_model, chat_model)
-
-    message.reply.assert_awaited_once()
-    text = _get_text_from_call_args(message.reply.call_args)
-    assert "group chats only" in text
+    sender.reply.assert_awaited_once()
+    text = _get_text_from_call_args(sender.reply.call_args)
+    assert "temporarily unavailable" in text
 
 
 @pytest.mark.asyncio
 async def test_show_buy_chat_options_no_user(make_message, mock_sender):
-    """Test /buy_chat without user returns error."""
+    """Test /buy_chat remains fail closed without model context."""
     message = make_message(text="/buy_chat")
     sender = mock_sender(message=message)
 
-    await show_buy_chat_options(message, sender, None, None)
+    await show_buy_chat_options(message, sender)
 
-    message.reply.assert_awaited_once()
-    text = _get_text_from_call_args(message.reply.call_args)
-    assert "Could not find" in text
+    sender.reply.assert_awaited_once()
+    text = _get_text_from_call_args(sender.reply.call_args)
+    assert "temporarily unavailable" in text

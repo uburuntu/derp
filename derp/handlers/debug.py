@@ -1,10 +1,4 @@
-"""Debug commands for admin-only production testing.
-
-These commands are thin proxies to real handlers to ensure production code paths
-are tested. They use reduced pricing (1 star) for safe payment testing.
-
-Only available to admins defined in settings.admin_ids.
-"""
+"""Admin diagnostics and reconciliation for legacy debug payments."""
 
 from __future__ import annotations
 
@@ -13,28 +7,28 @@ from dataclasses import dataclass
 from typing import Literal
 
 import logfire
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    LabeledPrice,
-    Message,
-    PreCheckoutQuery,
-)
+from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 from aiogram.utils.i18n import gettext as _
 from pydantic import BaseModel, ConfigDict, Field
 
 from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.credits import CreditService, ModelTier
+from derp.credits.purchase_suspension import (
+    PurchaseIntakeSource,
+    reject_purchase_callback,
+    reject_purchase_command,
+    reject_purchase_pre_checkout,
+)
 from derp.db.credits import get_balances
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception, telemetry_fingerprint
 
 router = Router(name="debug")
+reconciliation_router = Router(name="debug_payment_reconciliation")
 
 # Only process messages from admins
 router.message.filter(
@@ -72,136 +66,37 @@ class DebugPayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-def _build_debug_buy_keyboard(chat_id: int | None = None) -> InlineKeyboardMarkup:
-    """Build inline keyboard with debug buy buttons."""
-    buttons = []
-
-    # User credits buttons
-    for pack in DEBUG_PACKS.values():
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text=f"👤 {pack.stars}⭐ → {pack.credits} credits (user)",
-                    callback_data=f"dbuy:{pack.id}:user",
-                )
-            ]
-        )
-
-    # Chat credits buttons (if in a chat)
-    if chat_id:
-        for pack in DEBUG_PACKS.values():
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        text=f"💬 {pack.stars}⭐ → {pack.credits} credits (chat)",
-                        callback_data=f"dbuy:{pack.id}:chat:{chat_id}",
-                    )
-                ]
-            )
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
 @router.message(Command("debug_buy", "dbuy"))
 async def debug_buy_command(
     message: Message,
     sender: MessageSender,
-    chat_model: ChatModel | None = None,
 ) -> Message:
-    """Show debug credit purchase options (1 star each).
-
-    Usage:
-    - /debug_buy - Shows test packs for both user and chat credits
-    """
-    chat_id = chat_model.telegram_id if chat_model else None
-
-    text = _(
-        "🛠 **Debug Buy Menu**\n\n"
-        "All packs cost 1⭐ for testing.\n"
-        "Choose user or chat credits:"
-    )
-
-    return await sender.reply(
-        text,
-        reply_markup=_build_debug_buy_keyboard(chat_id),
+    """Reject new debug purchases while preserving reconciliation."""
+    return await reject_purchase_command(
+        message,
+        sender,
+        PurchaseIntakeSource.DEBUG_COMMAND,
     )
 
 
 @router.callback_query(F.data.startswith("dbuy:"))
 async def handle_debug_buy_callback(
     callback: CallbackQuery,
-    bot: Bot,
 ) -> None:
-    """Handle debug buy button press - create invoice with 1 star."""
-    if not callback.data or not callback.message:
-        return
-
-    parts = callback.data.split(":")
-    if len(parts) < 3:
-        await callback.answer("Invalid debug purchase request", show_alert=True)
-        return
-
-    pack_id = parts[1]
-    target_type = parts[2]
-
-    pack = DEBUG_PACKS.get(pack_id)
-    if not pack:
-        await callback.answer("Unknown debug pack", show_alert=True)
-        return
-
-    # Build payload
-    if target_type == "chat" and len(parts) >= 4:
-        target_id = int(parts[3])
-        payload = DebugPayload(
-            pack_id=pack_id,
-            target_type="chat",
-            target_id=target_id,
-        )
-        description = f"DEBUG: {pack.credits} credits for chat {target_id}"
-    else:
-        target_id = callback.from_user.id
-        payload = DebugPayload(
-            pack_id=pack_id,
-            target_type="user",
-            target_id=target_id,
-        )
-        description = f"DEBUG: {pack.credits} credits for user"
-
-    logfire.info(
-        "debug_invoice_created",
-        pack_id=pack_id,
-        target_type=target_type,
-        target_id=target_id,
-        user_id=callback.from_user.id,
-    )
-
-    # Send invoice directly (1 star)
-    try:
-        await callback.message.answer_invoice(
-            title=f"🛠 Debug: {pack.name}",
-            description=description,
-            payload=payload.model_dump_json(by_alias=True, exclude_none=True),
-            currency="XTR",
-            prices=[LabeledPrice(label="Debug Credits", amount=pack.stars)],
-        )
-        await callback.answer()
-    except Exception:
-        report_exception("debug_invoice_failed", pack_id=pack_id)
-        await callback.answer("Failed to create invoice", show_alert=True)
+    """Reject stale debug purchase buttons without creating an invoice."""
+    await reject_purchase_callback(callback, PurchaseIntakeSource.DEBUG_CALLBACK)
 
 
 @router.pre_checkout_query(F.invoice_payload.contains('"k":"debug_credits"'))
 async def handle_debug_pre_checkout(pre_checkout: PreCheckoutQuery) -> None:
-    """Approve debug payment pre-checkout."""
-    logfire.info(
-        "debug_pre_checkout_ok",
-        total_amount=pre_checkout.total_amount,
-        user_id=pre_checkout.from_user.id,
+    """Reject legacy debug invoices before Telegram captures Stars."""
+    await reject_purchase_pre_checkout(
+        pre_checkout,
+        PurchaseIntakeSource.DEBUG_PRE_CHECKOUT,
     )
-    await pre_checkout.answer(ok=True)
 
 
-@router.message(
+@reconciliation_router.message(
     F.successful_payment,
     F.successful_payment.invoice_payload.contains('"k":"debug_credits"'),
 )
@@ -597,8 +492,7 @@ async def debug_help(
     """
     help_text = _(
         "🛠 **Debug Commands** (admin only)\n\n"
-        "**Payment Testing:**\n"
-        "• /debug_buy - Buy credits with 1⭐ test packs\n"
+        "**Credit Testing:**\n"
         "• /debug_credits <n> [chat] - Add credits directly\n"
         "• /debug_reset [chat] - Reset credits to 0\n"
         "• /debug_refund <charge_id> - Test refund flow\n\n"

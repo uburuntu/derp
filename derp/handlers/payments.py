@@ -1,137 +1,48 @@
-"""Telegram Stars payment handler.
-
-Handles credit purchases via Telegram Stars (XTR currency).
-Flow:
-1. User clicks a buy button with invoice link
-2. Pre-checkout query is answered (approve payment)
-3. Successful payment triggers credit addition
-"""
+"""Suspended credit-purchase intake and payment reconciliation."""
 
 from __future__ import annotations
 
 import logfire
-from aiogram import Bot, F, Router
-from aiogram.types import (
-    CallbackQuery,
-    LabeledPrice,
-    Message,
-    PreCheckoutQuery,
-)
+from aiogram import F, Router
+from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 from aiogram.utils.i18n import gettext as _
 
 from derp.common.sender import MessageSender
 from derp.credits import CreditService
 from derp.credits.packs import CREDIT_PACKS
-from derp.credits.ui import build_buy_keyboard
+from derp.credits.purchase_suspension import (
+    PurchaseIntakeSource,
+    reject_purchase_callback,
+    reject_purchase_pre_checkout,
+)
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception, telemetry_fingerprint
 
 router = Router(name="payments")
+intake_router = Router(name="credit_purchase_intake")
+reconciliation_router = Router(name="credit_payment_reconciliation")
+router.include_routers(intake_router, reconciliation_router)
 
-# Export for use in other modules if needed, though importing from derp.credits.* is preferred
-__all__ = ["build_buy_keyboard", "router"]
 
-
-@router.callback_query(F.data.startswith("buy:"))
+@intake_router.callback_query(F.data.startswith("buy:"))
 async def handle_buy_callback(
     callback: CallbackQuery,
-    bot: Bot,
 ) -> None:
-    """Handle buy button press - create and send invoice."""
-    if not callback.data or not callback.message:
-        return
-
-    parts = callback.data.split(":")
-    if len(parts) < 3:
-        await callback.answer(_("Invalid purchase request"), show_alert=True)
-        return
-
-    pack_id = parts[1]
-    target = parts[2]
-
-    pack = CREDIT_PACKS.get(pack_id)
-    if not pack:
-        await callback.answer(_("Unknown credit pack"), show_alert=True)
-        return
-
-    # Build payload with target info
-    # Format: pack_id:target_type:target_id
-    if target.startswith("chat:"):
-        chat_id = target.split(":")[1]
-        payload = f"{pack_id}:chat:{chat_id}"
-        description = _("{credits} credits for this chat").format(credits=pack.credits)
-    else:
-        payload = f"{pack_id}:user:{callback.from_user.id}"
-        description = _("{credits} credits for your account").format(
-            credits=pack.credits
-        )
-
-    logfire.info(
-        "invoice_created",
-        pack_id=pack_id,
-        target=target,
-        user_id=callback.from_user.id,
-        stars=pack.stars,
-        credits=pack.credits,
-    )
-
-    # Create invoice link
-    try:
-        invoice_link = await bot.create_invoice_link(
-            title=_("{name} Credit Pack").format(name=pack.name),
-            description=description,
-            payload=payload,
-            currency="XTR",  # Telegram Stars
-            prices=[LabeledPrice(label=_("Credits"), amount=pack.stars)],
-            provider_token="",  # Empty for Stars
-        )
-
-        await callback.message.answer(
-            _("💫 Click below to complete your purchase:\n\n{link}").format(
-                link=invoice_link
-            ),
-        )
-        await callback.answer()
-
-    except Exception:
-        report_exception("invoice_creation_failed", pack_id=pack_id)
-        await callback.answer(
-            _("Failed to create invoice. Try again."), show_alert=True
-        )
+    """Reject stale credit-pack buttons without creating an invoice."""
+    await reject_purchase_callback(callback, PurchaseIntakeSource.CALLBACK)
 
 
-@router.pre_checkout_query()
+@intake_router.pre_checkout_query()
 async def handle_pre_checkout(pre_checkout: PreCheckoutQuery) -> None:
-    """Answer pre-checkout query to approve payment.
-
-    This is called by Telegram before the payment is processed.
-    We should validate the purchase and respond within 10 seconds.
-    """
-    payload = pre_checkout.invoice_payload
-    parts = payload.split(":")
-
-    if len(parts) < 3:
-        await pre_checkout.answer(ok=False, error_message=_("Invalid payment data"))
-        return
-
-    pack_id = parts[0]
-    if pack_id not in CREDIT_PACKS:
-        await pre_checkout.answer(ok=False, error_message=_("Unknown credit pack"))
-        return
-
-    logfire.info(
-        "pre_checkout_approved",
-        pack_id=pack_id,
-        user_id=pre_checkout.from_user.id,
-        total_amount=pre_checkout.total_amount,
+    """Reject legacy credit invoices before Telegram captures Stars."""
+    await reject_purchase_pre_checkout(
+        pre_checkout,
+        PurchaseIntakeSource.PRE_CHECKOUT,
     )
 
-    # Approve the payment
-    await pre_checkout.answer(ok=True)
 
-
-@router.message(F.successful_payment)
+@reconciliation_router.message(F.successful_payment)
 async def handle_successful_payment(
     message: Message,
     sender: MessageSender,

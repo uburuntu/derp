@@ -32,8 +32,6 @@ async def cmd_help(message: Message):
         "• /derp - Trigger AI response\n"
         "• /donate [stars] - Support the bot with Telegram Stars (default 20)\n"
         "• /credits - Check your credit balance\n"
-        "• /buy - Purchase personal credits with Stars\n"
-        "• /buy_chat - Purchase chat pool credits (groups)\n"
         "• /imagine <prompt> - Generate images with AI (premium)\n"
         "• /edit <prompt> - Edit images with AI (premium)\n"
         "• /video [fast|standard] <prompt> - Generate a video with Veo (premium)\n"
@@ -53,7 +51,6 @@ async def cmd_help(message: Message):
     if message.from_user and message.from_user.id in settings.admin_ids:
         debug_text = _(
             "\n\n🛠 Debug (admin only):\n"
-            "• /debug_buy - 1⭐ test packs (user/chat)\n"
             "• /debug_credits <n> [chat] - Add credits\n"
             "• /debug_reset [chat] - Reset to 0\n"
             "• /debug_status - Full diagnostic\n"

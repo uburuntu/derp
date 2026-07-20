@@ -142,6 +142,22 @@ class TestCmdHelp:
             f"Help should mention common commands. Found: {found_commands}"
         )
 
+        assert "/donate" in help_text
+        assert "/buy" not in help_text
+
+    @pytest.mark.asyncio
+    async def test_admin_help_does_not_advertise_debug_purchases(
+        self, make_message, monkeypatch
+    ):
+        message = make_message(text="/help", user_id=98765)
+        monkeypatch.setattr("derp.handlers.basic.settings.admin_ids", [98765])
+
+        await cmd_help(message)
+
+        help_text = message.reply.await_args.args[0]
+        assert "/debug_credits" in help_text
+        assert "/debug_buy" not in help_text
+
     @pytest.mark.asyncio
     async def test_help_works_in_private_chat(self, make_message):
         """Should work in private chats."""

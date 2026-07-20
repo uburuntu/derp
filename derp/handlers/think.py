@@ -15,6 +15,7 @@ from pydantic_ai.exceptions import ModelHTTPError
 
 from derp.common.sender import MessageSender
 from derp.credits import CreditService
+from derp.credits.purchase_suspension import purchase_suspension_message
 from derp.db import get_db_manager
 from derp.llm import AgentDeps, create_chat_agent
 from derp.llm.providers import ModelTier
@@ -66,11 +67,11 @@ async def handle_think(
 
     if not result.allowed:
         return await sender.reply(
-            _(
-                "🧠 Deep thinking requires credits.\n\n"
-                "✨ {reason}\n\n"
-                "💡 Use /buy to get credits!"
-            ).format(reason=result.reject_reason),
+            _("🧠 Deep thinking requires credits.\n\n✨ {reason}").format(
+                reason=result.reject_reason
+            )
+            + "\n\n"
+            + purchase_suspension_message(),
         )
 
     logfire.info(

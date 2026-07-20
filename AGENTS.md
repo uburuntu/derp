@@ -245,7 +245,8 @@ derp/credits/
 ├── models.py     # ModelConfig, MODEL_REGISTRY, tier mappings
 ├── tools.py      # ToolConfig, TOOL_REGISTRY, tool pricing
 ├── types.py      # CreditCheckResult
-└── service.py    # CreditService: check access, deduct, purchase, refund
+├── service.py    # CreditService: check access, deduct, purchase, refund
+└── purchase_suspension.py  # Fail-closed new-purchase boundary
 ```
 
 - **CreditService:** Central service for all credit operations. Accepts SQLAlchemy `UserModel`/`ChatModel` directly (not Telegram IDs). Performs atomic balance updates, records transactions with idempotency keys, and checks tool/model access. Injected via `CreditServiceMiddleware`.
@@ -254,11 +255,17 @@ derp/credits/
 
 ### Payment Flow
 
-1. User runs `/buy` or `/buy_chat` → shows inline keyboard with credit packs
-2. User taps pack → `payments.py` creates Telegram Stars invoice via `bot.create_invoice_link()`
-3. Telegram sends `pre_checkout_query` → bot approves
-4. Telegram sends `successful_payment` → `CreditService.purchase_credits()` adds credits atomically
-5. Transaction recorded with `telegram_charge_id` for idempotency and refund support
+- New credit purchases are intentionally suspended until the roadmap's durable
+  purchase intents and end-to-end Stars validation ship. `/buy`, `/buy_chat`,
+  legacy `buy:*`/`dbuy:*` callbacks, and credit pre-checkout queries must fail
+  closed through `derp/credits/purchase_suspension.py`.
+- Do not add an enable flag around the removed invoice code. Milestone 2 replaces
+  the suspension boundary with a validated purchase-intent service.
+- Successful-payment reconciliation remains registered for production and
+  legacy debug payments so captured charges are fulfilled idempotently through
+  `CreditService.purchase_credits()`.
+- Donation invoice creation, pre-checkout approval, and fulfillment are
+  independent and must stay before the catch-all credit rejection router.
 
 ### Tool Credit Integration
 

@@ -20,6 +20,7 @@ from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 from derp.common.extractor import Extractor
 from derp.common.sender import MessageSender
 from derp.credits import CreditService
+from derp.credits.purchase_suspension import purchase_suspension_message
 from derp.filters.meta import MetaCommand, MetaInfo
 from derp.llm import create_image_agent
 from derp.models import Chat as ChatModel
@@ -58,10 +59,9 @@ async def handle_imagine(
 
     if not result.allowed:
         return await message.reply(
-            _(
-                "✨ {reason}\n\n"
-                "💡 Use /buy to get credits for unlimited image generation!"
-            ).format(reason=result.reject_reason)
+            _("✨ {reason}").format(reason=result.reject_reason)
+            + "\n\n"
+            + purchase_suspension_message()
         )
 
     # Create sender bound to target message for reply
@@ -188,9 +188,9 @@ async def handle_edit(
 
     if not result.allowed:
         return await message.reply(
-            _(
-                "✨ {reason}\n\n💡 Use /buy to get credits for unlimited image editing!"
-            ).format(reason=result.reject_reason)
+            _("✨ {reason}").format(reason=result.reject_reason)
+            + "\n\n"
+            + purchase_suspension_message()
         )
 
     # Create sender bound to target message for reply

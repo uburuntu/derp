@@ -436,5 +436,5 @@ def get_placeholder_message(tool_name: str, reject_reason: str) -> str:
 
     return (
         f"[TOOL_UNAVAILABLE: {tool.description} requires credits. "
-        f"{reject_reason}. Suggest the user purchase credits with /buy.]"
+        f"{reject_reason}. Do not suggest a purchase; credit purchases are unavailable.]"
     )

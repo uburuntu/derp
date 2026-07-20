@@ -25,8 +25,7 @@ class TestBuyCallback:
     """Tests for buy button callback handler."""
 
     @pytest.mark.asyncio
-    async def test_creates_invoice(self):
-        """Test callback creates invoice link."""
+    async def test_rejects_stale_valid_button_without_sending_invoice(self):
         callback = MagicMock()
         callback.data = "buy:starter:user"
         callback.from_user.id = 12345
@@ -34,49 +33,31 @@ class TestBuyCallback:
         callback.message.answer = AsyncMock()
         callback.answer = AsyncMock()
 
-        bot = MagicMock()
-        bot.create_invoice_link = AsyncMock(return_value="https://t.me/invoice/xxx")
+        await handle_buy_callback(callback)
 
-        await handle_buy_callback(callback, bot)
-
-        bot.create_invoice_link.assert_awaited_once()
-        callback.message.answer.assert_awaited_once()
+        callback.message.answer.assert_not_awaited()
         callback.answer.assert_awaited_once()
+        assert "temporarily unavailable" in callback.answer.await_args.args[0]
+        assert callback.answer.await_args.kwargs == {"show_alert": True}
 
     @pytest.mark.asyncio
-    async def test_invalid_callback_data(self):
-        """Test callback with invalid data shows error."""
+    @pytest.mark.parametrize("data", ["buy:invalid", "buy:nonexistent:user"])
+    async def test_all_legacy_buttons_fail_closed(self, data):
         callback = MagicMock()
-        callback.data = "buy:invalid"
+        callback.data = data
+        callback.from_user.id = 12345
         callback.answer = AsyncMock()
 
-        bot = MagicMock()
+        await handle_buy_callback(callback)
 
-        await handle_buy_callback(callback, bot)
-
-        callback.answer.assert_awaited_with("Invalid purchase request", show_alert=True)
-
-    @pytest.mark.asyncio
-    async def test_unknown_pack(self):
-        """Test callback with unknown pack shows error."""
-        callback = MagicMock()
-        callback.data = "buy:nonexistent:user"
-        callback.message = MagicMock()
-        callback.answer = AsyncMock()
-
-        bot = MagicMock()
-
-        await handle_buy_callback(callback, bot)
-
-        callback.answer.assert_awaited_with("Unknown credit pack", show_alert=True)
+        assert callback.answer.await_args.kwargs == {"show_alert": True}
 
 
 class TestPreCheckout:
     """Tests for pre-checkout handler."""
 
     @pytest.mark.asyncio
-    async def test_approves_valid_checkout(self):
-        """Test valid checkout is approved."""
+    async def test_rejects_legacy_valid_checkout(self):
         # Get a real pack ID
         pack_id = next(iter(CREDIT_PACKS.keys()))
 
@@ -88,7 +69,12 @@ class TestPreCheckout:
 
         await handle_pre_checkout(pre_checkout)
 
-        pre_checkout.answer.assert_awaited_with(ok=True)
+        pre_checkout.answer.assert_awaited_once()
+        assert pre_checkout.answer.await_args.kwargs["ok"] is False
+        assert (
+            "temporarily unavailable"
+            in pre_checkout.answer.await_args.kwargs["error_message"]
+        )
 
     @pytest.mark.asyncio
     async def test_rejects_invalid_payload(self):
@@ -144,6 +130,13 @@ class TestSuccessfulPayment:
         )
 
         service.purchase_credits.assert_awaited_once()
+        service.purchase_credits.assert_awaited_once_with(
+            user,
+            None,
+            pack.credits,
+            "charge_123",
+            pack_name=pack.name,
+        )
         sender.send.assert_awaited_once()
         text = _get_text_from_call_args(sender.send.call_args)
         assert "Payment successful" in text
@@ -177,7 +170,13 @@ class TestSuccessfulPayment:
             message, sender, service, user_model=user, chat_model=chat
         )
 
-        service.purchase_credits.assert_awaited_once()
+        service.purchase_credits.assert_awaited_once_with(
+            user,
+            chat,
+            pack.credits,
+            "charge_123",
+            pack_name=pack.name,
+        )
 
     @pytest.mark.asyncio
     async def test_no_payment_object(

@@ -7,7 +7,18 @@ from unittest.mock import patch
 
 import pytest
 
-from derp.application import open_runtime
+from derp.application import APPLICATION_ROUTERS, open_runtime
+from derp.handlers import debug, donations, payments
+
+
+def test_payment_router_order_preserves_donations_and_reconciliation() -> None:
+    assert APPLICATION_ROUTERS.index(donations.router) < APPLICATION_ROUTERS.index(
+        payments.router
+    )
+    assert APPLICATION_ROUTERS.index(
+        debug.reconciliation_router
+    ) < APPLICATION_ROUTERS.index(debug.router)
+    assert debug.reconciliation_router not in debug.router.sub_routers
 
 
 class FakeBot:
