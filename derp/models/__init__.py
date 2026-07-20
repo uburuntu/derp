@@ -10,6 +10,7 @@ from derp.models.billing import (
 from derp.models.chat import Chat
 from derp.models.credit_transaction import CreditTransaction
 from derp.models.daily_usage import DailyUsage
+from derp.models.delivery import Artifact, DeliveryIntent
 from derp.models.message import Message
 from derp.models.paid_operation import (
     DeferredToolRequest,
@@ -48,4 +49,6 @@ __all__ = [
     "WalletLot",
     "CreditTransaction",
     "DailyUsage",
+    "Artifact",
+    "DeliveryIntent",
 ]
