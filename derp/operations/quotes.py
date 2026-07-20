@@ -12,8 +12,10 @@ from derp.catalog import (
     CREDIT_BASE_USD,
     DEFAULT_MARGIN,
     AudioPricing,
+    GoogleModelKey,
     ImagePricing,
     ImageResolution,
+    ModelCapability,
     TokenPricing,
     VideoPricing,
     VideoResolution,
@@ -22,6 +24,8 @@ from derp.execution import ExecutionPlan, Feature
 from derp.operations.types import ContextBand, OperationId, Quote, QuoteId, QuoteKey
 
 PRICING_VERSION: Final = f"google-{CATALOG_VERIFIED_ON.isoformat()}-v1"
+IMAGE_FINISHING_ALLOWANCE_VERSION: Final = "v1"
+IMAGE_FINISHING_OUTPUT_TOKENS: Final = 2_048
 
 
 def _validate_token_count(value: int, name: str = "input_tokens") -> None:
@@ -93,6 +97,62 @@ class ImageEditQuoteInput:
             raise TypeError("resolution must be an ImageResolution")
 
 
+type ImageQuoteInput = ImageGenerateQuoteInput | ImageEditQuoteInput
+
+
+@dataclass(frozen=True, slots=True)
+class FinishingChatQuoteInput:
+    """Validated post-tool chat usage bound to one explicit catalog model."""
+
+    model_key: GoogleModelKey
+    input_tokens: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.model_key, GoogleModelKey):
+            raise TypeError("model_key must be a GoogleModelKey")
+        _validate_token_count(self.input_tokens, "finishing_input_tokens")
+
+
+@dataclass(frozen=True, slots=True)
+class CompositeImageQuoteInput:
+    """Image provider work plus the bounded chat call that finishes its turn."""
+
+    image: ImageQuoteInput
+    finishing: FinishingChatQuoteInput
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.image, (ImageGenerateQuoteInput, ImageEditQuoteInput)):
+            raise TypeError("image must be an image quote input")
+        if not isinstance(self.finishing, FinishingChatQuoteInput):
+            raise TypeError("finishing must be a FinishingChatQuoteInput")
+
+
+@dataclass(frozen=True, slots=True)
+class ImageFinishingAllowance:
+    """Versioned fixed output allowance for a post-approval chat response."""
+
+    version: str = IMAGE_FINISHING_ALLOWANCE_VERSION
+    output_tokens: int = IMAGE_FINISHING_OUTPUT_TOKENS
+
+    def __post_init__(self) -> None:
+        if (
+            not self.version
+            or not self.version.isascii()
+            or len(self.version) > 8
+            or any(
+                not (character.isalnum() or character in "-_")
+                for character in self.version
+            )
+        ):
+            raise ValueError(
+                "finishing allowance version must be 1-8 ASCII letters, digits, '-' or '_'"
+            )
+        _validate_positive_int(self.output_tokens, "finishing_output_tokens")
+
+
+DEFAULT_IMAGE_FINISHING_ALLOWANCE: Final = ImageFinishingAllowance()
+
+
 @dataclass(frozen=True, slots=True)
 class TtsQuoteInput:
     """Validated speech usage with a bounded output duration."""
@@ -143,6 +203,7 @@ class QuotePolicy:
     inline_output_tokens: int = 1_024
     deep_think_output_tokens: int = 8_192
     image_text_output_tokens: int = 0
+    image_finishing: ImageFinishingAllowance = DEFAULT_IMAGE_FINISHING_ALLOWANCE
 
     def __post_init__(self) -> None:
         if not self.version.strip():
@@ -163,6 +224,8 @@ class QuotePolicy:
             self.image_text_output_tokens,
             "image_text_output_tokens",
         )
+        if not isinstance(self.image_finishing, ImageFinishingAllowance):
+            raise TypeError("image_finishing must be an ImageFinishingAllowance")
 
     def credits_for(self, provider_cost_usd: Decimal) -> int:
         """Convert provider cost to credits at this policy's gross margin."""
@@ -313,6 +376,56 @@ def _estimate_provider_cost(
     raise TypeError(f"unsupported quote input: {type(quote_input).__name__}")
 
 
+def _estimate_finishing_cost(
+    *,
+    plan: ExecutionPlan,
+    quote_input: FinishingChatQuoteInput,
+    policy: QuotePolicy,
+) -> tuple[Decimal, ContextBand]:
+    if plan.feature is not Feature.CHAT:
+        raise ValueError("image finishing requires a chat execution plan")
+    if plan.model.key is not quote_input.model_key:
+        raise ValueError(
+            "finishing quote model does not match the finishing execution plan"
+        )
+    required = frozenset({ModelCapability.TEXT_INPUT, ModelCapability.TEXT_OUTPUT})
+    if missing := required - plan.model.capabilities:
+        capabilities = ", ".join(sorted(capability.value for capability in missing))
+        raise ValueError(f"finishing model is missing {capabilities}")
+    if not isinstance(plan.model.pricing, TokenPricing):
+        raise ValueError("image finishing requires token pricing")
+
+    band = _validate_model_input(plan, quote_input.input_tokens)
+    _validate_model_output(plan, policy.image_finishing.output_tokens)
+    envelope = _context_envelope_tokens(
+        band=band,
+        model_input_limit=plan.model.input_token_limit,
+    )
+    return (
+        plan.model.pricing.estimate_usd(
+            input_tokens=envelope,
+            output_tokens=policy.image_finishing.output_tokens,
+        ),
+        band,
+    )
+
+
+def _composite_image_variant(
+    *,
+    resolution: ImageResolution,
+    finishing_model_key: GoogleModelKey,
+    finishing_band: ContextBand,
+    allowance: ImageFinishingAllowance,
+) -> str:
+    variant = (
+        f"resolution={resolution.value};finish={finishing_model_key.value}:"
+        f"{finishing_band.value}:{allowance.version}"
+    )
+    if len(variant.encode("ascii")) > 64:
+        raise ValueError("composite image quote variant exceeds 64 bytes")
+    return variant
+
+
 @dataclass(frozen=True, slots=True)
 class QuoteEngine:
     """Construct fixed quotes without clocks, storage, or provider access."""
@@ -365,14 +478,88 @@ class QuoteEngine:
             catalog_verified_on=plan.model.pricing_verified_on,
         )
 
+    def quote_composite_image(
+        self,
+        *,
+        quote_id: QuoteId,
+        operation_id: OperationId,
+        image_plan: ExecutionPlan,
+        finishing_plan: ExecutionPlan,
+        quote_input: CompositeImageQuoteInput,
+        created_at: datetime,
+    ) -> Quote:
+        """Price deferred image work and its finishing chat call as one unit."""
+        if not isinstance(created_at, datetime):
+            raise TypeError("created_at must be a datetime")
+        expected_feature = _feature_for(quote_input.image)
+        if image_plan.feature is not expected_feature:
+            raise ValueError(
+                f"{type(quote_input.image).__name__} cannot price "
+                f"{image_plan.feature.value}"
+            )
+        if (
+            image_plan.model.pricing_verified_on
+            != finishing_plan.model.pricing_verified_on
+        ):
+            raise ValueError("composite plans must share one catalog pricing version")
+
+        image_band = _validate_model_input(
+            image_plan,
+            quote_input.image.input_tokens,
+        )
+        image_envelope = _context_envelope_tokens(
+            band=image_band,
+            model_input_limit=image_plan.model.input_token_limit,
+        )
+        image_cost, _ = _estimate_provider_cost(
+            plan=image_plan,
+            quote_input=quote_input.image,
+            input_envelope_tokens=image_envelope,
+            policy=self.policy,
+        )
+        finishing_cost, finishing_band = _estimate_finishing_cost(
+            plan=finishing_plan,
+            quote_input=quote_input.finishing,
+            policy=self.policy,
+        )
+        provider_cost = image_cost + finishing_cost
+        return Quote(
+            id=quote_id,
+            operation_id=operation_id,
+            key=QuoteKey(
+                feature=image_plan.feature,
+                model_key=image_plan.model.key,
+                context_band=image_band,
+                variant=_composite_image_variant(
+                    resolution=quote_input.image.resolution,
+                    finishing_model_key=finishing_plan.model.key,
+                    finishing_band=finishing_band,
+                    allowance=self.policy.image_finishing,
+                ),
+            ),
+            credits=self.policy.credits_for(provider_cost),
+            estimated_provider_cost_usd=provider_cost,
+            created_at=created_at,
+            expires_at=created_at + self.policy.ttl,
+            pricing_version=self.policy.version,
+            catalog_verified_on=image_plan.model.pricing_verified_on,
+        )
+
 
 __all__ = [
+    "DEFAULT_IMAGE_FINISHING_ALLOWANCE",
     "DEFAULT_QUOTE_POLICY",
+    "IMAGE_FINISHING_ALLOWANCE_VERSION",
+    "IMAGE_FINISHING_OUTPUT_TOKENS",
     "PRICING_VERSION",
     "ChatQuoteInput",
+    "CompositeImageQuoteInput",
     "DeepThinkQuoteInput",
+    "FinishingChatQuoteInput",
     "ImageEditQuoteInput",
+    "ImageFinishingAllowance",
     "ImageGenerateQuoteInput",
+    "ImageQuoteInput",
     "InlineChatQuoteInput",
     "QuoteEngine",
     "QuoteInput",

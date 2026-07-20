@@ -11,17 +11,24 @@ import pytest
 
 from derp.catalog import (
     GoogleModelKey,
+    ImagePricing,
     ImageResolution,
+    TokenPricing,
     VideoResolution,
+    get_google_model,
 )
 from derp.execution import Feature, plan_execution
 from derp.operations import (
     PRICING_VERSION,
     ChatQuoteInput,
+    CompositeImageQuoteInput,
     ContextBand,
     DeepThinkQuoteInput,
+    FinishingChatQuoteInput,
     ImageEditQuoteInput,
+    ImageFinishingAllowance,
     ImageGenerateQuoteInput,
+    ImageQuoteInput,
     InlineChatQuoteInput,
     OperationId,
     Quote,
@@ -183,6 +190,203 @@ def test_maximum_context_envelope_is_capped_at_the_model_input_limit() -> None:
 
     assert quote.key.context_band is ContextBand.MAXIMUM
     assert quote.estimated_provider_cost_usd == Decimal("0.132536")
+
+
+@pytest.mark.parametrize(
+    (
+        "feature",
+        "image_input",
+        "finishing_model_key",
+        "finishing_input_tokens",
+        "image_envelope",
+        "finishing_envelope",
+        "image_band",
+        "finishing_band",
+        "provider_cost",
+        "credits",
+    ),
+    [
+        (
+            Feature.IMAGE_GENERATE,
+            ImageGenerateQuoteInput(1, ImageResolution.ONE_K),
+            GoogleModelKey.CHAT_ECONOMY,
+            8_001,
+            8_000,
+            32_000,
+            ContextBand.SMALL,
+            ContextBand.MEDIUM,
+            Decimal("0.082072"),
+            118,
+        ),
+        (
+            Feature.IMAGE_EDIT,
+            ImageEditQuoteInput(8_001, ImageResolution.TWO_K),
+            GoogleModelKey.CHAT_STANDARD,
+            32_001,
+            32_000,
+            128_000,
+            ContextBand.MEDIUM,
+            ContextBand.LARGE,
+            Decimal("0.327432"),
+            468,
+        ),
+    ],
+)
+def test_composite_image_quote_is_exact_image_plus_finishing_cost(
+    feature: Feature,
+    image_input: ImageQuoteInput,
+    finishing_model_key: GoogleModelKey,
+    finishing_input_tokens: int,
+    image_envelope: int,
+    finishing_envelope: int,
+    image_band: ContextBand,
+    finishing_band: ContextBand,
+    provider_cost: Decimal,
+    credits: int,
+) -> None:
+    policy = QuotePolicy()
+    image_model = get_google_model(GoogleModelKey.IMAGE)
+    finishing_model = get_google_model(finishing_model_key)
+    assert isinstance(image_model.pricing, ImagePricing)
+    assert isinstance(finishing_model.pricing, TokenPricing)
+    expected_image_cost = image_model.pricing.estimate_usd(
+        input_tokens=image_envelope,
+        text_output_tokens=policy.image_text_output_tokens,
+        resolution=image_input.resolution,
+    )
+    expected_finishing_cost = finishing_model.pricing.estimate_usd(
+        input_tokens=finishing_envelope,
+        output_tokens=policy.image_finishing.output_tokens,
+    )
+
+    quote = QuoteEngine(policy).quote_composite_image(
+        quote_id=QuoteId(UUID(int=2)),
+        operation_id=_operation_id(feature),
+        image_plan=plan_execution(feature, GoogleModelKey.IMAGE),
+        finishing_plan=plan_execution(Feature.CHAT, finishing_model_key),
+        quote_input=CompositeImageQuoteInput(
+            image=image_input,
+            finishing=FinishingChatQuoteInput(
+                model_key=finishing_model_key,
+                input_tokens=finishing_input_tokens,
+            ),
+        ),
+        created_at=NOW,
+    )
+
+    expected_provider_cost = expected_image_cost + expected_finishing_cost
+    assert expected_provider_cost == provider_cost
+    assert quote.estimated_provider_cost_usd == expected_provider_cost
+    assert quote.credits == policy.credits_for(provider_cost) == credits
+    assert quote.key.context_band is image_band
+    assert quote.key.variant == (
+        f"resolution={image_input.resolution.value};"
+        f"finish={finishing_model_key.value}:{finishing_band.value}:v1"
+    )
+    assert len(quote.key.variant.encode("utf-8")) <= 64
+
+
+def test_command_image_quote_does_not_include_finishing_work() -> None:
+    command = _quote(
+        Feature.IMAGE_GENERATE,
+        GoogleModelKey.IMAGE,
+        ImageGenerateQuoteInput(1, ImageResolution.ONE_K),
+    )
+
+    assert command.estimated_provider_cost_usd == Decimal("0.071")
+    assert command.credits == 102
+    assert command.key.variant == "resolution=1K"
+
+
+def test_composite_image_quote_rejects_mismatched_features_and_models() -> None:
+    quote_input = CompositeImageQuoteInput(
+        image=ImageGenerateQuoteInput(100, ImageResolution.ONE_K),
+        finishing=FinishingChatQuoteInput(GoogleModelKey.CHAT_ECONOMY, 100),
+    )
+    engine = QuoteEngine()
+
+    with pytest.raises(ValueError, match="cannot price image_edit"):
+        engine.quote_composite_image(
+            quote_id=QuoteId.new(),
+            operation_id=_operation_id(Feature.IMAGE_EDIT),
+            image_plan=plan_execution(Feature.IMAGE_EDIT, GoogleModelKey.IMAGE),
+            finishing_plan=plan_execution(
+                Feature.CHAT,
+                GoogleModelKey.CHAT_ECONOMY,
+            ),
+            quote_input=quote_input,
+            created_at=NOW,
+        )
+
+    with pytest.raises(ValueError, match="model does not match"):
+        engine.quote_composite_image(
+            quote_id=QuoteId.new(),
+            operation_id=_operation_id(Feature.IMAGE_GENERATE),
+            image_plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
+            finishing_plan=plan_execution(
+                Feature.CHAT,
+                GoogleModelKey.CHAT_STANDARD,
+            ),
+            quote_input=quote_input,
+            created_at=NOW,
+        )
+
+    with pytest.raises(ValueError, match="requires a chat execution plan"):
+        engine.quote_composite_image(
+            quote_id=QuoteId.new(),
+            operation_id=_operation_id(Feature.IMAGE_GENERATE),
+            image_plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
+            finishing_plan=plan_execution(
+                Feature.INLINE_CHAT,
+                GoogleModelKey.CHAT_ECONOMY,
+            ),
+            quote_input=quote_input,
+            created_at=NOW,
+        )
+
+
+def test_composite_finishing_limits_and_allowance_version() -> None:
+    oversized_input = CompositeImageQuoteInput(
+        image=ImageGenerateQuoteInput(100, ImageResolution.ONE_K),
+        finishing=FinishingChatQuoteInput(
+            GoogleModelKey.CHAT_ECONOMY,
+            1_048_577,
+        ),
+    )
+    with pytest.raises(ValueError, match="exceed chat_economy's 1048576-token limit"):
+        QuoteEngine().quote_composite_image(
+            quote_id=QuoteId.new(),
+            operation_id=_operation_id(Feature.IMAGE_GENERATE),
+            image_plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
+            finishing_plan=plan_execution(
+                Feature.CHAT,
+                GoogleModelKey.CHAT_ECONOMY,
+            ),
+            quote_input=oversized_input,
+            created_at=NOW,
+        )
+
+    policy = QuotePolicy(
+        image_finishing=ImageFinishingAllowance(version="v2", output_tokens=65_537)
+    )
+    with pytest.raises(ValueError, match="policy output exceeds"):
+        QuoteEngine(policy).quote_composite_image(
+            quote_id=QuoteId.new(),
+            operation_id=_operation_id(Feature.IMAGE_GENERATE),
+            image_plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
+            finishing_plan=plan_execution(
+                Feature.CHAT,
+                GoogleModelKey.CHAT_ECONOMY,
+            ),
+            quote_input=CompositeImageQuoteInput(
+                image=ImageGenerateQuoteInput(100, ImageResolution.ONE_K),
+                finishing=FinishingChatQuoteInput(
+                    GoogleModelKey.CHAT_ECONOMY,
+                    100,
+                ),
+            ),
+            created_at=NOW,
+        )
 
 
 def test_quote_input_must_match_the_execution_feature() -> None:
