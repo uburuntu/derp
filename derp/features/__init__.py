@@ -1,5 +1,7 @@
 """Provider-neutral feature execution boundaries."""
 
+from typing import TYPE_CHECKING, Any
+
 from derp.features.image import (
     MAX_IMAGE_OUTPUT_BYTES,
     V1_IMAGE_OUTPUT_COUNT,
@@ -14,17 +16,68 @@ from derp.features.image import (
 )
 from derp.features.types import MediaContent, TextOutput
 
+if TYPE_CHECKING:
+    from derp.features.image_operation import (
+        ImageAwaitingFunding,
+        ImageDelivered,
+        ImageDeliveryUncertain,
+        ImageInProgress,
+        ImageInvocation,
+        ImageNotCharged,
+        ImageNotChargedReason,
+        ImageOperationCoordinator,
+        ImageOperationOutcome,
+        ImageRefunded,
+        ImageRequest,
+    )
+
+_IMAGE_OPERATION_EXPORTS = frozenset(
+    {
+        "ImageAwaitingFunding",
+        "ImageDelivered",
+        "ImageDeliveryUncertain",
+        "ImageInProgress",
+        "ImageInvocation",
+        "ImageNotCharged",
+        "ImageNotChargedReason",
+        "ImageOperationCoordinator",
+        "ImageOperationOutcome",
+        "ImageRefunded",
+        "ImageRequest",
+    }
+)
+
 __all__ = [
     "MAX_IMAGE_OUTPUT_BYTES",
     "V1_IMAGE_OUTPUT_COUNT",
     "ImageEditRequest",
+    "ImageAwaitingFunding",
+    "ImageDelivered",
+    "ImageDeliveryUncertain",
     "ImageExecutionPolicy",
     "ImageFeatureService",
     "ImageGenerateRequest",
+    "ImageInProgress",
+    "ImageInvocation",
+    "ImageNotCharged",
+    "ImageNotChargedReason",
+    "ImageOperationCoordinator",
+    "ImageOperationOutcome",
     "ImageOutput",
     "ImageProviderExecutor",
+    "ImageRefunded",
+    "ImageRequest",
     "ImageSourceLoader",
     "MediaContent",
     "PreparedImageEditRequest",
     "TextOutput",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Load application coordination only when explicitly requested."""
+    if name not in _IMAGE_OPERATION_EXPORTS:
+        raise AttributeError(name)
+    from derp.features import image_operation
+
+    return getattr(image_operation, name)
