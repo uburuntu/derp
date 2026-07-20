@@ -175,6 +175,52 @@ class SubscriptionStateResult:
     changed: bool
 
 
+class SubscriptionStatus(StrEnum):
+    """Locally observed lifecycle state for a personal plan."""
+
+    ACTIVE = "active"
+    CANCELED = "canceled"
+    EXPIRED = "expired"
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionManagementSnapshot:
+    """Framework-independent inputs needed to render and control one plan."""
+
+    subscription_id: uuid.UUID
+    user_id: uuid.UUID
+    payer_telegram_id: int
+    plan_id: str
+    plan_version: str
+    status: SubscriptionStatus
+    renewal_enabled: bool
+    current_period_end: datetime
+    telegram_payment_charge_id: str
+
+    def __post_init__(self) -> None:
+        if self.payer_telegram_id <= 0:
+            raise ValueError("payer_telegram_id must be positive")
+        for name in ("plan_id", "plan_version", "telegram_payment_charge_id"):
+            if not getattr(self, name).strip():
+                raise ValueError(f"{name} must not be blank")
+        _require_aware(self.current_period_end, "current_period_end")
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionRenewalCommand:
+    """Allowlisted provider command with no persistence or aiogram objects."""
+
+    payer_telegram_id: int
+    telegram_payment_charge_id: str
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        if self.payer_telegram_id <= 0:
+            raise ValueError("payer_telegram_id must be positive")
+        if not self.telegram_payment_charge_id.strip():
+            raise ValueError("telegram_payment_charge_id must not be blank")
+
+
 @dataclass(frozen=True, slots=True)
 class ClawbackResult:
     """Source-specific purchase clawback outcome."""
@@ -221,7 +267,10 @@ __all__ = [
     "PurchaseIntentHandle",
     "PurchaseTarget",
     "PurchaseTargetKind",
+    "SubscriptionManagementSnapshot",
+    "SubscriptionRenewalCommand",
     "SubscriptionStateError",
     "SubscriptionStateResult",
+    "SubscriptionStatus",
     "UnknownProductError",
 ]

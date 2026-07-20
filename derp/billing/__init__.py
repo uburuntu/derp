@@ -1,5 +1,6 @@
 """Durable Stars product, intent, settlement, and subscription API."""
 
+from derp.billing.expiry import SubscriptionExpiryWorker
 from derp.billing.intents import PurchaseIntentService
 from derp.billing.policy import CLOSED_COMMERCE_POLICY, CommercePolicy
 from derp.billing.products import (
@@ -12,6 +13,10 @@ from derp.billing.products import (
     TopUpProduct,
 )
 from derp.billing.settlement import PaymentSettlementService
+from derp.billing.subscriptions import (
+    SubscriptionManagementService,
+    SubscriptionRenewalProvider,
+)
 from derp.billing.types import (
     ActiveSubscriptionError,
     CapturedPayment,
@@ -27,8 +32,11 @@ from derp.billing.types import (
     PurchaseIntentHandle,
     PurchaseTarget,
     PurchaseTargetKind,
+    SubscriptionManagementSnapshot,
+    SubscriptionRenewalCommand,
     SubscriptionStateError,
     SubscriptionStateResult,
+    SubscriptionStatus,
     UnknownProductError,
 )
 
@@ -57,8 +65,14 @@ __all__ = [
     "PurchaseTargetKind",
     "StarsProduct",
     "SubscriptionPlan",
+    "SubscriptionExpiryWorker",
+    "SubscriptionManagementService",
+    "SubscriptionManagementSnapshot",
+    "SubscriptionRenewalCommand",
+    "SubscriptionRenewalProvider",
     "SubscriptionStateError",
     "SubscriptionStateResult",
+    "SubscriptionStatus",
     "TopUpProduct",
     "UnknownProductError",
 ]
