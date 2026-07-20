@@ -2,12 +2,8 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import logfire
 import pytest
 from pydantic_ai import BinaryContent
-
-# Disable logfire instrumentation during tests
-logfire.configure(send_to_logfire=False)
 
 
 class TestExtractMediaForAgent:

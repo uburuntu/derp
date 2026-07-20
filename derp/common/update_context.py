@@ -1,6 +1,6 @@
 """Context for correlating outbound bot actions to inbound updates.
 
-We use a contextvar set by the outer DatabaseLoggerMiddleware so that
+We use a contextvar set by the outer LogUpdatesMiddleware so that
 session middleware (which intercepts Bot API calls) can link bot actions
 to the originating Telegram update without handlers passing values around.
 """

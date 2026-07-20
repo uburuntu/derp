@@ -3,14 +3,13 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import logfire
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update
 
 from derp.common.message_log import upsert_message_from_update
 from derp.common.tg import decompose_update
-from derp.common.update_context import UpdateContext, update_ctx
 from derp.db import DatabaseManager, upsert_chat, upsert_user
+from derp.observability import report_exception
 
 
 class DatabaseLoggerMiddleware(BaseMiddleware):
@@ -79,34 +78,14 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
                     is_forum=sender_chat.is_forum or False,
                 )
 
-        # Expose correlation context for downstream (e.g., API session middleware)
-        token = update_ctx.set(
-            UpdateContext(
-                update_id=event.update_id,
-                chat_id=chat and chat.id,
-                user_id=user and user.id,
-                thread_id=event.message and event.message.message_thread_id,
-            )
-        )
-
         # Project inbound message to messages table BEFORE handler for context reads
         try:
             await upsert_message_from_update(self.db, update=event, direction="in")
         except Exception as exc:
-            logfire.warning("persist_inbound_failed", _exc_info=exc)
+            report_exception(
+                "persist_inbound_failed",
+                exception=exc,
+                level="warning",
+            )
 
-        # Execute the handler with Logfire baggage for correlation
-        try:
-            baggage: dict[str, str] = {"update_id": str(event.update_id)}
-            if chat and chat.id is not None:
-                baggage["chat_id"] = str(chat.id)
-            if user and user.id is not None:
-                baggage["user_id"] = str(user.id)
-
-            with logfire.set_baggage(**baggage):
-                response = await handler(event, data)
-        finally:
-            # Clear context to avoid leaks
-            update_ctx.reset(token)
-
-        return response
+        return await handler(event, data)

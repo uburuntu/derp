@@ -26,6 +26,7 @@ from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.llm import ModelTier, create_inline_agent
+from derp.observability import report_exception
 
 router = Router(name="inline")
 
@@ -167,7 +168,7 @@ async def chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bot) -> N
                 ),
             )
         else:
-            logfire.exception("inline_model_http_error", status_code=exc.status_code)
+            report_exception("inline_model_http_error", status_code=exc.status_code)
             await sender.edit_inline(
                 chosen_result.inline_message_id,
                 _("😅 Something went wrong. I couldn't process that."),
@@ -182,7 +183,7 @@ async def chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bot) -> N
             ),
         )
     except Exception:
-        logfire.exception("inline_handler_failed")
+        report_exception("inline_handler_failed")
         await sender.edit_inline(
             chosen_result.inline_message_id,
             _("😅 Something went wrong. I couldn't process that."),

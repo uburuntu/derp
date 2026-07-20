@@ -21,6 +21,7 @@ from derp.db import get_db_manager
 from derp.filters.meta import MetaCommand, MetaInfo
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.observability import report_exception
 from derp.tools.veo_video import VEO_31_FAST, VEO_31_STANDARD, generate_and_send_video
 
 router = Router(name="video")
@@ -107,7 +108,7 @@ async def handle_video(
         )
         return message
     except Exception:
-        logfire.exception("video_command_failed")
+        report_exception("video_command_failed")
         return await message.reply(
             _("😅 Something went wrong while generating the video. Try again later.")
         )

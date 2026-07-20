@@ -15,6 +15,7 @@ from derp.common.extractor import Extractor
 from derp.common.sender import MessageSender
 from derp.llm.agents import create_image_agent
 from derp.llm.deps import AgentDeps
+from derp.observability import report_exception
 from derp.tools.wrapper import credit_aware_tool
 
 
@@ -71,7 +72,7 @@ async def generate_image(
             # Model returned text instead of image (refusal or error)
             logfire.warning(
                 "image_generation_text_response",
-                response=output[:200],
+                response_chars=len(output),
                 chat_id=deps.chat_id,
             )
             return f"I couldn't generate that image: {output}"
@@ -84,7 +85,7 @@ async def generate_image(
             return "Something unexpected happened during image generation."
 
     except Exception as exc:
-        logfire.exception("image_generation_failed", chat_id=deps.chat_id)
+        report_exception("image_generation_failed", chat_id=deps.chat_id)
         return f"Image generation failed: {exc!s}"
 
 
@@ -156,7 +157,7 @@ async def edit_image(
         elif isinstance(output, str):
             logfire.warning(
                 "image_edit_text_response",
-                response=output[:200],
+                response_chars=len(output),
                 chat_id=deps.chat_id,
             )
             return f"I couldn't edit that image: {output}"
@@ -169,5 +170,5 @@ async def edit_image(
             return "Something unexpected happened during image editing."
 
     except Exception as exc:
-        logfire.exception("image_edit_failed", chat_id=deps.chat_id)
+        report_exception("image_edit_failed", chat_id=deps.chat_id)
         return f"Image editing failed: {exc!s}"

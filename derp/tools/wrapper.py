@@ -14,6 +14,7 @@ import logfire
 from pydantic_ai import RunContext
 
 from derp.credits.service import CreditService, get_placeholder_message
+from derp.observability import report_exception
 
 if TYPE_CHECKING:
     from derp.llm.deps import AgentDeps
@@ -85,16 +86,6 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
                         tool_name, result.reject_reason or ""
                     )
 
-                # Log access granted with tool call parameters
-                # Serialize kwargs for logging (exclude large binary data)
-                loggable_kwargs = {
-                    k: (
-                        f"<{type(v).__name__}:{len(v)} bytes>"
-                        if isinstance(v, bytes)
-                        else v
-                    )
-                    for k, v in kwargs.items()
-                }
                 logfire.info(
                     "tool_invoked",
                     tool=tool_name,
@@ -102,18 +93,11 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
                     credits_to_deduct=result.credits_to_deduct,
                     user_id=deps.user_id,
                     chat_id=deps.chat_id,
-                    args=loggable_kwargs,
                 )
 
                 # Execute tool
                 try:
-                    with logfire.span(
-                        f"tool.{tool_name}",
-                        tool=tool_name,
-                        source=result.source,
-                        model=result.model_id,
-                    ):
-                        output = await func(ctx, *args, **kwargs)
+                    output = await func(ctx, *args, **kwargs)
 
                     # Deduct credits on success
                     # Use message_id as part of idempotency key
@@ -136,7 +120,7 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
 
                 except Exception as e:
                     # Don't deduct on failure
-                    logfire.exception("tool_execution_failed", tool=tool_name)
+                    report_exception("tool_execution_failed", tool=tool_name)
                     return f"[TOOL_ERROR: {tool_name} failed - {e}]"
 
         return wrapper  # type: ignore[return-value]

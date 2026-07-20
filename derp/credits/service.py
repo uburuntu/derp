@@ -31,6 +31,7 @@ from derp.db.credits import (
     get_transaction_by_idempotency_key,
     increment_daily_usage,
 )
+from derp.observability import telemetry_fingerprint
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -307,7 +308,7 @@ class CreditService:
         if existing:
             logfire.info(
                 "purchase_skipped_duplicate",
-                telegram_charge_id=telegram_charge_id,
+                charge_fingerprint=telemetry_fingerprint(telegram_charge_id),
             )
             # Return the balance from the existing transaction
             return existing.balance_after
@@ -370,14 +371,15 @@ class CreditService:
         )
         if not original:
             logfire.warn(
-                "refund_failed_not_found", telegram_charge_id=telegram_charge_id
+                "refund_failed_not_found",
+                charge_fingerprint=telemetry_fingerprint(telegram_charge_id),
             )
             return False
 
         if original.type != "purchase":
             logfire.warn(
                 "refund_failed_not_purchase",
-                telegram_charge_id=telegram_charge_id,
+                charge_fingerprint=telemetry_fingerprint(telegram_charge_id),
                 type=original.type,
             )
             return False
@@ -389,7 +391,8 @@ class CreditService:
         )
         if existing_refund:
             logfire.info(
-                "refund_already_processed", telegram_charge_id=telegram_charge_id
+                "refund_already_processed",
+                charge_fingerprint=telemetry_fingerprint(telegram_charge_id),
             )
             return True
 
@@ -415,7 +418,7 @@ class CreditService:
 
         logfire.info(
             "refund_processed",
-            telegram_charge_id=telegram_charge_id,
+            charge_fingerprint=telemetry_fingerprint(telegram_charge_id),
             amount=original.amount,
         )
         return True

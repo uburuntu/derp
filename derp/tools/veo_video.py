@@ -110,7 +110,7 @@ async def generate_and_send_video(
     veo_model = _pick_veo_model(quality=quality, model=model)
 
     # Use paid key for Veo (paid tier feature)
-    client = genai.Client(api_key=settings.google_api_paid_key)
+    client = genai.Client(api_key=settings.google_api_paid_key.get_secret_value())
 
     # Extract reference image from message/reply, with optional profile photo fallback
     photo = await Extractor.photo(deps.message, with_profile_photo=with_profile_photo)

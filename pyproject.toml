@@ -12,7 +12,8 @@ dependencies = [
     "ddgs>=9.14.4",
     "google-genai>=2.12.1,<3",
     "httpx>=0.28.1",
-    "logfire[aiohttp,httpx,system-metrics]>=4.38.0,<5",
+    "logfire[aiohttp,google-genai,httpx,system-metrics]>=4.38.0,<5",
+    "opentelemetry-api>=1.43,<1.44",
     "pydantic>=2.13.4,<3",
     "pydantic-ai>=2.13.0,<3",
     "pydantic-settings>=2.14.2",
@@ -38,7 +39,7 @@ extend-exclude = [
     "migrations",  # Alembic migrations
 ]
 
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 # Extend Ruff's default rules (E4, E7, E9, F) with additional quality rules

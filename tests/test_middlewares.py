@@ -266,7 +266,7 @@ class TestDatabaseModelMiddleware:
             "derp.middlewares.db_models.get_chat_settings",
             new=AsyncMock(side_effect=Exception("Database error")),
         ):
-            with patch("derp.middlewares.db_models.logfire.exception") as mock_logfire:
+            with patch("derp.middlewares.db_models.report_exception") as mock_logfire:
                 handler = AsyncMock()
                 event = MagicMock()
                 data = {EVENT_CHAT_KEY: chat}

@@ -44,12 +44,13 @@ from derp.llm import (
 )
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.observability import report_exception
 from derp.tools import create_chat_toolset
 
 router = Router(name="chat")
 
 
-@logfire.instrument("extract_media")
+@logfire.instrument("extract_media", extract_args=False)
 async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
     """Extract supported media from message for agent processing.
 
@@ -73,7 +74,7 @@ async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
                 size=len(image_data),
             )
         except Exception:
-            logfire.exception("photo_download_failed")
+            report_exception("photo_download_failed")
 
     # Extract video (includes video stickers, animations, video notes)
     if video := await Extractor.video(message):
@@ -91,7 +92,7 @@ async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
                 size=len(video_data),
             )
         except Exception:
-            logfire.exception("video_download_failed")
+            report_exception("video_download_failed")
 
     # Extract audio (includes audio files and voice messages)
     if audio := await Extractor.audio(message):
@@ -109,7 +110,7 @@ async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
                 size=len(audio_data),
             )
         except Exception:
-            logfire.exception("audio_download_failed")
+            report_exception("audio_download_failed")
 
     # Extract document (PDF only for now)
     if (
@@ -129,12 +130,12 @@ async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
                 size=len(document_data),
             )
         except Exception:
-            logfire.exception("document_download_failed")
+            report_exception("document_download_failed")
 
     return media_parts
 
 
-@logfire.instrument("build_context")
+@logfire.instrument("build_context", extract_args=False)
 async def build_context_prompt(
     message: Message,
     db: DatabaseManager,
@@ -353,22 +354,22 @@ class ChatAgentHandler(MessageHandler):
                         "and try again."
                     )
                 )
-            logfire.exception("chat_model_http_error", status_code=exc.status_code)
+            report_exception("chat_model_http_error", status_code=exc.status_code)
             return await self.event.reply(
                 _("😅 Something went wrong. I couldn't process that message.")
             )
         except UsageLimitExceeded:
-            logfire.warning("agent_usage_limit_exceeded", _exc_info=True)
+            report_exception("agent_usage_limit_exceeded", level="warning")
             return await self.event.reply(
                 _("⚠️ Too many tool calls. Please try a simpler request.")
             )
         except UnexpectedModelBehavior:
-            logfire.warning("agent_unexpected_behavior", _exc_info=True)
+            report_exception("agent_unexpected_behavior", level="warning")
             return await self.event.reply(
                 _("😅 Something went wrong. I couldn't process that message.")
             )
         except Exception:
-            logfire.exception("chat_agent_failed")
+            report_exception("chat_agent_failed")
             return await self.event.reply(
                 _("😅 Something went wrong. I couldn't process that message.")
             )

@@ -12,6 +12,7 @@ from pydantic_ai import RunContext
 
 from derp.db import update_chat_memory as db_update_chat_memory
 from derp.llm.deps import AgentDeps
+from derp.observability import report_exception
 from derp.tools.wrapper import credit_aware_tool
 
 
@@ -61,5 +62,5 @@ async def update_chat_memory(ctx: RunContext[AgentDeps], full_memory: str) -> st
         return f"Memory updated successfully. New memory length: {len(full_memory)} characters."
 
     except Exception:
-        logfire.exception("chat_memory_update_failed", chat_id=ctx.deps.chat_id)
+        report_exception("chat_memory_update_failed", chat_id=ctx.deps.chat_id)
         return "Failed to update memory. Please try again."

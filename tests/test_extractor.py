@@ -4,7 +4,12 @@ The Extractor class handles extracting various media types (photos, videos, audi
 documents) and text from Telegram messages, with support for reply policies.
 """
 
+import json
+from unittest.mock import AsyncMock, patch
+
+import httpx
 import pytest
+from logfire.testing import CaptureLogfire
 
 from derp.common.extractor import (
     ExtractedAudio,
@@ -35,6 +40,43 @@ class TestExtractorPhoto:
         assert result.file_id == "large_id"
         assert result.width == 1280
         assert result.height == 960
+
+    @pytest.mark.asyncio
+    async def test_download_redacts_sensitive_url_from_exception(
+        self,
+        make_message,
+        make_photo,
+        capfire: CaptureLogfire,
+    ) -> None:
+        capfire.exporter.clear()
+        message = make_message()
+        media = ExtractedPhoto(message=message, media=make_photo())
+        sensitive_url = (
+            "https://api.telegram.org/file/bot123456789:"
+            "private-token-value-sentinel/photos/file.jpg"
+        )
+        request = httpx.Request("GET", sensitive_url)
+        response = httpx.Response(500, request=request)
+        error = httpx.HTTPStatusError(
+            f"Server error for url '{sensitive_url}'",
+            request=request,
+            response=response,
+        )
+
+        with (
+            patch(
+                "derp.common.extractor.create_sensitive_url_from_file_id",
+                new=AsyncMock(return_value=sensitive_url),
+            ),
+            patch.object(httpx.AsyncClient, "get", new=AsyncMock(side_effect=error)),
+            pytest.raises(RuntimeError, match="Failed to download media"),
+        ):
+            await media.download()
+
+        spans = capfire.exporter.exported_spans_as_dict()
+        assert "private-token-value-sentinel" not in json.dumps(spans)
+        span = next(span for span in spans if span["name"] == "media_download")
+        assert span["attributes"]["error.type"] == "HTTPStatusError"
 
     @pytest.mark.asyncio
     async def test_extract_photo_from_document(self, make_message, make_document):

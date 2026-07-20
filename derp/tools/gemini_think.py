@@ -15,6 +15,7 @@ from pydantic_ai import RunContext
 from derp.llm.agents import create_chat_agent
 from derp.llm.deps import AgentDeps
 from derp.llm.providers import ModelTier
+from derp.observability import report_exception
 from derp.tools.wrapper import credit_aware_tool
 
 # System prompt for deep thinking mode
@@ -78,5 +79,5 @@ async def think_deep(
         return result.output
 
     except Exception as exc:
-        logfire.exception("deep_thinking_failed", chat_id=deps.chat_id)
+        report_exception("deep_thinking_failed", chat_id=deps.chat_id)
         return f"Deep thinking failed: {exc!s}"

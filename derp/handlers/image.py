@@ -24,6 +24,7 @@ from derp.filters.meta import MetaCommand, MetaInfo
 from derp.llm import create_image_agent
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.observability import report_exception
 
 router = Router(name="image")
 
@@ -133,7 +134,7 @@ async def handle_imagine(
                     "and try again."
                 )
             )
-        logfire.exception("imagine_model_http_error", status_code=exc.status_code)
+        report_exception("imagine_model_http_error", status_code=exc.status_code)
         return await message.reply(
             _("😅 Something went wrong while generating the image. Try again later.")
         )
@@ -146,7 +147,7 @@ async def handle_imagine(
             )
         )
     except Exception:
-        logfire.exception("imagine_failed")
+        report_exception("imagine_failed")
         return await message.reply(
             _("😅 Something went wrong while generating the image. Try again later.")
         )
@@ -268,7 +269,7 @@ async def handle_edit(
                     "and try again."
                 )
             )
-        logfire.exception("edit_model_http_error", status_code=exc.status_code)
+        report_exception("edit_model_http_error", status_code=exc.status_code)
         return await message.reply(
             _("😅 Something went wrong while editing the image. Try again later.")
         )
@@ -281,7 +282,7 @@ async def handle_edit(
             )
         )
     except Exception:
-        logfire.exception("edit_failed")
+        report_exception("edit_failed")
         return await message.reply(
             _("😅 Something went wrong while editing the image. Try again later.")
         )

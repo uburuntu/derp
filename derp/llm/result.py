@@ -14,6 +14,7 @@ from aiogram.utils.i18n import gettext as _
 from pydantic_ai import AgentRunResult, BinaryImage
 
 from derp.common.sender import MessageSender
+from derp.observability import report_exception
 
 
 @dataclass
@@ -104,7 +105,7 @@ class AgentResult:
                 logfire.info("images_sent", count=len(self.images))
             return result if isinstance(result, Message) else result[-1]
         except Exception:
-            logfire.warning("send_content_failed", _exc_info=True)
+            report_exception("send_content_failed", level="warning")
             # Fallback: try text only if we had images
             if self.images and text_response:
                 return await sender.reply(text_response)

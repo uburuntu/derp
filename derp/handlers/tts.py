@@ -20,6 +20,7 @@ from derp.filters.meta import MetaCommand, MetaInfo
 from derp.llm.deps import AgentDeps
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.observability import report_exception
 from derp.tools.gemini_tts import TTS_MODEL, generate_and_send_tts
 
 router = Router(name="tts")
@@ -81,7 +82,7 @@ async def handle_tts(
         )
         return message
     except Exception:
-        logfire.exception("tts_command_failed")
+        report_exception("tts_command_failed")
         return await message.reply(
             _(
                 "😅 Something went wrong while generating the voice message. Try again later."

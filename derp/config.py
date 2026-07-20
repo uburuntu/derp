@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Docs: https://docs.pydantic.dev/2.8/concepts/pydantic_settings/
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     environment: Literal["dev", "prod"]
 
     # Token got from https://t.me/BotFather
-    telegram_bot_token: str
+    telegram_bot_token: SecretStr
     bot_username: str = "DerpRobot"
 
     # PostgreSQL database connection string
@@ -24,10 +24,11 @@ class Settings(BaseSettings):
     polling_concurrency: int = Field(default=10, ge=1)
 
     # Google API key used by all configured models
-    google_api_paid_key: str
+    google_api_paid_key: SecretStr
 
     # Logfire token
-    logfire_token: str
+    logfire_token: SecretStr
+    logfire_capture_ai_content: bool = False
 
     # --- Non essentials ---
 
@@ -48,7 +49,7 @@ class Settings(BaseSettings):
 
     @property
     def bot_id(self) -> int:
-        return int(self.telegram_bot_token.split(":")[0])
+        return int(self.telegram_bot_token.get_secret_value().split(":")[0])
 
 
 settings = Settings()

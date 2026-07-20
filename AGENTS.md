@@ -82,28 +82,28 @@ logfire.info("checkout", cart_id=cart_id, total=total.amount)
 
 - **Never log error then raise:** Let exceptions propagate; the final handler logs.
 - **Warning for recoverable, then fallback:** Log warning, then use fallback value.
-- **`logfire.exception()` only at boundaries:** Use in top-level handlers where you catch-all and reply with a friendly message.
-- **Include traceback with `_exc_info=True`:** For `.warning()` and `.error()` inside `except` blocks, add `_exc_info=True` to capture the traceback. `.exception()` does this automatically.
+- **Privacy-safe exception reports only at boundaries:** Use `report_exception()` in top-level handlers that recover and reply with a friendly message. It preserves safe stack locations while redacting exception text.
+- **Never use raw exception capture:** `logfire.exception()` and `_exc_info` export exception messages and stack traces outside normal scrubbing. Let exceptions propagate or use `report_exception(..., level="warning" | "error")` when recovering.
 - **Include context in logs:** Always add identifiers as structured attributes for traceability.
 - **Fail fast internally, degrade gracefully externally:** Raise for programmer errors; recover for environmental failures.
 
 ```python
 # BAD: double-logging
 except SomeError as exc:
-    logfire.exception("operation_failed")  # logged here
+    report_exception("operation_failed", exception=exc)  # logged here
     raise  # ...and logged again by caller
 
 # GOOD: warning + fallback
 except SomeError as exc:
-    logfire.warning("operation_failed_fallback")
+    report_exception("operation_failed_fallback", exception=exc, level="warning")
     return fallback_value
 
 # GOOD: let it propagate, log at boundary
 async def handler(...):
     try:
         await do_work()
-    except Exception:
-        logfire.exception("handler_failed")  # only logged here
+    except Exception as exc:
+        report_exception("handler_failed", exception=exc)  # only logged here
         await message.reply("Something went wrong")
 ```
 
@@ -294,7 +294,7 @@ derp/credits/
 
 ## Observability & Resilience
 
-- **Logging/Tracing:** `logfire` is configured with service name and environment. In `dev`, instruments `httpx`. Also instruments system metrics, Pydantic failures, and Google GenAI calls. A `LogfireLoggingHandler` bridges stdlib logging.
+- **Logging/Tracing:** `derp/observability.py` owns Logfire configuration, scrubbing, integrations, stdlib logging, and shutdown. `derp/application.py` owns the bot/database runtime. Every update gets one content-free `telegram.update` consumer span.
 - **Backpressure/Throttling:** Polling has a configurable global concurrency limit. `ThrottleUsersMiddleware` is available for per-user exclusion but is not enabled.
 - **Error Handling:** Handlers catch and log exceptions, replying with friendly fallbacks; image pipelines degrade to text if no images are returned.
 
@@ -306,12 +306,14 @@ derp/credits/
 - Use `@logfire.instrument()` for standalone functions that warrant tracing; prefer explicit `with logfire.span(...)` in async contexts.
 
 **Auto-instrumentation:**
-- Pydantic AI instrumentation is configured through `Agent.instrument_all(...)`;
-  do not add duplicate manual provider-generation spans.
+- Configure Pydantic AI through the configured `Logfire.instrument_pydantic_ai(...)` instance so it uses the same tracer and meter providers. Content-free Google GenAI SDK child spans are intentional for direct and provider calls; do not add manual provider-generation spans.
 - Run-level token usage is captured under `gen_ai.aggregated_usage.*`; provider
   spans may expose more specific `gen_ai.usage.*` attributes. Avoid duplicate
   manual token tracking.
 - Metrics are aggregated within spans via `MetricsOptions(collect_in_spans=True)`.
+- Direct Google SDK content and completion hooks are always disabled. The explicit local-dev opt-in enables only Pydantic AI text content and may never enable production or binary capture.
+- The global exception callback must redact exception messages, stack source text, and status descriptions for auto-instrumented spans. Recovering boundaries use `report_exception()`; never bypass either layer.
+- Do not globally instrument HTTPX: Telegram file URLs contain the bot token. Instrument only owned safe clients with headers and bodies disabled, or use explicit semantic spans.
 
 **Structured attributes:**
 - Use OpenTelemetry semantic conventions: `gen_ai.*`, `http.*`, `db.*`.
@@ -328,17 +330,18 @@ derp/credits/
 
 **Anti-patterns:**
 - Avoid logging inside tight loops.
-- Don't log full message content at info level (use debug or omit).
+- Never log message, prompt, query, callback, payment payload, tool arguments, or provider response content at any level; record lengths, types, identifiers, and outcomes instead.
 - Don't create spans for synchronous, fast operations.
 - Never log secrets, tokens, or API keys.
 - Don't duplicate what auto-instrumentation already captures.
+- Don't propagate Telegram identifiers through OpenTelemetry baggage. Local correlation belongs in the update root span and `UpdateContext`.
 
 ## Telegram/Aiogram Guidelines
 
 - **Aiogram vs SQLAlchemy types:** aiogram `User`/`Chat` objects have `.id` for Telegram ID. SQLAlchemy `UserModel`/`ChatModel` have `.telegram_id` for Telegram ID and `.id` for database UUID. Middlewares inject both: `user`/`chat` (aiogram) and `user_model`/`chat_model` (SQLAlchemy). Pass SQLAlchemy models to `CreditService` and DB queries.
 - Direct fields: aiogram types are Pydantic models; access fields directly (they exist and may be `None`), avoid `getattr(..., "field", None)` for defined attributes.
 - Short-circuit idioms: prefer concise patterns for optionals like `user and user.id` and `user and user.username or ""`.
-- Logging: instrument decision points with `logfire` and include identifiers (chat_id, user_id, payload) for traceability.
+- Logging: instrument decision points with `logfire` and include safe identifiers and outcomes; never include Telegram or payment payload content.
 - Resilience: wrap network sends in try/except, degrade gracefully (e.g., fall back from media to text), and ensure auxiliary failures don't impact the core user flow.
 - Comments: keep comments purposeful (document intent/invariants); avoid restating obvious behavior that the code already conveys.
 
@@ -362,7 +365,7 @@ source for repository-specific changes.
 
 - **Add a handler:**
   - Create `derp/handlers/<name>.py` with a `Router` and handlers.
-  - Import and add the router in `derp/__main__.py` via `dp.include_routers(...)` in the right order.
+  - Import and add the router in `derp/application.py` via `dispatcher.include_routers(...)` in the right order.
 - **Add a middleware:** Implement `BaseMiddleware` (or `UserContextMiddleware`) in `derp/middlewares/` and register as outer or inner depending on concern.
 - **Add a filter:** Place in `derp/filters/` and use in router decorators.
 - **Add a database migration:** Run `make db-revision MSG="description"` (**never create migration files manually**).

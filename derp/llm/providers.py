@@ -63,7 +63,7 @@ def create_model(tier: ModelTier = ModelTier.STANDARD) -> Model:
 
     # Use paid API key for all tiers to avoid free tier rate limits.
     # The CHEAP tier still uses a cheaper model for cost efficiency.
-    provider = GoogleProvider(api_key=settings.google_api_paid_key)
+    provider = GoogleProvider(api_key=settings.google_api_paid_key.get_secret_value())
 
     return GoogleModel(model_name, provider=provider)
 
@@ -77,7 +77,7 @@ def create_image_model() -> Model:
     model_name = TIER_MODELS[ModelTier.IMAGE]
 
     # Image generation uses the paid key for higher limits
-    provider = GoogleProvider(api_key=settings.google_api_paid_key)
+    provider = GoogleProvider(api_key=settings.google_api_paid_key.get_secret_value())
 
     return GoogleModel(model_name, provider=provider)
 

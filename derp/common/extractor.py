@@ -84,12 +84,17 @@ class ExtractedMedia(BaseModel):
                 )
                 async with httpx.AsyncClient() as client:
                     response = await client.get(download_url)
-                    response.raise_for_status()
+                    if response.is_error:
+                        span.set_attribute(
+                            "http.response.status_code", response.status_code
+                        )
+                        raise RuntimeError("Failed to download media")
                     content = response.content
                     span.set_attribute("media.downloaded_bytes", len(content))
                     return content
-            except Exception as e:
-                raise RuntimeError("Failed to download media") from e
+            except Exception as exc:
+                span.set_attribute("error.type", type(exc).__name__)
+                raise RuntimeError("Failed to download media") from None
 
 
 class ExtractedPhoto(ExtractedMedia):
@@ -295,7 +300,7 @@ class Extractor:
         cls,
         message: Message,
         extractor_func,
-        reply_policy: "Extractor.ReplyPolicy" = None,
+        reply_policy: Extractor.ReplyPolicy = None,
     ):
         """Extract content using the specified reply policy."""
 
@@ -345,7 +350,7 @@ class Extractor:
         cls,
         message: Message,
         with_profile_photo: bool = False,
-        reply_policy: "Extractor.ReplyPolicy" = None,
+        reply_policy: Extractor.ReplyPolicy = None,
     ) -> ExtractedPhoto | None:
         """Extract photo content from a message, with reply and profile photo fallbacks.
 
@@ -397,7 +402,7 @@ class Extractor:
 
     @classmethod
     async def video(
-        cls, message: Message, reply_policy: "Extractor.ReplyPolicy" = None
+        cls, message: Message, reply_policy: Extractor.ReplyPolicy = None
     ) -> ExtractedVideo | None:
         """Extract video content from a message, with optional reply fallback.
 
@@ -430,7 +435,7 @@ class Extractor:
 
     @classmethod
     async def audio(
-        cls, message: Message, reply_policy: "Extractor.ReplyPolicy" = None
+        cls, message: Message, reply_policy: Extractor.ReplyPolicy = None
     ) -> ExtractedAudio | None:
         """Extract audio content from a message, with optional reply fallback.
 
@@ -460,7 +465,7 @@ class Extractor:
 
     @classmethod
     async def document(
-        cls, message: Message, reply_policy: "Extractor.ReplyPolicy" = None
+        cls, message: Message, reply_policy: Extractor.ReplyPolicy = None
     ) -> ExtractedDocument | None:
         """Extract any document attachment from a message, with optional reply fallback.
 
@@ -489,7 +494,7 @@ class Extractor:
 
     @classmethod
     async def text(
-        cls, message: Message, reply_policy: "Extractor.ReplyPolicy" = None
+        cls, message: Message, reply_policy: Extractor.ReplyPolicy = None
     ) -> ExtractedText | None:
         """Extract text content from a message, with optional reply fallback.
 
@@ -518,7 +523,7 @@ class Extractor:
 
     @classmethod
     async def all_media(
-        cls, message: Message, reply_policy: "Extractor.ReplyPolicy" = None
+        cls, message: Message, reply_policy: Extractor.ReplyPolicy = None
     ) -> tuple[
         ExtractedPhoto | None,
         ExtractedVideo | None,

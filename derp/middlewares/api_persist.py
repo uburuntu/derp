@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-import logfire
 from aiogram import Bot
 from aiogram.client.session.middlewares.base import BaseRequestMiddleware
 from aiogram.methods import TelegramMethod
@@ -19,6 +18,7 @@ from aiogram.types import Message
 from derp.common.message_log import mark_deleted, upsert_message_from_message
 from derp.common.update_context import update_ctx
 from derp.db import DatabaseManager
+from derp.observability import report_exception
 
 
 class PersistBotActionsMiddleware(BaseRequestMiddleware):
@@ -73,6 +73,6 @@ class PersistBotActionsMiddleware(BaseRequestMiddleware):
                 )
         except Exception:
             # Never break outbound calls due to persistence issues
-            logfire.exception("persist_outbound_failed")
+            report_exception("persist_outbound_failed")
 
         return result

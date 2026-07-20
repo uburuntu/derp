@@ -32,6 +32,7 @@ from derp.credits import CreditService, ModelTier
 from derp.db.credits import get_balances
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.observability import report_exception, telemetry_fingerprint
 
 router = Router(name="debug")
 
@@ -185,7 +186,7 @@ async def handle_debug_buy_callback(
         )
         await callback.answer()
     except Exception:
-        logfire.exception("debug_invoice_failed", pack_id=pack_id)
+        report_exception("debug_invoice_failed", pack_id=pack_id)
         await callback.answer("Failed to create invoice", show_alert=True)
 
 
@@ -194,7 +195,6 @@ async def handle_debug_pre_checkout(pre_checkout: PreCheckoutQuery) -> None:
     """Approve debug payment pre-checkout."""
     logfire.info(
         "debug_pre_checkout_ok",
-        payload=pre_checkout.invoice_payload,
         total_amount=pre_checkout.total_amount,
         user_id=pre_checkout.from_user.id,
     )
@@ -221,9 +221,7 @@ async def handle_debug_successful_payment(
     try:
         payload = DebugPayload.model_validate_json(payment.invoice_payload)
     except Exception:
-        logfire.exception(
-            "debug_payload_decode_failed", payload=payment.invoice_payload
-        )
+        report_exception("debug_payload_decode_failed")
         await message.answer("❌ Failed to decode payment payload")
         return
 
@@ -274,11 +272,13 @@ async def handle_debug_successful_payment(
             credits=pack.credits,
             user_id=user_model.telegram_id,
             target_type=payload.target_type,
-            charge_id=payment.telegram_payment_charge_id,
+            charge_fingerprint=telemetry_fingerprint(
+                payment.telegram_payment_charge_id
+            ),
         )
 
     except Exception:
-        logfire.exception("debug_payment_processing_failed")
+        report_exception("debug_payment_processing_failed")
         await sender.send(
             f"❌ Payment processing failed.\n"
             f"Charge ID: `{payment.telegram_payment_charge_id}`",
@@ -336,7 +336,7 @@ async def debug_add_credits(
                 amount=amount,
                 target="chat",
                 chat_id=chat_model.telegram_id,
-                charge_id=fake_charge_id,
+                charge_fingerprint=telemetry_fingerprint(fake_charge_id),
             )
             return await sender.reply(
                 f"✅ Added **{amount}** credits to chat.\n"
@@ -356,7 +356,7 @@ async def debug_add_credits(
                 amount=amount,
                 target="user",
                 user_id=user_model.telegram_id,
-                charge_id=fake_charge_id,
+                charge_fingerprint=telemetry_fingerprint(fake_charge_id),
             )
             return await sender.reply(
                 f"✅ Added **{amount}** credits to your account.\n"
@@ -364,7 +364,7 @@ async def debug_add_credits(
                 f"Charge ID: `{fake_charge_id}`",
             )
     except Exception:
-        logfire.exception("debug_credits_failed")
+        report_exception("debug_credits_failed")
         return await message.reply("❌ Failed to add credits")
 
 
@@ -541,12 +541,18 @@ async def debug_refund(
     success = await credit_service.refund_credits(charge_id)
 
     if success:
-        logfire.info("debug_refund_success", charge_id=charge_id)
+        logfire.info(
+            "debug_refund_success",
+            charge_fingerprint=telemetry_fingerprint(charge_id),
+        )
         return await sender.reply(
             f"✅ Refund processed for `{charge_id}`",
         )
     else:
-        logfire.warn("debug_refund_failed", charge_id=charge_id)
+        logfire.warn(
+            "debug_refund_failed",
+            charge_fingerprint=telemetry_fingerprint(charge_id),
+        )
         return await sender.reply(
             f"❌ Refund failed for `{charge_id}`\n"
             f"Transaction not found or already refunded.",

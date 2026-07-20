@@ -694,6 +694,27 @@ persisted epochs until the data justifies them.
 - Keep instrumentation v5 explicit and exclude binary and message content from
   production telemetry.
 
+### Logfire and OpenTelemetry
+
+- `derp/observability.py` owns configuration, scrubbing, integrations, logging,
+  and synchronous flush/shutdown. Application imports must not configure global
+  telemetry as a side effect.
+- Trace every inbound update with one constant-name `telegram.update` consumer
+  span. Attach only numeric Telegram identifiers, update type, and handled
+  outcome; content and display names are forbidden.
+- Keep direct Google GenAI content capture and completion hooks disabled. A
+  local-development opt-in may capture Pydantic AI text only; production and
+  binary capture remain disabled.
+- Redact exception messages, source text, and status descriptions through the
+  global Logfire exception callback, including auto-instrumented provider
+  spans. Recovering boundaries use the same privacy-safe reporting helper.
+- Never globally instrument HTTPX because Telegram file URLs contain the bot
+  token. Do not place Telegram identifiers in baggage propagated to external
+  services.
+- Use Logfire's configured tracer and meter providers for integrations, basic
+  system metrics, failure-only Pydantic validation, and explicit shutdown after
+  the application boundary has logged a fatal error.
+
 ### Aiogram
 
 - Use typed `CallbackData` and typed `MiddlewareData`.

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import settings
 from ..filters.meta import MetaCommand, MetaInfo
+from ..observability import report_exception
 
 router = Router(name="donations")
 
@@ -183,7 +184,6 @@ async def handle_pre_checkout(query: PreCheckoutQuery) -> None:
     await query.answer(ok=True)
     logfire.info(
         "pre_checkout_ok",
-        payload=query.invoice_payload,
         currency=query.currency,
         total_amount=query.total_amount,
         user_id=(query.from_user and query.from_user.id),
@@ -201,7 +201,7 @@ async def handle_successful_payment(message: Message, bot: Bot) -> None:
     try:
         payload_model = DonationPayload.model_validate_json(sp.invoice_payload)
     except Exception:
-        logfire.exception("donation_payload_decode_failed", payload=sp.invoice_payload)
+        report_exception("donation_payload_decode_failed")
         payload_model = None
     target_chat_id = (payload_model and payload_model.chat_id) or message.chat.id
     target_thread_id = payload_model and payload_model.thread_id
@@ -241,13 +241,10 @@ async def handle_successful_payment(message: Message, bot: Bot) -> None:
             stars=stars,
             chat_id=target_chat_id,
             thread_id=target_thread_id,
-            payload=sp.invoice_payload,
             user_id=(message.from_user and message.from_user.id),
-            tpcid=sp.telegram_payment_charge_id,
-            ppcid=sp.provider_payment_charge_id,
         )
     except Exception:
-        logfire.exception("donation_ack_photo_failed")
+        report_exception("donation_ack_photo_failed")
         try:
             await bot.send_message(
                 chat_id=target_chat_id,
@@ -261,11 +258,10 @@ async def handle_successful_payment(message: Message, bot: Bot) -> None:
                 stars=stars,
                 chat_id=target_chat_id,
                 thread_id=target_thread_id,
-                payload=sp.invoice_payload,
                 user_id=(message.from_user and message.from_user.id),
             )
         except Exception:
-            logfire.exception("donation_ack_text_failed")
+            report_exception("donation_ack_text_failed")
 
     # Notify admin with full details using plain HTML helpers
     try:
@@ -299,11 +295,10 @@ async def handle_successful_payment(message: Message, bot: Bot) -> None:
         logfire.info(
             "donation_admin_notified",
             stars=stars,
-            payload=payload,
             chat_id=chat.id,
             thread_id=message.message_thread_id,
             user_id=(user and user.id),
         )
     except Exception:
         # Silent: admin notification failures should not affect user flow
-        logfire.exception("donation_admin_notify_failed")
+        report_exception("donation_admin_notify_failed")

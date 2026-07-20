@@ -7,7 +7,6 @@ CreditService instance to handlers that need credit operations.
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import logfire
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 
@@ -38,10 +37,6 @@ class CreditServiceMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        try:
-            async with self.db.session() as session:
-                data["credit_service"] = CreditService(session)
-                return await handler(event, data)
-        except Exception:
-            logfire.exception("credit_service_middleware_error")
-            raise
+        async with self.db.session() as session:
+            data["credit_service"] = CreditService(session)
+            return await handler(event, data)

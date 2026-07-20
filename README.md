@@ -32,6 +32,7 @@ Key environment variables in `.env`:
 | `DATABASE_URL` | PostgreSQL connection string |
 | `GOOGLE_API_PAID_KEY` | Google AI API key |
 | `LOGFIRE_TOKEN` | Logfire observability token |
+| `LOGFIRE_CAPTURE_AI_CONTENT` | Local-only opt-in for Pydantic AI text capture (default `false`) |
 | `ENVIRONMENT` | `dev` or `prod` |
 
 See `env.example` for the complete list.

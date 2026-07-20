@@ -33,7 +33,7 @@ async def generate_and_send_tts(
 ) -> None:
     tts_model = model or TTS_MODEL
 
-    client = genai.Client(api_key=settings.google_api_paid_key)
+    client = genai.Client(api_key=settings.google_api_paid_key.get_secret_value())
     logfire.info("tts_start", model=tts_model, chars=len(text), chat_id=deps.chat_id)
 
     # Use async API

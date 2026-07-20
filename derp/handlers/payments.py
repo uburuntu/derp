@@ -25,6 +25,7 @@ from derp.credits.packs import CREDIT_PACKS
 from derp.credits.ui import build_buy_keyboard
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.observability import report_exception, telemetry_fingerprint
 
 router = Router(name="payments")
 
@@ -94,7 +95,7 @@ async def handle_buy_callback(
         await callback.answer()
 
     except Exception:
-        logfire.exception("invoice_creation_failed", pack_id=pack_id)
+        report_exception("invoice_creation_failed", pack_id=pack_id)
         await callback.answer(
             _("Failed to create invoice. Try again."), show_alert=True
         )
@@ -147,7 +148,7 @@ async def handle_successful_payment(
     parts = payload.split(":")
 
     if len(parts) < 3:
-        logfire.error("invalid_payment_payload", payload=payload)
+        logfire.error("invalid_payment_payload")
         await message.answer(
             _("Payment received but credits could not be added. Contact support.")
         )
@@ -210,13 +211,17 @@ async def handle_successful_payment(
             stars=pack.stars,
             user_id=user_model.telegram_id,
             target_type=target_type,
-            charge_id=payment.telegram_payment_charge_id,
+            charge_fingerprint=telemetry_fingerprint(
+                payment.telegram_payment_charge_id
+            ),
         )
 
     except Exception:
-        logfire.exception(
+        report_exception(
             "payment_processing_failed",
-            charge_id=payment.telegram_payment_charge_id,
+            charge_fingerprint=telemetry_fingerprint(
+                payment.telegram_payment_charge_id
+            ),
         )
         await message.answer(
             _(

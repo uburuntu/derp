@@ -20,6 +20,7 @@ from derp.llm import AgentDeps, create_chat_agent
 from derp.llm.providers import ModelTier
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.observability import report_exception
 
 router = Router(name="think")
 
@@ -132,7 +133,7 @@ async def handle_think(
                     "and try again."
                 )
             )
-        logfire.exception(
+        report_exception(
             "think_model_http_error",
             status_code=exc.status_code,
             user_id=user_model.telegram_id if user_model else None,
@@ -141,7 +142,7 @@ async def handle_think(
             _("😅 Something went wrong during deep thinking. Please try again.")
         )
     except Exception:
-        logfire.exception(
+        report_exception(
             "think_command_failed",
             user_id=user_model.telegram_id if user_model else None,
         )
