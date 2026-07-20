@@ -11,14 +11,16 @@ from types import MappingProxyType
 from typing import Protocol
 
 import logfire
-from sqlalchemy import case, func, select
+from sqlalchemy import case, exists, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.catalog import GoogleModelKey, get_google_model
 from derp.execution import Feature
 from derp.models import (
+    Artifact,
     Chat,
+    DeliveryIntent,
     OperationAllocation,
     OperationQuote,
     PaidOperation,
@@ -369,23 +371,118 @@ class OperationLedger:
                 raise InvalidOperationTransitionError(
                     f"Cannot capture operation in {operation.state}"
                 )
-            wallet, allocations = await self._locked_allocations(session, operation)
-            for allocation, lot in allocations:
-                if lot.reserved_credits < allocation.amount_credits:
-                    raise OperationLedgerError("Reserved lot balance is inconsistent")
-                lot.reserved_credits -= allocation.amount_credits
-                lot.consumed_credits += allocation.amount_credits
-                self._record_lot_event(
-                    session,
-                    wallet,
-                    lot,
-                    operation,
-                    "capture",
-                    allocation.amount_credits,
+            return await self._capture_locked(
+                session,
+                operation,
+                self._aware_now(),
+            )
+
+    async def expire_quote_if_due(
+        self,
+        operation_id: OperationId,
+        *,
+        as_of: datetime,
+    ) -> SettlementResult | None:
+        """Cancel a still-quoted operation only when its immutable quote is due."""
+        self._require_aware(as_of, "as_of")
+        async with self._transactions() as session:
+            operation = await self._locked_operation(session, operation_id)
+            if operation.state != OperationState.QUOTED.value:
+                return None
+            quote = await session.get(OperationQuote, operation.quote_id)
+            if quote is None:
+                raise OperationLedgerError("Operation quote disappeared")
+            if quote.expires_at > as_of:
+                return None
+            operation.state = OperationState.CANCELED.value
+            operation.terminal_reason = ReservationRejection.QUOTE_EXPIRED.value
+            return SettlementResult(operation_id, OperationState.CANCELED, True)
+
+    async def release_stale_reservation(
+        self,
+        operation_id: OperationId,
+        *,
+        stale_before: datetime,
+        reason: str,
+    ) -> SettlementResult | None:
+        """Release only a reservation that is still unclaimed and stale."""
+        self._require_aware(stale_before, "stale_before")
+        if not reason.strip():
+            raise ValueError("release reason must not be blank")
+        now = self._aware_now()
+        async with self._transactions() as session:
+            operation = await self._locked_operation(session, operation_id)
+            if operation.state != OperationState.RESERVED.value:
+                return None
+            if operation.reserved_at is None or operation.reserved_at > stale_before:
+                return None
+            return await self._release_locked(session, operation, reason, now)
+
+    async def release_stale_execution_without_result(
+        self,
+        operation_id: OperationId,
+        *,
+        stale_before: datetime,
+        reason: str,
+    ) -> SettlementResult | None:
+        """Release a stale provider claim only while no durable result exists.
+
+        The operation row lock serializes this check with result persistence. If
+        persistence wins, its artifact prevents release; if release wins, later
+        persistence rejects the terminal operation and cleans its orphaned bytes.
+        """
+        self._require_aware(stale_before, "stale_before")
+        if not reason.strip():
+            raise ValueError("release reason must not be blank")
+        now = self._aware_now()
+        async with self._transactions() as session:
+            operation = await self._locked_operation(session, operation_id)
+            if operation.state != OperationState.EXECUTING.value:
+                return None
+            if (
+                operation.execution_started_at is None
+                or operation.execution_started_at > stale_before
+            ):
+                return None
+            has_artifact = bool(
+                await session.scalar(
+                    select(exists().where(Artifact.operation_id == operation.id))
                 )
-            operation.state = OperationState.CAPTURED.value
-            operation.captured_at = self._aware_now()
-            return SettlementResult(operation_id, OperationState.CAPTURED, True)
+            )
+            if has_artifact:
+                return None
+            return await self._release_locked(session, operation, reason, now)
+
+    async def capture_persisted_result(
+        self,
+        operation_id: OperationId,
+    ) -> SettlementResult | None:
+        """Capture only when an artifact and its delivery intent are committed."""
+        now = self._aware_now()
+        async with self._transactions() as session:
+            operation = await self._locked_operation(session, operation_id)
+            if operation.state not in {
+                OperationState.EXECUTING.value,
+                OperationState.CAPTURED.value,
+            }:
+                return None
+            if operation.wallet_id is None:
+                return None
+            has_result = bool(
+                await session.scalar(
+                    select(
+                        exists().where(
+                            Artifact.operation_id == operation.id,
+                            exists().where(DeliveryIntent.operation_id == operation.id),
+                        )
+                    )
+                )
+            )
+            if not has_result:
+                return None
+            if operation.state == OperationState.CAPTURED.value:
+                return SettlementResult(operation_id, OperationState.CAPTURED, False)
+            return await self._capture_locked(session, operation, now)
 
     async def release(
         self,
@@ -447,6 +544,39 @@ class OperationLedger:
         operation.released_at = now
         operation.terminal_reason = reason
         return SettlementResult(operation_id, OperationState.RELEASED, True)
+
+    async def _capture_locked(
+        self,
+        session: AsyncSession,
+        operation: PaidOperation,
+        now: datetime,
+    ) -> SettlementResult:
+        """Capture a locked reserved operation inside the caller's transaction."""
+        operation_id = OperationId(operation.id)
+        if operation.state not in {
+            OperationState.RESERVED.value,
+            OperationState.EXECUTING.value,
+        }:
+            raise InvalidOperationTransitionError(
+                f"Cannot capture operation in {operation.state}"
+            )
+        wallet, allocations = await self._locked_allocations(session, operation)
+        for allocation, lot in allocations:
+            if lot.reserved_credits < allocation.amount_credits:
+                raise OperationLedgerError("Reserved lot balance is inconsistent")
+            lot.reserved_credits -= allocation.amount_credits
+            lot.consumed_credits += allocation.amount_credits
+            self._record_lot_event(
+                session,
+                wallet,
+                lot,
+                operation,
+                "capture",
+                allocation.amount_credits,
+            )
+        operation.state = OperationState.CAPTURED.value
+        operation.captured_at = now
+        return SettlementResult(operation_id, OperationState.CAPTURED, True)
 
     async def reverse(
         self,
@@ -937,6 +1067,11 @@ class OperationLedger:
     @staticmethod
     def _frozen_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
         return MappingProxyType(deepcopy(dict(value)))
+
+    @staticmethod
+    def _require_aware(value: datetime, name: str) -> None:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{name} must be timezone-aware")
 
     def _aware_now(self) -> datetime:
         now = self._clock()

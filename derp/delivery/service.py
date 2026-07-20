@@ -256,12 +256,13 @@ class DeliveryService:
                     )
             raise
 
-    async def mark_ready(self, operation_id: OperationId) -> None:
+    async def mark_ready(self, operation_id: OperationId) -> bool:
         """Open delivery only after the operation's spend has been captured."""
         async with self._transactions() as session:
             operation, intent = await self._locked_state(session, operation_id)
             if intent.state in {"pending", "delivering", "delivered", "uncertain"}:
-                return
+                operation.delivery_state = intent.state
+                return False
             if intent.state != "not_ready":
                 raise DeliveryStateError(f"Cannot ready delivery in {intent.state}")
             if operation.state != OperationState.CAPTURED.value:
@@ -269,6 +270,21 @@ class DeliveryService:
                     "Delivery cannot become ready before spend capture"
                 )
             intent.state = "pending"
+            operation.delivery_state = DeliveryState.PENDING.value
+            return True
+
+    async def reconcile_ready(self, operation_id: OperationId) -> bool:
+        """Repair a committed result only while it still needs readiness."""
+        async with self._transactions() as session:
+            operation, intent = await self._locked_state(session, operation_id)
+            if (
+                intent.state != DeliveryState.NOT_READY.value
+                or operation.state != OperationState.CAPTURED.value
+            ):
+                return False
+            intent.state = DeliveryState.PENDING.value
+            operation.delivery_state = DeliveryState.PENDING.value
+            return True
 
     async def deliver(
         self,

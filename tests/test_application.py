@@ -74,6 +74,18 @@ class FakeSubscriptionExpiryWorker:
         self.events.append("subscription_expiry_stop")
 
 
+class FakeOperationReconciliationWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("operation_reconciliation_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("operation_reconciliation_stop")
+
+
 @pytest.mark.asyncio
 async def test_runtime_closes_bot_before_database(tmp_path) -> None:
     events: list[str] = []
@@ -97,6 +109,10 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
             "derp.application.SubscriptionExpiryWorker",
             return_value=FakeSubscriptionExpiryWorker(events),
         ),
+        patch(
+            "derp.application.OperationReconciliationWorker",
+            return_value=FakeOperationReconciliationWorker(events),
+        ) as reconciliation_worker,
     ):
         async with open_runtime(settings) as runtime:
             assert runtime.bot is bot
@@ -109,6 +125,8 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
                 runtime.image_operation_coordinator._delivery_service
                 is runtime.delivery_service
             )
+            reconciler = reconciliation_worker.call_args.args[0]
+            assert reconciler._delivery is runtime.delivery_service
             events.append("running")
 
     assert events == [
@@ -116,7 +134,9 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
         "db_connect",
         "retention_start",
         "subscription_expiry_start",
+        "operation_reconciliation_start",
         "running",
+        "operation_reconciliation_stop",
         "subscription_expiry_stop",
         "retention_stop",
         "bot_close",
@@ -136,6 +156,9 @@ async def test_runtime_cleans_up_after_partial_startup() -> None:
         patch("derp.application.init_db_manager", return_value=database),
         patch("derp.application.HistoryRetentionWorker") as retention_worker,
         patch("derp.application.SubscriptionExpiryWorker") as expiry_worker,
+        patch(
+            "derp.application.OperationReconciliationWorker"
+        ) as reconciliation_worker,
         pytest.raises(RuntimeError, match="database unavailable"),
     ):
         async with open_runtime(settings):
@@ -143,6 +166,7 @@ async def test_runtime_cleans_up_after_partial_startup() -> None:
 
     retention_worker.assert_not_called()
     expiry_worker.assert_not_called()
+    reconciliation_worker.assert_not_called()
 
     assert events == [
         "bot_enter",

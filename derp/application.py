@@ -58,7 +58,12 @@ from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
 from derp.middlewares.sender import MessageSenderMiddleware
-from derp.operations import OperationLedger, QuoteEngine
+from derp.operations import (
+    OperationLedger,
+    OperationReconciler,
+    OperationReconciliationWorker,
+    QuoteEngine,
+)
 from derp.tools.authorization import ActorRoleResolver
 
 logger = logging.getLogger(__name__)
@@ -151,6 +156,11 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
         await stack.enter_async_context(HistoryRetentionWorker(db))
         await stack.enter_async_context(
             SubscriptionExpiryWorker(PaymentSettlementService(db.session))
+        )
+        await stack.enter_async_context(
+            OperationReconciliationWorker(
+                OperationReconciler(db.session, delivery_service)
+            )
         )
         yield Runtime(
             bot=bot,
