@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, ParamSpec, TypeVar
 import logfire
 from pydantic_ai import RunContext
 
-from derp.credits.service import CreditService, get_placeholder_message
+from derp.credits.gateway import CreditServiceGateway
+from derp.credits.service import get_placeholder_message
 from derp.execution import execution_plan_scope
 from derp.observability import report_exception
 
@@ -63,72 +64,66 @@ def credit_aware_tool(tool_name: str) -> Callable[[Callable[P, T]], Callable[P, 
                 )
                 return f"[TOOL_ERROR: Missing user or chat context for {tool_name}]"
 
-            # Get or create credit service
-            async with deps.db.session() as session:
-                service = CreditService(session)
+            service = CreditServiceGateway(deps.db.session)
+            result = await service.check_tool_access(
+                deps.user_model,
+                deps.chat_model,
+                tool_name,
+                arguments=kwargs,
+            )
 
-                # Check access
-                result = await service.check_tool_access(
-                    deps.user_model,
-                    deps.chat_model,
-                    tool_name,
-                    arguments=kwargs,
-                )
-
-                if not result.allowed:
-                    logfire.info(
-                        "tool_access_denied",
-                        tool=tool_name,
-                        reason=result.reject_reason,
-                        user_id=deps.user_id,
-                        chat_id=deps.chat_id,
-                    )
-                    return get_placeholder_message(
-                        tool_name, result.reject_reason or ""
-                    )
-
+            if not result.allowed:
                 logfire.info(
-                    "tool_invoked",
+                    "tool_access_denied",
                     tool=tool_name,
-                    feature=result.plan and result.plan.feature.value,
-                    source=result.source,
-                    model_key=result.model and result.model.key.value,
-                    model=result.model and result.model.provider_model_id,
-                    credits_to_deduct=result.credits_to_deduct,
+                    reason=result.reject_reason,
                     user_id=deps.user_id,
                     chat_id=deps.chat_id,
                 )
+                return get_placeholder_message(tool_name, result.reject_reason or "")
 
-                # Execute tool
-                try:
-                    with execution_plan_scope(result.plan):
-                        output = await func(ctx, *args, **kwargs)
+            logfire.info(
+                "tool_invoked",
+                tool=tool_name,
+                feature=result.plan and result.plan.feature.value,
+                source=result.source,
+                model_key=result.model and result.model.key.value,
+                model=result.model and result.model.provider_model_id,
+                credits_to_deduct=result.credits_to_deduct,
+                user_id=deps.user_id,
+                chat_id=deps.chat_id,
+            )
 
-                    # Deduct credits on success
-                    # Use message_id as part of idempotency key
-                    idempotency_key = (
-                        f"{tool_name}:{deps.chat_id}:{deps.message.message_id}"
-                    )
-                    await service.deduct(
-                        result,
-                        deps.user_model,
-                        deps.chat_model,
-                        tool_name,
-                        idempotency_key=idempotency_key,
-                        metadata={
-                            "message_id": deps.message.message_id,
-                            "source": result.source,
-                            "feature": result.plan and result.plan.feature.value,
-                            "model": result.model_id,
-                        },
-                    )
+            try:
+                with execution_plan_scope(result.plan):
+                    output = await func(ctx, *args, **kwargs)
 
-                    return output
+                if not ctx.tool_call_id:
+                    raise RuntimeError("credit-aware tool call has no identity")
+                idempotency_key = (
+                    f"{tool_name}:{deps.chat_id}:{deps.message.message_id}:"
+                    f"{ctx.tool_call_id}"
+                )
+                await service.deduct(
+                    result,
+                    deps.user_model,
+                    deps.chat_model,
+                    tool_name,
+                    idempotency_key=idempotency_key,
+                    metadata={
+                        "message_id": deps.message.message_id,
+                        "source": result.source,
+                        "feature": result.plan and result.plan.feature.value,
+                        "model": result.model_id,
+                    },
+                )
 
-                except Exception as e:
-                    # Don't deduct on failure
-                    report_exception("tool_execution_failed", tool=tool_name)
-                    return f"[TOOL_ERROR: {tool_name} failed - {e}]"
+                return output
+
+            except Exception:
+                # Failed executions are not settled.
+                report_exception("tool_execution_failed", tool=tool_name)
+                return f"[TOOL_ERROR: {tool_name} failed]"
 
         return wrapper  # type: ignore[return-value]
 

@@ -748,6 +748,7 @@ def mock_credit_service_factory(make_credit_check_result):
 
         service = MagicMock()
         service.session = MagicMock()
+        service.get_balances = AsyncMock(return_value=(0, 0))
         service.check_tool_access = AsyncMock(return_value=check_result)
         service.check_model_access = AsyncMock(return_value=check_result)
         service.deduct = AsyncMock()

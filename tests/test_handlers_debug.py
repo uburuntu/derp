@@ -1,6 +1,6 @@
 """Tests for debug handler commands."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -135,17 +135,15 @@ async def test_debug_status(
 
     service = mock_credit_service_factory()
 
-    with patch(
-        "derp.handlers.debug.get_balances", new_callable=AsyncMock
-    ) as mock_balances:
-        mock_balances.return_value = (100, 50)  # chat_credits, user_credits
+    service.get_balances.return_value = (100, 50)
 
-        await debug_status(message, sender, service, user, chat)
+    await debug_status(message, sender, service, user, chat)
 
-        sender.reply.assert_awaited_once()
-        response = _get_text_from_call_args(sender.reply.call_args)
-        assert "Debug Status" in response
-        assert "12345" in response  # user telegram id
+    service.get_balances.assert_awaited_once_with(12345, -100123)
+    sender.reply.assert_awaited_once()
+    response = _get_text_from_call_args(sender.reply.call_args)
+    assert "Debug Status" in response
+    assert "12345" in response  # user telegram id
 
 
 @pytest.mark.asyncio

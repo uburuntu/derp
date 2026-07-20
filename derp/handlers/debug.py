@@ -23,7 +23,6 @@ from derp.credits.purchase_suspension import (
     reject_purchase_command,
     reject_purchase_pre_checkout,
 )
-from derp.db.credits import get_balances
 from derp.execution import Feature, plan_execution
 from derp.history.service import HISTORY_WINDOWS
 from derp.models import Chat as ChatModel
@@ -292,10 +291,10 @@ async def debug_reset_credits(
     if target == "chat" and not chat_model:
         return await message.reply("❌ Not in a chat context")
 
-    # Get current balance first (use credit_service.session for raw query)
     if target == "chat" and chat_model:
-        chat_credits, _ = await get_balances(
-            credit_service.session, user_model.telegram_id, chat_model.telegram_id
+        chat_credits, _ = await credit_service.get_balances(
+            user_model.telegram_id,
+            chat_model.telegram_id,
         )
         if chat_credits > 0:
             fake_charge_id = f"debug-reset-{int(time.time())}"
@@ -316,8 +315,9 @@ async def debug_reset_credits(
             f"✅ Chat credits reset.\nPrevious: **{chat_credits}** → Now: **0**",
         )
     else:
-        _, user_credits = await get_balances(
-            credit_service.session, user_model.telegram_id, None
+        _, user_credits = await credit_service.get_balances(
+            user_model.telegram_id,
+            None,
         )
         if user_credits > 0:
             fake_charge_id = f"debug-reset-{int(time.time())}"
@@ -357,8 +357,9 @@ async def debug_status(
 
     # Get balances
     chat_id = chat_model.telegram_id if chat_model else None
-    chat_credits, user_credits = await get_balances(
-        credit_service.session, user_model.telegram_id, chat_id
+    chat_credits, user_credits = await credit_service.get_balances(
+        user_model.telegram_id,
+        chat_id,
     )
 
     # The shared-chat path requires both database models for balance policy.

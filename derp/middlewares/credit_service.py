@@ -1,8 +1,4 @@
-"""Middleware for injecting CreditService into handlers.
-
-This middleware opens a transactional session and provides a ready-to-use
-CreditService instance to handlers that need credit operations.
-"""
+"""Inject the short-transaction legacy credit compatibility boundary."""
 
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -10,26 +6,15 @@ from typing import Any
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 
-from derp.credits import CreditService
+from derp.credits.gateway import CreditServiceGateway
 from derp.db import DatabaseManager
 
 
 class CreditServiceMiddleware(BaseMiddleware):
-    """Middleware that injects a CreditService into handler data.
+    """Inject a gateway whose individual methods own their transactions."""
 
-    Opens a transactional session for the duration of the handler execution.
-    Commits on success, rolls back on exception.
-
-    Usage in handlers:
-        async def my_handler(
-            message: Message,
-            credit_service: CreditService,
-        ):
-            result = await credit_service.check_tool_access(...)
-    """
-
-    def __init__(self, db: DatabaseManager):
-        self.db = db
+    def __init__(self, db: DatabaseManager) -> None:
+        self._gateway = CreditServiceGateway(db.session)
 
     async def __call__(
         self,
@@ -37,6 +22,5 @@ class CreditServiceMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        async with self.db.session() as session:
-            data["credit_service"] = CreditService(session)
-            return await handler(event, data)
+        data["credit_service"] = self._gateway
+        return await handler(event, data)
