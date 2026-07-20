@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Self
 
@@ -14,12 +15,13 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import ARRAY, Text, cast, delete, func, or_, select, update
+from sqlalchemy import ARRAY, Text, cast, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Select
 
 from derp.history.policy import CONTEXT_NOTICE_VERSION, ChatPolicyFlag
-from derp.models import Chat, Message, User
+from derp.models import Chat, DeferredToolRequest, Message, User
 
 _TOMBSTONE_TEXT = "[message deleted]"
 _TOMBSTONE_HISTORY: dict[str, object] = {
@@ -36,6 +38,75 @@ _TOMBSTONE_CANONICAL: dict[str, object] = {
     "text": _TOMBSTONE_TEXT,
     "attachment_types": [],
 }
+_ACTIVE_DEFERRED_STATUSES = ("pending", "approved")
+
+
+async def _scrub_deferred_requests_for_messages(
+    session: AsyncSession,
+    message_ids: Select[tuple[uuid.UUID]],
+    *,
+    now: datetime,
+) -> int:
+    """Expire approvals whose durable history may contain selected messages."""
+    scopes = (
+        select(Message.chat_id, Message.thread_id)
+        .where(Message.id.in_(message_ids))
+        .distinct()
+        .subquery()
+    )
+    matching_scope = exists(
+        select(1).where(
+            scopes.c.chat_id == DeferredToolRequest.chat_id,
+            scopes.c.thread_id.is_not_distinct_from(DeferredToolRequest.thread_id),
+        )
+    )
+    result = await session.execute(
+        update(DeferredToolRequest)
+        .where(
+            DeferredToolRequest.status.in_(_ACTIVE_DEFERRED_STATUSES),
+            matching_scope,
+        )
+        .values(
+            status="expired",
+            validated_arguments={},
+            original_history=[],
+            decided_at=now,
+            resumed_at=None,
+            updated_at=now,
+        )
+    )
+    return result.rowcount or 0
+
+
+async def _scrub_deferred_requests_for_scope(
+    session: AsyncSession,
+    *,
+    chat_id: uuid.UUID,
+    thread_id: int | None,
+    now: datetime,
+) -> int:
+    scope = (
+        DeferredToolRequest.thread_id.is_(None)
+        if thread_id is None
+        else DeferredToolRequest.thread_id == thread_id
+    )
+    result = await session.execute(
+        update(DeferredToolRequest)
+        .where(
+            DeferredToolRequest.chat_id == chat_id,
+            scope,
+            DeferredToolRequest.status.in_(_ACTIVE_DEFERRED_STATUSES),
+        )
+        .values(
+            status="expired",
+            validated_arguments={},
+            original_history=[],
+            decided_at=now,
+            resumed_at=None,
+            updated_at=now,
+        )
+    )
+    return result.rowcount or 0
 
 
 class _ToolCallRecord(BaseModel):
@@ -131,13 +202,20 @@ async def purge_expired_history(
     chat_telegram_id: int | None = None,
 ) -> int:
     """Hard-delete source data after its disclosed retention deadline."""
-    conditions = [Message.retention_expires_at <= (now or datetime.now(UTC))]
+    timestamp = now or datetime.now(UTC)
+    conditions = [Message.retention_expires_at <= timestamp]
     if chat_telegram_id is not None:
         conditions.append(
             Message.chat_id.in_(
                 select(Chat.id).where(Chat.telegram_id == chat_telegram_id)
             )
         )
+    message_ids = select(Message.id).where(*conditions)
+    await _scrub_deferred_requests_for_messages(
+        session,
+        message_ids,
+        now=timestamp,
+    )
     result = await session.execute(delete(Message).where(*conditions))
     return result.rowcount or 0
 
@@ -178,11 +256,18 @@ async def set_ambient_history(
     chat.updated_at = datetime.now(UTC)
     if enabled:
         return 0
+    ambient_ids = select(Message.id).where(
+        Message.chat_id == chat.id,
+        Message.capture_kind == "ambient",
+    )
+    await _scrub_deferred_requests_for_messages(
+        session,
+        ambient_ids,
+        now=chat.updated_at,
+    )
     deleted = await session.execute(
         delete(Message).where(
-            Message.chat_id.in_(
-                select(Chat.id).where(Chat.telegram_id == chat_telegram_id)
-            ),
+            Message.chat_id == chat.id,
             Message.capture_kind == "ambient",
         )
     )
@@ -280,14 +365,19 @@ async def remove_disqualified_message(
 ) -> bool:
     """Remove a stored projection when an edit no longer qualifies for capture."""
     await lock_chat_history_policy(session, chat_telegram_id=chat_telegram_id)
-    result = await session.execute(
-        delete(Message).where(
-            Message.chat_id.in_(
-                select(Chat.id).where(Chat.telegram_id == chat_telegram_id)
-            ),
-            Message.telegram_message_id == telegram_message_id,
-        )
+    timestamp = datetime.now(UTC)
+    conditions = (
+        Message.chat_id.in_(
+            select(Chat.id).where(Chat.telegram_id == chat_telegram_id)
+        ),
+        Message.telegram_message_id == telegram_message_id,
     )
+    await _scrub_deferred_requests_for_messages(
+        session,
+        select(Message.id).where(*conditions),
+        now=timestamp,
+    )
+    result = await session.execute(delete(Message).where(*conditions))
     return bool(result.rowcount)
 
 
@@ -320,6 +410,11 @@ async def tombstone_user_messages(
     )
     if telegram_message_id is not None:
         owned = owned.where(Message.telegram_message_id == telegram_message_id)
+    await _scrub_deferred_requests_for_messages(
+        session,
+        owned,
+        now=timestamp,
+    )
     result = await session.execute(
         update(Message)
         .where(Message.id.in_(owned))
@@ -357,6 +452,12 @@ async def clear_history_scope(
         Message.thread_id.is_(None)
         if thread_id is None
         else Message.thread_id == thread_id
+    )
+    await _scrub_deferred_requests_for_scope(
+        session,
+        chat_id=chat.id,
+        thread_id=thread_id,
+        now=datetime.now(UTC),
     )
     result = await session.execute(
         delete(Message).where(Message.chat_id == chat.id, scope)

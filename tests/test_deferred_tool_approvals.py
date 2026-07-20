@@ -38,8 +38,9 @@ from derp.approvals import (
     ResumeUnavailableReason,
 )
 from derp.catalog import GoogleModelKey, ImageResolution
+from derp.db.history import clear_history_scope, tombstone_user_messages
 from derp.execution import Feature, plan_execution
-from derp.models import Chat, DeferredToolRequest, User
+from derp.models import Chat, DeferredToolRequest, Message, User
 from derp.operations import (
     ImageGenerateQuoteInput,
     OperationId,
@@ -195,6 +196,29 @@ async def _stored_payload(
         )
         assert request is not None
         return request.validated_arguments, request.original_history
+
+
+async def _store_source_message(
+    env: ApprovalEnvironment,
+    stored: StoredRequest,
+) -> None:
+    snapshot = stored.handle.snapshot
+    async with env.transactions() as session:
+        session.add(
+            Message(
+                chat_id=snapshot.chat_id,
+                user_id=snapshot.requester_id,
+                telegram_message_id=snapshot.message_id,
+                thread_id=snapshot.thread_id,
+                direction="in",
+                role="user",
+                capture_kind="explicit",
+                content_type="text",
+                text="private source message",
+                telegram_date=env.clock(),
+                retention_expires_at=env.clock() + timedelta(days=30),
+            )
+        )
 
 
 async def test_create_is_idempotent_only_for_exact_immutable_state(
@@ -455,3 +479,48 @@ async def test_expiration_sweep_scrubs_payload_without_a_callback(
     assert history == []
     assert sentinel not in str(arguments)
     assert sentinel not in str(history)
+
+
+async def test_history_deletion_expires_and_scrubs_pending_approval(
+    approval_env: ApprovalEnvironment,
+) -> None:
+    sentinel = "deleted-history-sentinel"
+    stored = await _store_request(approval_env, prompt=sentinel)
+    await _store_source_message(approval_env, stored)
+
+    async with approval_env.transactions() as session:
+        removed = await tombstone_user_messages(
+            session,
+            chat_telegram_id=stored.capability.chat_telegram_id,
+            actor_telegram_id=stored.capability.requester_telegram_id,
+            telegram_message_id=stored.handle.snapshot.message_id,
+        )
+
+    assert removed == 1
+    assert await _stored_payload(
+        approval_env,
+        stored.handle.snapshot.request_id,
+    ) == ({}, [])
+    inspected = await approval_env.service.inspect(stored.capability)
+    assert inspected.status is DeferredToolStatus.EXPIRED
+
+
+async def test_scope_clear_scrubs_approval_even_after_source_row_is_gone(
+    approval_env: ApprovalEnvironment,
+) -> None:
+    stored = await _store_request(approval_env, prompt="scope-clear-sentinel")
+
+    async with approval_env.transactions() as session:
+        removed = await clear_history_scope(
+            session,
+            chat_telegram_id=stored.capability.chat_telegram_id,
+            thread_id=stored.capability.thread_id,
+        )
+
+    assert removed == 0
+    assert await _stored_payload(
+        approval_env,
+        stored.handle.snapshot.request_id,
+    ) == ({}, [])
+    inspected = await approval_env.service.inspect(stored.capability)
+    assert inspected.status is DeferredToolStatus.EXPIRED
