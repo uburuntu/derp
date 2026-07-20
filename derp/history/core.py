@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -171,6 +171,41 @@ class LogicalTurn:
             raise ValueError("tool rounds require a final assistant response")
 
 
+def render_user_content(
+    turn: UserTextTurn,
+    *,
+    available_attachments: Collection[AttachmentReference] = (),
+) -> str:
+    """Render one user turn as compact, canonical, explicitly untrusted JSON."""
+    payload = {
+        "attachments": [
+            {
+                "index": index,
+                "media_type": attachment.media_type,
+                "status": (
+                    "available" if attachment in available_attachments else "missing"
+                ),
+            }
+            for index, attachment in enumerate(turn.attachments, start=1)
+        ],
+        "source": {
+            "message_id": turn.source_message_id,
+            "speaker": {
+                "display_name": turn.speaker.display_name,
+                "id": turn.speaker.id,
+            },
+        },
+        "text": turn.text,
+        "type": "untrusted_history_user_message",
+    }
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class TokenEstimator:
     """Deterministic UTF-8 size heuristic used for history window policy."""
@@ -201,7 +236,9 @@ class TokenEstimator:
     def estimate_turn(self, turn: LogicalTurn) -> int:
         """Estimate all model-visible messages in one atomic logical turn."""
         request = turn.request
-        total = self.message_overhead + self._estimate_part(request.text)
+        total = self.message_overhead + self._estimate_part(
+            render_user_content(request)
+        )
         total += len(request.attachments) * (
             self.part_overhead + self.attachment_tokens
         )
@@ -287,9 +324,18 @@ def materialize_history(
             turn.request.attachments,
             hydrated_attachments,
         )
-        request_content: str | list[UserContent] = turn.request.text
+        available_attachments = frozenset(
+            reference
+            for reference in turn.request.attachments
+            if hydrated_attachments is not None and reference in hydrated_attachments
+        )
+        rendered_request = render_user_content(
+            turn.request,
+            available_attachments=available_attachments,
+        )
+        request_content: str | list[UserContent] = rendered_request
         if request_files:
-            request_content = [turn.request.text, *request_files]
+            request_content = [rendered_request, *request_files]
         messages.append(
             ModelRequest(
                 parts=[
@@ -397,5 +443,6 @@ __all__ = [
     "ToolRound",
     "UserTextTurn",
     "materialize_history",
+    "render_user_content",
     "trim_history",
 ]

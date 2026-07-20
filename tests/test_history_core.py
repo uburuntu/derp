@@ -1,5 +1,6 @@
 """Focused tests for the pure conversation history core."""
 
+import json
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 
@@ -26,6 +27,7 @@ from derp.history.core import (
     ToolRound,
     UserTextTurn,
     materialize_history,
+    render_user_content,
     trim_history,
 )
 
@@ -90,6 +92,31 @@ def test_history_dtos_are_frozen_and_reject_ambiguous_source_data() -> None:
         )
 
 
+def test_user_content_renderer_is_canonical_and_marks_missing_media() -> None:
+    attachment = AttachmentReference("photo", "private-file", "stable-file")
+    turn = _user_turn(
+        7,
+        'say "hi"\nnow',
+        speaker=OTHER_USER,
+        attachments=(attachment,),
+    )
+
+    rendered = render_user_content(turn)
+
+    assert rendered == (
+        '{"attachments":[{"index":1,"media_type":"photo","status":"missing"}],'
+        '"source":{"message_id":7,"speaker":{"display_name":"Grace","id":202}},'
+        '"text":"say \\"hi\\"\\nnow","type":"untrusted_history_user_message"}'
+    )
+    assert render_user_content(turn) == rendered
+    assert '"status":"available"' in render_user_content(
+        turn,
+        available_attachments={attachment},
+    )
+    assert "private-file" not in rendered
+    assert "stable-file" not in rendered
+
+
 def test_materializes_ambient_and_tool_turns_as_native_messages() -> None:
     ambient_ada = LogicalTurn(request=_user_turn(1, "First", speaker=USER))
     ambient_grace = LogicalTurn(request=_user_turn(2, "Second", speaker=OTHER_USER))
@@ -123,7 +150,13 @@ def test_materializes_ambient_and_tool_turns_as_native_messages() -> None:
     assert all(isinstance(message, ModelRequest) for message in messages[:3])
     first_prompt = messages[0].parts[0]
     assert isinstance(first_prompt, UserPromptPart)
-    assert first_prompt.content == "First"
+    assert first_prompt.content == render_user_content(ambient_ada.request)
+    first_content = json.loads(first_prompt.content)
+    assert first_content["type"] == "untrusted_history_user_message"
+    assert first_content["source"] == {
+        "message_id": 1,
+        "speaker": {"display_name": "Ada", "id": 101},
+    }
     assert messages[0].metadata == {
         "derp.history": {
             "role": "user",
@@ -135,6 +168,12 @@ def test_materializes_ambient_and_tool_turns_as_native_messages() -> None:
     assert messages[1].metadata["derp.history"]["speaker"] == {  # type: ignore[index]
         "id": 202,
         "display_name": "Grace",
+    }
+    second_prompt = messages[1].parts[0]
+    assert isinstance(second_prompt, UserPromptPart)
+    assert json.loads(second_prompt.content)["source"]["speaker"] == {
+        "display_name": "Grace",
+        "id": 202,
     }
 
     call_message = messages[3]
@@ -193,7 +232,13 @@ def test_materialization_uses_only_successfully_hydrated_attachments() -> None:
     assert isinstance(request, ModelRequest)
     prompt = request.parts[0]
     assert isinstance(prompt, UserPromptPart)
-    assert prompt.content == ["Inspect these", user_content]
+    assert isinstance(prompt.content, list)
+    rendered_request, rendered_file = prompt.content
+    assert rendered_file is user_content
+    assert json.loads(rendered_request)["attachments"] == [
+        {"index": 1, "media_type": "photo", "status": "available"},
+        {"index": 2, "media_type": "photo", "status": "missing"},
+    ]
     assert isinstance(response, ModelResponse)
     assert response.parts == [
         TextPart("Generated result"),
@@ -217,9 +262,14 @@ def test_token_estimation_is_deterministic_and_charges_for_attachments() -> None
     assert estimator.estimate_text("abcd") == 1
     assert estimator.estimate_text("12345") == 2
     assert estimator.estimate_text("🙂") == 1
-    assert estimator.estimate_turn(turn) == 13
-    assert estimator.estimate_history((turn, turn)) == 26
-    assert estimator.estimate_history((turn, turn)) == 26
+    expected = (
+        estimator.estimate_text(render_user_content(turn.request))
+        + estimator.attachment_tokens
+        + estimator.estimate_text(turn.response.text)
+    )
+    assert estimator.estimate_turn(turn) == expected
+    assert estimator.estimate_history((turn, turn)) == expected * 2
+    assert estimator.estimate_history((turn, turn)) == expected * 2
 
 
 def test_trim_keeps_newest_contiguous_complete_turns_under_both_budgets() -> None:
@@ -236,13 +286,13 @@ def test_trim_keeps_newest_contiguous_complete_turns_under_both_budgets() -> Non
     assert trim_history(
         (old, middle, newest),
         max_turns=2,
-        max_tokens=8,
+        max_tokens=estimator.estimate_history((middle, newest)),
         estimator=estimator,
     ) == (middle, newest)
     assert trim_history(
         (old, middle, newest),
         max_turns=1,
-        max_tokens=100,
+        max_tokens=estimator.estimate_turn(newest),
         estimator=estimator,
     ) == (newest,)
 
@@ -282,7 +332,7 @@ def test_trim_never_splits_exchange_or_skips_an_oversized_newest_turn() -> None:
         trim_history(
             (small, oversized),
             max_turns=10,
-            max_tokens=5,
+            max_tokens=estimator.estimate_turn(oversized) - 1,
             estimator=estimator,
         )
         == ()
