@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import uuid
 from collections.abc import Callable
@@ -13,7 +14,7 @@ from typing import Protocol
 import logfire
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, InputMediaPhoto, Message
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.artifacts import (
@@ -22,22 +23,37 @@ from derp.artifacts import (
     ArtifactMetadata,
     ArtifactStore,
     ArtifactStoreError,
+    ArtifactTooLargeError,
 )
 from derp.common.sanitize import sanitize_for_telegram
+from derp.delivery.tokens import ResendTokenCodec
 from derp.delivery.types import (
+    ArtifactCleanup,
     Delivered,
     DeliveryFailed,
+    DeliveryInspection,
     DeliveryOutcome,
+    DeliveryReconciliation,
+    DeliveryState,
     DeliveryTarget,
     DeliveryUncertain,
+    ResendAuthorization,
     classify_delivery_exception,
 )
 from derp.features import MediaContent
 from derp.media import MediaFamily
-from derp.models import Artifact, DeliveryIntent, PaidOperation
+from derp.models import (
+    Artifact,
+    DeliveryIntent,
+    OperationQuote,
+    PaidOperation,
+    User,
+)
 from derp.operations import OperationId, OperationState
 
 type TransactionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
+
+MAX_TELEGRAM_PHOTO_BYTES = 10 * 1024 * 1024
 
 
 class SpendReversal(Protocol):
@@ -48,6 +64,10 @@ class SpendReversal(Protocol):
 
 class DeliveryStateError(RuntimeError):
     """A delivery transition violated its durable lifecycle."""
+
+
+class DeliveryAuthorizationError(PermissionError):
+    """A resend capability does not match its actor and Telegram scope."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +106,12 @@ class DeliveryAttempt:
 type BeginDeliveryResult = DeliveryAttempt | DeliveryOutcome
 
 
+@dataclass(frozen=True, slots=True)
+class _ArtifactCleanupCandidate:
+    artifact_id: uuid.UUID
+    key: ArtifactKey
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -99,6 +125,7 @@ class DeliveryService:
         artifact_store: ArtifactStore,
         bot: Bot,
         spend_reversal: SpendReversal,
+        token_codec: ResendTokenCodec,
         *,
         clock: Callable[[], datetime] = _utc_now,
         artifact_ttl: timedelta = timedelta(hours=6),
@@ -109,6 +136,7 @@ class DeliveryService:
         self._artifact_store = artifact_store
         self._bot = bot
         self._spend_reversal = spend_reversal
+        self._token_codec = token_codec
         self._clock = clock
         self._artifact_ttl = artifact_ttl
 
@@ -125,6 +153,14 @@ class DeliveryService:
             raise ValueError("delivery result must contain media")
         if any(item.family is not MediaFamily.IMAGE for item in media):
             raise ValueError("the first delivery slice accepts image output only")
+        if oversized := next(
+            (item for item in media if len(item.data) > MAX_TELEGRAM_PHOTO_BYTES),
+            None,
+        ):
+            raise ArtifactTooLargeError(
+                size_bytes=len(oversized.data),
+                limit_bytes=MAX_TELEGRAM_PHOTO_BYTES,
+            )
         normalized_caption = caption.strip() if caption else None
         if caption is not None and not normalized_caption:
             raise ValueError("caption must not be blank")
@@ -149,7 +185,7 @@ class DeliveryService:
             now = self._aware_now()
             expires_at = now + self._artifact_ttl
             intent_id = uuid.uuid4()
-            resend_token = str(intent_id)
+            resend_token = self._token_codec.issue(intent_id)
             async with self._transactions() as session:
                 operation = await session.scalar(
                     select(PaidOperation)
@@ -188,10 +224,12 @@ class DeliveryService:
                         thread_id=target.thread_id,
                         reply_to_message_id=target.reply_to_message_id,
                         business_connection_id=target.business_connection_id,
-                        resend_token_hash=self._token_hash(resend_token),
+                        resend_token_hash=self._token_codec.digest(resend_token),
                         state="not_ready",
                         expires_at=expires_at,
                         caption=normalized_caption,
+                        created_at=now,
+                        updated_at=now,
                     )
                 )
                 operation.result_metadata = {
@@ -235,104 +273,350 @@ class DeliveryService:
     async def deliver(
         self,
         operation_id: OperationId,
-        *,
-        explicit_resend: bool = False,
     ) -> DeliveryOutcome:
-        """Attempt delivery once; uncertain attempts require explicit user retry."""
-        started = await self._begin_attempt(
-            operation_id, explicit_resend=explicit_resend
-        )
-        if not isinstance(started, DeliveryAttempt):
-            if isinstance(started, DeliveryFailed) and not started.retryable:
-                await self._reverse_terminal(operation_id, started.code)
-            return started
+        """Attempt initial delivery once without crossing an uncertainty gap."""
+        started = await self._begin_attempt(operation_id)
+        return await self._execute_attempt(operation_id, started)
 
-        try:
-            loaded_artifacts = []
-            for descriptor in started.artifacts:
-                loaded_artifacts.append(await self._artifact_store.read(descriptor.key))
-            artifacts = tuple(loaded_artifacts)
-        except ArtifactStoreError as exc:
-            outcome: DeliveryOutcome = DeliveryFailed(type(exc).__name__, False)
-        else:
-            try:
-                messages = await self._send_images(started, artifacts)
-                outcome = Delivered(tuple(message.message_id for message in messages))
-            except BaseException as exc:
-                outcome = classify_delivery_exception(exc)
+    async def resend(
+        self,
+        authorization: ResendAuthorization,
+    ) -> DeliveryOutcome:
+        """Resend only for the original requester, target, and opaque capability."""
+        operation_id, started = await self._begin_resend(authorization)
+        return await self._execute_attempt(operation_id, started)
 
-        settled = await self._complete_attempt(operation_id, outcome)
-        if isinstance(settled, DeliveryFailed) and not settled.retryable:
-            await self._reverse_terminal(operation_id, settled.code)
-        return settled
+    async def inspect(self, operation_id: OperationId) -> DeliveryInspection:
+        """Return content-free durable state without changing delivery."""
+        async with self._transactions() as session:
+            intent = await session.scalar(
+                select(DeliveryIntent).where(
+                    DeliveryIntent.operation_id == operation_id.value
+                )
+            )
+            if intent is None:
+                raise DeliveryStateError(f"Unknown delivery for {operation_id}")
+            artifact_count = int(
+                await session.scalar(
+                    select(func.count(Artifact.id)).where(
+                        Artifact.operation_id == operation_id.value
+                    )
+                )
+                or 0
+            )
+            return self._inspection(intent, artifact_count)
 
-    async def _begin_attempt(
+    async def reconcile_interrupted(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int = 100,
+    ) -> DeliveryReconciliation:
+        """Mark pre-existing in-flight sends uncertain without retrying them."""
+        self._require_aware(stale_before, "stale_before")
+        self._require_limit(limit)
+        now = self._aware_now()
+        if stale_before > now:
+            raise ValueError("stale_before must not be in the future")
+        async with self._transactions() as session:
+            intents = list(
+                await session.scalars(
+                    select(DeliveryIntent)
+                    .where(
+                        DeliveryIntent.state == DeliveryState.DELIVERING.value,
+                        DeliveryIntent.updated_at <= stale_before,
+                    )
+                    .order_by(DeliveryIntent.updated_at, DeliveryIntent.id)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            for intent in intents:
+                intent.state = DeliveryState.UNCERTAIN.value
+                intent.uncertain_at = now
+                intent.last_error_code = "process_interrupted"
+            operation_ids = tuple(
+                OperationId(intent.operation_id) for intent in intents
+            )
+        return DeliveryReconciliation(operation_ids)
+
+    async def reconcile_expired(
+        self,
+        *,
+        limit: int = 100,
+    ) -> DeliveryReconciliation:
+        """Expire due deliveries and finish interrupted terminal reversals."""
+        self._require_limit(limit)
+        now = self._aware_now()
+        due_states = {
+            DeliveryState.NOT_READY.value,
+            DeliveryState.PENDING.value,
+            DeliveryState.UNCERTAIN.value,
+        }
+        async with self._transactions() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(DeliveryIntent, PaidOperation)
+                        .join(
+                            PaidOperation,
+                            PaidOperation.id == DeliveryIntent.operation_id,
+                        )
+                        .where(
+                            (
+                                (DeliveryIntent.expires_at <= now)
+                                & DeliveryIntent.state.in_(due_states)
+                            )
+                            | (
+                                DeliveryIntent.state.in_(
+                                    {
+                                        DeliveryState.FAILED.value,
+                                        DeliveryState.EXPIRED.value,
+                                    }
+                                )
+                                & (PaidOperation.state == OperationState.CAPTURED.value)
+                            )
+                        )
+                        .order_by(DeliveryIntent.expires_at, DeliveryIntent.id)
+                        .limit(limit)
+                        .with_for_update(skip_locked=True)
+                    )
+                ).all()
+            )
+            operation_ids: list[OperationId] = []
+            reversal_codes: dict[uuid.UUID, str] = {}
+            for intent, operation in rows:
+                operation_id = OperationId(intent.operation_id)
+                operation_ids.append(operation_id)
+                if intent.state in due_states:
+                    intent.state = DeliveryState.EXPIRED.value
+                    intent.uncertain_at = None
+                    intent.failed_at = now
+                    intent.last_error_code = "artifact_expired"
+                if operation.state == OperationState.CAPTURED.value:
+                    reversal_codes[operation_id.value] = (
+                        intent.last_error_code or "terminal_delivery_failure"
+                    )
+
+        for operation_id in operation_ids:
+            if error_code := reversal_codes.get(operation_id.value):
+                await self._reverse_terminal(operation_id, error_code)
+            await self.cleanup_terminal_artifacts(operation_id)
+        return DeliveryReconciliation(tuple(operation_ids))
+
+    async def cleanup_terminal_artifacts(
         self,
         operation_id: OperationId,
-        *,
-        explicit_resend: bool,
-    ) -> BeginDeliveryResult:
-        now = self._aware_now()
+    ) -> ArtifactCleanup:
+        """Delete recoverable bytes only after delivery reaches a terminal state."""
         async with self._transactions() as session:
-            _, intent = await self._locked_state(session, operation_id)
-            if intent.state == "delivered":
-                return Delivered(tuple(intent.telegram_message_ids))
-            if now >= intent.expires_at:
-                intent.state = "expired"
-                intent.failed_at = now
-                intent.last_error_code = "artifact_expired"
-                return DeliveryFailed("artifact_expired", retryable=False)
-            if intent.state == "uncertain" and not explicit_resend:
-                return DeliveryUncertain("explicit_resend_required")
-            if intent.state == "delivering":
-                return DeliveryUncertain("attempt_in_progress_or_interrupted")
-            if intent.state in {"failed", "expired", "not_ready"}:
-                return DeliveryFailed(
-                    intent.state,
-                    retryable=intent.state == "not_ready",
+            intent = await session.scalar(
+                select(DeliveryIntent).where(
+                    DeliveryIntent.operation_id == operation_id.value
                 )
-            if intent.state not in {"pending", "uncertain"}:
-                raise DeliveryStateError(f"Cannot deliver intent in {intent.state}")
-
-            rows = list(
-                await session.scalars(
+            )
+            if intent is None:
+                raise DeliveryStateError(f"Unknown delivery for {operation_id}")
+            state = DeliveryState(intent.state)
+            if not state.terminal:
+                raise DeliveryStateError(
+                    f"Cannot clean artifacts for delivery in {intent.state}"
+                )
+            candidates = tuple(
+                self._cleanup_candidate(row)
+                for row in await session.scalars(
                     select(Artifact)
                     .where(Artifact.operation_id == operation_id.value)
                     .order_by(Artifact.ordinal)
                 )
             )
-            if not rows:
-                intent.state = "failed"
-                intent.failed_at = now
-                intent.last_error_code = "artifact_missing"
-                return DeliveryFailed("artifact_missing", retryable=False)
+        return await self._purge_artifacts(candidates)
 
-            intent.state = "delivering"
-            intent.attempt_count += 1
-            intent.uncertain_at = None
-            intent.failed_at = None
-            intent.last_error_code = None
-            return DeliveryAttempt(
-                operation_id=operation_id,
-                target=DeliveryTarget(
-                    intent.chat_id,
-                    intent.thread_id,
-                    intent.reply_to_message_id,
-                    intent.business_connection_id,
-                ),
-                caption=intent.caption,
-                artifacts=tuple(
-                    ArtifactDescriptor(
-                        key=ArtifactKey(uuid.UUID(row.storage_key)),
-                        kind=ArtifactKind(row.kind),
-                        mime_type=row.mime_type,
-                        filename=row.filename,
-                        size_bytes=row.size_bytes,
-                        sha256=row.sha256,
+    async def cleanup_expired_artifacts(
+        self,
+        *,
+        limit: int = 100,
+    ) -> ArtifactCleanup:
+        """Delete one bounded batch of expired bytes for terminal deliveries."""
+        self._require_limit(limit)
+        now = self._aware_now()
+        async with self._transactions() as session:
+            artifacts = list(
+                await session.scalars(
+                    select(Artifact)
+                    .join(
+                        DeliveryIntent,
+                        DeliveryIntent.operation_id == Artifact.operation_id,
                     )
-                    for row in rows
-                ),
+                    .where(
+                        Artifact.expires_at <= now,
+                        DeliveryIntent.state.in_(
+                            state.value for state in DeliveryState if state.terminal
+                        ),
+                    )
+                    .order_by(Artifact.expires_at, Artifact.id)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
             )
+            candidates = tuple(self._cleanup_candidate(row) for row in artifacts)
+        return await self._purge_artifacts(candidates)
+
+    async def _execute_attempt(
+        self,
+        operation_id: OperationId,
+        started: BeginDeliveryResult,
+    ) -> DeliveryOutcome:
+        if not isinstance(started, DeliveryAttempt):
+            await self._finalize_terminal(operation_id, started)
+            return started
+
+        try:
+            try:
+                loaded_artifacts = []
+                for descriptor in started.artifacts:
+                    loaded_artifacts.append(
+                        await self._artifact_store.read(descriptor.key)
+                    )
+                artifacts = tuple(loaded_artifacts)
+            except ArtifactStoreError as exc:
+                outcome: DeliveryOutcome = DeliveryFailed(type(exc).__name__, False)
+            else:
+                try:
+                    messages = await self._send_images(started, artifacts)
+                    outcome = Delivered(
+                        tuple(message.message_id for message in messages)
+                    )
+                except Exception as exc:
+                    outcome = classify_delivery_exception(exc)
+        except asyncio.CancelledError:
+            await self._persist_cancellation_uncertainty(operation_id)
+            raise
+
+        try:
+            settled = await self._complete_attempt(operation_id, outcome)
+        except asyncio.CancelledError:
+            await self._persist_cancellation_uncertainty(operation_id)
+            raise
+        await self._finalize_terminal(operation_id, settled)
+        return settled
+
+    async def _begin_attempt(
+        self,
+        operation_id: OperationId,
+    ) -> BeginDeliveryResult:
+        async with self._transactions() as session:
+            _, intent = await self._locked_state(session, operation_id)
+            return await self._start_locked_attempt(
+                session,
+                operation_id,
+                intent,
+                authorized_resend=False,
+            )
+
+    async def _begin_resend(
+        self,
+        authorization: ResendAuthorization,
+    ) -> tuple[OperationId, BeginDeliveryResult]:
+        token_hash = self._token_codec.digest(authorization.token)
+        async with self._transactions() as session:
+            intent = await session.scalar(
+                select(DeliveryIntent)
+                .where(DeliveryIntent.resend_token_hash == token_hash)
+                .with_for_update()
+            )
+            if intent is None:
+                raise DeliveryAuthorizationError("Invalid resend authorization")
+            operation_id = OperationId(intent.operation_id)
+            operation = await session.scalar(
+                select(PaidOperation)
+                .where(PaidOperation.id == operation_id.value)
+                .with_for_update()
+            )
+            if operation is None:
+                raise DeliveryAuthorizationError("Invalid resend authorization")
+            actor_user_id = await session.scalar(
+                select(User.telegram_id)
+                .join(
+                    OperationQuote,
+                    OperationQuote.requester_id == User.id,
+                )
+                .where(OperationQuote.id == operation.quote_id)
+            )
+            stored_target = self._target(intent)
+            if (
+                actor_user_id != authorization.actor_user_id
+                or stored_target != authorization.target
+            ):
+                raise DeliveryAuthorizationError("Invalid resend authorization")
+            started = await self._start_locked_attempt(
+                session,
+                operation_id,
+                intent,
+                authorized_resend=True,
+            )
+            return operation_id, started
+
+    async def _start_locked_attempt(
+        self,
+        session: AsyncSession,
+        operation_id: OperationId,
+        intent: DeliveryIntent,
+        *,
+        authorized_resend: bool,
+    ) -> BeginDeliveryResult:
+        now = self._aware_now()
+        state = DeliveryState(intent.state)
+        if state is DeliveryState.DELIVERED:
+            return Delivered(tuple(intent.telegram_message_ids))
+        if state in {DeliveryState.FAILED, DeliveryState.EXPIRED}:
+            return DeliveryFailed(state.value, retryable=False)
+        if now >= intent.expires_at:
+            intent.state = DeliveryState.EXPIRED.value
+            intent.uncertain_at = None
+            intent.failed_at = now
+            intent.last_error_code = "artifact_expired"
+            return DeliveryFailed("artifact_expired", retryable=False)
+        if state is DeliveryState.UNCERTAIN and not authorized_resend:
+            return DeliveryUncertain("authenticated_resend_required")
+        if state is DeliveryState.DELIVERING:
+            return DeliveryUncertain("attempt_in_progress_or_interrupted")
+        if state is DeliveryState.NOT_READY:
+            return DeliveryFailed(
+                state.value,
+                retryable=True,
+            )
+        allowed = (
+            {DeliveryState.UNCERTAIN} if authorized_resend else {DeliveryState.PENDING}
+        )
+        if state not in allowed:
+            raise DeliveryStateError(f"Cannot deliver intent in {intent.state}")
+
+        rows = list(
+            await session.scalars(
+                select(Artifact)
+                .where(Artifact.operation_id == operation_id.value)
+                .order_by(Artifact.ordinal)
+            )
+        )
+        if not rows:
+            intent.state = DeliveryState.FAILED.value
+            intent.uncertain_at = None
+            intent.failed_at = now
+            intent.last_error_code = "artifact_missing"
+            return DeliveryFailed("artifact_missing", retryable=False)
+
+        intent.state = DeliveryState.DELIVERING.value
+        intent.attempt_count += 1
+        intent.uncertain_at = None
+        intent.failed_at = None
+        intent.last_error_code = None
+        return DeliveryAttempt(
+            operation_id=operation_id,
+            target=self._target(intent),
+            caption=intent.caption,
+            artifacts=tuple(self._artifact_descriptor(row) for row in rows),
+        )
 
     async def _complete_attempt(
         self,
@@ -342,26 +626,103 @@ class DeliveryService:
         now = self._aware_now()
         async with self._transactions() as session:
             _, intent = await self._locked_state(session, operation_id)
-            if intent.state == "delivered":
+            if intent.state == DeliveryState.DELIVERED.value:
                 return Delivered(tuple(intent.telegram_message_ids))
-            if intent.state != "delivering":
+            if intent.state != DeliveryState.DELIVERING.value:
                 raise DeliveryStateError(f"Cannot complete delivery in {intent.state}")
             if isinstance(outcome, Delivered):
-                intent.state = "delivered"
+                intent.state = DeliveryState.DELIVERED.value
                 intent.delivered_at = now
                 intent.telegram_message_ids = list(outcome.message_ids)
             elif isinstance(outcome, DeliveryUncertain):
-                intent.state = "uncertain"
+                intent.state = DeliveryState.UNCERTAIN.value
                 intent.uncertain_at = now
                 intent.last_error_code = outcome.code
             elif outcome.retryable:
-                intent.state = "pending"
+                intent.state = DeliveryState.PENDING.value
                 intent.last_error_code = outcome.code
             else:
-                intent.state = "failed"
+                intent.state = DeliveryState.FAILED.value
                 intent.failed_at = now
                 intent.last_error_code = outcome.code
             return outcome
+
+    async def _persist_cancellation_uncertainty(
+        self,
+        operation_id: OperationId,
+    ) -> None:
+        persistence = asyncio.create_task(
+            self._complete_attempt(
+                operation_id,
+                DeliveryUncertain("CancelledError"),
+            )
+        )
+        try:
+            await asyncio.shield(persistence)
+        except asyncio.CancelledError:
+            # A second cancellation must still escape. The shielded transaction
+            # continues independently and startup reconciliation is the fallback.
+            raise
+        except Exception:
+            logfire.warning(
+                "delivery_cancellation_state_persist_failed",
+                operation_id=str(operation_id),
+            )
+
+    async def _finalize_terminal(
+        self,
+        operation_id: OperationId,
+        outcome: DeliveryOutcome,
+    ) -> None:
+        if isinstance(outcome, Delivered):
+            await self.cleanup_terminal_artifacts(operation_id)
+            return
+        if isinstance(outcome, DeliveryFailed) and not outcome.retryable:
+            if await self._requires_reversal(operation_id):
+                await self._reverse_terminal(operation_id, outcome.code)
+            await self.cleanup_terminal_artifacts(operation_id)
+
+    async def _requires_reversal(self, operation_id: OperationId) -> bool:
+        async with self._transactions() as session:
+            state = await session.scalar(
+                select(PaidOperation.state).where(
+                    PaidOperation.id == operation_id.value
+                )
+            )
+            if state is None:
+                raise DeliveryStateError(f"Unknown operation {operation_id}")
+            return state == OperationState.CAPTURED.value
+
+    async def _purge_artifacts(
+        self,
+        candidates: tuple[_ArtifactCleanupCandidate, ...],
+    ) -> ArtifactCleanup:
+        if not candidates:
+            return ArtifactCleanup(0, 0, 0)
+        purgeable_ids: list[uuid.UUID] = []
+        failed_count = 0
+        for candidate in candidates:
+            try:
+                await self._artifact_store.delete(candidate.key)
+            except ArtifactStoreError:
+                failed_count += 1
+                logfire.warning(
+                    "artifact_cleanup_failed",
+                    artifact_key_fingerprint=hashlib.sha256(
+                        str(candidate.key).encode()
+                    ).hexdigest()[:12],
+                )
+            else:
+                purgeable_ids.append(candidate.artifact_id)
+
+        purged_count = 0
+        if purgeable_ids:
+            async with self._transactions() as session:
+                result = await session.execute(
+                    delete(Artifact).where(Artifact.id.in_(purgeable_ids))
+                )
+                purged_count = max(result.rowcount or 0, 0)
+        return ArtifactCleanup(len(candidates), purged_count, failed_count)
 
     async def _existing_preparation(
         self,
@@ -377,12 +738,7 @@ class DeliveryService:
             )
             if intent is None:
                 return None
-            stored_target = DeliveryTarget(
-                intent.chat_id,
-                intent.thread_id,
-                intent.reply_to_message_id,
-                intent.business_connection_id,
-            )
+            stored_target = self._target(intent)
             if stored_target != target or intent.caption != caption:
                 raise DeliveryStateError("Conflicting delivery target for operation")
             count = int(
@@ -398,7 +754,7 @@ class DeliveryService:
             return PreparedDelivery(
                 operation_id,
                 intent.id,
-                str(intent.id),
+                self._token_codec.issue(intent.id),
                 count,
                 idempotent=True,
             )
@@ -469,13 +825,62 @@ class DeliveryService:
 
     def _aware_now(self) -> datetime:
         now = self._clock()
-        if now.tzinfo is None or now.utcoffset() is None:
-            raise ValueError("DeliveryService clock must return an aware datetime")
+        self._require_aware(now, "DeliveryService clock")
         return now
 
     @staticmethod
-    def _token_hash(token: str) -> str:
-        return hashlib.sha256(token.encode()).hexdigest()
+    def _inspection(
+        intent: DeliveryIntent,
+        artifact_count: int,
+    ) -> DeliveryInspection:
+        return DeliveryInspection(
+            operation_id=OperationId(intent.operation_id),
+            state=DeliveryState(intent.state),
+            target=DeliveryService._target(intent),
+            attempt_count=intent.attempt_count,
+            artifact_count=artifact_count,
+            expires_at=intent.expires_at,
+            updated_at=intent.updated_at,
+            message_ids=tuple(intent.telegram_message_ids),
+            last_error_code=intent.last_error_code,
+        )
+
+    @staticmethod
+    def _target(intent: DeliveryIntent) -> DeliveryTarget:
+        return DeliveryTarget(
+            intent.chat_id,
+            intent.thread_id,
+            intent.reply_to_message_id,
+            intent.business_connection_id,
+        )
+
+    @staticmethod
+    def _artifact_descriptor(row: Artifact) -> ArtifactDescriptor:
+        return ArtifactDescriptor(
+            key=ArtifactKey(uuid.UUID(row.storage_key)),
+            kind=ArtifactKind(row.kind),
+            mime_type=row.mime_type,
+            filename=row.filename,
+            size_bytes=row.size_bytes,
+            sha256=row.sha256,
+        )
+
+    @staticmethod
+    def _cleanup_candidate(row: Artifact) -> _ArtifactCleanupCandidate:
+        return _ArtifactCleanupCandidate(
+            artifact_id=row.id,
+            key=ArtifactKey(uuid.UUID(row.storage_key)),
+        )
+
+    @staticmethod
+    def _require_aware(value: datetime, name: str) -> None:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{name} must be timezone-aware")
+
+    @staticmethod
+    def _require_limit(limit: int) -> None:
+        if isinstance(limit, bool) or not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
 
     @staticmethod
     def _filename(mime_type: str, ordinal: int) -> str:

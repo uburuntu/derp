@@ -1,5 +1,6 @@
 """Delivery targets and Telegram send certainty stay explicit."""
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,6 +8,7 @@ from aiogram.exceptions import (
     TelegramBadRequest,
     TelegramNetworkError,
     TelegramRetryAfter,
+    TelegramServerError,
 )
 
 from derp.delivery import (
@@ -45,10 +47,14 @@ def test_network_and_unknown_failures_are_never_blindly_retried() -> None:
 
     network = classify_delivery_exception(TelegramNetworkError(method, "timeout"))
     timeout = classify_delivery_exception(TimeoutError())
+    server = classify_delivery_exception(TelegramServerError(method, "unavailable"))
+    cancellation = classify_delivery_exception(asyncio.CancelledError())
     unknown = classify_delivery_exception(RuntimeError("unknown send state"))
 
     assert isinstance(network, DeliveryUncertain)
     assert isinstance(timeout, DeliveryUncertain)
+    assert isinstance(server, DeliveryUncertain)
+    assert isinstance(cancellation, DeliveryUncertain)
     assert isinstance(unknown, DeliveryUncertain)
 
 
