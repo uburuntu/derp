@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from derp.catalog import GoogleModelKey
+from derp.catalog import GoogleModelKey, ImageResolution
 from derp.execution import (
     Failed,
     FailureReason,
@@ -21,6 +21,7 @@ from derp.execution import (
     plan_execution,
 )
 from derp.features.image import (
+    MAX_IMAGE_OUTPUT_BYTES,
     MAX_IMAGE_PROMPT_CHARS,
     ImageEditRequest,
     ImageExecutionPolicy,
@@ -31,6 +32,7 @@ from derp.features.image import (
 )
 from derp.features.types import MediaContent
 from derp.media.types import MediaFamily, MediaMetadata, MediaReference
+from derp.operations import ImageEditQuoteInput, ImageGenerateQuoteInput
 
 
 def _image(data: bytes = b"image", mime_type: str = "image/png") -> MediaContent:
@@ -60,6 +62,7 @@ def test_image_dtos_are_normalized_frozen_and_provider_neutral() -> None:
 
     assert request.prompt == "a lighthouse"
     assert request.style == "ink"
+    assert request.resolution is ImageResolution.ONE_K
     assert content.mime_type == "image/png"
     assert content.size_bytes == 5
     assert output.images == (content,)
@@ -67,6 +70,48 @@ def test_image_dtos_are_normalized_frozen_and_provider_neutral() -> None:
         request.prompt = "changed"  # type: ignore[misc]
     with pytest.raises(TypeError, match="immutable tuple"):
         ImageOutput(images=[content])  # type: ignore[arg-type]
+
+
+def test_image_request_resolution_is_shared_with_quote_and_prepared_edit() -> None:
+    generate = ImageGenerateRequest(
+        prompt="a lighthouse",
+        resolution=ImageResolution.TWO_K,
+    )
+    edit = ImageEditRequest(
+        prompt="add a beacon",
+        source=_reference(),
+        resolution=ImageResolution.FOUR_K,
+    )
+    quote_input = ImageGenerateQuoteInput(
+        input_tokens=100,
+        resolution=generate.resolution,
+    )
+    edit_quote_input = ImageEditQuoteInput(
+        input_tokens=100,
+        resolution=edit.resolution,
+    )
+
+    assert quote_input.resolution is generate.resolution is ImageResolution.TWO_K
+    assert edit_quote_input.resolution is edit.resolution is ImageResolution.FOUR_K
+
+
+@pytest.mark.parametrize(
+    "request_factory",
+    [
+        lambda: ImageGenerateRequest(
+            prompt="a lighthouse",
+            resolution="1K",  # type: ignore[arg-type]
+        ),
+        lambda: ImageEditRequest(
+            prompt="add a beacon",
+            source=_reference(),
+            resolution="1K",  # type: ignore[arg-type]
+        ),
+    ],
+)
+def test_image_requests_require_typed_resolution(request_factory) -> None:
+    with pytest.raises(TypeError, match="ImageResolution"):
+        request_factory()
 
 
 @pytest.mark.parametrize(
@@ -192,7 +237,7 @@ async def test_unusable_provider_output_is_rejected_without_side_effects(
         edit=AsyncMock(),
     )
     policy = ImageExecutionPolicy(
-        max_total_output_bytes=3,
+        max_output_bytes=3,
         max_output_images=1,
     )
 
@@ -222,7 +267,11 @@ async def test_edit_hydrates_bounded_reference_before_provider_execution() -> No
 
     result = await service.edit(
         plan,
-        ImageEditRequest(prompt="add a beacon", source=reference),
+        ImageEditRequest(
+            prompt="add a beacon",
+            source=reference,
+            resolution=ImageResolution.FOUR_K,
+        ),
     )
 
     assert result is success
@@ -230,6 +279,7 @@ async def test_edit_hydrates_bounded_reference_before_provider_execution() -> No
     prepared = executor.edit.await_args.args[1]
     assert isinstance(prepared, PreparedImageEditRequest)
     assert prepared.prompt == "add a beacon"
+    assert prepared.resolution is ImageResolution.FOUR_K
     assert prepared.source.data == b"image"
     assert prepared.source.mime_type == "image/png"
 
@@ -271,8 +321,18 @@ async def test_edit_rejects_unsupported_or_oversized_source_before_provider(
 
 
 def test_policy_rejects_unbounded_or_non_image_configuration() -> None:
+    policy = ImageExecutionPolicy()
+
+    assert policy.max_output_bytes == MAX_IMAGE_OUTPUT_BYTES
+    assert policy.max_output_images == 1
+    with pytest.raises(TypeError, match="must be an integer"):
+        ImageExecutionPolicy(max_output_bytes=1.5)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="finite and positive"):
         ImageExecutionPolicy(provider_deadline_seconds=math.inf)
+    with pytest.raises(ValueError, match="must not exceed"):
+        ImageExecutionPolicy(max_output_bytes=MAX_IMAGE_OUTPUT_BYTES + 1)
+    with pytest.raises(ValueError, match="must be 1 for image v1"):
+        ImageExecutionPolicy(max_output_images=2)
     with pytest.raises(ValueError, match="image MIME"):
         ImageExecutionPolicy(
             allowed_output_mime_types=frozenset({"audio/ogg"}),

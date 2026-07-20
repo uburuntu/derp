@@ -14,6 +14,11 @@ from derp.media.gateway import (
     MediaUnavailableError,
     UnsupportedMediaTypeError,
 )
+from derp.media.image_source import (
+    TelegramImageMetadata,
+    TelegramImageSourceLoader,
+    image_reference_from_telegram,
+)
 from derp.media.types import MediaFamily, MediaMetadata, MediaReference
 
 __all__ = [
@@ -31,5 +36,8 @@ __all__ = [
     "MediaTooLargeError",
     "MediaTransportError",
     "MediaUnavailableError",
+    "TelegramImageMetadata",
+    "TelegramImageSourceLoader",
     "UnsupportedMediaTypeError",
+    "image_reference_from_telegram",
 ]

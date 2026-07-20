@@ -8,6 +8,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from derp.catalog import ImageResolution
 from derp.execution import (
     ExecutionPlan,
     Failed,
@@ -24,6 +25,8 @@ from derp.media.types import MediaFamily, MediaReference, normalize_mime_type
 
 MAX_IMAGE_PROMPT_CHARS = 8_000
 MAX_IMAGE_STYLE_CHARS = 200
+MAX_IMAGE_OUTPUT_BYTES = 10 * 1024 * 1024
+V1_IMAGE_OUTPUT_COUNT = 1
 
 _DEFAULT_INPUT_MIME_TYPES = DEFAULT_ALLOWED_MIME_TYPES[MediaFamily.IMAGE]
 _DEFAULT_OUTPUT_MIME_TYPES = frozenset(
@@ -44,14 +47,21 @@ def _normalized_text(value: str, *, name: str, max_chars: int) -> str:
     return normalized
 
 
+def _require_resolution(value: ImageResolution) -> None:
+    if not isinstance(value, ImageResolution):
+        raise TypeError("resolution must be an ImageResolution")
+
+
 @dataclass(frozen=True, slots=True)
 class ImageGenerateRequest:
     """Validated provider-independent image generation request."""
 
     prompt: str
     style: str | None = None
+    resolution: ImageResolution = ImageResolution.ONE_K
 
     def __post_init__(self) -> None:
+        _require_resolution(self.resolution)
         object.__setattr__(
             self,
             "prompt",
@@ -79,10 +89,12 @@ class ImageEditRequest:
 
     prompt: str
     source: MediaReference
+    resolution: ImageResolution = ImageResolution.ONE_K
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, MediaReference):
             raise TypeError("image edit source must be a MediaReference")
+        _require_resolution(self.resolution)
         object.__setattr__(
             self,
             "prompt",
@@ -100,17 +112,19 @@ class PreparedImageEditRequest:
 
     prompt: str
     source: MediaContent
+    resolution: ImageResolution = ImageResolution.ONE_K
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, MediaContent):
             raise TypeError("prepared image source must be MediaContent")
         if self.source.family is not MediaFamily.IMAGE:
             raise ValueError("image editing requires image source media")
+        _require_resolution(self.resolution)
 
 
 @dataclass(frozen=True, slots=True)
 class ImageOutput:
-    """One or more provider-independent generated images."""
+    """Provider-independent images awaiting feature-policy validation."""
 
     images: tuple[MediaContent, ...]
 
@@ -130,8 +144,8 @@ class ImageExecutionPolicy:
     """Resource and deadline limits enforced around every image provider."""
 
     max_source_bytes: int = 20_000_000
-    max_total_output_bytes: int = 40_000_000
-    max_output_images: int = 4
+    max_output_bytes: int = MAX_IMAGE_OUTPUT_BYTES
+    max_output_images: int = V1_IMAGE_OUTPUT_COUNT
     provider_deadline_seconds: float = 90.0
     allowed_input_mime_types: frozenset[str] = field(
         default_factory=lambda: _DEFAULT_INPUT_MIME_TYPES
@@ -143,11 +157,22 @@ class ImageExecutionPolicy:
     def __post_init__(self) -> None:
         for name in (
             "max_source_bytes",
-            "max_total_output_bytes",
+            "max_output_bytes",
             "max_output_images",
         ):
-            if getattr(self, name) <= 0:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer")
+            if value <= 0:
                 raise ValueError(f"{name} must be positive")
+        if self.max_output_bytes > MAX_IMAGE_OUTPUT_BYTES:
+            raise ValueError(
+                f"max_output_bytes must not exceed {MAX_IMAGE_OUTPUT_BYTES}"
+            )
+        if self.max_output_images != V1_IMAGE_OUTPUT_COUNT:
+            raise ValueError(
+                f"max_output_images must be {V1_IMAGE_OUTPUT_COUNT} for image v1"
+            )
         if (
             not math.isfinite(self.provider_deadline_seconds)
             or self.provider_deadline_seconds <= 0
@@ -242,6 +267,7 @@ class ImageFeatureService:
 
         prepared = PreparedImageEditRequest(
             prompt=request.prompt,
+            resolution=request.resolution,
             source=MediaContent(
                 family=MediaFamily.IMAGE,
                 mime_type=metadata.mime_type,
@@ -268,17 +294,14 @@ class ImageFeatureService:
         if not isinstance(outcome.value, ImageOutput):
             return Rejected(RejectionReason.UNUSABLE_OUTPUT)
         images = outcome.value.images
-        if len(images) > self._policy.max_output_images:
+        if len(images) != self._policy.max_output_images:
             return Rejected(RejectionReason.UNUSABLE_OUTPUT)
         if any(
             image.mime_type not in self._policy.allowed_output_mime_types
             for image in images
         ):
             return Rejected(RejectionReason.UNUSABLE_OUTPUT)
-        if (
-            sum(image.size_bytes for image in images)
-            > self._policy.max_total_output_bytes
-        ):
+        if any(image.size_bytes > self._policy.max_output_bytes for image in images):
             return Rejected(RejectionReason.UNUSABLE_OUTPUT)
         return outcome
 
@@ -291,6 +314,8 @@ class ImageFeatureService:
 __all__ = [
     "MAX_IMAGE_PROMPT_CHARS",
     "MAX_IMAGE_STYLE_CHARS",
+    "MAX_IMAGE_OUTPUT_BYTES",
+    "V1_IMAGE_OUTPUT_COUNT",
     "ImageEditRequest",
     "ImageExecutionPolicy",
     "ImageFeatureService",
