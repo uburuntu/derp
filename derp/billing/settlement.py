@@ -27,6 +27,7 @@ from derp.billing.types import (
     FulfillmentState,
     PaymentConflictError,
     ProductKind,
+    RefundedPaymentCommand,
     SubscriptionStateError,
     SubscriptionStateResult,
     UnknownProductError,
@@ -296,9 +297,14 @@ class PaymentSettlementService:
 
     async def clawback(
         self,
-        telegram_charge_id: str,
+        refund: RefundedPaymentCommand | str,
     ) -> ClawbackResult:
-        """Revoke only the charged source and turn committed use into debt."""
+        """Validate a provider refund, then revoke only its charged source."""
+        telegram_charge_id = (
+            refund.telegram_charge_id
+            if isinstance(refund, RefundedPaymentCommand)
+            else refund
+        )
         if not telegram_charge_id.strip():
             raise ValueError("telegram_charge_id must not be blank")
         now = self._aware_now()
@@ -310,6 +316,8 @@ class PaymentSettlementService:
             )
             if receipt is None:
                 raise LookupError("Payment receipt does not exist")
+            if isinstance(refund, RefundedPaymentCommand):
+                self._assert_refund_matches(receipt, refund)
             if receipt.status == "clawed_back":
                 existing = await self._clawback_result(session, receipt)
                 return ClawbackResult(
@@ -811,6 +819,30 @@ class PaymentSettlementService:
         if actual != expected:
             raise PaymentConflictError(
                 "Telegram charge ID replayed with different payment fields"
+            )
+
+    @staticmethod
+    def _assert_refund_matches(
+        receipt: PaymentReceipt,
+        refund: RefundedPaymentCommand,
+    ) -> None:
+        expected = (
+            refund.currency,
+            refund.total_amount,
+            hash_invoice_payload(refund.invoice_payload),
+        )
+        actual = (
+            receipt.currency,
+            receipt.total_amount,
+            receipt.payload_token_hash,
+        )
+        provider_matches = (
+            refund.provider_charge_id is None
+            or receipt.provider_charge_id == refund.provider_charge_id
+        )
+        if actual != expected or not provider_matches:
+            raise PaymentConflictError(
+                "Refund fields do not match the captured payment receipt"
             )
 
     @staticmethod

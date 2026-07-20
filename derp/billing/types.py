@@ -140,6 +140,26 @@ class CapturedPayment:
                 raise ValueError("subscription expiration requires a recurring payment")
 
 
+@dataclass(frozen=True, slots=True)
+class RefundedPaymentCommand:
+    """Allowlisted provider refund fields used for exact-source clawback."""
+
+    invoice_payload: str
+    telegram_charge_id: str
+    provider_charge_id: str | None
+    currency: str
+    total_amount: int
+
+    def __post_init__(self) -> None:
+        for name in ("invoice_payload", "telegram_charge_id", "currency"):
+            if not getattr(self, name).strip():
+                raise ValueError(f"{name} must not be blank")
+        if self.provider_charge_id is not None and not self.provider_charge_id.strip():
+            raise ValueError("provider_charge_id must not be blank when provided")
+        if self.total_amount <= 0:
+            raise ValueError("total_amount must be positive")
+
+
 class FulfillmentState(StrEnum):
     """Terminal local handling state for one captured charge."""
 
@@ -267,6 +287,7 @@ __all__ = [
     "PurchaseIntentHandle",
     "PurchaseTarget",
     "PurchaseTargetKind",
+    "RefundedPaymentCommand",
     "SubscriptionManagementSnapshot",
     "SubscriptionRenewalCommand",
     "SubscriptionStateError",

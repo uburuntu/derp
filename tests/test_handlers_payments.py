@@ -12,9 +12,11 @@ from aiogram.types import CallbackQuery
 from derp.billing import (
     ActiveSubscriptionError,
     CapturedPayment,
+    ClawbackResult,
     CommercePolicy,
     FulfillmentResult,
     FulfillmentState,
+    PaymentConflictError,
     PreCheckoutDecision,
     PreCheckoutRejection,
     PreCheckoutRequest,
@@ -24,12 +26,15 @@ from derp.billing import (
 )
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
 from derp.billing.telegram import PurchaseCallback, PurchaseTargetCode
+from derp.billing.types import RefundedPaymentCommand
 from derp.handlers.payments import (
     handle_buy_callback,
     handle_pre_checkout,
+    handle_refunded_payment,
     handle_successful_payment,
     reject_malformed_buy_callback,
 )
+from derp.observability import telemetry_fingerprint
 
 NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 OPEN_COMMERCE = CommercePolicy(public_intake_enabled=True)
@@ -363,6 +368,26 @@ def _settlement(result: FulfillmentResult | None = None) -> MagicMock:
     return service
 
 
+def _refund_message(make_message, **overrides):
+    message = make_message(text="")
+    values = {
+        "invoice_payload": "dpi1_opaque-token",
+        "telegram_payment_charge_id": "telegram-refund-1",
+        "provider_payment_charge_id": None,
+        "currency": "XTR",
+        "total_amount": 150,
+    }
+    values.update(overrides)
+    message.refunded_payment = MagicMock(**values)
+    return message
+
+
+def _refund_settlement(result: ClawbackResult | None = None) -> MagicMock:
+    service = MagicMock()
+    service.clawback = AsyncMock(return_value=result)
+    return service
+
+
 class TestSuccessfulPayment:
     @pytest.mark.asyncio
     async def test_maps_captured_subscription_and_reports_active_allowance(
@@ -498,4 +523,134 @@ class TestSuccessfulPayment:
         await handle_successful_payment(message, sender, settlement)
 
         settlement.fulfill.assert_not_awaited()
+        sender.send.assert_not_awaited()
+
+
+class TestRefundedPayment:
+    @pytest.mark.asyncio
+    async def test_maps_allowlisted_fields_and_reports_removed_value_and_debt(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _refund_message(make_message)
+        sender = mock_sender(message=message)
+        settlement = _refund_settlement(
+            ClawbackResult(
+                receipt_id=UUID(int=60),
+                wallet_id=UUID(int=61),
+                removed_available_credits=30,
+                debt_created_credits=20,
+                idempotent=False,
+            )
+        )
+
+        await handle_refunded_payment(message, sender, settlement)
+
+        settlement.clawback.assert_awaited_once_with(
+            RefundedPaymentCommand(
+                invoice_payload="dpi1_opaque-token",
+                telegram_charge_id="telegram-refund-1",
+                provider_charge_id=None,
+                currency="XTR",
+                total_amount=150,
+            )
+        )
+        text = sender.send.await_args.args[0]
+        assert "Unused credits removed: 30" in text
+        assert "Credits already used or reserved: 20" in text
+        assert "payment debt" in text
+
+    @pytest.mark.asyncio
+    async def test_idempotent_refund_has_unambiguous_copy(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _refund_message(
+            make_message,
+            provider_payment_charge_id="provider-refund-1",
+        )
+        sender = mock_sender(message=message)
+        settlement = _refund_settlement(
+            ClawbackResult(
+                receipt_id=UUID(int=62),
+                wallet_id=UUID(int=63),
+                removed_available_credits=0,
+                debt_created_credits=0,
+                idempotent=True,
+            )
+        )
+
+        await handle_refunded_payment(message, sender, settlement)
+
+        settlement.clawback.assert_awaited_once_with(
+            RefundedPaymentCommand(
+                invoice_payload="dpi1_opaque-token",
+                telegram_charge_id="telegram-refund-1",
+                provider_charge_id="provider-refund-1",
+                currency="XTR",
+                total_amount=150,
+            )
+        )
+        assert sender.send.await_args.args[0] == "This refund was already reconciled."
+
+    @pytest.mark.asyncio
+    async def test_receipt_mismatch_reports_review_without_sensitive_log_fields(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _refund_message(make_message)
+        sender = mock_sender(message=message)
+        settlement = _refund_settlement()
+        settlement.clawback.side_effect = PaymentConflictError("payload mismatch")
+
+        with patch("derp.handlers.payments.logfire.warning") as warning:
+            await handle_refunded_payment(message, sender, settlement)
+
+        assert "need review" in sender.send.await_args.args[0]
+        assert "No credits were changed" in sender.send.await_args.args[0]
+        attributes = warning.call_args.kwargs
+        assert attributes["error_type"] == "PaymentConflictError"
+        assert attributes["charge_fingerprint"] != "telegram-refund-1"
+        assert "invoice_payload" not in attributes
+
+    @pytest.mark.asyncio
+    async def test_reconciliation_failure_uses_redacted_exception_reporting(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _refund_message(make_message)
+        sender = mock_sender(message=message)
+        settlement = _refund_settlement()
+        error = RuntimeError("database endpoint with secret failed")
+        settlement.clawback.side_effect = error
+
+        with patch("derp.handlers.payments.report_exception") as report:
+            await handle_refunded_payment(message, sender, settlement)
+
+        report.assert_called_once_with(
+            "payment_refund_reconciliation_failed",
+            exception=error,
+            charge_fingerprint=telemetry_fingerprint("telegram-refund-1"),
+        )
+        assert "needs review" in sender.send.await_args.args[0]
+        assert "No credits were changed" in sender.send.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_missing_refund_returns_without_side_effects(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = make_message(text="")
+        message.refunded_payment = None
+        sender = mock_sender(message=message)
+        settlement = _refund_settlement()
+
+        await handle_refunded_payment(message, sender, settlement)
+
+        settlement.clawback.assert_not_awaited()
         sender.send.assert_not_awaited()

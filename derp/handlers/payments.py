@@ -15,6 +15,9 @@ from aiogram.types import (
     PreCheckoutQuery,
     SuccessfulPayment,
 )
+from aiogram.types import (
+    RefundedPayment as TelegramRefundedPayment,
+)
 
 from derp.billing import (
     CLOSED_COMMERCE_POLICY,
@@ -22,11 +25,13 @@ from derp.billing import (
     CapturedPayment,
     CommercePolicy,
     FulfillmentState,
+    PaymentConflictError,
     PaymentSettlementService,
     PreCheckoutRequest,
     ProductKind,
     PurchaseIntentService,
     PurchaseTarget,
+    RefundedPaymentCommand,
     UnknownProductError,
 )
 from derp.billing.telegram import (
@@ -235,6 +240,67 @@ async def handle_successful_payment(
     )
 
 
+@reconciliation_router.message(F.refunded_payment)
+async def handle_refunded_payment(
+    message: Message,
+    sender: MessageSender,
+    payment_settlement: PaymentSettlementService,
+) -> None:
+    """Validate and reconcile each Telegram refund against its captured charge."""
+    payment = message.refunded_payment
+    if not payment:
+        return
+
+    charge_fingerprint = telemetry_fingerprint(payment.telegram_payment_charge_id)
+    try:
+        result = await payment_settlement.clawback(_refunded_payment(payment))
+    except (LookupError, PaymentConflictError, ValueError) as exc:
+        logfire.warning(
+            "payment_refund_needs_review",
+            error_type=type(exc).__name__,
+            charge_fingerprint=charge_fingerprint,
+        )
+        await sender.send(
+            "Refund received, but its details need review. No credits were "
+            "changed; support can reconcile it safely."
+        )
+        return
+    except Exception as exc:
+        report_exception(
+            "payment_refund_reconciliation_failed",
+            exception=exc,
+            charge_fingerprint=charge_fingerprint,
+        )
+        await sender.send(
+            "Refund received, but local reconciliation needs review. No credits "
+            "were changed; support can reconcile it safely."
+        )
+        return
+
+    if result.idempotent:
+        await sender.send("This refund was already reconciled.")
+    else:
+        lines = [
+            "<b>Refund reconciled</b>",
+            f"Unused credits removed: {result.removed_available_credits}",
+        ]
+        if result.debt_created_credits:
+            lines.append(
+                "Credits already used or reserved: "
+                f"{result.debt_created_credits} (recorded as payment debt)."
+            )
+        await sender.send("\n".join(lines))
+
+    logfire.info(
+        "payment_refund_reconciled",
+        receipt_id=str(result.receipt_id),
+        idempotent=result.idempotent,
+        removed_credits=result.removed_available_credits,
+        debt_credits=result.debt_created_credits,
+        charge_fingerprint=charge_fingerprint,
+    )
+
+
 def _captured_payment(
     payment: SuccessfulPayment,
     payer_telegram_id: int,
@@ -255,4 +321,15 @@ def _captured_payment(
         is_recurring=bool(payment.is_recurring),
         is_first_recurring=bool(payment.is_first_recurring),
         subscription_expiration_at=expiration,
+    )
+
+
+def _refunded_payment(payment: TelegramRefundedPayment) -> RefundedPaymentCommand:
+    """Map allowlisted Telegram fields into the provider-neutral command."""
+    return RefundedPaymentCommand(
+        invoice_payload=payment.invoice_payload,
+        telegram_charge_id=payment.telegram_payment_charge_id,
+        provider_charge_id=payment.provider_payment_charge_id,
+        currency=payment.currency,
+        total_amount=payment.total_amount,
     )

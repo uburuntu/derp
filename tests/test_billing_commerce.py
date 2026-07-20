@@ -29,6 +29,7 @@ from derp.billing import (
     UnknownProductError,
 )
 from derp.billing.payloads import hash_invoice_payload
+from derp.billing.types import RefundedPaymentCommand
 from derp.models import (
     Chat,
     PaymentReceipt,
@@ -143,6 +144,22 @@ def _top_up_payment(handle, telegram_id: int, charge_id: str) -> CapturedPayment
         currency="XTR",
         total_amount=handle.stars,
     )
+
+
+def _refund_command(
+    handle,
+    charge_id: str,
+    **overrides,
+) -> RefundedPaymentCommand:
+    values = {
+        "invoice_payload": handle.invoice_payload,
+        "telegram_charge_id": charge_id,
+        "provider_charge_id": f"provider:{charge_id}",
+        "currency": "XTR",
+        "total_amount": handle.stars,
+    }
+    values.update(overrides)
+    return RefundedPaymentCommand(**values)
 
 
 async def test_intent_is_hashed_and_precheckout_validates_every_payment_field(
@@ -522,6 +539,83 @@ async def test_subscription_clawback_reconciles_its_exact_cycle_source(
         assert cycle.status == "clawed_back"
         assert receipt.status == "clawed_back"
         assert wallet.debt_credits == consumed
+
+
+async def test_typed_refund_accepts_missing_optional_provider_id_and_is_idempotent(
+    commerce_env: CommerceEnvironment,
+) -> None:
+    user_id, telegram_id = await _create_user(commerce_env)
+    handle = await _prechecked_top_up(
+        commerce_env,
+        user_id=user_id,
+        telegram_id=telegram_id,
+    )
+    charge_id = "typed-refund-without-provider"
+    fulfilled = await commerce_env.settlement.fulfill(
+        _top_up_payment(handle, telegram_id, charge_id)
+    )
+    refund = _refund_command(handle, charge_id, provider_charge_id=None)
+
+    clawback = await commerce_env.settlement.clawback(refund)
+    duplicate = await commerce_env.settlement.clawback(refund)
+
+    assert clawback.wallet_id == fulfilled.wallet_id
+    assert clawback.removed_available_credits == handle.credits
+    assert clawback.debt_created_credits == 0
+    assert not clawback.idempotent
+    assert duplicate.idempotent
+
+
+@pytest.mark.parametrize(
+    ("mismatched_field", "mismatched_value"),
+    [
+        pytest.param("invoice_payload", "dpi1_different", id="payload"),
+        pytest.param("provider_charge_id", "provider:different", id="provider"),
+        pytest.param("currency", "USD", id="currency"),
+        pytest.param("total_amount", 999_999, id="amount"),
+    ],
+)
+async def test_refund_mismatch_does_not_mutate_receipt_or_wallet(
+    commerce_env: CommerceEnvironment,
+    mismatched_field: str,
+    mismatched_value: str | int,
+) -> None:
+    user_id, telegram_id = await _create_user(commerce_env)
+    handle = await _prechecked_top_up(
+        commerce_env,
+        user_id=user_id,
+        telegram_id=telegram_id,
+    )
+    charge_id = f"refund-mismatch-{mismatched_field}"
+    fulfilled = await commerce_env.settlement.fulfill(
+        _top_up_payment(handle, telegram_id, charge_id)
+    )
+    refund = _refund_command(
+        handle,
+        charge_id,
+        **{mismatched_field: mismatched_value},
+    )
+
+    with pytest.raises(PaymentConflictError):
+        await commerce_env.settlement.clawback(refund)
+
+    async with commerce_env.transactions() as session:
+        receipt = await session.get(PaymentReceipt, fulfilled.receipt_id)
+        lot = await session.get(WalletLot, fulfilled.wallet_lot_id)
+        wallet = await session.get(Wallet, fulfilled.wallet_id)
+        event_types = list(
+            await session.scalars(
+                select(WalletLedgerEntry.event_type).where(
+                    WalletLedgerEntry.payment_receipt_id == fulfilled.receipt_id
+                )
+            )
+        )
+        assert receipt is not None and receipt.status == "fulfilled"
+        assert receipt.clawed_back_at is None
+        assert lot is not None and lot.available_credits == handle.credits
+        assert lot.clawed_back_credits == 0
+        assert wallet is not None and wallet.debt_credits == 0
+        assert event_types == ["grant"]
 
 
 async def test_clawback_is_source_specific_and_later_grant_reconciles_debt(
