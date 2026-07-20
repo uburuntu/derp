@@ -16,6 +16,7 @@ from aiogram.utils.chat_action import ChatActionMiddleware
 from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
+from derp.artifacts import FilesystemArtifactStore
 from derp.billing import (
     CommercePolicy,
     PaymentSettlementService,
@@ -23,6 +24,12 @@ from derp.billing import (
 )
 from derp.config import Settings
 from derp.db import DatabaseManager, init_db_manager
+from derp.delivery import (
+    MAX_TELEGRAM_PHOTO_BYTES,
+    DeliveryService,
+    ResendTokenCodec,
+)
+from derp.features import ImageFeatureService, ImageOperationCoordinator
 from derp.handlers import (
     basic,
     chat,
@@ -40,7 +47,8 @@ from derp.handlers import (
 )
 from derp.health import RuntimeHeartbeat
 from derp.history.retention import HistoryRetentionWorker
-from derp.media import MediaGateway
+from derp.llm.image_executor import PydanticAIImageExecutor
+from derp.media import MediaGateway, TelegramImageSourceLoader
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
 from derp.middlewares.api_resilient import ResilientRequestMiddleware
 from derp.middlewares.commerce import CommerceMiddleware
@@ -49,8 +57,8 @@ from derp.middlewares.database_logger import DatabaseLoggerMiddleware
 from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
-from derp.middlewares.operation_ledger import OperationLedgerMiddleware
 from derp.middlewares.sender import MessageSenderMiddleware
+from derp.operations import OperationLedger, QuoteEngine
 from derp.tools.authorization import ActorRoleResolver
 
 logger = logging.getLogger(__name__)
@@ -80,6 +88,10 @@ class Runtime:
     db: DatabaseManager
     media_gateway: MediaGateway
     actor_role_resolver: ActorRoleResolver
+    artifact_store: FilesystemArtifactStore
+    operation_ledger: OperationLedger
+    delivery_service: DeliveryService
+    image_operation_coordinator: ImageOperationCoordinator
 
 
 def create_bot(settings: Settings) -> Bot:
@@ -113,6 +125,29 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             httpx.AsyncClient(follow_redirects=False)
         )
         await db.connect()
+        media_gateway = MediaGateway(media_client)
+        artifact_store = FilesystemArtifactStore(
+            settings.artifact_store_path,
+            max_item_bytes=MAX_TELEGRAM_PHOTO_BYTES,
+        )
+        operation_ledger = OperationLedger(db.session)
+        delivery_service = DeliveryService(
+            db.session,
+            artifact_store,
+            bot,
+            operation_ledger,
+            ResendTokenCodec(settings.callback_signing_key),
+        )
+        image_service = ImageFeatureService(
+            PydanticAIImageExecutor(),
+            source_loader=TelegramImageSourceLoader(media_gateway, bot=bot),
+        )
+        image_operation_coordinator = ImageOperationCoordinator(
+            operation_ledger,
+            QuoteEngine(),
+            image_service,
+            delivery_service,
+        )
         await stack.enter_async_context(HistoryRetentionWorker(db))
         await stack.enter_async_context(
             SubscriptionExpiryWorker(PaymentSettlementService(db.session))
@@ -120,8 +155,12 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
         yield Runtime(
             bot=bot,
             db=db,
-            media_gateway=MediaGateway(media_client),
+            media_gateway=media_gateway,
             actor_role_resolver=ActorRoleResolver(bot),
+            artifact_store=artifact_store,
+            operation_ledger=operation_ledger,
+            delivery_service=delivery_service,
+            image_operation_coordinator=image_operation_coordinator,
         )
 
 
@@ -137,6 +176,9 @@ def create_dispatcher(
         storage=MemoryStorage(),
         media_gateway=runtime.media_gateway,
         actor_role_resolver=runtime.actor_role_resolver,
+        operation_ledger=runtime.operation_ledger,
+        delivery_service=runtime.delivery_service,
+        image_operation_coordinator=runtime.image_operation_coordinator,
         commerce_policy=CommercePolicy(
             public_intake_enabled=settings.public_purchases_enabled
         ),
@@ -159,7 +201,6 @@ def create_dispatcher(
 
     dispatcher.update.middleware(EventContextMiddleware(db=db))
     dispatcher.update.middleware(DatabaseModelMiddleware(db=db))
-    dispatcher.update.middleware(OperationLedgerMiddleware(db=db))
     dispatcher.update.middleware(CommerceMiddleware(db=db))
     dispatcher.update.middleware(CreditServiceMiddleware(db=db))
     dispatcher.message.middleware(MessageSenderMiddleware())

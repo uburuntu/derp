@@ -75,11 +75,16 @@ class FakeSubscriptionExpiryWorker:
 
 
 @pytest.mark.asyncio
-async def test_runtime_closes_bot_before_database() -> None:
+async def test_runtime_closes_bot_before_database(tmp_path) -> None:
     events: list[str] = []
     bot = FakeBot(events)
     database = FakeDatabase(events)
-    settings = SimpleNamespace(database_url="postgresql://test", environment="dev")
+    settings = SimpleNamespace(
+        database_url="postgresql://test",
+        environment="dev",
+        artifact_store_path=tmp_path / "artifacts",
+        callback_signing_key=b"runtime-test-key".ljust(32, b"!"),
+    )
 
     with (
         patch("derp.application.create_bot", return_value=bot),
@@ -96,6 +101,14 @@ async def test_runtime_closes_bot_before_database() -> None:
         async with open_runtime(settings) as runtime:
             assert runtime.bot is bot
             assert runtime.db is database
+            assert runtime.delivery_service._spend_reversal is runtime.operation_ledger
+            assert (
+                runtime.image_operation_coordinator._ledger is runtime.operation_ledger
+            )
+            assert (
+                runtime.image_operation_coordinator._delivery_service
+                is runtime.delivery_service
+            )
             events.append("running")
 
     assert events == [

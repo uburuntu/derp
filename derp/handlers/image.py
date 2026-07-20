@@ -1,33 +1,176 @@
-"""Image generation and editing handler using Pydantic-AI.
-
-This handler processes /imagine and /edit commands with credit checking,
-using the catalog's native image model.
-
-Credit-aware:
-- Free tier: 1 free image per day
-- Paid tier: Deducts credits per image
-"""
+"""Thin Telegram adapters for durable image operations."""
 
 from __future__ import annotations
 
-import logfire
 from aiogram import Router, flags
 from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
-from pydantic_ai import BinaryContent, BinaryImage
-from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
+from derp.catalog import GoogleModelKey
 from derp.common.extractor import Extractor
-from derp.common.sender import MessageSender
-from derp.credits import CreditService
-from derp.credits.purchase_suspension import purchase_suspension_message
+from derp.delivery import DeliveryTarget, ProgressStage
+from derp.execution import Feature, plan_execution
+from derp.features import (
+    ImageAwaitingFunding,
+    ImageDelivered,
+    ImageDeliveryUncertain,
+    ImageEditRequest,
+    ImageGenerateRequest,
+    ImageInProgress,
+    ImageInvocation,
+    ImageNotCharged,
+    ImageNotChargedReason,
+    ImageOperationCoordinator,
+    ImageOperationOutcome,
+    ImageRefunded,
+    ImageRequest,
+)
 from derp.filters.meta import MetaCommand, MetaInfo
-from derp.llm import create_image_agent
+from derp.history.core import DEFAULT_TOKEN_ESTIMATOR
+from derp.media import image_reference_from_telegram
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
+from derp.operations import OperationId, ReservationRejection
 
 router = Router(name="image")
+
+
+def _funding_text(outcome: ImageAwaitingFunding) -> str:
+    if outcome.reason is ReservationRejection.PERSONAL_CONSENT_REQUIRED:
+        return _(
+            "Funding approval is required. Not charged. Enable personal credit "
+            "spending for this chat, then retry."
+        )
+    if outcome.reason is ReservationRejection.WALLET_IN_DEBT:
+        return _("Funding is unavailable while this balance is in debt. Not charged.")
+    return _("Funding needed: {credits} credits. Not charged.").format(
+        credits=outcome.quote.credits
+    )
+
+
+def _not_charged_text(reason: ImageNotChargedReason) -> str:
+    if reason is ImageNotChargedReason.INVALID_INPUT:
+        return _("Not charged. The image request is invalid.")
+    if reason is ImageNotChargedReason.POLICY_REJECTION:
+        return _("Not charged. The image request was declined.")
+    if reason is ImageNotChargedReason.UNUSABLE_OUTPUT:
+        return _("Not charged. The model did not return a usable image.")
+    if reason is ImageNotChargedReason.QUOTE_EXPIRED:
+        return _("Not charged. The price expired; send the request again.")
+    if reason is ImageNotChargedReason.CANCELED:
+        return _("Not charged. The image request was canceled.")
+    return _("Not charged. Image generation did not complete. Please try again.")
+
+
+def _outcome_text(outcome: ImageOperationOutcome) -> str:
+    if isinstance(outcome, ImageDelivered):
+        return _("Image delivered.")
+    if isinstance(outcome, ImageAwaitingFunding):
+        return _funding_text(outcome)
+    if isinstance(outcome, ImageNotCharged):
+        return _not_charged_text(outcome.reason)
+    if isinstance(outcome, ImageRefunded):
+        return _("Refunded. Delivery failed, so the charged credits were returned.")
+    if isinstance(outcome, ImageDeliveryUncertain):
+        return _(
+            "Delivery uncertain. The image may already have arrived. Do not retry yet."
+        )
+    if isinstance(outcome, ImageInProgress):
+        return {
+            ProgressStage.PREPARING: _(
+                "In progress. This image request is still being prepared."
+            ),
+            ProgressStage.GENERATING: _(
+                "In progress. This image is still being generated."
+            ),
+            ProgressStage.DELIVERING: _(
+                "In progress. This image is still being delivered."
+            ),
+        }[outcome.stage]
+    raise TypeError(f"Unsupported image operation outcome: {type(outcome).__name__}")
+
+
+async def _edit_progress(progress: Message, text: str) -> Message:
+    """Keep one status message when possible and preserve the final outcome."""
+    try:
+        edited = await progress.edit_text(text)
+    except Exception as exc:
+        report_exception(
+            "image_progress_edit_failed",
+            exception=exc,
+            level="warning",
+        )
+        try:
+            return await progress.reply(text)
+        except Exception as fallback_exc:
+            report_exception(
+                "image_progress_fallback_failed",
+                exception=fallback_exc,
+                level="warning",
+            )
+            return progress
+    return edited if isinstance(edited, Message) else progress
+
+
+def _delivery_target(message: Message, reply_to: Message) -> DeliveryTarget:
+    return DeliveryTarget(
+        chat_id=message.chat.id,
+        thread_id=message.message_thread_id,
+        reply_to_message_id=reply_to.message_id,
+        business_connection_id=message.business_connection_id,
+    )
+
+
+async def _run_image_operation(
+    *,
+    message: Message,
+    meta: MetaInfo,
+    coordinator: ImageOperationCoordinator,
+    user_model: UserModel,
+    chat_model: ChatModel,
+    feature: Feature,
+    request: ImageRequest,
+) -> Message:
+    operation_id = OperationId.for_command(
+        feature=feature,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+    )
+    target_message = meta.target_message
+    target = _delivery_target(message, target_message)
+    invocation = ImageInvocation(
+        operation_id=operation_id,
+        request_key=(
+            f"telegram:command:{feature.value}:{message.chat.id}:{message.message_id}"
+        ),
+        requester_id=user_model.id,
+        chat_id=chat_model.id,
+        thread_id=target.thread_id,
+        target=target,
+        input_tokens=DEFAULT_TOKEN_ESTIMATOR.estimate_text(request.prompt),
+    )
+    plan = plan_execution(feature, GoogleModelKey.IMAGE)
+
+    progress = await message.reply(_("Preparing image..."))
+    progress = await _edit_progress(progress, _("Generating image..."))
+    try:
+        outcome = await coordinator.run(invocation, plan, request)
+    except Exception as exc:
+        report_exception(
+            "image_operation_failed",
+            exception=exc,
+            operation_id=str(operation_id),
+            feature=feature.value,
+        )
+        return await _edit_progress(
+            progress,
+            _(
+                "The image request could not be completed. "
+                "Check your credit balance before retrying."
+            ),
+        )
+    return await _edit_progress(progress, _outcome_text(outcome))
 
 
 @router.message(MetaCommand("imagine", "image", "img", "и"))
@@ -35,123 +178,32 @@ router = Router(name="image")
 async def handle_imagine(
     message: Message,
     meta: MetaInfo,
-    sender: MessageSender,
-    credit_service: CreditService,
+    image_operation_coordinator: ImageOperationCoordinator,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
 ) -> Message:
-    """Handle /imagine command for image generation.
-
-    Credit-aware: checks credits/daily limit before generating.
-    """
+    """Create one durable image-generation operation from a Telegram command."""
     prompt = meta.target_text
     if not prompt:
         return await message.reply(_("Usage: /imagine <prompt>"))
-
-    if not user_model or not chat_model:
+    if user_model is None or chat_model is None:
         return await message.reply(
-            _("😅 Could not verify your access. Please try again.")
+            _("Could not verify your account. Please try again.")
         )
-
-    result = await credit_service.check_tool_access(
-        user_model, chat_model, "image_generate"
-    )
-
-    if not result.allowed:
-        return await message.reply(
-            _("✨ {reason}").format(reason=result.reject_reason)
-            + "\n\n"
-            + purchase_suspension_message()
-        )
-    plan = result.require_plan()
-
-    # Create sender bound to target message for reply
-    target_sender = MessageSender.from_message(meta.target_message)
 
     try:
-        with logfire.span(
-            "image_generate",
-            _tags=["agent", "image"],
-            telegram_chat_id=message.chat.id,
-            telegram_user_id=message.from_user and message.from_user.id,
-            prompt_length=len(prompt),
-            credit_source=result.source,
-        ):
-            agent = create_image_agent(plan)
-            run_result = await agent.run(prompt)
-            output = run_result.output
-
-            # Check for multiple images in response
-            if hasattr(run_result, "response") and hasattr(
-                run_result.response, "images"
-            ):
-                images = run_result.response.images
-                if images:
-                    logfire.info("images_generated", count=len(images))
-                    idempotency_key = (
-                        f"imagine:{chat_model.telegram_id}:{message.message_id}"
-                    )
-                    await credit_service.deduct(
-                        result,
-                        user_model,
-                        chat_model,
-                        "image_generate",
-                        idempotency_key=idempotency_key,
-                    )
-                    sent = await target_sender.compose().images(images).reply()
-                    return sent if isinstance(sent, Message) else sent[-1]
-
-            # Handle single image or text output
-            if isinstance(output, BinaryImage):
-                idempotency_key = (
-                    f"imagine:{chat_model.telegram_id}:{message.message_id}"
-                )
-                await credit_service.deduct(
-                    result,
-                    user_model,
-                    chat_model,
-                    "image_generate",
-                    idempotency_key=idempotency_key,
-                )
-                sent = await target_sender.compose().image(output).reply()
-                return sent if isinstance(sent, Message) else sent[-1]
-
-            # Text response (refusal or error from model)
-            return await meta.target_message.reply(
-                output or _("🤷 No image generated.")
-            )
-
-    except ModelHTTPError as exc:
-        if exc.status_code == 429:
-            logfire.warning(
-                "imagine_rate_limited",
-                status_code=exc.status_code,
-                model=exc.model_name,
-            )
-            return await message.reply(
-                _(
-                    "⏳ The AI service is overloaded right now.\n\n"
-                    "This happens during peak usage. Please wait 30-60 seconds "
-                    "and try again."
-                )
-            )
-        report_exception("imagine_model_http_error", status_code=exc.status_code)
-        return await message.reply(
-            _("😅 Something went wrong while generating the image. Try again later.")
-        )
-    except UnexpectedModelBehavior:
-        logfire.warning("imagine_unexpected_behavior")
-        return await message.reply(
-            _(
-                "⏳ I'm getting too many requests right now. "
-                "Please try again in about 30 seconds."
-            )
-        )
-    except Exception:
-        report_exception("imagine_failed")
-        return await message.reply(
-            _("😅 Something went wrong while generating the image. Try again later.")
-        )
+        request = ImageGenerateRequest(prompt=prompt)
+    except TypeError, ValueError:
+        return await message.reply(_("The image prompt is too long or invalid."))
+    return await _run_image_operation(
+        message=message,
+        meta=meta,
+        coordinator=image_operation_coordinator,
+        user_model=user_model,
+        chat_model=chat_model,
+        feature=Feature.IMAGE_GENERATE,
+        request=request,
+    )
 
 
 @router.message(MetaCommand("edit", "ed", "e", "е"))
@@ -159,132 +211,37 @@ async def handle_imagine(
 async def handle_edit(
     message: Message,
     meta: MetaInfo,
-    sender: MessageSender,
-    credit_service: CreditService,
+    image_operation_coordinator: ImageOperationCoordinator,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
 ) -> Message:
-    """Handle /edit command for image editing.
-
-    Credit-aware: checks credits/daily limit before editing.
-    """
+    """Create one durable image-edit operation from Telegram source metadata."""
     prompt = meta.target_text
     if not prompt:
         return await message.reply(_("Reply to an image and use: /edit <prompt>"))
-
-    photo = await Extractor.photo(message, with_profile_photo=True)
-    if not photo:
+    if user_model is None or chat_model is None:
         return await message.reply(
-            _("Please reply to an image (photo/document/sticker) to edit it.")
+            _("Could not verify your account. Please try again.")
         )
 
-    if not user_model or not chat_model:
+    photo = await Extractor.photo(message)
+    if photo is None:
         return await message.reply(
-            _("😅 Could not verify your access. Please try again.")
+            _("Reply to or attach an image, then use: /edit <prompt>")
         )
-
-    result = await credit_service.check_tool_access(
-        user_model, chat_model, "image_edit"
-    )
-
-    if not result.allowed:
-        return await message.reply(
-            _("✨ {reason}").format(reason=result.reject_reason)
-            + "\n\n"
-            + purchase_suspension_message()
-        )
-    plan = result.require_plan()
-
-    # Create sender bound to target message for reply
-    target_sender = MessageSender.from_message(meta.target_message)
-
     try:
-        with logfire.span(
-            "image_edit",
-            _tags=["agent", "image"],
-            telegram_chat_id=message.chat.id,
-            telegram_user_id=message.from_user and message.from_user.id,
-            prompt_length=len(prompt),
-            credit_source=result.source,
-        ):
-            data = await photo.download()
-            logfire.debug("source_image_downloaded", size=len(data))
-
-            agent = create_image_agent(plan)
-            user_prompt: list[str | BinaryContent] = [
-                prompt,
-                BinaryContent(data=data, media_type=photo.media_type),
-            ]
-
-            run_result = await agent.run(user_prompt)
-            output = run_result.output
-
-            # Check for multiple images in response
-            if hasattr(run_result, "response") and hasattr(
-                run_result.response, "images"
-            ):
-                images = run_result.response.images
-                if images:
-                    logfire.info("images_edited", count=len(images))
-                    idempotency_key = (
-                        f"edit:{chat_model.telegram_id}:{message.message_id}"
-                    )
-                    await credit_service.deduct(
-                        result,
-                        user_model,
-                        chat_model,
-                        "image_edit",
-                        idempotency_key=idempotency_key,
-                    )
-                    sent = await target_sender.compose().images(images).reply()
-                    return sent if isinstance(sent, Message) else sent[-1]
-
-            # Handle single image or text output
-            if isinstance(output, BinaryImage):
-                idempotency_key = f"edit:{chat_model.telegram_id}:{message.message_id}"
-                await credit_service.deduct(
-                    result,
-                    user_model,
-                    chat_model,
-                    "image_edit",
-                    idempotency_key=idempotency_key,
-                )
-                sent = await target_sender.compose().image(output).reply()
-                return sent if isinstance(sent, Message) else sent[-1]
-
-            # Text response (refusal or error from model)
-            return await meta.target_message.reply(
-                output or _("🤷 No image generated.")
-            )
-
-    except ModelHTTPError as exc:
-        if exc.status_code == 429:
-            logfire.warning(
-                "edit_rate_limited",
-                status_code=exc.status_code,
-                model=exc.model_name,
-            )
-            return await message.reply(
-                _(
-                    "⏳ The AI service is overloaded right now.\n\n"
-                    "This happens during peak usage. Please wait 30-60 seconds "
-                    "and try again."
-                )
-            )
-        report_exception("edit_model_http_error", status_code=exc.status_code)
-        return await message.reply(
-            _("😅 Something went wrong while editing the image. Try again later.")
+        request = ImageEditRequest(
+            prompt=prompt,
+            source=image_reference_from_telegram(photo.media),
         )
-    except UnexpectedModelBehavior:
-        logfire.warning("edit_unexpected_behavior")
-        return await message.reply(
-            _(
-                "⏳ I'm getting too many requests right now. "
-                "Please try again in about 30 seconds."
-            )
-        )
-    except Exception:
-        report_exception("edit_failed")
-        return await message.reply(
-            _("😅 Something went wrong while editing the image. Try again later.")
-        )
+    except TypeError, ValueError:
+        return await message.reply(_("That image cannot be edited."))
+    return await _run_image_operation(
+        message=message,
+        meta=meta,
+        coordinator=image_operation_coordinator,
+        user_model=user_model,
+        chat_model=chat_model,
+        feature=Feature.IMAGE_EDIT,
+        request=request,
+    )

@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 import logfire
@@ -446,6 +446,10 @@ async def test_m1_dispatch_journey_matrix(
         db=database,
         media_gateway=media_gateway,
         actor_role_resolver=_RoleResolver(),
+        artifact_store=MagicMock(),
+        operation_ledger=MagicMock(),
+        delivery_service=MagicMock(),
+        image_operation_coordinator=MagicMock(),
     )
     dispatcher = create_dispatcher(
         runtime,
