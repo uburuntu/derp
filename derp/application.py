@@ -16,6 +16,7 @@ from aiogram.utils.chat_action import ChatActionMiddleware
 from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
+from derp.billing import CommercePolicy
 from derp.config import Settings
 from derp.db import DatabaseManager, init_db_manager
 from derp.handlers import (
@@ -36,6 +37,7 @@ from derp.history.retention import HistoryRetentionWorker
 from derp.media import MediaGateway
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
 from derp.middlewares.api_resilient import ResilientRequestMiddleware
+from derp.middlewares.commerce import CommerceMiddleware
 from derp.middlewares.credit_service import CreditServiceMiddleware
 from derp.middlewares.database_logger import DatabaseLoggerMiddleware
 from derp.middlewares.db_models import DatabaseModelMiddleware
@@ -126,6 +128,9 @@ def create_dispatcher(
         storage=MemoryStorage(),
         media_gateway=runtime.media_gateway,
         actor_role_resolver=runtime.actor_role_resolver,
+        commerce_policy=CommercePolicy(
+            public_intake_enabled=settings.public_purchases_enabled
+        ),
     )
 
     i18n = I18n(path="derp/locales", default_locale="en", domain="messages")
@@ -146,6 +151,7 @@ def create_dispatcher(
     dispatcher.update.middleware(EventContextMiddleware(db=db))
     dispatcher.update.middleware(DatabaseModelMiddleware(db=db))
     dispatcher.update.middleware(OperationLedgerMiddleware(db=db))
+    dispatcher.update.middleware(CommerceMiddleware(db=db))
     dispatcher.update.middleware(CreditServiceMiddleware(db=db))
     dispatcher.message.middleware(MessageSenderMiddleware())
     dispatcher.callback_query.middleware(MessageSenderMiddleware())

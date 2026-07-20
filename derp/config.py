@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     # PostgreSQL database connection string
     database_url: str = "postgresql+asyncpg://localhost:5432/derp"
     polling_concurrency: int = Field(default=10, ge=1)
+    public_purchases_enabled: bool = False
 
     # Google API key used by all configured models
     google_api_paid_key: SecretStr

@@ -1,6 +1,7 @@
 """Durable Stars product, intent, settlement, and subscription API."""
 
 from derp.billing.intents import PurchaseIntentService
+from derp.billing.policy import CLOSED_COMMERCE_POLICY, CommercePolicy
 from derp.billing.products import (
     DEFAULT_PRODUCT_CATALOG,
     PRODUCT_VERSION,
@@ -38,6 +39,8 @@ __all__ = [
     "ActiveSubscriptionError",
     "CapturedPayment",
     "ClawbackResult",
+    "CLOSED_COMMERCE_POLICY",
+    "CommercePolicy",
     "CommerceError",
     "FulfillmentResult",
     "FulfillmentState",

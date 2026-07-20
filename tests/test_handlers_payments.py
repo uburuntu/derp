@@ -1,216 +1,501 @@
-"""Tests for payment handler."""
+"""Tests for the durable Telegram Stars payment adapters."""
 
-from unittest.mock import AsyncMock, MagicMock
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import pytest
+from aiogram.types import CallbackQuery
 
-from derp.credits.packs import CREDIT_PACKS
+from derp.billing import (
+    ActiveSubscriptionError,
+    CapturedPayment,
+    CommercePolicy,
+    FulfillmentResult,
+    FulfillmentState,
+    PreCheckoutDecision,
+    PreCheckoutRejection,
+    PreCheckoutRequest,
+    ProductKind,
+    PurchaseIntentHandle,
+    PurchaseTarget,
+)
+from derp.billing.products import DEFAULT_PRODUCT_CATALOG
+from derp.billing.telegram import PurchaseCallback, PurchaseTargetCode
 from derp.handlers.payments import (
     handle_buy_callback,
     handle_pre_checkout,
     handle_successful_payment,
+    reject_malformed_buy_callback,
 )
 
+NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
+OPEN_COMMERCE = CommercePolicy(public_intake_enabled=True)
 
-def _get_text_from_call_args(call_args):
-    """Extract text from mock call_args (handles both positional and keyword)."""
-    if call_args.args:
-        return call_args.args[0]
-    if call_args.kwargs and "text" in call_args.kwargs:
-        return call_args.kwargs["text"]
-    return ""
+
+def _intent(
+    *,
+    kind: ProductKind = ProductKind.TOP_UP,
+    target: PurchaseTarget | None = None,
+    product_id: str = "starter",
+) -> PurchaseIntentHandle:
+    product = (
+        DEFAULT_PRODUCT_CATALOG.subscription_plan
+        if kind is ProductKind.SUBSCRIPTION
+        else DEFAULT_PRODUCT_CATALOG.current_top_ups[product_id]
+    )
+    return PurchaseIntentHandle(
+        intent_id=UUID(int=10),
+        invoice_payload="dpi1_opaque-token",
+        product_kind=kind,
+        product_id=product.id,
+        product_version=product.version,
+        target=target or PurchaseTarget.user(UUID(int=1)),
+        credits=product.credits,
+        stars=product.stars,
+        currency=product.currency,
+        expires_at=NOW,
+        subscription_period_seconds=getattr(product, "period_seconds", None),
+    )
+
+
+def _purchase_intents(*, handle: PurchaseIntentHandle | None = None) -> MagicMock:
+    service = MagicMock()
+    service.create_top_up_intent = AsyncMock(return_value=handle)
+    service.create_subscription_intent = AsyncMock(return_value=handle)
+    service.validate_pre_checkout = AsyncMock()
+    return service
+
+
+def _callback(make_message, make_user) -> CallbackQuery:
+    callback = MagicMock(spec=CallbackQuery)
+    callback.message = make_message(text="purchase")
+    callback.message.business_connection_id = "business-1"
+    callback.from_user = make_user(id=12345)
+    callback.bot = MagicMock()
+    callback.bot.create_invoice_link = AsyncMock(
+        return_value="https://t.me/$invoice-link"
+    )
+    callback.answer = AsyncMock()
+    return callback
 
 
 class TestBuyCallback:
-    """Tests for buy button callback handler."""
+    @pytest.mark.asyncio
+    async def test_public_intake_is_fail_closed_by_default(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+    ) -> None:
+        service = _purchase_intents()
+        callback = _callback(make_message, make_user)
+
+        await handle_buy_callback(
+            callback,
+            PurchaseCallback(
+                kind=ProductKind.TOP_UP,
+                product_id="starter",
+                target=PurchaseTargetCode.USER,
+            ),
+            service,
+            mock_user_model(telegram_id=12345),
+        )
+
+        service.create_top_up_intent.assert_not_awaited()
+        callback.bot.create_invoice_link.assert_not_awaited()
+        callback.answer.assert_awaited_once_with(
+            "Purchases are not enabled yet",
+            show_alert=True,
+        )
 
     @pytest.mark.asyncio
-    async def test_rejects_stale_valid_button_without_sending_invoice(self):
-        callback = MagicMock()
-        callback.data = "buy:starter:user"
-        callback.from_user.id = 12345
-        callback.message = MagicMock()
-        callback.message.answer = AsyncMock()
-        callback.answer = AsyncMock()
+    async def test_personal_top_up_creates_bound_intent_and_invoice_link(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+    ) -> None:
+        user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+        handle = _intent(target=PurchaseTarget.user(user.id))
+        service = _purchase_intents(handle=handle)
+        callback = _callback(make_message, make_user)
 
-        await handle_buy_callback(callback)
+        await handle_buy_callback(
+            callback,
+            PurchaseCallback(
+                kind=ProductKind.TOP_UP,
+                product_id="starter",
+                target=PurchaseTargetCode.USER,
+            ),
+            service,
+            user,
+            commerce_policy=OPEN_COMMERCE,
+        )
 
+        service.create_top_up_intent.assert_awaited_once_with(
+            payer_user_id=user.id,
+            target=PurchaseTarget.user(user.id),
+            product_id="starter",
+        )
+        callback.bot.create_invoice_link.assert_awaited_once()
+        invoice = callback.bot.create_invoice_link.await_args.kwargs
+        assert invoice["payload"] == handle.invoice_payload
+        assert invoice["currency"] == "XTR"
+        assert invoice["prices"][0].amount == handle.stars
+        assert invoice["provider_token"] == ""
+        assert invoice["business_connection_id"] == "business-1"
+        markup = callback.message.answer.await_args.kwargs["reply_markup"]
+        assert markup.inline_keyboard[0][0].url == "https://t.me/$invoice-link"
+        callback.answer.assert_awaited_once_with("Invoice ready")
+
+    @pytest.mark.asyncio
+    async def test_chat_top_up_binds_current_non_private_chat(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+        mock_chat_model,
+    ) -> None:
+        user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+        chat = mock_chat_model(chat_id=UUID(int=2), chat_type="supergroup")
+        handle = _intent(target=PurchaseTarget.chat(chat.id))
+        service = _purchase_intents(handle=handle)
+        callback = _callback(make_message, make_user)
+
+        await handle_buy_callback(
+            callback,
+            PurchaseCallback(
+                kind=ProductKind.TOP_UP,
+                product_id="starter",
+                target=PurchaseTargetCode.CHAT,
+            ),
+            service,
+            user,
+            chat,
+            commerce_policy=OPEN_COMMERCE,
+        )
+
+        service.create_top_up_intent.assert_awaited_once_with(
+            payer_user_id=user.id,
+            target=PurchaseTarget.chat(chat.id),
+            product_id="starter",
+        )
+        assert "this chat" in callback.message.answer.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_subscription_uses_personal_plan_intent(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+    ) -> None:
+        user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+        handle = _intent(
+            kind=ProductKind.SUBSCRIPTION,
+            target=PurchaseTarget.user(user.id),
+            product_id=DEFAULT_PRODUCT_CATALOG.subscription_plan.id,
+        )
+        service = _purchase_intents(handle=handle)
+        callback = _callback(make_message, make_user)
+
+        await handle_buy_callback(
+            callback,
+            PurchaseCallback(
+                kind=ProductKind.SUBSCRIPTION,
+                product_id=handle.product_id,
+                target=PurchaseTargetCode.USER,
+            ),
+            service,
+            user,
+            commerce_policy=OPEN_COMMERCE,
+        )
+
+        service.create_subscription_intent.assert_awaited_once_with(
+            payer_user_id=user.id
+        )
+        service.create_top_up_intent.assert_not_awaited()
+        invoice = callback.bot.create_invoice_link.await_args.kwargs
+        assert invoice["subscription_period"] == 30 * 24 * 60 * 60
+
+    @pytest.mark.asyncio
+    async def test_changed_actor_fails_before_creating_intent(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+    ) -> None:
+        user = mock_user_model(user_id=UUID(int=1), telegram_id=999)
+        service = _purchase_intents()
+        callback = _callback(make_message, make_user)
+
+        await handle_buy_callback(
+            callback,
+            PurchaseCallback(
+                kind=ProductKind.TOP_UP,
+                product_id="starter",
+                target=PurchaseTargetCode.USER,
+            ),
+            service,
+            user,
+            commerce_policy=OPEN_COMMERCE,
+        )
+
+        service.create_top_up_intent.assert_not_awaited()
+        callback.answer.assert_awaited_once_with(
+            "Purchase identity changed", show_alert=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_active_subscription_returns_specific_alert(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+    ) -> None:
+        user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+        service = _purchase_intents()
+        service.create_subscription_intent.side_effect = ActiveSubscriptionError
+        callback = _callback(make_message, make_user)
+
+        await handle_buy_callback(
+            callback,
+            PurchaseCallback(
+                kind=ProductKind.SUBSCRIPTION,
+                product_id=DEFAULT_PRODUCT_CATALOG.subscription_plan.id,
+                target=PurchaseTargetCode.USER,
+            ),
+            service,
+            user,
+            commerce_policy=OPEN_COMMERCE,
+        )
+
+        callback.answer.assert_awaited_once_with(
+            "Your current plan is already active", show_alert=True
+        )
         callback.message.answer.assert_not_awaited()
-        callback.answer.assert_awaited_once()
-        assert "temporarily unavailable" in callback.answer.await_args.args[0]
-        assert callback.answer.await_args.kwargs == {"show_alert": True}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("data", ["buy:invalid", "buy:nonexistent:user"])
-    async def test_all_legacy_buttons_fail_closed(self, data):
-        callback = MagicMock()
-        callback.data = data
-        callback.from_user.id = 12345
+    async def test_stale_callback_fails_closed(self) -> None:
+        callback = MagicMock(spec=CallbackQuery)
         callback.answer = AsyncMock()
 
-        await handle_buy_callback(callback)
+        await reject_malformed_buy_callback(callback)
 
-        assert callback.answer.await_args.kwargs == {"show_alert": True}
+        callback.answer.assert_awaited_once_with(
+            "This purchase option expired. Open /buy again.",
+            show_alert=True,
+        )
 
 
 class TestPreCheckout:
-    """Tests for pre-checkout handler."""
-
     @pytest.mark.asyncio
-    async def test_rejects_legacy_valid_checkout(self):
-        # Get a real pack ID
-        pack_id = next(iter(CREDIT_PACKS.keys()))
-
+    async def test_approved_decision_maps_every_telegram_field(self, make_user) -> None:
+        intent_id = UUID(int=20)
+        service = _purchase_intents()
+        service.validate_pre_checkout.return_value = PreCheckoutDecision(
+            approved=True,
+            intent_id=intent_id,
+        )
         pre_checkout = MagicMock()
-        pre_checkout.invoice_payload = f"{pack_id}:user:12345"
-        pre_checkout.from_user.id = 12345
-        pre_checkout.total_amount = CREDIT_PACKS[pack_id].stars
+        pre_checkout.invoice_payload = "dpi1_opaque-token"
+        pre_checkout.from_user = make_user(id=12345)
+        pre_checkout.currency = "XTR"
+        pre_checkout.total_amount = 150
         pre_checkout.answer = AsyncMock()
 
-        await handle_pre_checkout(pre_checkout)
+        await handle_pre_checkout(pre_checkout, service)
 
-        pre_checkout.answer.assert_awaited_once()
-        assert pre_checkout.answer.await_args.kwargs["ok"] is False
-        assert (
-            "temporarily unavailable"
-            in pre_checkout.answer.await_args.kwargs["error_message"]
+        service.validate_pre_checkout.assert_awaited_once_with(
+            PreCheckoutRequest(
+                invoice_payload="dpi1_opaque-token",
+                payer_telegram_id=12345,
+                currency="XTR",
+                total_amount=150,
+            )
+        )
+        pre_checkout.answer.assert_awaited_once_with(ok=True)
+
+    @pytest.mark.asyncio
+    async def test_rejected_decision_fails_checkout_closed(self, make_user) -> None:
+        service = _purchase_intents()
+        service.validate_pre_checkout.return_value = PreCheckoutDecision(
+            approved=False,
+            rejection=PreCheckoutRejection.EXPIRED,
+        )
+        pre_checkout = MagicMock()
+        pre_checkout.invoice_payload = "dpi1_expired-token"
+        pre_checkout.from_user = make_user(id=12345)
+        pre_checkout.currency = "XTR"
+        pre_checkout.total_amount = 50
+        pre_checkout.answer = AsyncMock()
+
+        await handle_pre_checkout(pre_checkout, service)
+
+        pre_checkout.answer.assert_awaited_once_with(
+            ok=False,
+            error_message=("This invoice expired or changed. Open /buy and try again."),
         )
 
-    @pytest.mark.asyncio
-    async def test_rejects_invalid_payload(self):
-        """Test invalid payload is rejected."""
-        pre_checkout = MagicMock()
-        pre_checkout.invoice_payload = "invalid"
-        pre_checkout.answer = AsyncMock()
 
-        await handle_pre_checkout(pre_checkout)
+def _payment_message(make_message, **overrides):
+    message = make_message(text="")
+    values = {
+        "invoice_payload": "dpi1_opaque-token",
+        "telegram_payment_charge_id": "telegram-charge-1",
+        "provider_payment_charge_id": "provider-charge-1",
+        "currency": "XTR",
+        "total_amount": 500,
+        "is_recurring": False,
+        "is_first_recurring": False,
+        "subscription_expiration_date": None,
+    }
+    values.update(overrides)
+    message.successful_payment = MagicMock(**values)
+    return message
 
-        pre_checkout.answer.assert_awaited()
-        call_args = pre_checkout.answer.call_args
-        assert call_args[1]["ok"] is False
 
-    @pytest.mark.asyncio
-    async def test_rejects_unknown_pack(self):
-        """Test unknown pack is rejected."""
-        pre_checkout = MagicMock()
-        pre_checkout.invoice_payload = "unknown_pack:user:12345"
-        pre_checkout.answer = AsyncMock()
-
-        await handle_pre_checkout(pre_checkout)
-
-        pre_checkout.answer.assert_awaited()
-        call_args = pre_checkout.answer.call_args
-        assert call_args[1]["ok"] is False
+def _settlement(result: FulfillmentResult | None = None) -> MagicMock:
+    service = MagicMock()
+    service.fulfill = AsyncMock(return_value=result)
+    return service
 
 
 class TestSuccessfulPayment:
-    """Tests for successful payment handler."""
-
     @pytest.mark.asyncio
-    async def test_adds_user_credits(
-        self, make_message, mock_sender, mock_user_model, mock_credit_service_factory
-    ):
-        """Test successful payment adds credits to user."""
-        pack_id = next(iter(CREDIT_PACKS.keys()))
-        pack = CREDIT_PACKS[pack_id]
-
-        message = make_message(text="")
-        sender = mock_sender(message=message)
-        message.successful_payment = MagicMock()
-        message.successful_payment.invoice_payload = f"{pack_id}:user:12345"
-        message.successful_payment.telegram_payment_charge_id = "charge_123"
-        message.from_user = MagicMock()
-        message.from_user.id = 12345
-
-        user = mock_user_model(telegram_id=12345)
-        service = mock_credit_service_factory(purchase_result=pack.credits)
-
-        await handle_successful_payment(
-            message, sender, service, user_model=user, chat_model=None
-        )
-
-        service.purchase_credits.assert_awaited_once()
-        service.purchase_credits.assert_awaited_once_with(
-            user,
-            None,
-            pack.credits,
-            "charge_123",
-            pack_name=pack.name,
-        )
-        sender.send.assert_awaited_once()
-        text = _get_text_from_call_args(sender.send.call_args)
-        assert "Payment successful" in text
-
-    @pytest.mark.asyncio
-    async def test_adds_chat_credits(
+    async def test_maps_captured_subscription_and_reports_active_allowance(
         self,
         make_message,
         mock_sender,
-        mock_user_model,
-        mock_chat_model,
-        mock_credit_service_factory,
-    ):
-        """Test successful payment adds credits to chat."""
-        pack_id = next(iter(CREDIT_PACKS.keys()))
-        pack = CREDIT_PACKS[pack_id]
-
-        message = make_message(text="")
+    ) -> None:
+        expires_at = datetime(2026, 8, 19, 12, tzinfo=UTC)
+        message = _payment_message(
+            make_message,
+            is_recurring=True,
+            is_first_recurring=True,
+            subscription_expiration_date=int(expires_at.timestamp()),
+        )
         sender = mock_sender(message=message)
-        message.successful_payment = MagicMock()
-        message.successful_payment.invoice_payload = f"{pack_id}:chat:-100123"
-        message.successful_payment.telegram_payment_charge_id = "charge_123"
-        message.from_user = MagicMock()
-        message.from_user.id = 12345
-
-        user = mock_user_model(telegram_id=12345)
-        chat = mock_chat_model(telegram_id=-100123)
-        service = mock_credit_service_factory(purchase_result=pack.credits)
-
-        await handle_successful_payment(
-            message, sender, service, user_model=user, chat_model=chat
+        result = FulfillmentResult(
+            receipt_id=UUID(int=30),
+            state=FulfillmentState.FULFILLED,
+            subscription_cycle_id=UUID(int=31),
+            available_credits=1_000,
         )
+        settlement = _settlement(result)
 
-        service.purchase_credits.assert_awaited_once_with(
-            user,
-            chat,
-            pack.credits,
-            "charge_123",
-            pack_name=pack.name,
+        await handle_successful_payment(message, sender, settlement)
+
+        settlement.fulfill.assert_awaited_once_with(
+            CapturedPayment(
+                invoice_payload="dpi1_opaque-token",
+                telegram_charge_id="telegram-charge-1",
+                provider_charge_id="provider-charge-1",
+                payer_telegram_id=12345,
+                currency="XTR",
+                total_amount=500,
+                is_recurring=True,
+                is_first_recurring=True,
+                subscription_expiration_at=expires_at,
+            )
         )
+        assert "Plan active" in sender.send.await_args.args[0]
+        assert "1000 credits" in sender.send.await_args.args[0]
 
     @pytest.mark.asyncio
-    async def test_no_payment_object(
-        self, make_message, mock_sender, mock_credit_service_factory
-    ):
-        """Test handler returns early without payment object."""
-        message = make_message(text="")
+    async def test_top_up_reports_available_value_and_debt_offset(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _payment_message(make_message, total_amount=150)
         sender = mock_sender(message=message)
+        settlement = _settlement(
+            FulfillmentResult(
+                receipt_id=UUID(int=40),
+                state=FulfillmentState.FULFILLED,
+                wallet_lot_id=UUID(int=41),
+                available_credits=135,
+                debt_offset_credits=30,
+            )
+        )
+
+        await handle_successful_payment(message, sender, settlement)
+
+        text = sender.send.await_args.args[0]
+        assert "Payment complete" in text
+        assert "Purchased credits available: 135" in text
+        assert "Applied to prior payment debt: 30" in text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("result", "expected"),
+        [
+            (
+                FulfillmentResult(
+                    receipt_id=UUID(int=50),
+                    state=FulfillmentState.FULFILLED,
+                    idempotent=True,
+                ),
+                "already applied",
+            ),
+            (
+                FulfillmentResult(
+                    receipt_id=UUID(int=51),
+                    state=FulfillmentState.NEEDS_REVIEW,
+                    review_reason="amount_mismatch",
+                ),
+                "need review",
+            ),
+        ],
+    )
+    async def test_settlement_state_has_unambiguous_user_copy(
+        self,
+        make_message,
+        mock_sender,
+        result,
+        expected,
+    ) -> None:
+        message = _payment_message(make_message)
+        sender = mock_sender(message=message)
+
+        await handle_successful_payment(message, sender, _settlement(result))
+
+        assert expected in sender.send.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_fulfillment_failure_does_not_tell_user_to_buy_again(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _payment_message(make_message)
+        sender = mock_sender(message=message)
+        settlement = _settlement()
+        settlement.fulfill.side_effect = RuntimeError("database unavailable")
+
+        with patch("derp.handlers.payments.report_exception") as report:
+            await handle_successful_payment(message, sender, settlement)
+
+        report.assert_called_once()
+        text = sender.send.await_args.args[0]
+        assert "needs review" in text
+        assert "do not need to buy again" in text
+
+    @pytest.mark.asyncio
+    async def test_missing_payment_returns_without_side_effects(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = make_message(text="")
         message.successful_payment = None
-        service = mock_credit_service_factory()
-
-        await handle_successful_payment(
-            message, sender, service, user_model=None, chat_model=None
-        )
-
-        message.answer.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_invalid_payload(
-        self, make_message, mock_sender, mock_credit_service_factory
-    ):
-        """Test invalid payload shows error."""
-        message = make_message(text="")
         sender = mock_sender(message=message)
-        message.successful_payment = MagicMock()
-        message.successful_payment.invoice_payload = "invalid"
-        message.from_user = MagicMock()
-        message.from_user.id = 12345
-        service = mock_credit_service_factory()
+        settlement = _settlement()
 
-        await handle_successful_payment(
-            message, sender, service, user_model=None, chat_model=None
-        )
+        await handle_successful_payment(message, sender, settlement)
 
-        message.answer.assert_awaited_once()
-        text = _get_text_from_call_args(message.answer.call_args)
-        assert "could not be added" in text
+        settlement.fulfill.assert_not_awaited()
+        sender.send.assert_not_awaited()

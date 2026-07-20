@@ -5,10 +5,49 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram.types import Update
 
+from derp.billing import PaymentSettlementService, PurchaseIntentService
+from derp.credits.gateway import CreditServiceGateway
+from derp.middlewares.commerce import CommerceMiddleware
+from derp.middlewares.credit_service import CreditServiceMiddleware
 from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.operation_ledger import OperationLedgerMiddleware
 from derp.operations import OperationLedger
+
+
+@pytest.mark.asyncio
+async def test_credit_service_middleware_injects_without_opening_transaction(
+    mock_db_client,
+) -> None:
+    middleware = CreditServiceMiddleware(mock_db_client)
+    handler = AsyncMock(return_value="handled")
+    event = MagicMock(spec=Update)
+    data = {}
+
+    result = await middleware(handler, event, data)
+
+    assert result == "handled"
+    assert isinstance(data["credit_service"], CreditServiceGateway)
+    mock_db_client.session.assert_not_called()
+    handler.assert_awaited_once_with(event, data)
+
+
+@pytest.mark.asyncio
+async def test_commerce_middleware_injects_without_opening_transaction(
+    mock_db_client,
+) -> None:
+    middleware = CommerceMiddleware(mock_db_client)
+    handler = AsyncMock(return_value="handled")
+    event = MagicMock(spec=Update)
+    data = {}
+
+    result = await middleware(handler, event, data)
+
+    assert result == "handled"
+    assert isinstance(data["purchase_intents"], PurchaseIntentService)
+    assert isinstance(data["payment_settlement"], PaymentSettlementService)
+    mock_db_client.session.assert_not_called()
+    handler.assert_awaited_once_with(event, data)
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,8 @@
 
 Provides commands for users to:
 - /credits - Check their credit balance
-- /buy - Explain the temporary purchase suspension
+- /buy - Add personal credits or start the personal plan
+- /buy_chat - Add credits to the current shared chat
 """
 
 from __future__ import annotations
@@ -13,11 +14,13 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.utils.i18n import gettext as _
 
-from derp.common.sender import MessageSender
-from derp.credits.purchase_suspension import (
-    PurchaseIntakeSource,
-    reject_purchase_command,
+from derp.billing import CLOSED_COMMERCE_POLICY, CommercePolicy
+from derp.billing.telegram import (
+    PurchaseTargetCode,
+    build_purchase_panel,
 )
+from derp.common.sender import MessageSender
+from derp.credits.purchase_suspension import purchase_suspension_message
 from derp.handlers.context_settings import build_credit_panel
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
@@ -74,23 +77,33 @@ async def show_credits(
 async def show_buy_options(
     message: Message,
     sender: MessageSender,
+    user_model: UserModel | None = None,
+    commerce_policy: CommercePolicy = CLOSED_COMMERCE_POLICY,
 ) -> Message:
-    """Reject new personal credit purchases until durable intents ship."""
-    return await reject_purchase_command(
-        message,
-        sender,
-        PurchaseIntakeSource.PERSONAL_COMMAND,
-    )
+    """Show durable personal top-ups and the single recurring plan."""
+    if not commerce_policy.public_intake_enabled:
+        return await sender.reply(purchase_suspension_message())
+    if not user_model:
+        return await message.reply(_("Could not find your user info."))
+    text, markup = build_purchase_panel(target=PurchaseTargetCode.USER)
+    return await sender.reply(text, reply_markup=markup)
 
 
 @router.message(Command("buy_chat", "buychat"))
 async def show_buy_chat_options(
     message: Message,
     sender: MessageSender,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
+    commerce_policy: CommercePolicy = CLOSED_COMMERCE_POLICY,
 ) -> Message:
-    """Reject new chat credit purchases until durable intents ship."""
-    return await reject_purchase_command(
-        message,
-        sender,
-        PurchaseIntakeSource.CHAT_COMMAND,
-    )
+    """Show top-ups bound to the current shared chat wallet."""
+    if not commerce_policy.public_intake_enabled:
+        return await sender.reply(purchase_suspension_message())
+    if not user_model or not chat_model:
+        return await message.reply(_("Could not find this chat."))
+    if chat_model.type == "private":
+        text, markup = build_purchase_panel(target=PurchaseTargetCode.USER)
+        return await sender.reply(text, reply_markup=markup)
+    text, markup = build_purchase_panel(target=PurchaseTargetCode.CHAT)
+    return await sender.reply(text, reply_markup=markup)
