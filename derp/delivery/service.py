@@ -14,7 +14,7 @@ from typing import Protocol
 import logfire
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, InputMediaPhoto, Message
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.artifacts import (
@@ -306,6 +306,26 @@ class DeliveryService:
             )
             return self._inspection(intent, artifact_count)
 
+    async def issue_resend_token(self, operation_id: OperationId) -> str:
+        """Reissue the opaque capability for one still-recoverable uncertain send."""
+        async with self._transactions() as session:
+            intent = await session.scalar(
+                select(DeliveryIntent)
+                .where(DeliveryIntent.operation_id == operation_id.value)
+                .with_for_update()
+            )
+            if intent is None:
+                raise DeliveryStateError(f"Unknown delivery for {operation_id}")
+            if intent.state != DeliveryState.UNCERTAIN.value:
+                raise DeliveryStateError(
+                    f"Cannot issue resend token for delivery in {intent.state}"
+                )
+            if self._aware_now() >= intent.expires_at:
+                raise DeliveryStateError(
+                    "Cannot issue resend token after artifact expiry"
+                )
+            return self._token_codec.issue(intent.id)
+
     async def reconcile_interrupted(
         self,
         *,
@@ -430,6 +450,7 @@ class DeliveryService:
                     .order_by(Artifact.ordinal)
                 )
             )
+            intent.caption = None
         return await self._purge_artifacts(candidates)
 
     async def cleanup_expired_artifacts(
@@ -460,6 +481,13 @@ class DeliveryService:
                 )
             )
             candidates = tuple(self._cleanup_candidate(row) for row in artifacts)
+            operation_ids = {row.operation_id for row in artifacts}
+            if operation_ids:
+                await session.execute(
+                    update(DeliveryIntent)
+                    .where(DeliveryIntent.operation_id.in_(operation_ids))
+                    .values(caption=None)
+                )
         return await self._purge_artifacts(candidates)
 
     async def _execute_attempt(
@@ -751,10 +779,11 @@ class DeliveryService:
             )
             if count == 0:
                 raise DeliveryStateError("Delivery intent has no artifacts")
+            resend_token = self._token_codec.issue(intent.id)
             return PreparedDelivery(
                 operation_id,
                 intent.id,
-                self._token_codec.issue(intent.id),
+                resend_token,
                 count,
                 idempotent=True,
             )

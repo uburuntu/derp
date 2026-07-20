@@ -213,6 +213,13 @@ async def test_delivery_acknowledgement_is_persisted_and_retry_is_idempotent(
     inspection = await delivery_env.service.inspect(operation_id)
     assert inspection.state is DeliveryState.DELIVERED
     assert inspection.artifact_count == 0
+    async with delivery_env.transactions() as session:
+        intent = await session.scalar(
+            select(DeliveryIntent).where(
+                DeliveryIntent.operation_id == operation_id.value
+            )
+        )
+        assert intent is not None and intent.caption is None
 
 
 async def test_timeout_requires_authenticated_resend_and_never_charges_again(
@@ -235,6 +242,31 @@ async def test_timeout_requires_authenticated_resend_and_never_charges_again(
     assert resent == Delivered((202,))
     assert delivery_env.bot.send_photo.await_count == 2
     delivery_env.reversal.reverse.assert_not_awaited()
+
+
+async def test_uncertain_delivery_can_reissue_restart_stable_resend_token(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    operation_id = await _operation(delivery_env)
+    prepared = await _prepare_and_capture(delivery_env, operation_id)
+    delivery_env.bot.send_photo.side_effect = TimeoutError()
+
+    await delivery_env.service.deliver(operation_id)
+
+    assert (
+        await delivery_env.service.issue_resend_token(operation_id)
+        == prepared.resend_token
+    )
+
+
+async def test_resend_token_is_not_issued_for_an_unambiguous_delivery(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    operation_id = await _operation(delivery_env)
+    await _prepare_and_capture(delivery_env, operation_id)
+
+    with pytest.raises(DeliveryStateError, match="pending"):
+        await delivery_env.service.issue_resend_token(operation_id)
 
 
 async def test_resend_rejects_forged_token_actor_and_target(

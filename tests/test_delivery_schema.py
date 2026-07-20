@@ -155,3 +155,27 @@ async def test_artifact_metadata_is_database_immutable(
 
     with pytest.raises(DBAPIError, match="artifact metadata is immutable"):
         await db_session.flush()
+
+
+async def test_terminal_delivery_allows_one_way_caption_scrub(
+    db_session, user_factory, chat_factory
+) -> None:
+    operation = await _operation(db_session, user_factory, chat_factory)
+    now = datetime.now(UTC)
+    intent = DeliveryIntent(
+        operation_id=operation.id,
+        chat_id=1,
+        resend_token_hash="1" * 64,
+        expires_at=now + timedelta(hours=1),
+        caption="temporary result caption",
+    )
+    db_session.add(intent)
+    await db_session.flush()
+
+    intent.state = "delivered"
+    intent.delivered_at = now
+    intent.telegram_message_ids = [101]
+    intent.caption = None
+    await db_session.flush()
+
+    assert intent.caption is None

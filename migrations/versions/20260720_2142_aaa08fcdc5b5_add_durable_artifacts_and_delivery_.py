@@ -211,8 +211,7 @@ def upgrade() -> None:
                 OLD.reply_to_message_id,
                 OLD.business_connection_id,
                 OLD.resend_token_hash,
-                OLD.expires_at,
-                OLD.caption
+                OLD.expires_at
             ) IS DISTINCT FROM ROW(
                 NEW.operation_id,
                 NEW.chat_id,
@@ -220,10 +219,18 @@ def upgrade() -> None:
                 NEW.reply_to_message_id,
                 NEW.business_connection_id,
                 NEW.resend_token_hash,
-                NEW.expires_at,
-                NEW.caption
+                NEW.expires_at
             ) THEN
                 RAISE EXCEPTION 'delivery target is immutable'
+                    USING ERRCODE = '55000';
+            END IF;
+            IF OLD.caption IS DISTINCT FROM NEW.caption
+                AND NOT (
+                    OLD.caption IS NOT NULL
+                    AND NEW.caption IS NULL
+                    AND NEW.state = ANY (ARRAY['delivered', 'failed', 'expired'])
+                ) THEN
+                RAISE EXCEPTION 'delivery caption is immutable before cleanup'
                     USING ERRCODE = '55000';
             END IF;
             RETURN NEW;
