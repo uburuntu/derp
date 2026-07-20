@@ -54,5 +54,8 @@ USER app
 # Ensure the virtual environment is in PATH
 ENV PATH="/app/.venv/bin:$PATH"
 
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 \
+    CMD ["python", "-m", "derp.healthcheck"]
+
 # Set the default command
 CMD ["python", "-m", "derp"] 

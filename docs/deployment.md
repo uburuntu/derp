@@ -23,10 +23,12 @@ discovery aids only; they are never deployment identities.
 - A successful forward migration is not automatically reversible. The
   workflow never starts the previous image after migration begins.
 
-The runtime currently has no application-level health endpoint. Deployment
-therefore proves that the exact image remains running without a restart for 60
-seconds and honors a Docker health check if one is added later. It does not
-claim that Telegram or a model provider is reachable.
+After the database connects and Telegram `getMe` succeeds, the runtime writes a
+private heartbeat that is refreshed by the application event loop. The Docker
+health check requires that heartbeat to remain fresh, and deployment requires a
+healthy, restart-free container for 60 seconds. This proves startup,
+authentication, and event-loop liveness; it does not claim that a model
+provider is reachable.
 
 ## Backup gate
 
@@ -66,7 +68,8 @@ together outside the application host.
 6. The candidate runs `alembic upgrade head`, followed by
    `alembic current --check-heads`.
 7. The exact candidate starts as `derp-bot` with the artifact bind mount. Its
-   digest is stored in Docker labels and verified after the readiness window.
+   digest is stored in Docker labels, and its event-loop heartbeat must become
+   healthy during the readiness window.
 8. When an active container existed, `derp-bot-previous` remains stopped. The
    next successful deployment rotates it; routine image cleanup is
    intentionally outside the release transaction.

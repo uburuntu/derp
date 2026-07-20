@@ -1,9 +1,14 @@
 """Configuration settings using Pydantic."""
 
+import hashlib
+import tempfile
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from derp.health import DEFAULT_RUNTIME_HEALTH_PATH
 
 # Docs: https://docs.pydantic.dev/2.8/concepts/pydantic_settings/
 
@@ -23,6 +28,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://localhost:5432/derp"
     polling_concurrency: int = Field(default=10, ge=1)
     public_purchases_enabled: bool = False
+    artifact_store_path: Path = Path(tempfile.gettempdir()) / "derp-artifacts"
+    runtime_health_path: Path = DEFAULT_RUNTIME_HEALTH_PATH
+    callback_signing_secret: SecretStr | None = None
 
     # Google API key used by all configured models
     google_api_paid_key: SecretStr
@@ -51,6 +59,15 @@ class Settings(BaseSettings):
     @property
     def bot_id(self) -> int:
         return int(self.telegram_bot_token.get_secret_value().split(":")[0])
+
+    @property
+    def callback_signing_key(self) -> bytes:
+        """Derive a fixed-length key without exposing configured secret text."""
+        configured = self.callback_signing_secret or self.telegram_bot_token
+        return hashlib.sha256(
+            b"derp:callback-signing:v1\0"
+            + configured.get_secret_value().encode("utf-8")
+        ).digest()
 
 
 settings = Settings()

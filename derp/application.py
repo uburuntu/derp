@@ -38,6 +38,7 @@ from derp.handlers import (
     tts,
     video,
 )
+from derp.health import RuntimeHeartbeat
 from derp.history.retention import HistoryRetentionWorker
 from derp.media import MediaGateway
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
@@ -182,9 +183,11 @@ async def run_application(
             extra={"telegram.bot_id": bot_info.id},
         )
 
-        await dispatcher.start_polling(
-            runtime.bot,
-            allowed_updates=dispatcher.resolve_used_update_types() + ["edited_message"],
-            close_bot_session=False,
-            tasks_concurrency_limit=settings.polling_concurrency,
-        )
+        async with RuntimeHeartbeat(settings.runtime_health_path):
+            await dispatcher.start_polling(
+                runtime.bot,
+                allowed_updates=dispatcher.resolve_used_update_types()
+                + ["edited_message"],
+                close_bot_session=False,
+                tasks_concurrency_limit=settings.polling_concurrency,
+            )
