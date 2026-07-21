@@ -70,11 +70,13 @@ async def test_worker_sweeps_immediately_then_periodically_and_joins() -> None:
         interval=timedelta(minutes=5),
         sleep=sleeper,
     )
+    assert not worker.is_running
     with patch(
         "derp.history.retention.purge_expired_history",
         side_effect=purge_expired,
     ):
         async with worker:
+            assert worker.is_running
             assert calls == 1
             await sleeper.waiting.wait()
             assert sleeper.delays == [300]
@@ -83,6 +85,7 @@ async def test_worker_sweeps_immediately_then_periodically_and_joins() -> None:
             await sleeper.waiting.wait()
 
     assert calls == 2
+    assert not worker.is_running
     assert database.session_entries == 2
     assert sleeper.cancelled.is_set()
 

@@ -39,6 +39,11 @@ class HistoryRetentionWorker:
         self._sweep_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
 
+    @property
+    def is_running(self) -> bool:
+        """Whether this worker owns its periodic lifecycle task."""
+        return self._task is not None
+
     async def __aenter__(self) -> Self:
         if self._task is not None:
             raise RuntimeError("History retention worker is already running")
