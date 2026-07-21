@@ -14,6 +14,16 @@ from derp.features.image import (
     ImageSourceLoader,
     PreparedImageEditRequest,
 )
+from derp.features.tts import (
+    MAX_TTS_OUTPUT_BYTES,
+    MAX_TTS_OUTPUT_SECONDS,
+    MAX_TTS_TEXT_CHARS,
+    TtsExecutionPolicy,
+    TtsFeatureService,
+    TtsProviderExecutor,
+    TtsProviderOutput,
+    TtsRequest,
+)
 from derp.features.types import MediaContent, TextOutput
 
 if TYPE_CHECKING:
@@ -49,6 +59,9 @@ _IMAGE_OPERATION_EXPORTS = frozenset(
 
 __all__ = [
     "MAX_IMAGE_OUTPUT_BYTES",
+    "MAX_TTS_OUTPUT_BYTES",
+    "MAX_TTS_OUTPUT_SECONDS",
+    "MAX_TTS_TEXT_CHARS",
     "V1_IMAGE_OUTPUT_COUNT",
     "ImageEditRequest",
     "ImageAwaitingFunding",
@@ -71,6 +84,11 @@ __all__ = [
     "MediaContent",
     "PreparedImageEditRequest",
     "TextOutput",
+    "TtsExecutionPolicy",
+    "TtsFeatureService",
+    "TtsProviderExecutor",
+    "TtsProviderOutput",
+    "TtsRequest",
 ]
 
 
