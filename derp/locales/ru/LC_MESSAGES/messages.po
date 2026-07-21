@@ -7,11 +7,11 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-21 11:10+0100\n"
-"PO-Revision-Date: 2025-04-28 20:27+0100\n"
-"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"POT-Creation-Date: 2026-07-21 12:30+0100\n"
+"PO-Revision-Date: 2026-07-21 12:09+0100\n"
+"Last-Translator: Команда Дерпа <https://github.com/uburuntu/derp>\n"
 "Language: ru\n"
-"Language-Team: ru <LL@li.org>\n"
+"Language-Team: Russian <https://github.com/uburuntu/derp>\n"
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && "
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 "MIME-Version: 1.0\n"
@@ -24,40 +24,40 @@ msgid "Create an image"
 msgstr "Создать изображение"
 
 #: derp/command_menu.py:61
-msgid "Reply to an image and describe changes"
-msgstr "Ответить на изображение и описать изменения"
+msgid "Edit an image you reply to"
+msgstr "Изменить изображение, ответив на него"
 
 #: derp/command_menu.py:62
-msgid "Turn text into a voice message"
-msgstr "Озвучить текст голосовым сообщением"
+msgid "Turn text into speech"
+msgstr "Озвучить текст"
 
 #: derp/command_menu.py:80 derp/command_menu.py:103
-msgid "Open help and available actions"
-msgstr "Открыть справку и доступные действия"
+msgid "See what Derp can do"
+msgstr "Узнать, что умеет Дерп"
 
 #: derp/command_menu.py:81
-msgid "Privacy and personal settings"
-msgstr "Настройки конфиденциальности"
+msgid "Manage privacy and history"
+msgstr "Настроить приватность и историю"
 
 #: derp/command_menu.py:83
-msgid "View your credits and activity"
-msgstr "Посмотреть кредиты и операции"
+msgid "See credits and recent charges"
+msgstr "Посмотреть кредиты и недавние списания"
 
 #: derp/command_menu.py:86
-msgid "Buy personal credits"
+msgid "Buy credits for yourself"
 msgstr "Купить личные кредиты"
 
 #: derp/command_menu.py:89
-msgid "Manage your personal plan"
-msgstr "Управлять личным планом"
+msgid "Manage your monthly plan"
+msgstr "Управлять месячным планом"
 
 #: derp/command_menu.py:90 derp/command_menu.py:112
-msgid "Delete a replied message from history"
-msgstr "Удалить сообщение из истории ответом"
+msgid "Forget a message you reply to"
+msgstr "Удалить из истории сообщение, на которое отвечаете"
 
 #: derp/command_menu.py:91 derp/command_menu.py:113
 msgid "Support Derp with Stars"
-msgstr "Поддержать Derp Звёздами"
+msgstr "Поддержать Дерпа Звёздами"
 
 #: derp/command_menu.py:97
 msgid "Manage chat settings"
@@ -67,162 +67,814 @@ msgstr "Управлять настройками чата"
 msgid "View chat settings"
 msgstr "Посмотреть настройки чата"
 
-#: derp/command_menu.py:102
-msgid "Ask Derp in this chat"
-msgstr "Спросить Derp в этом чате"
+#: derp/command_menu.py:102 derp/handlers/context_settings.py:204
+#: derp/handlers/inline.py:45 derp/handlers/inline.py:72
+msgid "Ask Derp"
+msgstr "Спросить Дерпа"
 
 #: derp/command_menu.py:106
-msgid "View personal and shared credits"
-msgstr "Посмотреть личные и общие кредиты"
+msgid "See personal and chat credits"
+msgstr "Посмотреть личные кредиты и кредиты чата"
 
 #: derp/command_menu.py:109
 msgid "Buy credits for this chat"
 msgstr "Купить кредиты для этого чата"
 
+#: derp/billing/telegram.py:51
+#, python-brace-format
+msgid "{count} credit"
+msgid_plural "{count} credits"
+msgstr[0] "{count} кредит"
+msgstr[1] "{count} кредита"
+msgstr[2] "{count} кредитов"
+
+#: derp/billing/telegram.py:55
+#, python-brace-format
+msgid "{count} Star"
+msgid_plural "{count} Stars"
+msgstr[0] "{count} звезда"
+msgstr[1] "{count} звезды"
+msgstr[2] "{count} звёзд"
+
+#: derp/billing/telegram.py:59
+#, python-brace-format
+msgid "{count} day"
+msgid_plural "{count} days"
+msgstr[0] "{count} день"
+msgstr[1] "{count} дня"
+msgstr[2] "{count} дней"
+
+#: derp/billing/telegram.py:73
+#, python-brace-format
+msgid "{credits} · {stars}"
+msgstr "{credits} · {stars}"
+
+#: derp/billing/telegram.py:92
+#, python-brace-format
+msgid "{plan} · {stars} / {days}"
+msgstr "{plan} · {stars} / {days}"
+
+#: derp/billing/telegram.py:93 derp/billing/telegram.py:124
+msgid "Derp Personal"
+msgstr "Дерп: личный план"
+
+#: derp/billing/telegram.py:106 derp/handlers/paid_media_controls.py:117
+#: derp/handlers/tool_approvals.py:633
+msgid "Buy chat credits"
+msgstr "Купить кредиты чата"
+
+#: derp/billing/telegram.py:108
+msgid "Buy personal credits"
+msgstr "Купить личные кредиты"
+
+#: derp/billing/telegram.py:111
+msgid "Choose an option. Telegram asks you to confirm before charging."
+msgstr "Выберите вариант. Telegram спишет Stars только после подтверждения."
+
+#: derp/billing/telegram.py:126
+msgid "Derp credits"
+msgstr "Кредиты Дерпа"
+
+#: derp/billing/telegram.py:135
+#, python-brace-format
+msgid ""
+"{credits} every {days} for {stars}. Renews automatically until canceled. "
+"Telegram asks you to confirm the first charge."
+msgstr ""
+"Период: {days}. За период начисляется {credits}. Цена: {stars}. "
+"Автопродление действует до отмены. Первое списание нужно подтвердить в "
+"Telegram."
+
+#: derp/billing/telegram.py:144
+#, python-brace-format
+msgid ""
+"{credits} for this chat. One-time price: {stars}. Telegram charges you "
+"only after you confirm."
+msgstr ""
+"{credits} для этого чата. Разовая цена: {stars}. Списание в Telegram "
+"только после подтверждения."
+
+#: derp/billing/telegram.py:149
+#, python-brace-format
+msgid ""
+"{credits} for your account. One-time price: {stars}. Telegram charges you"
+" only after you confirm."
+msgstr ""
+"{credits} для личного аккаунта. Разовая цена: {stars}. Списание в "
+"Telegram только после подтверждения."
+
 #: derp/credits/purchase_suspension.py:31
 msgid ""
-"Credit purchases are temporarily unavailable while billing is being "
-"upgraded. Existing credits and free features still work."
+"Credit purchases are temporarily unavailable. You won't be charged. Your "
+"existing credits and free features still work."
 msgstr ""
-"Покупка кредитов временно недоступна, пока мы обновляем платёжную "
-"систему. Уже имеющиеся кредиты и бесплатные функции продолжают работать."
+"Покупка кредитов временно недоступна. Telegram не спишет Stars. Имеющиеся"
+" кредиты и бесплатные функции по-прежнему доступны."
+
+#: derp/handlers/basic.py:11
+msgid "there"
+msgstr "друг"
 
 #: derp/handlers/basic.py:13
 #, python-brace-format
-msgid ""
-"Hello, {name}. Ask me naturally here, or open /help for context, privacy,"
-" creation, and credit controls."
+msgid "Hi, {name}. Ask me anything here, or open /help for settings and tools."
 msgstr ""
+"Привет, {name}. Здесь можно спросить о чём угодно. Для настроек и "
+"возможностей отправьте /help."
 
-#: derp/handlers/chat.py:484
+#: derp/handlers/chat.py:486
 #, python-brace-format
-msgid "Context: {chars} chars, {msgs} messages"
-msgstr "Контекст: {chars} символов, {msgs} сообщений"
+msgid "{count} character"
+msgid_plural "{count} characters"
+msgstr[0] "{count} символ"
+msgstr[1] "{count} символа"
+msgstr[2] "{count} символов"
 
-#: derp/handlers/chat.py:526
-msgid "😅 Could not verify your access. Please try again."
-msgstr "😅 Не удалось проверить доступ. Попробуйте ещё раз."
+#: derp/handlers/chat.py:489
+#, python-brace-format
+msgid "{count} message"
+msgid_plural "{count} messages"
+msgstr[0] "{count} сообщение"
+msgstr[1] "{count} сообщения"
+msgstr[2] "{count} сообщений"
 
-#: derp/handlers/chat.py:821
-#, fuzzy
-msgid ""
-"⏳ The AI service is overloaded right now.\n"
-"\n"
-"This happens during peak usage. Please wait 30-60 seconds and try again.\n"
-"\n"
-"Not charged."
+#: derp/handlers/chat.py:492
+#, python-brace-format
+msgid "Context: {chars}, {messages}"
+msgstr "Контекст: {chars}, {messages}"
+
+#: derp/handlers/chat.py:534 derp/handlers/image.py:348
+#: derp/handlers/image.py:388 derp/handlers/tts.py:76
+msgid "I couldn't verify your account. You weren't charged. Try again."
+msgstr "Не удалось проверить аккаунт. Кредиты не списаны. Попробуйте ещё раз."
+
+#: derp/handlers/chat.py:829
+msgid "I'm busy right now. You weren't charged. Try again in about a minute."
 msgstr ""
-"⏳ Сервис ИИ сейчас перегружен.\n"
+"Сейчас не могу ответить. Кредиты не списаны. Попробуйте примерно через "
+"минуту."
+
+#: derp/handlers/chat.py:839 derp/handlers/chat.py:870
+#: derp/handlers/chat.py:880
+msgid "I couldn't answer that. You weren't charged. Try again."
+msgstr "Не получилось ответить. Кредиты не списаны. Попробуйте ещё раз."
+
+#: derp/handlers/chat.py:854
+msgid ""
+"That request became too complex. You weren't charged. Try a simpler "
+"version."
+msgstr ""
+"Запрос оказался слишком сложным. Кредиты не списаны. Упростите его и "
+"попробуйте ещё раз."
+
+#: derp/handlers/context_settings.py:64
+#, python-brace-format
+msgid ""
+"Reply with one short instruction for this chat, or send {clear} to remove"
+" it."
+msgstr ""
+"Ответьте одним коротким правилом для этого чата или отправьте {clear}, "
+"чтобы удалить его."
+
+#: derp/handlers/context_settings.py:115
+msgid "Members can now edit shared facts"
+msgstr "Участники теперь могут менять общие факты"
+
+#: derp/handlers/context_settings.py:117
+msgid "Shared facts now need admin review"
+msgstr "Теперь общие факты требуют проверки администратора"
+
+#: derp/handlers/context_settings.py:121
+msgid "Chat credits are available"
+msgstr "Кредиты чата доступны"
+
+#: derp/handlers/context_settings.py:121
+msgid "Chat credits are paused"
+msgstr "Использование кредитов чата приостановлено"
+
+#: derp/handlers/context_settings.py:124
+msgid "Paid features are enabled"
+msgstr "Платные функции включены"
+
+#: derp/handlers/context_settings.py:124
+msgid "Paid features are disabled"
+msgstr "Платные функции выключены"
+
+#: derp/handlers/context_settings.py:174 derp/handlers/context_settings.py:181
+msgid "On"
+msgstr "Вкл."
+
+#: derp/handlers/context_settings.py:176
+#, python-brace-format
+msgid "History: On · {days} day"
+msgid_plural "History: On · {days} days"
+msgstr[0] "История: вкл. · {days} день"
+msgstr[1] "История: вкл. · {days} дня"
+msgstr[2] "История: вкл. · {days} дней"
+
+#: derp/handlers/context_settings.py:181
+msgid "Off"
+msgstr "Выкл."
+
+#: derp/handlers/context_settings.py:183
+#, python-brace-format
+msgid "Context: {state} · {days} day"
+msgid_plural "Context: {state} · {days} days"
+msgstr[0] "Контекст: {state} · {days} день"
+msgstr[1] "Контекст: {state} · {days} дня"
+msgstr[2] "Контекст: {state} · {days} дней"
+
+#: derp/handlers/context_settings.py:191
+msgid "Mentions only"
+msgstr "Только упоминания"
+
+#: derp/handlers/context_settings.py:192
+msgid "Context: Mentions only"
+msgstr "Контекст: только упоминания"
+
+#: derp/handlers/context_settings.py:195
+#, python-brace-format
+msgid ""
+"<b>Derp</b>\n"
+"Message me privately, or mention or reply to me in a group.\n"
 "\n"
-"Такое бывает в часы пик. Подождите 30-60 секунд и попробуйте снова."
+"{context_line}\n"
+"Recent messages help me answer follow-ups. Anyone can check this setting "
+"and delete their own saved messages."
+msgstr ""
+"<b>Дерп</b>\n"
+"Напишите в личный чат, а в группе упомяните Дерпа или ответьте на его "
+"сообщение.\n"
+"\n"
+"{context_line}\n"
+"Недавние сообщения помогают продолжать разговор. Любой участник видит эту"
+" настройку и может удалить свои сохранённые сообщения."
 
-#: derp/handlers/chat.py:833 derp/handlers/chat.py:864
-#: derp/handlers/chat.py:877 derp/llm/result.py:145
-msgid "😅 Something went wrong. I couldn't process that message. Not charged."
-msgstr "😅 Что-то пошло не так. Я не смог обработать это сообщение. Средства не списаны."
+#: derp/handlers/context_settings.py:209
+#, python-brace-format
+msgid "History: {days}d"
+msgstr "История: {days} дн."
 
-#: derp/handlers/chat.py:849
-#, fuzzy
-msgid "⚠️ Too many tool calls. Please try a simpler request. Not charged."
-msgstr "⚠️ Слишком много вызовов инструментов. Попробуйте упростить запрос."
+#: derp/handlers/context_settings.py:211
+msgid "Turn context off"
+msgstr "Выключить контекст"
 
-#: derp/handlers/context_settings.py:249 derp/handlers/context_settings.py:282
-msgid "Creation"
-msgstr "Создание"
+#: derp/handlers/context_settings.py:213
+msgid "Turn context on"
+msgstr "Включить контекст"
 
-#: derp/handlers/context_settings.py:253
+#: derp/handlers/context_settings.py:215
+#, python-brace-format
+msgid "Context: {state}"
+msgstr "Контекст: {state}"
+
+#: derp/handlers/context_settings.py:234
+#, python-brace-format
+msgid "{days}d{selected}"
+msgstr "{days} дн.{selected}"
+
+#: derp/handlers/context_settings.py:252
+msgid "Require admin fact review"
+msgstr "Требовать проверки фактов администратором"
+
+#: derp/handlers/context_settings.py:254
+msgid "Let members edit facts"
+msgstr "Разрешить участникам менять факты"
+
+#: derp/handlers/context_settings.py:263
+msgid "Pause chat credits"
+msgstr "Приостановить использование кредитов чата"
+
+#: derp/handlers/context_settings.py:265
+msgid "Enable chat credits"
+msgstr "Разрешить использование кредитов чата"
+
+#: derp/handlers/context_settings.py:278
+msgid "Disable paid features"
+msgstr "Выключить платные функции"
+
+#: derp/handlers/context_settings.py:280
+msgid "Enable paid features"
+msgstr "Включить платные функции"
+
+#: derp/handlers/context_settings.py:288
+msgid "Set chat instructions"
+msgstr "Задать правила чата"
+
+#: derp/handlers/context_settings.py:298 derp/handlers/context_settings.py:331
+msgid "Create"
+msgstr "Создать"
+
+#: derp/handlers/context_settings.py:302
 msgid "Credits"
 msgstr "Кредиты"
 
-#: derp/handlers/context_settings.py:260
+#: derp/handlers/context_settings.py:309
 msgid "Privacy & history"
-msgstr "Конфиденциальность и история"
+msgstr "Приватность и история"
 
-#: derp/handlers/context_settings.py:267
-msgid "Personal spending"
-msgstr "Личные кредиты"
+#: derp/handlers/context_settings.py:316
+msgid "Change how my credits are used"
+msgstr "Настроить использование личных кредитов"
 
-#: derp/handlers/context_settings.py:293
+#: derp/handlers/context_settings.py:342 derp/handlers/context_settings.py:455
+#: derp/handlers/context_settings.py:552
 msgid "Back"
 msgstr "Назад"
 
-#: derp/handlers/context_settings.py:647
-msgid "Your credits"
-msgstr "Ваши кредиты"
-
-#: derp/handlers/context_settings.py:648
+#: derp/handlers/context_settings.py:361 derp/handlers/context_settings.py:769
 #, python-brace-format
-msgid "Monthly: {credits}"
-msgstr "Месячный лимит: {credits}"
+msgid "Monthly plan: {credits} credit"
+msgid_plural "Monthly plan: {credits} credits"
+msgstr[0] "Месячный план: {credits} кредит"
+msgstr[1] "Месячный план: {credits} кредита"
+msgstr[2] "Месячный план: {credits} кредитов"
 
-#: derp/handlers/context_settings.py:649
+#: derp/handlers/context_settings.py:366
+msgid "renews"
+msgstr "продление"
+
+#: derp/handlers/context_settings.py:366
+msgid "ends"
+msgstr "закончится"
+
+#: derp/handlers/context_settings.py:367
 #, python-brace-format
-msgid "Purchased: {credits}"
-msgstr "Купленные: {credits}"
+msgid "{allowance} · {renewal} {date}"
+msgstr "{allowance} · {renewal} {date}"
 
-#: derp/handlers/context_settings.py:652
+#: derp/handlers/context_settings.py:373
 #, python-brace-format
-msgid "Payment debt: {credits}"
-msgstr "Задолженность: {credits}"
+msgid "{allowance} · no active plan"
+msgstr "{allowance} · нет активного плана"
 
-#: derp/handlers/context_settings.py:654
+#: derp/handlers/context_settings.py:377
+msgid "<b>Credits</b>"
+msgstr "<b>Кредиты</b>"
+
+#: derp/handlers/context_settings.py:379
+msgid "<b>Your credits</b>"
+msgstr "<b>Личные кредиты</b>"
+
+#: derp/handlers/context_settings.py:382 derp/handlers/context_settings.py:774
+#, python-brace-format
+msgid "Purchased: {credits} credit"
+msgid_plural "Purchased: {credits} credits"
+msgstr[0] "Куплено: {credits} кредит"
+msgstr[1] "Куплено: {credits} кредита"
+msgstr[2] "Куплено: {credits} кредитов"
+
+#: derp/handlers/context_settings.py:390 derp/handlers/context_settings.py:428
+#, python-brace-format
+msgid "Reserved: {credits} credit"
+msgid_plural "Reserved: {credits} credits"
+msgstr[0] "В резерве: {credits} кредит"
+msgstr[1] "В резерве: {credits} кредита"
+msgstr[2] "В резерве: {credits} кредитов"
+
+#: derp/handlers/context_settings.py:398
+#, python-brace-format
+msgid "Payment debt: {credits} credit · paid features are paused"
+msgid_plural "Payment debt: {credits} credits · paid features are paused"
+msgstr[0] "Долг по платежу: {credits} кредит · платные функции приостановлены"
+msgstr[1] "Долг по платежу: {credits} кредита · платные функции приостановлены"
+msgstr[2] "Долг по платежу: {credits} кредитов · платные функции приостановлены"
+
+#: derp/handlers/context_settings.py:404
+msgid "<b>Recent activity</b>"
+msgstr "<b>Последние изменения</b>"
+
+#: derp/handlers/context_settings.py:410 derp/handlers/context_settings.py:788
 msgid "available"
-msgstr "доступны"
+msgstr "можно использовать"
 
-#: derp/handlers/context_settings.py:654
+#: derp/handlers/context_settings.py:410
+msgid "paused by admins"
+msgstr "использование приостановлено администраторами"
+
+#: derp/handlers/context_settings.py:414
+msgid "<b>This chat's credits</b>"
+msgstr "<b>Кредиты этого чата</b>"
+
+#: derp/handlers/context_settings.py:416
+#, python-brace-format
+msgid "Purchased: {credits} credit · {state}"
+msgid_plural "Purchased: {credits} credits · {state}"
+msgstr[0] "Куплено: {credits} кредит · {state}"
+msgstr[1] "Куплено: {credits} кредита · {state}"
+msgstr[2] "Куплено: {credits} кредитов · {state}"
+
+#: derp/handlers/context_settings.py:434
+msgid "<b>Recent chat activity</b>"
+msgstr "<b>Последние изменения чата</b>"
+
+#: derp/handlers/context_settings.py:440
+msgid "Ask before using my credits"
+msgstr "Спрашивать перед использованием личных кредитов"
+
+#: derp/handlers/context_settings.py:442
+msgid "Use my credits without asking"
+msgstr "Использовать личные кредиты без подтверждения"
+
+#: derp/handlers/context_settings.py:465
+msgid "Chat"
+msgstr "Чат"
+
+#: derp/handlers/context_settings.py:466
+msgid "Inline chat"
+msgstr "Ответ в инлайн-режиме"
+
+#: derp/handlers/context_settings.py:467
+msgid "Deep thinking"
+msgstr "Углублённый анализ"
+
+#: derp/handlers/context_settings.py:468
+msgid "Image generation"
+msgstr "Создание изображений"
+
+#: derp/handlers/context_settings.py:469
+msgid "Image editing"
+msgstr "Изменение изображений"
+
+#: derp/handlers/context_settings.py:470
+msgid "Voice"
+msgstr "Голосовое сообщение"
+
+#: derp/handlers/context_settings.py:471
+msgid "Video generation"
+msgstr "Создание видео"
+
+#: derp/handlers/context_settings.py:472
+msgid "Paid feature"
+msgstr "Платная функция"
+
+#: derp/handlers/context_settings.py:476
+#, python-brace-format
+msgid "{feature}: -{credits} credit · {date}"
+msgid_plural "{feature}: -{credits} credits · {date}"
+msgstr[0] "{feature}: -{credits} кредит · {date}"
+msgstr[1] "{feature}: -{credits} кредита · {date}"
+msgstr[2] "{feature}: -{credits} кредитов · {date}"
+
+#: derp/handlers/context_settings.py:486
+#, python-brace-format
+msgid "{feature} refund: +{credits} credit · {date}"
+msgid_plural "{feature} refund: +{credits} credits · {date}"
+msgstr[0] "{feature}: возврат +{credits} кредит · {date}"
+msgstr[1] "{feature}: возврат +{credits} кредита · {date}"
+msgstr[2] "{feature}: возврат +{credits} кредитов · {date}"
+
+#: derp/handlers/context_settings.py:496
+#, python-brace-format
+msgid "Payment refund: -{credits} credit · {date}"
+msgid_plural "Payment refund: -{credits} credits · {date}"
+msgstr[0] "Возврат платежа: -{credits} кредит · {date}"
+msgstr[1] "Возврат платежа: -{credits} кредита · {date}"
+msgstr[2] "Возврат платежа: -{credits} кредитов · {date}"
+
+#: derp/handlers/context_settings.py:504
+#, python-brace-format
+msgid "Payment debt: {credits} credit · {date}"
+msgid_plural "Payment debt: {credits} credits · {date}"
+msgstr[0] "Долг по платежу: {credits} кредит · {date}"
+msgstr[1] "Долг по платежу: {credits} кредита · {date}"
+msgstr[2] "Долг по платежу: {credits} кредитов · {date}"
+
+#: derp/handlers/context_settings.py:521 derp/handlers/context_settings.py:963
+#: derp/handlers/context_settings.py:1019
+msgid "topic"
+msgstr "темы"
+
+#: derp/handlers/context_settings.py:521 derp/handlers/context_settings.py:963
+#: derp/handlers/context_settings.py:1019
+msgid "chat"
+msgstr "чата"
+
+#: derp/handlers/context_settings.py:525
+msgid "Delete my messages"
+msgstr "Удалить мои сообщения"
+
+#: derp/handlers/context_settings.py:536
+#, python-brace-format
+msgid "Clear this {scope}"
+msgstr "Очистить историю {scope}"
+
+#: derp/handlers/context_settings.py:542
+msgid "Forget shared facts"
+msgstr "Удалить общие факты"
+
+#: derp/handlers/context_settings.py:558
+#, python-brace-format
+msgid ""
+"<b>Privacy and history</b>\n"
+"Saved messages are deleted after {days} day.\n"
+"\n"
+"You can delete your own saved messages at any time. Chat admins can clear"
+" this chat or topic. Approved shared facts are kept separately."
+msgid_plural ""
+"<b>Privacy and history</b>\n"
+"Saved messages are deleted after {days} days.\n"
+"\n"
+"You can delete your own saved messages at any time. Chat admins can clear"
+" this chat or topic. Approved shared facts are kept separately."
+msgstr[0] ""
+"<b>Приватность и история</b>\n"
+"Сохранённые сообщения удаляются через {days} день.\n"
+"\n"
+"Свои сохранённые сообщения можно удалить в любой момент. Администраторы "
+"могут очистить историю чата или темы. Подтверждённые общие факты хранятся"
+" отдельно."
+msgstr[1] ""
+"<b>Приватность и история</b>\n"
+"Сохранённые сообщения удаляются через {days} дня.\n"
+"\n"
+"Свои сохранённые сообщения можно удалить в любой момент. Администраторы "
+"могут очистить историю чата или темы. Подтверждённые общие факты хранятся"
+" отдельно."
+msgstr[2] ""
+"<b>Приватность и история</b>\n"
+"Сохранённые сообщения удаляются через {days} дней.\n"
+"\n"
+"Свои сохранённые сообщения можно удалить в любой момент. Администраторы "
+"могут очистить историю чата или темы. Подтверждённые общие факты хранятся"
+" отдельно."
+
+#: derp/handlers/context_settings.py:579
+msgid ""
+"This deletes Derp's saved messages and media references. Telegram "
+"messages and copies made by other people remain."
+msgstr ""
+"Сохранённые сообщения и сведения о медиафайлах будут удалены. Сообщения в"
+" Telegram и копии других людей останутся."
+
+#: derp/handlers/context_settings.py:582
+#, python-brace-format
+msgid ""
+"<b>{label}?</b>\n"
+"{detail}"
+msgstr ""
+"<b>{label}?</b>\n"
+"{detail}"
+
+#: derp/handlers/context_settings.py:587
+msgid "Delete"
+msgstr "Удалить"
+
+#: derp/handlers/context_settings.py:591
+#: derp/handlers/paid_media_controls.py:48
+#: derp/handlers/paid_media_controls.py:136 derp/handlers/tool_approvals.py:582
+msgid "Cancel"
+msgstr "Отменить"
+
+#: derp/handlers/context_settings.py:767
+msgid "Your credits"
+msgstr "Личные кредиты"
+
+#: derp/handlers/context_settings.py:782
+#, python-brace-format
+msgid "Payment debt: {credits} credit"
+msgid_plural "Payment debt: {credits} credits"
+msgstr[0] "Долг по платежу: {credits} кредит"
+msgstr[1] "Долг по платежу: {credits} кредита"
+msgstr[2] "Долг по платежу: {credits} кредитов"
+
+#: derp/handlers/context_settings.py:788
 msgid "paused"
-msgstr "приостановлены"
+msgstr "использование приостановлено"
 
-#: derp/handlers/context_settings.py:656
+#: derp/handlers/context_settings.py:791
 #, python-brace-format
-msgid "This chat: {credits} ({state})"
-msgstr "Этот чат: {credits} ({state})"
+msgid "This chat: {credits} purchased credit ({state})"
+msgid_plural "This chat: {credits} purchased credits ({state})"
+msgstr[0] "Куплено для чата: {credits} кредит ({state})"
+msgstr[1] "Куплено для чата: {credits} кредита ({state})"
+msgstr[2] "Куплено для чата: {credits} кредитов ({state})"
 
-#: derp/handlers/context_settings.py:661
-#: derp/handlers/paid_media_controls.py:98 derp/handlers/tool_approvals.py:616
-msgid "Always here"
-msgstr "Всегда использовать здесь"
+#: derp/handlers/context_settings.py:799
+msgid "always"
+msgstr "без подтверждения"
 
-#: derp/handlers/context_settings.py:661
-msgid "Ask me"
-msgstr "Спрашивать"
+#: derp/handlers/context_settings.py:799
+msgid "ask first"
+msgstr "с подтверждением"
 
-#: derp/handlers/context_settings.py:662
+#: derp/handlers/context_settings.py:800
 #, python-brace-format
-msgid "Personal fallback: {state}"
-msgstr "Личные кредиты: {state}"
+msgid "Use my credits here: {state}"
+msgstr "Личные кредиты здесь: {state}"
 
-#: derp/handlers/context_settings.py:740
-msgid "Personal fallback: Always here"
-msgstr "Личные кредиты: всегда здесь"
+#: derp/handlers/context_settings.py:817
+msgid "Credits are unavailable"
+msgstr "Кредиты недоступны"
 
-#: derp/handlers/context_settings.py:742
-msgid "Personal fallback: Ask me"
-msgstr "Личные кредиты: спрашивать"
+#: derp/handlers/context_settings.py:857 derp/handlers/context_settings.py:1239
+msgid "This setting only applies in groups"
+msgstr "Эта настройка доступна только в группах"
 
-#: derp/handlers/credit_cmds.py:43
-msgid "😅 Could not find your user info."
-msgstr "😅 Не удалось найти информацию о вашем пользователе."
+#: derp/handlers/context_settings.py:864 derp/handlers/context_settings.py:1235
+msgid "This setting is no longer valid"
+msgstr "Эта настройка больше не действует"
+
+#: derp/handlers/context_settings.py:880
+msgid "Your credits can be used here without asking"
+msgstr "Теперь личные кредиты можно использовать здесь без подтверждения"
+
+#: derp/handlers/context_settings.py:882
+msgid "I'll ask before using your credits here"
+msgstr "Теперь перед использованием личных кредитов здесь нужно подтверждение"
+
+#: derp/handlers/context_settings.py:916
+msgid "Delete your saved messages from this chat"
+msgstr "Удалить свои сохранённые сообщения из этого чата"
+
+#: derp/handlers/context_settings.py:931 derp/handlers/context_settings.py:981
+msgid "History is unavailable"
+msgstr "История недоступна"
+
+#: derp/handlers/context_settings.py:947 derp/handlers/context_settings.py:1000
+#, python-brace-format
+msgid "Deleted {count} saved message"
+msgid_plural "Deleted {count} saved messages"
+msgstr[0] "Удалено {count} сохранённое сообщение"
+msgstr[1] "Удалено {count} сохранённых сообщения"
+msgstr[2] "Удалено {count} сохранённых сообщений"
+
+#: derp/handlers/context_settings.py:961 derp/handlers/context_settings.py:984
+msgid "Only chat admins can clear history"
+msgstr "Очистить историю могут только администраторы чата"
+
+#: derp/handlers/context_settings.py:966
+#, python-brace-format
+msgid "Clear saved history for this {scope}"
+msgstr "Очистить сохранённую историю {scope}"
+
+#: derp/handlers/context_settings.py:1016
+#: derp/handlers/context_settings.py:1044
+msgid "Only chat admins can forget shared facts"
+msgstr "Удалить общие факты могут только администраторы чата"
+
+#: derp/handlers/context_settings.py:1022
+#, python-brace-format
+msgid "Forget approved facts in this {scope}"
+msgstr "Удалить подтверждённые факты {scope}"
+
+#: derp/handlers/context_settings.py:1024
+msgid ""
+"This deletes approved facts here. Saved conversation history stays "
+"unchanged."
+msgstr ""
+"Подтверждённые факты будут удалены. Сохранённая история переписки не "
+"изменится."
+
+#: derp/handlers/context_settings.py:1041
+msgid "Shared facts are unavailable"
+msgstr "Общие факты недоступны"
+
+#: derp/handlers/context_settings.py:1061
+#, python-brace-format
+msgid "Forgot {count} approved fact"
+msgid_plural "Forgot {count} approved facts"
+msgstr[0] "Удалён {count} подтверждённый факт"
+msgstr[1] "Удалены {count} подтверждённых факта"
+msgstr[2] "Удалено {count} подтверждённых фактов"
+
+#: derp/handlers/context_settings.py:1079
+msgid "This proposal is unavailable"
+msgstr "Этот факт недоступен"
+
+#: derp/handlers/context_settings.py:1083
+msgid "A chat admin must review this fact"
+msgstr "Этот факт должен проверить администратор чата"
+
+#: derp/handlers/context_settings.py:1089
+msgid "This proposal is no longer valid"
+msgstr "Этот факт уже нельзя проверить"
+
+#: derp/handlers/context_settings.py:1107
+msgid "This fact was already reviewed or is no longer available"
+msgstr "Этот факт уже проверен или больше недоступен"
+
+#: derp/handlers/context_settings.py:1112
+msgid "Approved"
+msgstr "подтверждён"
+
+#: derp/handlers/context_settings.py:1114
+msgid "Rejected"
+msgstr "отклонён"
+
+#: derp/handlers/context_settings.py:1117
+#, python-brace-format
+msgid ""
+"<b>{state} shared fact</b>\n"
+"<blockquote>{fact}</blockquote>"
+msgstr ""
+"<b>Общий факт {state}</b>\n"
+"<blockquote>{fact}</blockquote>"
+
+#: derp/handlers/context_settings.py:1135
+#: derp/handlers/context_settings.py:1189
+#: derp/handlers/context_settings.py:1229
+msgid "Settings are unavailable"
+msgstr "Настройки недоступны"
+
+#: derp/handlers/context_settings.py:1138
+#: derp/handlers/context_settings.py:1192
+#: derp/handlers/context_settings.py:1232
+msgid "Only chat admins can change this"
+msgstr "Изменить это могут только администраторы чата"
+
+#: derp/handlers/context_settings.py:1146
+msgid "Telegram only sends me mentions right now"
+msgstr "Сейчас Дерп получает от Telegram только упоминания"
+
+#: derp/handlers/context_settings.py:1163
+msgid "Context is on"
+msgstr "Контекст включён"
+
+#: derp/handlers/context_settings.py:1166
+#, python-brace-format
+msgid "Context is off · {count} saved message deleted"
+msgid_plural "Context is off · {count} saved messages deleted"
+msgstr[0] "Контекст выключен · удалено {count} сохранённое сообщение"
+msgstr[1] "Контекст выключен · удалено {count} сохранённых сообщения"
+msgstr[2] "Контекст выключен · удалено {count} сохранённых сообщений"
+
+#: derp/handlers/context_settings.py:1212
+#, python-brace-format
+msgid "Messages will be kept for {days} day"
+msgid_plural "Messages will be kept for {days} days"
+msgstr[0] "Сообщения будут храниться {days} день"
+msgstr[1] "Сообщения будут храниться {days} дня"
+msgstr[2] "Сообщения будут храниться {days} дней"
+
+#: derp/handlers/context_settings.py:1272
+msgid "Only chat admins can set instructions"
+msgstr "Задать правила могут только администраторы чата"
+
+#: derp/handlers/context_settings.py:1278
+msgid "One short instruction"
+msgstr "Одно короткое правило"
+
+#: derp/handlers/context_settings.py:1295
+msgid "Only chat admins can set instructions."
+msgstr "Задать правила могут только администраторы чата."
+
+#: derp/handlers/context_settings.py:1312
+msgid "Keep the instruction under 2,048 characters."
+msgstr "Правило должно быть короче 2 048 символов."
+
+#: derp/handlers/context_settings.py:1316
+msgid "Chat instructions saved."
+msgstr "Правила чата сохранены."
+
+#: derp/handlers/context_settings.py:1316
+msgid "Chat instructions cleared."
+msgstr "Правила чата удалены."
+
+#: derp/handlers/context_settings.py:1324
+msgid "Reply to one of your own messages with /forget."
+msgstr "Ответьте на своё сообщение командой /forget."
+
+#: derp/handlers/context_settings.py:1335
+msgid "That message isn't saved here or doesn't belong to you."
+msgstr "Это сообщение не сохранено здесь или принадлежит другому участнику."
+
+#: derp/handlers/context_settings.py:1340
+msgid ""
+"Deleted Derp's saved copy. The Telegram message and copies made by other "
+"people remain."
+msgstr ""
+"Дерп удалил сохранённую копию. Сообщение в Telegram и копии других людей "
+"остались."
+
+#: derp/handlers/context_settings.py:1364
+msgid ""
+"Derp uses recent messages for follow-up answers. Open /settings to view "
+"history and deletion settings."
+msgstr ""
+"Дерп использует недавние сообщения, чтобы продолжать разговор. Настройки "
+"истории и удаления сообщений — в /settings."
+
+#: derp/handlers/credit_cmds.py:43 derp/handlers/credit_cmds.py:98
+#: derp/handlers/subscriptions.py:115
+msgid "I couldn't find your account. Try again."
+msgstr "Не удалось найти аккаунт. Попробуйте ещё раз."
 
 #: derp/handlers/credit_cmds.py:78
-msgid "I sent your balance in a private chat."
-msgstr "Я отправил ваш баланс в личный чат."
+msgid "I sent your credit details in a private chat."
+msgstr "Данные о кредитах отправлены в личный чат."
 
 #: derp/handlers/credit_cmds.py:80
-msgid "I couldn't send your private balance. Open Derp privately and retry."
-msgstr "Не удалось отправить баланс лично. Откройте Derp и попробуйте снова."
-
-#: derp/handlers/credit_cmds.py:98
-#, fuzzy
-msgid "Could not find your user info."
-msgstr "😅 Не удалось найти информацию о вашем пользователе."
+msgid "I couldn't send your credit details. Open Derp privately and use /credits."
+msgstr ""
+"Не удалось отправить данные о кредитах. Откройте личный чат с Дерпом и "
+"отправьте /credits."
 
 #: derp/handlers/credit_cmds.py:115
-msgid "Could not find this chat."
-msgstr ""
+msgid "I couldn't find this chat. Try again."
+msgstr "Не удалось найти этот чат. Попробуйте ещё раз."
 
 #: derp/handlers/debug.py:514
-#, fuzzy
 msgid ""
 "🛠 **Debug Commands** (admin only)\n"
 "\n"
@@ -237,673 +889,905 @@ msgid ""
 "• /debug_tools - List tools with pricing\n"
 "• /debug_help - This help message"
 msgstr ""
-"🛠 **Отладочные команды** (только для админа)\n"
+"🛠 **Команды отладки** (только для администраторов)\n"
 "\n"
-"**Тестирование кредитов:**\n"
+"**Проверка кредитов:**\n"
+"• /debug_buy - провести реальную покупку за 1 Star\n"
 "• /debug_credits <n> [chat] - добавить кредиты напрямую\n"
-"• /debug_reset [chat] - сбросить кредиты в 0\n"
-"• /debug_refund <charge_id> - протестировать возврат\n"
+"• /debug_reset [chat] - обнулить кредиты\n"
+"• /debug_refund <charge_id> - проверить возврат\n"
 "\n"
 "**Диагностика:**\n"
-"• /debug_status - показать роль модели, балансы и конфигурацию\n"
-"• /debug_tools - показать цены инструментов\n"
-"• /debug_help - это сообщение"
+"• /debug_status - показать роль модели, балансы и настройки\n"
+"• /debug_tools - показать инструменты и цены\n"
+"• /debug_help - показать эту справку"
+
+#: derp/handlers/donations.py:23
+msgid "Support Derp"
+msgstr "Поддержать Дерпа"
+
+#: derp/handlers/donations.py:27
+msgid "A voluntary donation to support Derp's hosting and development."
+msgstr "Добровольное пожертвование на хостинг и разработку Дерпа."
+
+#: derp/handlers/donations.py:32
+#, python-brace-format
+msgid ""
+"I couldn't open the invoice for {stars} Star. You won't be charged. Use "
+"/donate {stars} to try again."
+msgid_plural ""
+"I couldn't open the invoice for {stars} Stars. You won't be charged. Use "
+"/donate {stars} to try again."
+msgstr[0] ""
+"Не удалось открыть счёт на {stars} звезду. Telegram не спишет Stars. "
+"Чтобы повторить, отправьте /donate {stars}."
+msgstr[1] ""
+"Не удалось открыть счёт на {stars} звезды. Telegram не спишет Stars. "
+"Чтобы повторить, отправьте /donate {stars}."
+msgstr[2] ""
+"Не удалось открыть счёт на {stars} звёзд. Telegram не спишет Stars. Чтобы"
+" повторить, отправьте /donate {stars}."
 
 #: derp/handlers/donations.py:42
-msgid "keep Derp caffeinated"
-msgstr "напоить Derp кофе"
-
-#: derp/handlers/donations.py:43
-msgid "pay the server bills"
-msgstr "оплатить серверы"
-
-#: derp/handlers/donations.py:44
-msgid "speed up image magic"
-msgstr "ускорить магию изображений"
-
-#: derp/handlers/donations.py:45
-msgid "train the tiny gremlins"
-msgstr "обучить маленьких гремлинов"
-
-#: derp/handlers/donations.py:46
-msgid "fuel new features"
-msgstr "подпитать новые фичи"
-
-#: derp/handlers/donations.py:47
-msgid "keep logs tidy and shiny"
-msgstr "держать логи в чистоте и блеске"
-
-#: derp/handlers/donations.py:48
-msgid "bribe the RNG for better rolls"
-msgstr "задобрить RNG для лучших роллов"
-
-#: derp/handlers/donations.py:49
-msgid "teach Derp a new trick"
-msgstr "научить Derp новой хитрости"
-
-#: derp/handlers/donations.py:50
-msgid "banish heisenbugs into the void"
-msgstr "изгнать гейзенбагов в пустоту"
-
-#: derp/handlers/donations.py:51
-msgid "keep the hamster wheel spinning"
-msgstr "крутить хомячье колесо"
-
-#: derp/handlers/donations.py:55
-msgid "Support Derp"
-msgstr "Поддержать Derp"
-
-#: derp/handlers/donations.py:56
-msgid "Power Up Derp"
-msgstr "Прокачать Derp"
-
-#: derp/handlers/donations.py:57
-msgid "Boost Derp"
-msgstr "Ускорить Derp"
-
-#: derp/handlers/donations.py:58
-msgid "Derp Fuel"
-msgstr "Топливо для Derp"
-
-#: derp/handlers/donations.py:59
-msgid "Derp Snacks"
-msgstr "Перекус для Derp"
-
-#: derp/handlers/donations.py:60
-msgid "Shiny Upgrades"
-msgstr "Блестящие апгрейды"
-
-#: derp/handlers/donations.py:64
-msgid "Coffee Run"
-msgstr "Забег за кофе"
-
-#: derp/handlers/donations.py:65
-msgid "Server Snacks"
-msgstr "Перекус для серверов"
-
-#: derp/handlers/donations.py:66
-msgid "Feature Juice"
-msgstr "Сок фич"
-
-#: derp/handlers/donations.py:67
-msgid "Good Vibes"
-msgstr "Добрые вайбы"
-
-#: derp/handlers/donations.py:68
-msgid "Bug Zapper"
-msgstr "Уничтожитель багов"
-
-#: derp/handlers/donations.py:69
-msgid "Gremlin School"
-msgstr "Школа гремлинов"
-
-#: derp/handlers/donations.py:73
 #, python-brace-format
-msgid "Every star helps {purpose}."
-msgstr "Каждая звезда помогает {purpose}."
+msgid "Thanks, {name}. Your {stars} Star is keeping Derp sharp."
+msgid_plural "Thanks, {name}. Your {stars} Stars are keeping Derp sharp."
+msgstr[0] "Спасибо, {name}. {stars} звезда помогает Дерпу держать форму."
+msgstr[1] "Спасибо, {name}. {stars} звезды помогают Дерпу держать форму."
+msgstr[2] "Спасибо, {name}. {stars} звёзд помогают Дерпу держать форму."
 
-#: derp/handlers/donations.py:74
-#, python-brace-format
-msgid "Your stars directly help us {purpose}."
-msgstr "Ваши звёзды напрямую помогают {purpose}."
-
-#: derp/handlers/donations.py:75
-#, python-brace-format
-msgid "Tiny bit of stardust to {purpose}."
-msgstr "Немного звёздной пыли, чтобы {purpose}."
-
-#: derp/handlers/donations.py:76
-#, python-brace-format
-msgid "Stars today, fewer bugs tomorrow — {purpose}."
-msgstr "Звёзды сегодня — меньше багов завтра — {purpose}."
-
-#: derp/handlers/donations.py:77
-#, python-brace-format
-msgid "A sprinkle of ✨ to {purpose}."
-msgstr "Щепотка ✨ чтобы {purpose}."
-
-#: derp/handlers/donations.py:81
-msgid "You rock."
-msgstr "Ты классный."
-
-#: derp/handlers/donations.py:82
-msgid "Thank you for being awesome!"
-msgstr "Спасибо, что ты классный!"
-
-#: derp/handlers/donations.py:83
-msgid "High‑five from the team ✋"
-msgstr "Дай пять от команды ✋"
-
-#: derp/handlers/donations.py:84
-msgid "We'll spend it wisely."
-msgstr "Потратим с умом."
-
-#: derp/handlers/donations.py:85
-msgid "Much love from Derp HQ 💙"
-msgstr "Любовь из штаба Derp 💙"
-
-#: derp/handlers/donations.py:86
-msgid "Deploying instant good karma…"
-msgstr "Отправляем мгновенную карму…"
-
-#: derp/handlers/donations.py:146 derp/handlers/donations.py:168
+#: derp/handlers/donations.py:85 derp/handlers/donations.py:101
 msgid "Donation"
 msgstr "Пожертвование"
 
-#: derp/handlers/donations.py:178
-#, python-brace-format
-msgid "Use /donate {n} to donate {n}⭐️."
-msgstr "Используйте /donate {n}, чтобы задонатить {n}⭐️."
-
-#: derp/handlers/donations.py:219
+#: derp/handlers/donations.py:142
 msgid "friend"
 msgstr "друг"
 
-#: derp/handlers/donations.py:221
-#, python-brace-format
-msgid "🙏 Thank you, {name}, for donating {stars}⭐️! Here's a {kind} for you."
-msgstr "🙏 Спасибо, {name}, за донат {stars}⭐️! Лови {kind}."
-
-#: derp/handlers/donations.py:222
-#, python-brace-format
-msgid "You absolute legend, {name}! {stars}⭐️ delivered. {kind} unlocked."
-msgstr "Ты легенда, {name}! {stars}⭐️ доставлены. {kind} разблокирован."
-
-#: derp/handlers/donations.py:223
-#, python-brace-format
-msgid "{name}, you fed the Derp! +{stars}⭐️ {kind} time."
-msgstr "{name}, ты накормил Derp! +{stars}⭐️ время для {kind}."
-
-#: derp/handlers/donations.py:224
-#, python-brace-format
-msgid "{stars}⭐️ received — karma++ for {name}! Enjoy a {kind}."
-msgstr "{stars}⭐️ получены — карма++ для {name}! Лови {kind}."
-
-#: derp/handlers/donations.py:225
-#, python-brace-format
-msgid "{name}, your {stars}⭐️ keeps the servers toasty. {kind} incoming!"
-msgstr "{name}, твои {stars}⭐️ держат серверы в тепле. {kind} уже тут!"
-
-#: derp/handlers/donations.py:252
-#, python-brace-format
-msgid "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
-msgstr "🙏 Спасибо, {name}, за донат {stars}⭐️ в поддержку Derp!"
-
 #: derp/handlers/image.py:65
 msgid ""
-"Funding approval is required. Not charged. Enable personal credit "
-"spending for this chat, then retry."
+"This chat can't cover the image. You weren't charged. Allow personal "
+"credits here, then try again."
 msgstr ""
+"Кредитов чата не хватает на изображение. Кредиты не списаны. Разрешите "
+"использовать здесь личные кредиты и попробуйте ещё раз."
 
-#: derp/handlers/image.py:69 derp/handlers/tool_approvals.py:677
-#: derp/handlers/tts.py:375
-msgid "Funding is unavailable while this balance is in debt. Not charged."
+#: derp/handlers/image.py:70 derp/handlers/tool_approvals.py:686
+#: derp/handlers/tts.py:381
+msgid ""
+"Paid features are paused for this balance. You weren't charged. Clear the"
+" payment debt to continue."
 msgstr ""
+"Платные функции приостановлены из-за долга по платежу. Кредиты не "
+"списаны. Погасите долг, чтобы продолжить."
 
-#: derp/handlers/image.py:70 derp/handlers/tool_approvals.py:678
-#: derp/handlers/tts.py:376
+#: derp/handlers/image.py:75 derp/handlers/tool_approvals.py:691
 #, python-brace-format
-msgid "Funding needed: {credits} credits. Not charged."
-msgstr ""
-
-#: derp/handlers/image.py:77
-msgid "Not charged. The image request is invalid."
-msgstr ""
-
-#: derp/handlers/image.py:79
-msgid "Not charged. The image request was declined."
-msgstr ""
-
-#: derp/handlers/image.py:81
-msgid "Not charged. The model did not return a usable image."
-msgstr ""
-
-#: derp/handlers/image.py:83
-msgid "Not charged. The price expired; send the request again."
-msgstr ""
-
-#: derp/handlers/image.py:85
-msgid "Not charged. The image request was canceled."
-msgstr ""
+msgid ""
+"This image needs {credits} credit. You weren't charged. Add credits and "
+"try again."
+msgid_plural ""
+"This image needs {credits} credits. You weren't charged. Add credits and "
+"try again."
+msgstr[0] ""
+"Для изображения нужен {credits} кредит. Кредиты не списаны. Добавьте "
+"кредиты и попробуйте ещё раз."
+msgstr[1] ""
+"Для изображения нужны {credits} кредита. Кредиты не списаны. Добавьте "
+"кредиты и попробуйте ещё раз."
+msgstr[2] ""
+"Для изображения нужно {credits} кредитов. Кредиты не списаны. Добавьте "
+"кредиты и попробуйте ещё раз."
 
 #: derp/handlers/image.py:86
-msgid "Not charged. Image generation did not complete. Please try again."
+msgid ""
+"I couldn't use that image request. You weren't charged. Check it and try "
+"again."
 msgstr ""
+"Не удалось обработать запрос на изображение. Кредиты не списаны. "
+"Проверьте его и попробуйте ещё раз."
 
 #: derp/handlers/image.py:91
-#, fuzzy
-msgid "Image delivered."
-msgstr "🤷 Изображение не сгенерировано."
-
-#: derp/handlers/image.py:97 derp/handlers/paid_media_delivery.py:150
-#: derp/handlers/tool_approvals.py:715 derp/handlers/tts.py:418
-msgid "Refunded. Delivery failed, so the charged credits were returned."
-msgstr ""
-
-#: derp/handlers/image.py:100
 msgid ""
-"Delivery uncertain. The image may already have arrived. Check the chat "
-"first, then use Send again only if it is missing. Sending again does not "
-"charge credits again."
+"I couldn't create that image. You weren't charged. Try a different "
+"request."
 msgstr ""
+"Не получилось создать изображение. Кредиты не списаны. Попробуйте другой "
+"запрос."
 
-#: derp/handlers/image.py:107
-msgid "In progress. This image request is still being prepared."
+#: derp/handlers/image.py:95
+msgid "I couldn't create a usable image. You weren't charged. Try again."
 msgstr ""
+"Не получилось создать подходящее изображение. Кредиты не списаны. "
+"Попробуйте ещё раз."
 
-#: derp/handlers/image.py:110
-msgid "In progress. This image is still being generated."
+#: derp/handlers/image.py:97 derp/handlers/tts.py:410
+msgid "The price expired. You weren't charged. Send the request again."
+msgstr "Эта цена больше не действует. Кредиты не списаны. Отправьте запрос заново."
+
+#: derp/handlers/image.py:99 derp/handlers/tool_approvals.py:235
+#: derp/handlers/tts.py:175 derp/handlers/tts.py:412
+msgid "Canceled. You weren't charged."
+msgstr "Отменено. Кредиты не списаны."
+
+#: derp/handlers/image.py:100 derp/handlers/tool_approvals.py:737
+msgid "I couldn't create the image. You weren't charged. Try again."
+msgstr "Не получилось создать изображение. Кредиты не списаны. Попробуйте ещё раз."
+
+#: derp/handlers/image.py:105
+msgid "Image delivered."
+msgstr "Изображение отправлено."
+
+#: derp/handlers/image.py:111 derp/handlers/tool_approvals.py:731
+msgid "I couldn't deliver the image. Your credits were returned."
+msgstr "Не получилось отправить изображение. Кредиты возвращены."
+
+#: derp/handlers/image.py:114 derp/handlers/tool_approvals.py:713
+msgid ""
+"The image may already be in the chat. You won't be charged again. Check "
+"first, then tap Send again if it's missing."
 msgstr ""
+"Изображение уже могло прийти в чат. Повторного списания не будет. Сначала"
+" проверьте чат, а если изображения нет, нажмите «Отправить ещё раз»."
 
-#: derp/handlers/image.py:113
-msgid "In progress. This image is still being delivered."
-msgstr ""
+#: derp/handlers/image.py:119
+msgid "Preparing your image..."
+msgstr "Подготавливаю изображение..."
 
-#: derp/handlers/image.py:128 derp/handlers/paid_media_delivery.py:80
+#: derp/handlers/image.py:120 derp/handlers/tool_approvals.py:304
+msgid "Creating your image..."
+msgstr "Создаю изображение..."
+
+#: derp/handlers/image.py:121
+msgid "Sending your image..."
+msgstr "Отправляю изображение..."
+
+#: derp/handlers/image.py:135 derp/handlers/paid_media_delivery.py:80
+#: derp/handlers/tool_approvals.py:720
 msgid "Send again"
+msgstr "Отправить ещё раз"
+
+#: derp/handlers/image.py:289 derp/handlers/image.py:327
+#: derp/handlers/paid_media_delivery.py:98
+#: derp/handlers/paid_media_delivery.py:161
+msgid "This button is no longer available."
+msgstr "Эта кнопка больше недоступна."
+
+#: derp/handlers/image.py:308
+msgid "Checking image delivery..."
+msgstr "Проверяю доставку изображения..."
+
+#: derp/handlers/image.py:345
+msgid "Send /imagine followed by an image description."
+msgstr "Отправьте /imagine и описание изображения."
+
+#: derp/handlers/image.py:356
+msgid ""
+"I couldn't use that image description. You weren't charged. Change it and"
+" try again."
 msgstr ""
+"Не удалось обработать описание изображения. Кредиты не списаны. Измените "
+"его и попробуйте ещё раз."
 
-#: derp/handlers/image.py:282 derp/handlers/paid_media_delivery.py:98
-msgid "This delivery control is unavailable."
+#: derp/handlers/image.py:384
+msgid "Reply to an image with /edit followed by your changes."
+msgstr "Ответьте на сообщение с изображением командой /edit и опишите изменения."
+
+#: derp/handlers/image.py:395
+msgid ""
+"I couldn't find an image to edit. You weren't charged. Attach one or "
+"reply to one, then try again."
 msgstr ""
+"Не нашлось изображения для изменения. Кредиты не списаны. Прикрепите его "
+"или ответьте на сообщение с ним и попробуйте ещё раз."
 
-#: derp/handlers/image.py:301
-msgid "In progress. Delivery status is still being reconciled."
+#: derp/handlers/image.py:406
+msgid "I can't edit that image. You weren't charged. Try another one."
 msgstr ""
-
-#: derp/handlers/image.py:320 derp/handlers/paid_media_delivery.py:161
-msgid "This delivery control is invalid or expired."
-msgstr ""
-
-#: derp/handlers/image.py:338
-msgid "Usage: /imagine <prompt>"
-msgstr "Использование: /imagine <запрос>"
-
-#: derp/handlers/image.py:341 derp/handlers/image.py:374
-#, fuzzy
-msgid "Could not verify your account. Please try again."
-msgstr "😅 Не удалось проверить доступ. Попробуйте ещё раз."
-
-#: derp/handlers/image.py:347
-msgid "The image prompt is too long or invalid."
-msgstr ""
-
-#: derp/handlers/image.py:371
-msgid "Reply to an image and use: /edit <prompt>"
-msgstr "Ответьте на изображение и используйте: /edit <запрос>"
-
-#: derp/handlers/image.py:380
-#, fuzzy
-msgid "Reply to or attach an image, then use: /edit <prompt>"
-msgstr "Ответьте на изображение и используйте: /edit <запрос>"
-
-#: derp/handlers/image.py:388
-msgid "That image cannot be edited."
-msgstr ""
-
-#: derp/handlers/inline.py:45 derp/handlers/inline.py:72
-msgid "🤖 Ask Derp"
-msgstr "🤖 Спросить Derp"
+"Не получилось изменить это изображение. Кредиты не списаны. Попробуйте "
+"другое."
 
 #: derp/handlers/inline.py:46
-msgid "Start typing to get an AI-powered response."
-msgstr "Начните печатать, чтобы получить ответ от ИИ."
+msgid "Ask a question in this chat."
+msgstr "Задайте вопрос в этом чате."
 
 #: derp/handlers/inline.py:48
-msgid "🤖 Please enter a prompt for Derp AI."
-msgstr "🤖 Пожалуйста, введите запрос для Derp AI."
+msgid "Type a question for Derp."
+msgstr "Введите вопрос Дерпу."
 
-#: derp/handlers/inline.py:54 derp/handlers/inline.py:85
-#: derp/handlers/inline.py:191
+#: derp/handlers/inline.py:54 derp/handlers/inline.py:83
+#: derp/handlers/inline.py:189
 msgid "Add Derp to your chat"
-msgstr "Добавить Derp в ваш чат"
+msgstr "Добавить Дерпа в чат"
 
 #: derp/handlers/inline.py:73
 #, python-brace-format
-msgid "Get an AI-powered response for: {user_input}"
-msgstr "Получить ответ от ИИ на: {user_input}"
+msgid "Ask Derp: {user_input}"
+msgstr "Спросить Дерпа: {user_input}"
 
-#: derp/handlers/inline.py:78
+#: derp/handlers/inline.py:76
 #, python-brace-format
-msgid "🧠 Thinking about: {user_input}"
-msgstr "🧠 Думаю над: {user_input}"
+msgid "Derp is thinking about: {user_input}"
+msgstr "Дерп думает над вопросом: {user_input}"
 
-#: derp/handlers/inline.py:95 derp/handlers/inline.py:204
+#: derp/handlers/inline.py:93 derp/handlers/inline.py:202
 msgid "Start personal chat"
-msgstr "Начать личный чат"
+msgstr "Открыть личный чат"
 
-#: derp/handlers/inline.py:117 derp/handlers/inline.py:176
-msgid "I couldn't verify your inline allowance. Open Derp and try again."
-msgstr ""
-"Не удалось проверить дневной лимит инлайн-запросов. Откройте Derp и "
-"попробуйте снова."
+#: derp/handlers/inline.py:115 derp/handlers/inline.py:174
+msgid "I couldn't verify this request. Open Derp and try again."
+msgstr "Не удалось проверить запрос. Откройте чат с Дерпом и попробуйте ещё раз."
 
-#: derp/handlers/inline.py:134 derp/handlers/inline.py:183
-msgid "I couldn't answer this inline request right now. Try again later."
-msgstr "Не удалось ответить на этот инлайн-запрос. Попробуйте позже."
+#: derp/handlers/inline.py:132 derp/handlers/inline.py:181
+msgid "I couldn't answer that here. Try again."
+msgstr "Не получилось ответить здесь. Попробуйте ещё раз."
 
-#: derp/handlers/inline.py:149
-msgid "Daily inline limit reached. Try again after 00:00 UTC."
-msgstr "Дневной лимит инлайн-запросов исчерпан. Попробуйте снова после 00:00 UTC."
+#: derp/handlers/inline.py:147
+msgid "You've used today's inline answers. Try again after 00:00 UTC."
+msgstr "Лимит ответов на сегодня исчерпан. Попробуйте после 00:00 UTC."
 
-#: derp/handlers/inline.py:156
-msgid "This inline request is empty or too long. Shorten it and try again."
-msgstr ""
-"Инлайн-запрос пустой или слишком длинный. Сократите его и попробуйте "
-"снова."
+#: derp/handlers/inline.py:154
+msgid "That question is empty or too long. Shorten it and try again."
+msgstr "Вопрос пустой или слишком длинный. Сократите его и попробуйте ещё раз."
+
+#: derp/handlers/inline.py:176
+msgid "That took too long. Try again."
+msgstr "Ответ занял слишком много времени. Попробуйте ещё раз."
 
 #: derp/handlers/inline.py:178
-msgid "The model took too long to answer. Try again later."
-msgstr "Модель не успела ответить. Попробуйте позже."
+msgid "I couldn't answer that question. Try wording it differently."
+msgstr "Не получилось ответить. Сформулируйте вопрос иначе."
 
 #: derp/handlers/inline.py:180
-msgid "The model couldn't answer this request. Try a different question."
-msgstr "Модель не смогла ответить на этот запрос. Задайте другой вопрос."
+msgid "I couldn't produce a useful answer. Try wording it differently."
+msgstr "Не получилось дать полезный ответ. Сформулируйте вопрос иначе."
 
-#: derp/handlers/inline.py:182
-msgid "The model returned no usable answer. Try a different question."
-msgstr "Модель не вернула пригодный ответ. Задайте другой вопрос."
-
-#: derp/handlers/inline.py:217
+#: derp/handlers/inline.py:215
 msgid "Ask another question"
-msgstr "Задать другой вопрос"
+msgstr "Задать ещё вопрос"
 
-#: derp/handlers/paid_media_controls.py:36
-#: derp/handlers/paid_media_controls.py:65
-#: derp/handlers/paid_media_controls.py:124 derp/handlers/tool_approvals.py:570
-#: derp/handlers/tool_approvals.py:587 derp/handlers/tool_approvals.py:602
-msgid "Run"
-msgstr "Запустить"
+#: derp/handlers/paid_media_controls.py:37
+msgid "Create voice"
+msgstr "Создать голосовое сообщение"
 
-#: derp/handlers/paid_media_controls.py:44
-#: derp/handlers/paid_media_controls.py:132 derp/handlers/tool_approvals.py:574
-msgid "Cancel"
-msgstr "Отмена"
+#: derp/handlers/paid_media_controls.py:39
+msgid "Create video"
+msgstr "Создать видео"
 
-#: derp/handlers/paid_media_controls.py:90 derp/handlers/tool_approvals.py:609
-msgid "Use mine once"
-msgstr "Использовать мои один раз"
+#: derp/handlers/paid_media_controls.py:69
+#: derp/handlers/paid_media_controls.py:128 derp/handlers/tool_approvals.py:595
+#: derp/handlers/tool_approvals.py:610
+msgid "Try again"
+msgstr "Попробовать ещё раз"
 
-#: derp/handlers/paid_media_controls.py:113 derp/handlers/tool_approvals.py:625
-msgid "Buy for chat"
-msgstr "Купить для чата"
+#: derp/handlers/paid_media_controls.py:94 derp/handlers/tool_approvals.py:617
+msgid "Use my credits once"
+msgstr "Использовать личные кредиты один раз"
 
-#: derp/handlers/paid_media_controls.py:115
+#: derp/handlers/paid_media_controls.py:102 derp/handlers/tool_approvals.py:624
+msgid "Always use my credits"
+msgstr "Всегда использовать личные кредиты"
+
+#: derp/handlers/paid_media_controls.py:119
 msgid "Buy credits"
 msgstr "Купить кредиты"
 
 #: derp/handlers/paid_media_delivery.py:118
-msgid "Delivery status is still being reconciled."
-msgstr "Статус доставки еще уточняется."
+msgid "Checking delivery..."
+msgstr "Проверяю доставку..."
 
 #: derp/handlers/paid_media_delivery.py:141
 msgid ""
-"Delivery is still uncertain. The media may already have arrived. Check "
-"the chat before sending again. No additional charge."
+"This may already be in the chat. You won't be charged again. Check first,"
+" then tap Send again if it's missing."
 msgstr ""
-"Статус доставки все еще неясен. Возможно, медиа уже пришло. Проверьте чат"
-" перед повторной отправкой. Повторного списания не будет."
+"Результат уже мог прийти в чат. Повторного списания не будет. Сначала "
+"проверьте чат, а если результата нет, нажмите «Отправить ещё раз»."
+
+#: derp/handlers/paid_media_delivery.py:150
+msgid "I couldn't deliver it. Your credits were returned."
+msgstr "Не получилось отправить результат. Кредиты возвращены."
 
 #: derp/handlers/paid_media_delivery.py:153
-msgid "Delivery is still in progress."
-msgstr "Доставка еще выполняется."
+msgid "Sending it now..."
+msgstr "Отправляю..."
+
+#: derp/handlers/payments.py:56
+#, python-brace-format
+msgid "{stars} Star"
+msgid_plural "{stars} Stars"
+msgstr[0] "{stars} звезда"
+msgstr[1] "{stars} звезды"
+msgstr[2] "{stars} звёзд"
+
+#: derp/handlers/payments.py:71
+msgid "Credit purchases aren't available yet. You won't be charged."
+msgstr "Покупка кредитов пока недоступна. Telegram не спишет Stars."
+
+#: derp/handlers/payments.py:77
+msgid ""
+"This purchase is unavailable. You won't be charged. Open /buy and try "
+"again."
+msgstr ""
+"Эта покупка недоступна. Telegram не спишет Stars. Отправьте /buy и "
+"попробуйте ещё раз."
+
+#: derp/handlers/payments.py:85
+msgid "This purchase is no longer valid. You won't be charged. Open /buy again."
+msgstr ""
+"Эта покупка больше не действует. Telegram не спишет Stars. Отправьте /buy"
+" заново."
+
+#: derp/handlers/payments.py:119
+msgid "Your monthly plan is already active"
+msgstr "Месячный план уже активен"
+
+#: derp/handlers/payments.py:125
+msgid ""
+"This purchase option is no longer available. You won't be charged. Open "
+"/buy again."
+msgstr ""
+"Этот вариант покупки больше недоступен. Telegram не спишет Stars. "
+"Отправьте /buy заново."
+
+#: derp/handlers/payments.py:139
+msgid "Telegram couldn't prepare the invoice. You won't be charged. Try again."
+msgstr "Telegram не подготовил счёт. Stars не будут списаны. Попробуйте ещё раз."
+
+#: derp/handlers/payments.py:149
+#, python-brace-format
+msgid "Pay {price}"
+msgstr "Перейти к оплате · {price}"
+
+#: derp/handlers/payments.py:155
+msgid "this chat"
+msgstr "этого чата"
+
+#: derp/handlers/payments.py:155
+msgid "you"
+msgstr "личного аккаунта"
+
+#: derp/handlers/payments.py:158
+#, python-brace-format
+msgid ""
+"<b>{credits} credit for {owner}</b>\n"
+"Telegram will ask you to confirm before charging {price}."
+msgid_plural ""
+"<b>{credits} credits for {owner}</b>\n"
+"Telegram will ask you to confirm before charging {price}."
+msgstr[0] ""
+"<b>{credits} кредит для {owner}</b>\n"
+"Telegram попросит подтвердить платёж: {price}."
+msgstr[1] ""
+"<b>{credits} кредита для {owner}</b>\n"
+"Telegram попросит подтвердить платёж: {price}."
+msgstr[2] ""
+"<b>{credits} кредитов для {owner}</b>\n"
+"Telegram попросит подтвердить платёж: {price}."
+
+#: derp/handlers/payments.py:170
+msgid "Invoice ready"
+msgstr "Счёт готов"
+
+#: derp/handlers/payments.py:185
+msgid "This purchase option expired. You weren't charged. Open /buy again."
+msgstr "Срок покупки истёк. Telegram не списал Stars. Отправьте /buy заново."
+
+#: derp/handlers/payments.py:215
+msgid ""
+"This invoice expired or changed. You won't be charged. Open /buy and try "
+"again."
+msgstr ""
+"Счёт истёк или изменился. Telegram не спишет Stars. Отправьте /buy и "
+"попробуйте ещё раз."
+
+#: derp/handlers/payments.py:247
+msgid ""
+"Telegram charged this payment, but your credits haven't been added. The "
+"payment needs review. Don't buy again; contact support with the receipt."
+msgstr ""
+"Telegram списал Stars, но кредиты пока не зачислены. Платёж нужно "
+"проверить. Не платите повторно. Отправьте квитанцию в поддержку."
+
+#: derp/handlers/payments.py:256
+msgid ""
+"Telegram charged this payment, but no credits were added because the "
+"details need review. Don't buy again; contact support."
+msgstr ""
+"Telegram списал Stars, но кредиты не зачислены: данные платежа нужно "
+"проверить. Не платите повторно. Обратитесь в поддержку."
+
+#: derp/handlers/payments.py:260
+msgid "This payment was already applied. No credits changed this time."
+msgstr "Этот платёж уже учтён. Баланс кредитов не изменился."
+
+#: derp/handlers/payments.py:263
+#, python-brace-format
+msgid ""
+"<b>Plan active</b>\n"
+"{credits} monthly credit is available."
+msgid_plural ""
+"<b>Plan active</b>\n"
+"{credits} monthly credits are available."
+msgstr[0] ""
+"<b>План активен</b>\n"
+"Доступен {credits} кредит по месячному плану."
+msgstr[1] ""
+"<b>План активен</b>\n"
+"Доступны {credits} кредита по месячному плану."
+msgstr[2] ""
+"<b>План активен</b>\n"
+"Доступно {credits} кредитов по месячному плану."
+
+#: derp/handlers/payments.py:269
+msgid "<b>Payment complete</b>"
+msgstr "<b>Платёж завершён</b>"
+
+#: derp/handlers/payments.py:271
+#, python-brace-format
+msgid "Purchased credit available: {credits}"
+msgid_plural "Purchased credits available: {credits}"
+msgstr[0] "Доступен {credits} купленный кредит"
+msgstr[1] "Доступны {credits} купленных кредита"
+msgstr[2] "Доступно {credits} купленных кредитов"
+
+#: derp/handlers/payments.py:279
+#, python-brace-format
+msgid "Used to repay payment debt: {credits} credit"
+msgid_plural "Used to repay payment debt: {credits} credits"
+msgstr[0] "На погашение долга использован {credits} кредит"
+msgstr[1] "На погашение долга использованы {credits} кредита"
+msgstr[2] "На погашение долга использовано {credits} кредитов"
+
+#: derp/handlers/payments.py:320 derp/handlers/payments.py:335
+msgid ""
+"Telegram sent a refund, but it needs review. No credits changed. Contact "
+"support."
+msgstr ""
+"Telegram вернул Stars, но возврат нужно проверить. Баланс кредитов не "
+"изменился. Обратитесь в поддержку."
+
+#: derp/handlers/payments.py:342
+msgid "This refund was already applied. No credits changed this time."
+msgstr "Этот возврат уже учтён. Баланс кредитов не изменился."
+
+#: derp/handlers/payments.py:345
+msgid "<b>Refund complete</b>"
+msgstr "<b>Возврат завершён</b>"
+
+#: derp/handlers/payments.py:347
+#, python-brace-format
+msgid "Unused credit removed: {credits}"
+msgid_plural "Unused credits removed: {credits}"
+msgstr[0] "Удалён {credits} неиспользованный кредит"
+msgstr[1] "Удалены {credits} неиспользованных кредита"
+msgstr[2] "Удалено {credits} неиспользованных кредитов"
+
+#: derp/handlers/payments.py:355
+#, python-brace-format
+msgid "Payment debt added: {credits} credit. Paid features are paused."
+msgid_plural "Payment debt added: {credits} credits. Paid features are paused."
+msgstr[0] ""
+"Добавлен долг по платежу: {credits} кредит. Платные функции "
+"приостановлены."
+msgstr[1] ""
+"Добавлен долг по платежу: {credits} кредита. Платные функции "
+"приостановлены."
+msgstr[2] ""
+"Добавлен долг по платежу: {credits} кредитов. Платные функции "
+"приостановлены."
+
+#: derp/handlers/payments.py:383
+msgid "I sent the payment details in a private chat."
+msgstr "Данные о платеже отправлены в личный чат."
+
+#: derp/handlers/payments.py:385
+msgid ""
+"I couldn't send the payment details. Open Derp privately and check "
+"/credits."
+msgstr ""
+"Не удалось отправить данные о платеже. Откройте личный чат с Дерпом и "
+"отправьте /credits."
+
+#: derp/handlers/payments.py:402
+msgid "I sent the refund details in a private chat."
+msgstr "Данные о возврате отправлены в личный чат."
+
+#: derp/handlers/payments.py:404
+msgid ""
+"I couldn't send the refund details. Open Derp privately and check "
+"/credits."
+msgstr ""
+"Не удалось отправить данные о возврате. Откройте личный чат с Дерпом и "
+"отправьте /credits."
 
 #: derp/handlers/premium_suspension.py:22
-msgid "This premium feature is temporarily unavailable. Not charged."
-msgstr "Эта премиум-функция временно недоступна. Средства не списаны."
+msgid "This feature isn't available right now. You weren't charged."
+msgstr "Эта функция сейчас недоступна. Кредиты не списаны."
+
+#: derp/handlers/subscriptions.py:62
+msgid "Expired"
+msgstr "Истёк"
+
+#: derp/handlers/subscriptions.py:63
+#, python-brace-format
+msgid "Your last paid period ended {date}."
+msgstr "Последний оплаченный период закончился {date}."
+
+#: derp/handlers/subscriptions.py:66
+msgid "Active · renews automatically"
+msgstr "Активен · продлевается автоматически"
+
+#: derp/handlers/subscriptions.py:67
+#, python-brace-format
+msgid "Your current credits are available until {date}."
+msgstr "Текущие кредиты доступны до {date}."
+
+#: derp/handlers/subscriptions.py:74
+msgid "Cancel automatic renewal"
+msgstr "Отменить автопродление"
+
+#: derp/handlers/subscriptions.py:83
+msgid "Active · renewal off"
+msgstr "Активен · автопродление выключено"
+
+#: derp/handlers/subscriptions.py:84
+#, python-brace-format
+msgid "Your credits remain available until {date}."
+msgstr "Кредиты останутся доступны до {date}."
+
+#: derp/handlers/subscriptions.py:91
+msgid "Turn renewal back on"
+msgstr "Включить автопродление"
+
+#: derp/handlers/subscriptions.py:99
+#, python-brace-format
+msgid ""
+"<b>Derp Personal</b>\n"
+"{state}\n"
+"\n"
+"{timing}"
+msgstr ""
+"<b>Дерп: личный план</b>\n"
+"{state}\n"
+"\n"
+"{timing}"
+
+#: derp/handlers/subscriptions.py:119
+msgid ""
+"<b>Derp Personal</b>\n"
+"You don't have a monthly plan."
+msgstr ""
+"<b>Дерп: личный план</b>\n"
+"Месячного плана нет."
+
+#: derp/handlers/subscriptions.py:128
+msgid "I sent your plan details in a private chat."
+msgstr "Данные о плане отправлены в личный чат."
+
+#: derp/handlers/subscriptions.py:130
+msgid "I couldn't send your plan details. Open Derp privately and use /plan."
+msgstr ""
+"Не удалось отправить данные о плане. Откройте личный чат с Дерпом и "
+"отправьте /plan."
+
+#: derp/handlers/subscriptions.py:147
+msgid "I can't manage this plan right now"
+msgstr "Сейчас не получится управлять этим планом"
+
+#: derp/handlers/subscriptions.py:151
+msgid "This plan link is no longer valid. Open /plan again."
+msgstr "Эта ссылка на план больше не действует. Отправьте /plan заново."
+
+#: derp/handlers/subscriptions.py:156
+msgid "Open Derp privately to manage your plan."
+msgstr "Чтобы управлять планом, откройте личный чат с Дерпом."
+
+#: derp/handlers/subscriptions.py:170
+msgid "This plan changed or expired. Open /plan again."
+msgstr "План изменился или истёк. Отправьте /plan заново."
+
+#: derp/handlers/subscriptions.py:180
+msgid "Telegram couldn't update renewal. Try again."
+msgstr "Telegram не смог изменить автопродление. Попробуйте ещё раз."
+
+#: derp/handlers/subscriptions.py:189
+msgid "Renewal may have changed. Open /plan to check its current status."
+msgstr ""
+"Автопродление могло измениться. Отправьте /plan и проверьте текущий "
+"статус."
+
+#: derp/handlers/subscriptions.py:203
+msgid "Automatic renewal is on"
+msgstr "Автопродление включено"
+
+#: derp/handlers/subscriptions.py:205
+msgid "Automatic renewal is off. Your paid period stays active."
+msgstr "Автопродление выключено. Оплаченный период остаётся активным."
+
+#: derp/handlers/subscriptions.py:214
+msgid "This plan button expired. Open /plan again."
+msgstr "Срок действия кнопки истёк. Отправьте /plan заново."
 
 #: derp/handlers/tool_approvals.py:150
 msgid ""
-"I can prepare one paid image request at a time. Please ask for one image "
-"and try again. Not charged."
+"I can only create one paid image at a time. You weren't charged. Ask for "
+"one image and try again."
 msgstr ""
+"За раз можно создать только одно платное изображение. Кредиты не списаны."
+" Попросите создать одно изображение и попробуйте ещё раз."
 
 #: derp/handlers/tool_approvals.py:168
-msgid "Attach or reply to an image before asking me to edit it. Not charged."
+msgid ""
+"I need an image to edit. You weren't charged. Attach one or reply to one,"
+" then try again."
 msgstr ""
+"Для изменения нужно изображение. Кредиты не списаны. Прикрепите его или "
+"ответьте на сообщение с ним и попробуйте ещё раз."
 
 #: derp/handlers/tool_approvals.py:177
 msgid ""
-"I could not prepare a valid image request. Please try again with one "
-"image instruction. Not charged."
+"I couldn't understand that image request. You weren't charged. Try again "
+"with one clear instruction."
 msgstr ""
+"Не удалось понять запрос на изображение. Кредиты не списаны. "
+"Сформулируйте одну чёткую инструкцию и попробуйте ещё раз."
 
 #: derp/handlers/tool_approvals.py:184
-msgid "Image edit"
-msgstr ""
+msgid "Edit this image"
+msgstr "Изменить это изображение"
 
-#: derp/handlers/tool_approvals.py:186
-#, fuzzy
-msgid "Image generation"
-msgstr "🤷 Изображение не сгенерировано."
+#: derp/handlers/tool_approvals.py:184
+msgid "Create this image"
+msgstr "Создать это изображение"
 
-#: derp/handlers/tool_approvals.py:188
+#: derp/handlers/tool_approvals.py:187
 #, python-brace-format
-msgid "{action} costs {credits} credits. Run it?"
-msgstr ""
+msgid "{action} for {credits} credit?"
+msgid_plural "{action} for {credits} credits?"
+msgstr[0] "{action} за {credits} кредит?"
+msgstr[1] "{action} за {credits} кредита?"
+msgstr[2] "{action} за {credits} кредитов?"
 
-#: derp/handlers/tool_approvals.py:216 derp/handlers/tool_approvals.py:283
-#: derp/handlers/tts.py:146 derp/handlers/tts.py:210
-msgid "This approval is not valid in this chat."
-msgstr "Это подтверждение недействительно в данном чате."
+#: derp/handlers/tool_approvals.py:199
+msgid "Edit image"
+msgstr "Изменить изображение"
 
-#: derp/handlers/tool_approvals.py:222 derp/handlers/tool_approvals.py:750
+#: derp/handlers/tool_approvals.py:199
+msgid "Create image"
+msgstr "Создать изображение"
+
+#: derp/handlers/tool_approvals.py:221 derp/handlers/tool_approvals.py:291
+#: derp/handlers/tts.py:149 derp/handlers/tts.py:215
+msgid "I can't use this request in this chat."
+msgstr "Этот запрос нельзя использовать в этом чате."
+
+#: derp/handlers/tool_approvals.py:227 derp/handlers/tool_approvals.py:767
 msgid "This image request is already running."
+msgstr "Этот запрос на изображение уже выполняется."
+
+#: derp/handlers/tool_approvals.py:233 derp/handlers/tool_approvals.py:271
+#: derp/handlers/tool_approvals.py:779
+msgid "This image request expired. You weren't charged. Send it again."
 msgstr ""
+"Срок запроса на изображение истёк. Кредиты не списаны. Отправьте его "
+"заново."
 
-#: derp/handlers/tool_approvals.py:228 derp/handlers/tool_approvals.py:264
-msgid "This image approval expired. Not charged."
-msgstr ""
+#: derp/handlers/tool_approvals.py:268 derp/handlers/tool_approvals.py:776
+msgid "This image request has expired."
+msgstr "Срок запроса на изображение истёк."
 
-#: derp/handlers/tool_approvals.py:230 derp/handlers/tts.py:170
-#: derp/handlers/tts.py:391
-msgid "Canceled. Not charged."
-msgstr "Отменено. Средства не списаны."
-
-#: derp/handlers/tool_approvals.py:263
-msgid "This image approval expired."
-msgstr ""
-
-#: derp/handlers/tool_approvals.py:288
+#: derp/handlers/tool_approvals.py:296
 msgid "This image request was canceled."
-msgstr ""
+msgstr "Запрос на изображение отменён."
 
-#: derp/handlers/tool_approvals.py:295 derp/handlers/tts.py:259
+#: derp/handlers/tool_approvals.py:303 derp/handlers/tts.py:264
 msgid "Started"
 msgstr "Запущено"
 
-#: derp/handlers/tool_approvals.py:296
-msgid "Generating image..."
+#: derp/handlers/tool_approvals.py:354
+msgid "I couldn't finish the image. Tap Try again."
 msgstr ""
+"Не получилось завершить создание изображения. Нажмите «Попробовать ещё "
+"раз»."
 
-#: derp/handlers/tool_approvals.py:346
-msgid "Could not finish this image request. Tap Run to retry."
-msgstr ""
-
-#: derp/handlers/tool_approvals.py:673
+#: derp/handlers/tool_approvals.py:681
 msgid ""
-"Shared credits cannot cover this image. Use your credits once, or add "
-"chat credits. Not charged."
+"This chat can't cover the image. You weren't charged. Use your credits "
+"once or add chat credits."
 msgstr ""
+"Кредитов чата не хватает на изображение. Кредиты не списаны. Используйте "
+"личные кредиты один раз или добавьте кредиты чата."
 
-#: derp/handlers/tool_approvals.py:697
-msgid ""
-"Delivery is uncertain. The image may already have arrived. Check the chat"
-" before resending."
-msgstr ""
+#: derp/handlers/tool_approvals.py:741
+msgid "Still working on your image..."
+msgstr "Всё ещё создаю изображение..."
 
-#: derp/handlers/tool_approvals.py:704
-#, fuzzy
-msgid "Resend"
-msgstr "друг"
-
-#: derp/handlers/tool_approvals.py:720
-msgid "Image generation did not complete. Not charged."
-msgstr ""
-
-#: derp/handlers/tool_approvals.py:724
-msgid "The image operation is still in progress."
-msgstr ""
-
-#: derp/handlers/tool_approvals.py:755
+#: derp/handlers/tool_approvals.py:772
 msgid "This image request is already complete."
-msgstr ""
+msgstr "Этот запрос на изображение уже выполнен."
 
-#: derp/handlers/tool_approvals.py:757
+#: derp/handlers/tool_approvals.py:774
 msgid "Image request complete."
-msgstr ""
-
-#: derp/handlers/tool_approvals.py:760
-msgid "This image approval is no longer active."
-msgstr ""
-
-#: derp/handlers/tool_approvals.py:763
-msgid "This image approval is no longer active. Not charged."
-msgstr ""
+msgstr "Запрос на изображение выполнен."
 
 #: derp/handlers/tts.py:73
-msgid "Usage: /tts <text>"
-msgstr "Использование: /tts <текст>"
-
-#: derp/handlers/tts.py:76
-msgid "Could not verify your account. Please try again. Not charged."
-msgstr ""
-"Не удалось проверить вашу учетную запись. Попробуйте еще раз. Средства не"
-" списаны."
+msgid "Send /tts followed by the text to read aloud."
+msgstr "Отправьте /tts и текст для озвучивания."
 
 #: derp/handlers/tts.py:82
-msgid "The voice text is too long or invalid. Not charged."
+msgid "I couldn't use that text. You weren't charged. Change it and try again."
 msgstr ""
-"Текст для озвучивания слишком длинный или некорректный. Средства не "
-"списаны."
+"Не удалось обработать этот текст. Кредиты не списаны. Измените его и "
+"попробуйте ещё раз."
 
 #: derp/handlers/tts.py:111
-msgid "Could not prepare this voice request. Please try again. Not charged."
+msgid "I couldn't prepare the voice message. You weren't charged. Try again."
 msgstr ""
-"Не удалось подготовить озвучивание. Попробуйте еще раз. Средства не "
-"списаны."
+"Не удалось подготовить голосовое сообщение. Кредиты не списаны. "
+"Попробуйте ещё раз."
 
-#: derp/handlers/tts.py:116
+#: derp/handlers/tts.py:118
 #, python-brace-format
-msgid "Voice generation costs {credits} credits. Run it?"
-msgstr "Озвучивание стоит {credits} кредитов. Запустить?"
+msgid "Create this voice message for {credits} credit?"
+msgid_plural "Create this voice message for {credits} credits?"
+msgstr[0] "Создать это голосовое сообщение за {credits} кредит?"
+msgstr[1] "Создать это голосовое сообщение за {credits} кредита?"
+msgstr[2] "Создать это голосовое сообщение за {credits} кредитов?"
 
-#: derp/handlers/tts.py:152 derp/handlers/tts.py:447
+#: derp/handlers/tts.py:155 derp/handlers/tts.py:468
 msgid "This voice request is already running."
-msgstr "Это озвучивание уже выполняется."
+msgstr "Запрос на голосовое сообщение уже выполняется."
 
-#: derp/handlers/tts.py:162
-msgid "Could not cancel this request."
-msgstr "Не удалось отменить запрос."
+#: derp/handlers/tts.py:166
+msgid "I couldn't cancel this request. Try again."
+msgstr "Не удалось отменить запрос. Попробуйте ещё раз."
 
-#: derp/handlers/tts.py:168
-msgid "This voice approval expired. Not charged."
-msgstr "Срок подтверждения озвучивания истек. Средства не списаны."
+#: derp/handlers/tts.py:173 derp/handlers/tts.py:484
+msgid "This voice request expired. You weren't charged. Send it again."
+msgstr ""
+"Срок запроса на голосовое сообщение истёк. Кредиты не списаны. Отправьте "
+"его заново."
 
-#: derp/handlers/tts.py:216
+#: derp/handlers/tts.py:221
 msgid "This voice request was canceled."
-msgstr "Запрос на озвучивание отменен."
+msgstr "Запрос на голосовое сообщение отменён."
 
-#: derp/handlers/tts.py:227
-msgid "Could not start this voice request."
-msgstr "Не удалось запустить озвучивание."
+#: derp/handlers/tts.py:232
+msgid "I couldn't start the voice message. Try again."
+msgstr "Не удалось начать создание голосового сообщения. Попробуйте ещё раз."
 
-#: derp/handlers/tts.py:233
-msgid "This voice approval expired."
-msgstr "Срок подтверждения озвучивания истек."
+#: derp/handlers/tts.py:238 derp/handlers/tts.py:479
+msgid "This voice request has expired."
+msgstr "Срок запроса на голосовое сообщение истёк."
 
-#: derp/handlers/tts.py:247
-msgid "This voice approval expired. Delivery status is being checked."
-msgstr "Срок подтверждения озвучивания истек. Проверяю статус доставки."
+#: derp/handlers/tts.py:252
+msgid "This voice request expired. I'm checking whether it was sent."
+msgstr "Срок запроса истёк. Проверяю, отправилось ли голосовое сообщение."
 
-#: derp/handlers/tts.py:285
-msgid "Preparing voice..."
-msgstr "Подготавливаю озвучивание..."
+#: derp/handlers/tts.py:290 derp/handlers/tts.py:449
+msgid "Preparing your voice message..."
+msgstr "Подготавливаю голосовое сообщение..."
 
-#: derp/handlers/tts.py:286
-msgid "Generating voice..."
-msgstr "Создаю голос..."
+#: derp/handlers/tts.py:291 derp/handlers/tts.py:450
+msgid "Creating your voice message..."
+msgstr "Создаю голосовое сообщение..."
 
-#: derp/handlers/tts.py:287
-msgid "Delivering voice..."
-msgstr "Отправляю голос..."
+#: derp/handlers/tts.py:292 derp/handlers/tts.py:451
+msgid "Sending your voice message..."
+msgstr "Отправляю голосовое сообщение..."
 
-#: derp/handlers/tts.py:348
-msgid "Could not finish this voice request. Tap Run to retry."
-msgstr "Не удалось завершить озвучивание. Нажмите «Запустить», чтобы повторить."
-
-#: derp/handlers/tts.py:363
-msgid "This voice approval is invalid or expired."
-msgstr "Это подтверждение озвучивания недействительно или просрочено."
-
-#: derp/handlers/tts.py:371
-msgid ""
-"Shared credits cannot cover this voice. Use your credits once, or add "
-"chat credits. Not charged."
+#: derp/handlers/tts.py:353
+msgid "I couldn't finish the voice message. Tap Try again."
 msgstr ""
-"Общих кредитов не хватает для озвучивания. Используйте свои кредиты один "
-"раз или пополните баланс чата. Средства не списаны."
+"Не получилось завершить создание голосового сообщения. Нажмите "
+"«Попробовать ещё раз»."
 
-#: derp/handlers/tts.py:383
-msgid "The voice request is invalid. Not charged."
-msgstr "Запрос на озвучивание некорректен. Средства не списаны."
+#: derp/handlers/tts.py:368
+msgid "This voice request is no longer available."
+msgstr "Этот запрос на голосовое сообщение больше недоступен."
 
-#: derp/handlers/tts.py:385
-msgid "The voice request was declined. Not charged."
-msgstr "Запрос на озвучивание отклонен. Средства не списаны."
-
-#: derp/handlers/tts.py:387
-msgid "The model returned no usable voice. Not charged."
-msgstr "Модель не вернула пригодный голос. Средства не списаны."
-
-#: derp/handlers/tts.py:389
-msgid "The price expired. Send the request again. Not charged."
-msgstr "Срок действия цены истек. Отправьте запрос снова. Средства не списаны."
-
-#: derp/handlers/tts.py:392
-msgid "Voice generation did not complete. Not charged."
-msgstr "Озвучивание не завершилось. Средства не списаны."
-
-#: derp/handlers/tts.py:403
-msgid "Voice delivered."
-msgstr "Голос отправлен."
-
-#: derp/handlers/tts.py:409
+#: derp/handlers/tts.py:376
 msgid ""
-"Delivery is uncertain. The voice may already have arrived. Check the chat"
-" before sending again. No additional charge."
+"This chat can't cover the voice message. You weren't charged. Use your "
+"credits once or add chat credits."
 msgstr ""
-"Статус доставки неясен. Возможно, голос уже пришел. Проверьте чат перед "
-"повторной отправкой. Повторного списания не будет."
+"Кредитов чата не хватает на голосовое сообщение. Кредиты не списаны. "
+"Используйте личные кредиты один раз или добавьте кредиты чата."
 
-#: derp/handlers/tts.py:428
-msgid "The voice request is still being prepared."
-msgstr "Запрос на озвучивание еще подготавливается."
+#: derp/handlers/tts.py:386
+#, python-brace-format
+msgid ""
+"This voice message needs {credits} credit. You weren't charged. Add "
+"credits and try again."
+msgid_plural ""
+"This voice message needs {credits} credits. You weren't charged. Add "
+"credits and try again."
+msgstr[0] ""
+"Для голосового сообщения нужен {credits} кредит. Кредиты не списаны. "
+"Добавьте кредиты и попробуйте ещё раз."
+msgstr[1] ""
+"Для голосового сообщения нужны {credits} кредита. Кредиты не списаны. "
+"Добавьте кредиты и попробуйте ещё раз."
+msgstr[2] ""
+"Для голосового сообщения нужно {credits} кредитов. Кредиты не списаны. "
+"Добавьте кредиты и попробуйте ещё раз."
 
-#: derp/handlers/tts.py:429
-msgid "The voice is still being generated."
-msgstr "Голос еще создается."
+#: derp/handlers/tts.py:397
+msgid ""
+"I couldn't use that voice request. You weren't charged. Check it and try "
+"again."
+msgstr ""
+"Не удалось обработать запрос на голосовое сообщение. Кредиты не списаны. "
+"Проверьте его и попробуйте ещё раз."
+
+#: derp/handlers/tts.py:402
+msgid ""
+"I couldn't create that voice message. You weren't charged. Try different "
+"text."
+msgstr ""
+"Не получилось создать голосовое сообщение. Кредиты не списаны. Попробуйте"
+" другой текст."
+
+#: derp/handlers/tts.py:407
+msgid "I couldn't create a usable voice message. You weren't charged. Try again."
+msgstr ""
+"Не получилось создать подходящее голосовое сообщение. Кредиты не списаны."
+" Попробуйте ещё раз."
+
+#: derp/handlers/tts.py:413
+msgid "I couldn't create the voice message. You weren't charged. Try again."
+msgstr ""
+"Не получилось создать голосовое сообщение. Кредиты не списаны. Попробуйте"
+" ещё раз."
+
+#: derp/handlers/tts.py:424
+msgid "Voice message delivered."
+msgstr "Голосовое сообщение отправлено."
 
 #: derp/handlers/tts.py:430
-msgid "The voice is still being delivered."
-msgstr "Голос еще отправляется."
+msgid ""
+"The voice message may already be in the chat. You won't be charged again."
+" Check first, then tap Send again if it's missing."
+msgstr ""
+"Голосовое сообщение уже могло прийти в чат. Повторного списания не будет."
+" Сначала проверьте чат, а если сообщения нет, нажмите «Отправить ещё "
+"раз»."
 
-#: derp/handlers/tts.py:453
+#: derp/handlers/tts.py:439
+msgid "I couldn't deliver the voice message. Your credits were returned."
+msgstr "Не получилось отправить голосовое сообщение. Кредиты возвращены."
+
+#: derp/handlers/tts.py:474
 msgid "This voice request is already complete."
-msgstr "Это озвучивание уже завершено."
-
-#: derp/handlers/tts.py:458
-msgid "This voice approval is no longer active."
-msgstr "Это подтверждение озвучивания больше не активно."
-
-#: derp/handlers/tts.py:463
-msgid "This voice approval is no longer active. Not charged."
-msgstr "Это подтверждение озвучивания больше не активно. Средства не списаны."
+msgstr "Этот запрос на голосовое сообщение уже выполнен."
 
 #: derp/llm/result.py:72
-msgid "Generated Code:"
-msgstr "Сгенерированный код:"
+msgid "Code:"
+msgstr "Код:"
 
 #: derp/llm/result.py:76
-msgid "Execution Result:"
-msgstr "Результат выполнения:"
+msgid "Result:"
+msgstr "Результат:"
+
+#: derp/llm/result.py:144
+msgid "I couldn't deliver that response. You weren't charged. Try again."
+msgstr "Не получилось отправить ответ. Кредиты не списаны. Попробуйте ещё раз."
+
+#: derp/tools/shared_facts.py:58
+msgid "Approve"
+msgstr "Подтвердить"
+
+#: derp/tools/shared_facts.py:65
+msgid "Reject"
+msgstr "Отклонить"
+
+#: derp/tools/shared_facts.py:75
+msgid "Save this fact?"
+msgstr "Сохранить этот факт?"
+
+#: derp/tools/shared_facts.py:76
+msgid "An admin must approve it before Derp can use it."
+msgstr ""
+"Сначала факт должен подтвердить администратор. После этого Дерп сможет "
+"его использовать."
