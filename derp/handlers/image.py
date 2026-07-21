@@ -344,13 +344,18 @@ async def handle_imagine(
     if not prompt:
         return await message.reply(_("Send /imagine followed by an image description."))
     if user_model is None or chat_model is None:
-        return await message.reply(_("I couldn't verify your account. Try again."))
+        return await message.reply(
+            _("I couldn't verify your account. You weren't charged. Try again.")
+        )
 
     try:
         request = ImageGenerateRequest(prompt=prompt)
     except TypeError, ValueError:
         return await message.reply(
-            _("I couldn't use that image description. Change it and try again.")
+            _(
+                "I couldn't use that image description. You weren't charged. "
+                "Change it and try again."
+            )
         )
     return await _present_command_approval(
         message=message,
@@ -379,12 +384,17 @@ async def handle_edit(
             _("Reply to an image with /edit followed by your changes.")
         )
     if user_model is None or chat_model is None:
-        return await message.reply(_("I couldn't verify your account. Try again."))
+        return await message.reply(
+            _("I couldn't verify your account. You weren't charged. Try again.")
+        )
 
     photo = await Extractor.photo(message)
     if photo is None:
         return await message.reply(
-            _("Attach an image or reply to one, then add /edit and your changes.")
+            _(
+                "I couldn't find an image to edit. You weren't charged. "
+                "Attach one or reply to one, then try again."
+            )
         )
     try:
         request = ImageEditRequest(
@@ -392,7 +402,9 @@ async def handle_edit(
             source=image_reference_from_telegram(photo.media),
         )
     except TypeError, ValueError:
-        return await message.reply(_("I can't edit that image. Try another one."))
+        return await message.reply(
+            _("I can't edit that image. You weren't charged. Try another one.")
+        )
     return await _present_command_approval(
         message=message,
         coordinator=image_operation_coordinator,

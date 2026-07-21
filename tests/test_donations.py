@@ -167,7 +167,8 @@ async def test_donate_tiers_invoice_failure_fallbacks():
     message.answer.assert_awaited()
     text = message.answer.await_args.args[0]
     assert text == (
-        "I couldn't open the invoice for 200 Stars. Use /donate 200 to try again."
+        "I couldn't open the invoice for 200 Stars. You won't be charged. "
+        "Use /donate 200 to try again."
     )
 
 
@@ -216,10 +217,12 @@ async def test_successful_payment_decode_failure_falls_back_to_message_chat():
 
 def test_donation_copy_handles_singular_and_plural():
     assert _invoice_retry_text(1) == (
-        "I couldn't open the invoice for 1 Star. Use /donate 1 to try again."
+        "I couldn't open the invoice for 1 Star. You won't be charged. "
+        "Use /donate 1 to try again."
     )
     assert _invoice_retry_text(2) == (
-        "I couldn't open the invoice for 2 Stars. Use /donate 2 to try again."
+        "I couldn't open the invoice for 2 Stars. You won't be charged. "
+        "Use /donate 2 to try again."
     )
     assert _donation_thanks("Alice", 1) == (
         "Thanks, Alice. Your 1 Star is keeping Derp sharp."

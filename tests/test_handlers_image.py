@@ -86,6 +86,60 @@ async def test_imagine_requires_prompt_before_creating_operation(make_message) -
 
 
 @pytest.mark.asyncio
+async def test_imagine_account_failure_is_explicitly_not_charged(make_message) -> None:
+    message = make_message(
+        text="/imagine a lighthouse",
+        business_connection_id=None,
+    )
+    coordinator = AsyncMock(spec=ImageOperationCoordinator)
+    approvals = MagicMock(spec=DeferredToolApprovalService)
+
+    await handle_imagine(
+        message,
+        _meta(prompt="a lighthouse", target_message=message),
+        coordinator,
+        approvals,
+    )
+
+    assert message.reply.await_args.args[0] == (
+        "I couldn't verify your account. You weren't charged. Try again."
+    )
+    coordinator.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_imagine_invalid_description_is_explicitly_not_charged(
+    make_message,
+) -> None:
+    message = make_message(
+        text="/imagine invalid",
+        business_connection_id=None,
+    )
+    user_model, chat_model = _models()
+    coordinator = AsyncMock(spec=ImageOperationCoordinator)
+    approvals = MagicMock(spec=DeferredToolApprovalService)
+
+    with patch(
+        "derp.handlers.image.ImageGenerateRequest",
+        side_effect=ValueError("invalid description"),
+    ):
+        await handle_imagine(
+            message,
+            _meta(prompt="invalid", target_message=message),
+            coordinator,
+            approvals,
+            user_model,
+            chat_model,
+        )
+
+    assert message.reply.await_args.args[0] == (
+        "I couldn't use that image description. You weren't charged. "
+        "Change it and try again."
+    )
+    coordinator.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_imagine_builds_stable_scoped_deferred_approval(
     make_message,
 ) -> None:
@@ -250,7 +304,51 @@ async def test_edit_requires_source_image(make_message) -> None:
     )
 
     assert message.reply.await_args.args[0] == (
-        "Attach an image or reply to one, then add /edit and your changes."
+        "I couldn't find an image to edit. You weren't charged. "
+        "Attach one or reply to one, then try again."
+    )
+    coordinator.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_edit_invalid_image_is_explicitly_not_charged(make_message) -> None:
+    source = make_message(
+        message_id=12,
+        content_type="photo",
+        photo=[
+            PhotoSize(
+                file_id="telegram-file",
+                file_unique_id="stable-file",
+                width=1024,
+                height=768,
+            )
+        ],
+        business_connection_id=None,
+    )
+    message = make_message(
+        text="/edit add fog",
+        reply_to_message=source,
+        business_connection_id=None,
+    )
+    user_model, chat_model = _models()
+    coordinator = AsyncMock(spec=ImageOperationCoordinator)
+    approvals = MagicMock(spec=DeferredToolApprovalService)
+
+    with patch(
+        "derp.handlers.image.image_reference_from_telegram",
+        side_effect=ValueError("unsupported image"),
+    ):
+        await handle_edit(
+            message,
+            _meta(prompt="add fog", target_message=message),
+            coordinator,
+            approvals,
+            user_model,
+            chat_model,
+        )
+
+    assert message.reply.await_args.args[0] == (
+        "I can't edit that image. You weren't charged. Try another one."
     )
     coordinator.run.assert_not_awaited()
 

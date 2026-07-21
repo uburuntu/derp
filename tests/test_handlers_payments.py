@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery
 
 from derp.billing import (
@@ -114,6 +115,33 @@ class TestBuyCallback:
         callback.bot.create_invoice_link.assert_not_awaited()
         callback.answer.assert_awaited_once_with(
             "Credit purchases aren't available yet. You won't be charged.",
+            show_alert=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_user_fails_without_charge(
+        self,
+        make_message,
+        make_user,
+    ) -> None:
+        service = _purchase_intents()
+        callback = _callback(make_message, make_user)
+
+        await handle_buy_callback(
+            callback,
+            PurchaseCallback(
+                kind=ProductKind.TOP_UP,
+                product_id="starter",
+                target=PurchaseTargetCode.USER,
+            ),
+            service,
+            commerce_policy=OPEN_COMMERCE,
+        )
+
+        service.create_top_up_intent.assert_not_awaited()
+        callback.answer.assert_awaited_once_with(
+            "This purchase is unavailable. You won't be charged. "
+            "Open /buy and try again.",
             show_alert=True,
         )
 
@@ -286,7 +314,8 @@ class TestBuyCallback:
 
         service.create_top_up_intent.assert_not_awaited()
         callback.answer.assert_awaited_once_with(
-            "This purchase is no longer valid. Open /buy again.", show_alert=True
+            "This purchase is no longer valid. You won't be charged. Open /buy again.",
+            show_alert=True,
         )
 
     @pytest.mark.asyncio
@@ -319,6 +348,73 @@ class TestBuyCallback:
         callback.message.answer.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_unavailable_option_fails_without_charge(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+    ) -> None:
+        user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+        service = _purchase_intents()
+        service.create_top_up_intent.side_effect = LookupError("gone")
+        callback = _callback(make_message, make_user)
+
+        await handle_buy_callback(
+            callback,
+            PurchaseCallback(
+                kind=ProductKind.TOP_UP,
+                product_id="starter",
+                target=PurchaseTargetCode.USER,
+            ),
+            service,
+            user,
+            commerce_policy=OPEN_COMMERCE,
+        )
+
+        callback.answer.assert_awaited_once_with(
+            "This purchase option is no longer available. You won't be charged. "
+            "Open /buy again.",
+            show_alert=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_invoice_failure_is_explicitly_not_charged(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+    ) -> None:
+        user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+        service = _purchase_intents(handle=_intent(target=PurchaseTarget.user(user.id)))
+        callback = _callback(make_message, make_user)
+
+        with patch(
+            "derp.handlers.payments.create_stars_invoice_link",
+            new=AsyncMock(
+                side_effect=TelegramAPIError(
+                    method=MagicMock(),
+                    message="invoice unavailable",
+                )
+            ),
+        ):
+            await handle_buy_callback(
+                callback,
+                PurchaseCallback(
+                    kind=ProductKind.TOP_UP,
+                    product_id="starter",
+                    target=PurchaseTargetCode.USER,
+                ),
+                service,
+                user,
+                commerce_policy=OPEN_COMMERCE,
+            )
+
+        callback.answer.assert_awaited_once_with(
+            "Telegram couldn't prepare the invoice. You won't be charged. Try again.",
+            show_alert=True,
+        )
+
+    @pytest.mark.asyncio
     async def test_stale_callback_fails_closed(self) -> None:
         callback = MagicMock(spec=CallbackQuery)
         callback.answer = AsyncMock()
@@ -326,7 +422,7 @@ class TestBuyCallback:
         await reject_malformed_buy_callback(callback)
 
         callback.answer.assert_awaited_once_with(
-            "This purchase option expired. Open /buy again. You haven't been charged.",
+            "This purchase option expired. You weren't charged. Open /buy again.",
             show_alert=True,
         )
 
@@ -378,8 +474,8 @@ class TestPreCheckout:
         pre_checkout.answer.assert_awaited_once_with(
             ok=False,
             error_message=(
-                "This invoice expired or changed. Open /buy and try again. You won't "
-                "be charged."
+                "This invoice expired or changed. You won't be charged. "
+                "Open /buy and try again."
             ),
         )
 

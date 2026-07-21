@@ -141,10 +141,7 @@ class AgentResult:
                     )
 
             notice = await message.reply(
-                _(
-                    "I couldn't deliver that response. Please try again. "
-                    "You weren't charged."
-                )
+                _("I couldn't deliver that response. You weren't charged. Try again.")
             )
             return AgentContentUnavailable(notice)
 

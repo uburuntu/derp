@@ -72,10 +72,19 @@ async def handle_buy_callback(
             show_alert=True,
         )
     if not isinstance(callback.message, Message) or not user_model:
-        return await callback.answer(_("This purchase is unavailable"), show_alert=True)
+        return await callback.answer(
+            _(
+                "This purchase is unavailable. You won't be charged. "
+                "Open /buy and try again."
+            ),
+            show_alert=True,
+        )
     if user_model.telegram_id != callback.from_user.id:
         return await callback.answer(
-            _("This purchase is no longer valid. Open /buy again."),
+            _(
+                "This purchase is no longer valid. You won't be charged. "
+                "Open /buy again."
+            ),
             show_alert=True,
         )
 
@@ -112,7 +121,10 @@ async def handle_buy_callback(
         )
     except LookupError, UnknownProductError, ValueError:
         return await callback.answer(
-            _("This purchase option is no longer available"),
+            _(
+                "This purchase option is no longer available. You won't be charged. "
+                "Open /buy again."
+            ),
             show_alert=True,
         )
     except TelegramAPIError:
@@ -123,7 +135,10 @@ async def handle_buy_callback(
             user_id=user_model.telegram_id,
         )
         return await callback.answer(
-            _("Telegram couldn't prepare the invoice. Try again."),
+            _(
+                "Telegram couldn't prepare the invoice. You won't be charged. "
+                "Try again."
+            ),
             show_alert=True,
         )
 
@@ -167,7 +182,7 @@ async def handle_buy_callback(
 async def reject_malformed_buy_callback(callback: CallbackQuery) -> None:
     """Fail closed for stale selectors that do not match the typed callback."""
     await callback.answer(
-        _("This purchase option expired. Open /buy again. You haven't been charged."),
+        _("This purchase option expired. You weren't charged. Open /buy again."),
         show_alert=True,
     )
 
@@ -197,8 +212,8 @@ async def handle_pre_checkout(
     await pre_checkout.answer(
         ok=False,
         error_message=_(
-            "This invoice expired or changed. Open /buy and try again. You won't "
-            "be charged."
+            "This invoice expired or changed. You won't be charged. "
+            "Open /buy and try again."
         ),
     )
 

@@ -30,9 +30,9 @@ def make_description() -> str:
 def _invoice_retry_text(stars: int) -> str:
     return _(
         "I couldn't open the invoice for {stars} Star. "
-        "Use /donate {stars} to try again.",
+        "You won't be charged. Use /donate {stars} to try again.",
         "I couldn't open the invoice for {stars} Stars. "
-        "Use /donate {stars} to try again.",
+        "You won't be charged. Use /donate {stars} to try again.",
         stars,
     ).format(stars=stars)
 

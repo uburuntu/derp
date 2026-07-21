@@ -61,5 +61,5 @@ async def test_plain_content_send_failure_returns_unavailable_notice(
     assert outcome.notice is message
     sender.reply.assert_not_awaited()
     assert message.reply.await_args.args[0] == (
-        "I couldn't deliver that response. Please try again. You weren't charged."
+        "I couldn't deliver that response. You weren't charged. Try again."
     )

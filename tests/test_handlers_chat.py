@@ -570,7 +570,7 @@ async def test_provider_failure_releases_paid_turn_before_fallback(
     env.accounting.capture_success.assert_not_awaited()
     env.message.reply.assert_awaited_once()
     assert env.message.reply.await_args.args[0] == (
-        "I couldn't answer that. Please try again. You weren't charged."
+        "I couldn't answer that. You weren't charged. Try again."
     )
 
 
@@ -609,7 +609,7 @@ async def test_delivery_failure_releases_paid_turn_and_sends_fallback(
     env.accounting.capture_success.assert_not_awaited()
     env.message.reply.assert_awaited_once()
     assert env.message.reply.await_args.args[0] == (
-        "I couldn't answer that. Please try again. You weren't charged."
+        "I couldn't answer that. You weren't charged. Try again."
     )
 
 
