@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-21 10:51+0100\n"
+"POT-Creation-Date: 2026-07-21 11:10+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -90,16 +90,16 @@ msgid ""
 " creation, and credit controls."
 msgstr ""
 
-#: derp/handlers/chat.py:463
+#: derp/handlers/chat.py:484
 #, python-brace-format
 msgid "Context: {chars} chars, {msgs} messages"
 msgstr ""
 
-#: derp/handlers/chat.py:505
+#: derp/handlers/chat.py:526
 msgid "😅 Could not verify your access. Please try again."
 msgstr ""
 
-#: derp/handlers/chat.py:782
+#: derp/handlers/chat.py:821
 msgid ""
 "⏳ The AI service is overloaded right now.\n"
 "\n"
@@ -108,12 +108,12 @@ msgid ""
 "Not charged."
 msgstr ""
 
-#: derp/handlers/chat.py:794 derp/handlers/chat.py:825
-#: derp/handlers/chat.py:838
+#: derp/handlers/chat.py:833 derp/handlers/chat.py:864
+#: derp/handlers/chat.py:877 derp/llm/result.py:145
 msgid "😅 Something went wrong. I couldn't process that message. Not charged."
 msgstr ""
 
-#: derp/handlers/chat.py:810
+#: derp/handlers/chat.py:849
 msgid "⚠️ Too many tool calls. Please try a simpler request. Not charged."
 msgstr ""
 
@@ -191,23 +191,23 @@ msgstr ""
 msgid "Personal fallback: Ask me"
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:44
+#: derp/handlers/credit_cmds.py:43
 msgid "😅 Could not find your user info."
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:94
-msgid "I couldn't send your private balance. Open Derp privately and retry."
-msgstr ""
-
-#: derp/handlers/credit_cmds.py:96
+#: derp/handlers/credit_cmds.py:78
 msgid "I sent your balance in a private chat."
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:110
+#: derp/handlers/credit_cmds.py:80
+msgid "I couldn't send your private balance. Open Derp privately and retry."
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:98
 msgid "Could not find your user info."
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:127
+#: derp/handlers/credit_cmds.py:115
 msgid "Could not find this chat."
 msgstr ""
 
@@ -857,15 +857,11 @@ msgstr ""
 msgid "This voice approval is no longer active. Not charged."
 msgstr ""
 
-#: derp/llm/result.py:55
+#: derp/llm/result.py:72
 msgid "Generated Code:"
 msgstr ""
 
-#: derp/llm/result.py:59
+#: derp/llm/result.py:76
 msgid "Execution Result:"
-msgstr ""
-
-#: derp/llm/result.py:113
-msgid "📊 Generated content, but couldn't display it."
 msgstr ""
 
