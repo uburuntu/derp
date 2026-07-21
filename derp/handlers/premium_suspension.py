@@ -19,7 +19,7 @@ router = Router(name="premium_suspension")
 async def handle_suspended_premium(message: Message) -> Message:
     """Intercept unsafe premium paths before the general chat handler."""
     return await message.reply(
-        _("This premium feature is temporarily unavailable. Not charged.")
+        _("This feature isn't available right now. You weren't charged.")
     )
 
 

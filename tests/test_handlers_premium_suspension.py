@@ -46,7 +46,7 @@ async def test_suspension_reply_needs_no_mutable_domain_dependency(
 
     assert result is message
     message.reply.assert_awaited_once_with(
-        "This premium feature is temporarily unavailable. Not charged."
+        "This feature isn't available right now. You weren't charged."
     )
     assert set(inspect.signature(handle_suspended_premium).parameters) == {"message"}
     assert {handler.callback for handler in router.message.handlers} == {

@@ -95,7 +95,7 @@ async def resend_paid_media_delivery(
     message = callback.message
     if not isinstance(message, Message):
         await callback.answer(
-            _("This delivery control is unavailable."),
+            _("This button is no longer available."),
             show_alert=True,
         )
         return None
@@ -115,7 +115,7 @@ async def resend_paid_media_delivery(
     except DeliveryStateError:
         await _edit_control(
             message,
-            _("Delivery status is still being reconciled."),
+            _("Checking delivery..."),
         )
         return message
     except Exception as exc:
@@ -138,8 +138,8 @@ async def resend_paid_media_delivery(
         await _edit_control(
             message,
             _(
-                "Delivery is still uncertain. The media may already have arrived. "
-                "Check the chat before sending again. No additional charge."
+                "This may already be in the chat. You won't be charged again. "
+                "Check first, then tap Send again if it's missing."
             ),
             reply_markup=paid_media_resend_markup(outcome.resend_token),
         )
@@ -147,10 +147,10 @@ async def resend_paid_media_delivery(
     if isinstance(outcome, PaidMediaRefunded):
         await _edit_control(
             message,
-            _("Refunded. Delivery failed, so the charged credits were returned."),
+            _("I couldn't deliver it. Your credits were returned."),
         )
         return message
-    await _edit_control(message, _("Delivery is still in progress."))
+    await _edit_control(message, _("Sending it now..."))
     return message
 
 
@@ -158,7 +158,7 @@ async def resend_paid_media_delivery(
 async def reject_malformed_paid_media_resend(callback: CallbackQuery) -> None:
     """Reject malformed recovery controls without touching durable state."""
     await callback.answer(
-        _("This delivery control is invalid or expired."),
+        _("This button is no longer available."),
         show_alert=True,
     )
 

@@ -70,16 +70,16 @@ async def handle_tts(
     """Quote and persist one command without calling the TTS provider."""
     text = meta.target_text
     if not text:
-        return await message.reply(_("Usage: /tts <text>"))
+        return await message.reply(_("Send /tts followed by the text to read aloud."))
     if user_model is None or chat_model is None:
         return await message.reply(
-            _("Could not verify your account. Please try again. Not charged.")
+            _("I couldn't verify your account. You weren't charged. Try again.")
         )
     try:
         request = TtsRequest(text, MAX_TTS_OUTPUT_SECONDS)
     except TypeError, ValueError:
         return await message.reply(
-            _("The voice text is too long or invalid. Not charged.")
+            _("I couldn't use that text. You weren't charged. Change it and try again.")
         )
 
     tool_call = tts_command_tool_call(request)
@@ -108,14 +108,17 @@ async def handle_tts(
             telegram_user_id=user_model.telegram_id,
         )
         return await message.reply(
-            _("Could not prepare this voice request. Please try again. Not charged.")
+            _("I couldn't prepare the voice message. You weren't charged. Try again.")
         )
 
     with suppress_outbound_history():
+        credit_count = prepared.quote.credits
         return await message.reply(
-            _("Voice generation costs {credits} credits. Run it?").format(
-                credits=prepared.quote.credits
-            ),
+            _(
+                "Create this voice message for {credits} credit?",
+                "Create this voice message for {credits} credits?",
+                credit_count,
+            ).format(credits=credit_count),
             reply_markup=paid_media_decision_keyboard(
                 PaidMediaApprovalKind.TTS,
                 prepared.handle.callback_token,
@@ -143,7 +146,7 @@ async def deny_tts_approval(
         decision = await paid_media_approval_coordinator.cancel(capability)
     except ApprovalAuthorizationError:
         await callback.answer(
-            _("This approval is not valid in this chat."),
+            _("I can't use this request in this chat."),
             show_alert=True,
         )
         return
@@ -159,15 +162,17 @@ async def deny_tts_approval(
             exception=exc,
             telegram_user_id=callback.from_user.id,
         )
-        await callback.answer(_("Could not cancel this request."), show_alert=True)
+        await callback.answer(
+            _("I couldn't cancel this request. Try again."), show_alert=True
+        )
         return
 
     await callback.answer()
     await _edit_control(
         message,
-        _("This voice approval expired. Not charged.")
+        _("This voice request expired. You weren't charged. Send it again.")
         if decision.disposition is DecisionDisposition.EXPIRED
-        else _("Canceled. Not charged."),
+        else _("Canceled. You weren't charged."),
     )
 
 
@@ -207,7 +212,7 @@ async def run_tts_approval(
         approval = await paid_media_approval_coordinator.approve_and_claim(capability)
     except ApprovalAuthorizationError:
         await callback.answer(
-            _("This approval is not valid in this chat."),
+            _("I can't use this request in this chat."),
             show_alert=True,
         )
         return
@@ -224,13 +229,13 @@ async def run_tts_approval(
             telegram_user_id=callback.from_user.id,
         )
         await callback.answer(
-            _("Could not start this voice request."),
+            _("I couldn't start the voice message. Try again."),
             show_alert=True,
         )
         return
 
     if approval.decision.disposition is DecisionDisposition.EXPIRED:
-        await callback.answer(_("This voice approval expired."), show_alert=True)
+        await callback.answer(_("This voice request has expired."), show_alert=True)
         try:
             outcome = await paid_media_approval_coordinator.reconcile_expired(
                 approval.decision.snapshot
@@ -244,7 +249,7 @@ async def run_tts_approval(
             )
             await _edit_control(
                 message,
-                _("This voice approval expired. Delivery status is being checked."),
+                _("This voice request expired. I'm checking whether it was sent."),
             )
             return
         await _render_tts_outcome(message, outcome)
@@ -282,9 +287,9 @@ async def run_tts_approval(
             await _edit_control(
                 message,
                 {
-                    "preparing": _("Preparing voice..."),
-                    "generating": _("Generating voice..."),
-                    "delivering": _("Delivering voice..."),
+                    "preparing": _("Preparing your voice message..."),
+                    "generating": _("Creating your voice message..."),
+                    "delivering": _("Sending your voice message..."),
                 }[stage.value],
                 reply_markup=recovery_markup,
             )
@@ -345,7 +350,7 @@ async def run_tts_approval(
         )
         await _edit_control(
             message,
-            _("Could not finish this voice request. Tap Run to retry."),
+            _("I couldn't finish the voice message. Tap Try again."),
             reply_markup=paid_media_retry_keyboard(
                 PaidMediaApprovalKind.TTS,
                 callback_data.token,
@@ -360,7 +365,7 @@ async def run_tts_approval(
 async def reject_malformed_tts_approval(callback: CallbackQuery) -> None:
     """Reject malformed TTS controls without touching durable state."""
     await callback.answer(
-        _("This voice approval is invalid or expired."),
+        _("This voice request is no longer available."),
         show_alert=True,
     )
 
@@ -368,28 +373,44 @@ async def reject_malformed_tts_approval(callback: CallbackQuery) -> None:
 def _funding_text(outcome: PaidMediaAwaitingFunding) -> str:
     if outcome.reason is ReservationRejection.PERSONAL_CONSENT_REQUIRED:
         return _(
-            "Shared credits cannot cover this voice. Use your credits once, "
-            "or add chat credits. Not charged."
+            "This chat can't cover the voice message. You weren't charged. "
+            "Use your credits once or add chat credits."
         )
     if outcome.reason is ReservationRejection.WALLET_IN_DEBT:
-        return _("Funding is unavailable while this balance is in debt. Not charged.")
-    return _("Funding needed: {credits} credits. Not charged.").format(
-        credits=outcome.quote.credits
-    )
+        return _(
+            "Paid features are paused for this balance. You weren't charged. "
+            "Clear the payment debt to continue."
+        )
+    credit_count = outcome.quote.credits
+    return _(
+        "This voice message needs {credits} credit. You weren't charged. "
+        "Add credits and try again.",
+        "This voice message needs {credits} credits. You weren't charged. "
+        "Add credits and try again.",
+        credit_count,
+    ).format(credits=credit_count)
 
 
 def _not_charged_text(reason: PaidMediaNotChargedReason) -> str:
     if reason is PaidMediaNotChargedReason.INVALID_INPUT:
-        return _("The voice request is invalid. Not charged.")
+        return _(
+            "I couldn't use that voice request. You weren't charged. "
+            "Check it and try again."
+        )
     if reason is PaidMediaNotChargedReason.POLICY_REJECTION:
-        return _("The voice request was declined. Not charged.")
+        return _(
+            "I couldn't create that voice message. You weren't charged. "
+            "Try different text."
+        )
     if reason is PaidMediaNotChargedReason.UNUSABLE_OUTPUT:
-        return _("The model returned no usable voice. Not charged.")
+        return _(
+            "I couldn't create a usable voice message. You weren't charged. Try again."
+        )
     if reason is PaidMediaNotChargedReason.QUOTE_EXPIRED:
-        return _("The price expired. Send the request again. Not charged.")
+        return _("The price expired. You weren't charged. Send the request again.")
     if reason is PaidMediaNotChargedReason.CANCELED:
-        return _("Canceled. Not charged.")
-    return _("Voice generation did not complete. Not charged.")
+        return _("Canceled. You weren't charged.")
+    return _("I couldn't create the voice message. You weren't charged. Try again.")
 
 
 async def _render_tts_outcome(
@@ -400,14 +421,14 @@ async def _render_tts_outcome(
 ) -> None:
     if isinstance(outcome, PaidMediaDelivered):
         if not await _delete_control(message):
-            await _edit_control(message, _("Voice delivered."))
+            await _edit_control(message, _("Voice message delivered."))
         return
     if isinstance(outcome, PaidMediaDeliveryUncertain):
         await _edit_control(
             message,
             _(
-                "Delivery is uncertain. The voice may already have arrived. "
-                "Check the chat before sending again. No additional charge."
+                "The voice message may already be in the chat. You won't be charged "
+                "again. Check first, then tap Send again if it's missing."
             ),
             reply_markup=paid_media_resend_markup(outcome.resend_token),
         )
@@ -415,7 +436,7 @@ async def _render_tts_outcome(
     if isinstance(outcome, PaidMediaRefunded):
         await _edit_control(
             message,
-            _("Refunded. Delivery failed, so the charged credits were returned."),
+            _("I couldn't deliver the voice message. Your credits were returned."),
         )
         return
     if isinstance(outcome, PaidMediaNotCharged):
@@ -425,9 +446,9 @@ async def _render_tts_outcome(
         await _edit_control(
             message,
             {
-                "preparing": _("The voice request is still being prepared."),
-                "generating": _("The voice is still being generated."),
-                "delivering": _("The voice is still being delivered."),
+                "preparing": _("Preparing your voice message..."),
+                "generating": _("Creating your voice message..."),
+                "delivering": _("Sending your voice message..."),
             }[outcome.stage.value],
             reply_markup=retry_markup,
         )
@@ -455,12 +476,12 @@ async def _answer_unavailable(
         )
         return
     await callback.answer(
-        _("This voice approval is no longer active."),
+        _("This voice request has expired."),
         show_alert=True,
     )
     await _edit_control(
         message,
-        _("This voice approval is no longer active. Not charged."),
+        _("This voice request expired. You weren't charged. Send it again."),
     )
 
 

@@ -185,9 +185,9 @@ async def test_command_only_quotes_and_presents_run_cancel(
     assert prepare["adapter"] is adapter
     adapter.service.synthesize.assert_not_awaited()
     reply = message.reply.await_args
-    assert "costs" in reply.args[0]
+    assert reply.args[0] == f"Create this voice message for {quote.credits} credits?"
     buttons = reply.kwargs["reply_markup"].inline_keyboard[0]
-    assert [button.text for button in buttons] == ["Run", "Cancel"]
+    assert [button.text for button in buttons] == ["Create voice", "Cancel"]
     callbacks = [
         PaidMediaApprovalCallback.unpack(button.callback_data) for button in buttons
     ]
@@ -215,7 +215,9 @@ async def test_command_validation_fails_without_quote_or_provider(
         adapter,
     )
 
-    assert "Usage" in message.reply.await_args.args[0]
+    assert message.reply.await_args.args[0] == (
+        "Send /tts followed by the text to read aloud."
+    )
     workflow.prepare.assert_not_awaited()
     adapter.service.synthesize.assert_not_awaited()
 
@@ -248,7 +250,7 @@ async def test_cancel_uses_callback_actor_chat_topic_and_never_runs_provider(
     assert capability.chat_telegram_id == -100_123
     assert capability.thread_id == 9
     message.edit_text.assert_awaited_once_with(
-        "Canceled. Not charged.",
+        "Canceled. You weren't charged.",
         reply_markup=None,
     )
     workflow.resume.assert_not_awaited()
@@ -279,7 +281,7 @@ async def test_invalid_callback_scope_does_not_mutate_or_run(
     )
 
     callback.answer.assert_awaited_once_with(
-        "This approval is not valid in this chat.",
+        "I can't use this request in this chat.",
         show_alert=True,
     )
     message.edit_text.assert_not_awaited()
@@ -340,8 +342,8 @@ async def test_expired_approval_renders_durable_delivery_truth(
     workflow.reconcile_expired.assert_awaited_once_with(snapshot)
     workflow.resume.assert_not_awaited()
     edit = message.edit_text.await_args
-    assert "Delivery is uncertain" in edit.args[0]
-    assert "Not charged" not in edit.args[0]
+    assert "may already be in the chat" in edit.args[0]
+    assert "weren't charged" not in edit.args[0]
     button = edit.kwargs["reply_markup"].inline_keyboard[0][0]
     assert PaidMediaResendCallback.unpack(button.callback_data).token == "r" * 43
 
@@ -415,9 +417,9 @@ async def test_run_uses_lease_and_renders_honest_progress(
 
     callback.answer.assert_awaited_once_with("Started")
     assert [item.args[0] for item in message.edit_text.await_args_list] == [
-        "Preparing voice...",
-        "Generating voice...",
-        "Delivering voice...",
+        "Preparing your voice message...",
+        "Creating your voice message...",
+        "Sending your voice message...",
     ]
     for edit in message.edit_text.await_args_list:
         button = edit.kwargs["reply_markup"].inline_keyboard[0][0]
@@ -521,7 +523,7 @@ async def test_personal_funding_requires_exact_authenticated_action(
 @pytest.mark.parametrize(
     ("chat_type", "shared_spending", "purchase_label", "purchase_target"),
     [
-        ("supergroup", True, "Buy for chat", PurchaseTargetCode.CHAT),
+        ("supergroup", True, "Buy chat credits", PurchaseTargetCode.CHAT),
         ("private", False, "Buy credits", PurchaseTargetCode.USER),
         ("supergroup", False, "Buy credits", PurchaseTargetCode.USER),
     ],
@@ -604,7 +606,7 @@ async def test_funding_panel_offers_policy_aware_consent_and_purchase(
     workflow.release.assert_awaited_once_with(lease)
     workflow.complete.assert_not_awaited()
     edit = message.edit_text.await_args
-    assert "Not charged" in edit.args[0]
+    assert "You weren't charged" in edit.args[0]
     buttons = [
         button for row in edit.kwargs["reply_markup"].inline_keyboard for button in row
     ]
@@ -698,6 +700,6 @@ async def test_uncertain_delivery_keeps_no_charge_resend_capability(
     await _render_tts_outcome(message, outcome)
 
     edit = message.edit_text.await_args
-    assert "No additional charge" in edit.args[0]
+    assert "You won't be charged again" in edit.args[0]
     button = edit.kwargs["reply_markup"].inline_keyboard[0][0]
     assert PaidMediaResendCallback.unpack(button.callback_data).token == "r" * 43

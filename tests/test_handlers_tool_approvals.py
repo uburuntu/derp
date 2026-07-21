@@ -104,7 +104,7 @@ async def test_cancel_uses_exact_callback_actor_chat_and_topic(
     assert capability.token == CALLBACK_CAPABILITY
     callback.answer.assert_awaited_once_with()
     message.edit_text.assert_awaited_once_with(
-        "Canceled. Not charged.",
+        "Canceled. You weren't charged.",
         reply_markup=None,
     )
 
@@ -131,7 +131,7 @@ async def test_invalid_capability_never_changes_the_control_message(
     )
 
     callback.answer.assert_awaited_once_with(
-        "This approval is not valid in this chat.",
+        "I can't use this request in this chat.",
         show_alert=True,
     )
     message.edit_text.assert_not_awaited()
@@ -161,7 +161,7 @@ async def test_expired_denial_replaces_controls_with_not_charged_state(
     )
 
     message.edit_text.assert_awaited_once_with(
-        "This image approval expired. Not charged.",
+        "This image request expired. You weren't charged. Send it again.",
         reply_markup=None,
     )
 
@@ -188,7 +188,8 @@ async def test_uncertain_delivery_keeps_only_authenticated_resend_control(
     )
 
     edit = message.edit_text.await_args
-    assert "may already have arrived" in edit.args[0]
+    assert "may already be in the chat" in edit.args[0]
+    assert "You won't be charged again" in edit.args[0]
     buttons = edit.kwargs["reply_markup"].inline_keyboard
     assert len(buttons) == 1
     assert len(buttons[0]) == 1
@@ -244,7 +245,7 @@ async def test_run_claim_is_completed_only_after_successful_resume(
     service.mark_resumed.assert_awaited_once_with(lease)
     service.release_resume.assert_not_awaited()
     assert message.edit_text.await_args_list == [
-        call("Generating image...", reply_markup=None),
+        call("Creating your image...", reply_markup=None),
     ]
     message.delete.assert_awaited_once_with()
 
@@ -349,7 +350,7 @@ async def test_shared_funding_failure_keeps_approval_runnable_and_explicit(
     service.release_resume.assert_awaited_once_with(lease)
     service.mark_resumed.assert_not_awaited()
     funding_edit = message.edit_text.await_args_list[-1]
-    assert "Not charged" in funding_edit.args[0]
+    assert "You weren't charged" in funding_edit.args[0]
     actions = {
         ImageApprovalCallback.unpack(button.callback_data).action
         for row in funding_edit.kwargs["reply_markup"].inline_keyboard
@@ -640,8 +641,10 @@ async def test_presenter_shows_exact_quote_without_prompt_content(
 
     text = message.reply.await_args.args[0]
     markup = message.reply.await_args.kwargs["reply_markup"]
-    assert text == "Image generation costs 7 credits. Run it?"
+    assert text == "Create this image for 7 credits?"
     assert "private prompt sentinel" not in text
+    assert markup.inline_keyboard[0][0].text == "Create image"
+    assert markup.inline_keyboard[0][1].text == "Cancel"
     assert len(markup.inline_keyboard[0][0].callback_data) <= 64
     assert len(markup.inline_keyboard[0][1].callback_data) <= 64
 
@@ -672,8 +675,8 @@ async def test_presenter_rejects_sibling_approvals_without_creating_records(
 
     prepare.assert_not_awaited()
     text = message.reply.await_args.args[0]
-    assert "one paid image request" in text
-    assert "Not charged" in text
+    assert "one paid image at a time" in text
+    assert "You weren't charged" in text
 
 
 @pytest.mark.asyncio

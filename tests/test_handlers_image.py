@@ -79,7 +79,9 @@ async def test_imagine_requires_prompt_before_creating_operation(make_message) -
         approvals,
     )
 
-    assert "Usage" in message.reply.await_args.args[0]
+    assert message.reply.await_args.args[0] == (
+        "Send /imagine followed by an image description."
+    )
     coordinator.run.assert_not_awaited()
 
 
@@ -247,7 +249,9 @@ async def test_edit_requires_source_image(make_message) -> None:
         chat_model,
     )
 
-    assert "Reply to or attach" in message.reply.await_args.args[0]
+    assert message.reply.await_args.args[0] == (
+        "Attach an image or reply to one, then add /edit and your changes."
+    )
     coordinator.run.assert_not_awaited()
 
 
@@ -274,31 +278,34 @@ def test_all_image_operation_outcomes_have_concise_user_copy() -> None:
                 quote,
                 ReservationRejection.INSUFFICIENT_FUNDS,
             ),
-            "Funding needed",
+            "credits. You weren't charged",
         ),
         (
             ImageNotCharged(
                 operation_id,
                 ImageNotChargedReason.PROVIDER_FAILURE,
             ),
-            "Not charged",
+            "I couldn't create the image. You weren't charged",
         ),
-        (ImageRefunded(operation_id, "delivery_failed"), "Refunded"),
+        (
+            ImageRefunded(operation_id, "delivery_failed"),
+            "Your credits were returned",
+        ),
         (
             ImageDeliveryUncertain(operation_id, "network", "opaque-token"),
-            "Delivery uncertain",
+            "may already be in the chat",
         ),
         (
             ImageInProgress(operation_id, ProgressStage.PREPARING),
-            "In progress",
+            "Preparing your image...",
         ),
         (
             ImageInProgress(operation_id, ProgressStage.GENERATING),
-            "In progress",
+            "Creating your image...",
         ),
         (
             ImageInProgress(operation_id, ProgressStage.DELIVERING),
-            "In progress",
+            "Sending your image...",
         ),
     )
 
@@ -332,25 +339,25 @@ def test_uncertain_outcome_has_compact_typed_send_again_callback() -> None:
         (
             DeliveryUncertain("network"),
             ImageDeliveryUncertain,
-            "Delivery uncertain",
+            "may already be in the chat",
             True,
         ),
         (
             DeliveryUncertain("attempt_in_progress_or_interrupted"),
             ImageInProgress,
-            "In progress",
+            "Sending your image...",
             False,
         ),
         (
             DeliveryFailed("TelegramRetryAfter", retryable=True),
             ImageInProgress,
-            "In progress",
+            "Sending your image...",
             False,
         ),
         (
             DeliveryFailed("TelegramBadRequest", retryable=False),
             ImageRefunded,
-            "Refunded",
+            "Your credits were returned",
             False,
         ),
     ),

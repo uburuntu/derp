@@ -147,8 +147,8 @@ async def present_image_approvals(
         with suppress_outbound_history():
             return await message.reply(
                 _(
-                    "I can prepare one paid image request at a time. "
-                    "Please ask for one image and try again. Not charged."
+                    "I can only create one paid image at a time. You weren't charged. "
+                    "Ask for one image and try again."
                 )
             )
     history = durable_message_history(original_history)
@@ -165,8 +165,8 @@ async def present_image_approvals(
             with suppress_outbound_history():
                 last_message = await message.reply(
                     _(
-                        "Attach or reply to an image before asking me to edit it. "
-                        "Not charged."
+                        "I need an image to edit. You weren't charged. "
+                        "Attach one or reply to one, then try again."
                     )
                 )
             continue
@@ -174,25 +174,30 @@ async def present_image_approvals(
             with suppress_outbound_history():
                 last_message = await message.reply(
                     _(
-                        "I could not prepare a valid image request. "
-                        "Please try again with one image instruction. Not charged."
+                        "I couldn't understand that image request. You weren't charged. "
+                        "Try again with one clear instruction."
                     )
                 )
             continue
 
-        action = (
-            _("Image edit")
-            if prepared.call.feature is Feature.IMAGE_EDIT
-            else _("Image generation")
-        )
-        text = _("{action} costs {credits} credits. Run it?").format(
+        editing = prepared.call.feature is Feature.IMAGE_EDIT
+        action = _("Edit this image") if editing else _("Create this image")
+        credit_count = prepared.quote.credits
+        text = _(
+            "{action} for {credits} credit?",
+            "{action} for {credits} credits?",
+            credit_count,
+        ).format(
             action=action,
-            credits=prepared.quote.credits,
+            credits=credit_count,
         )
         with suppress_outbound_history():
             last_message = await message.reply(
                 text,
-                reply_markup=_decision_keyboard(prepared.handle.callback_token),
+                reply_markup=_decision_keyboard(
+                    prepared.handle.callback_token,
+                    action_label=_("Edit image") if editing else _("Create image"),
+                ),
             )
     return last_message
 
@@ -213,7 +218,7 @@ async def deny_image_tool(
         decision = await service.deny(capability)
     except ApprovalAuthorizationError:
         await callback.answer(
-            _("This approval is not valid in this chat."),
+            _("I can't use this request in this chat."),
             show_alert=True,
         )
         return
@@ -225,9 +230,9 @@ async def deny_image_tool(
 
     await callback.answer()
     text = (
-        _("This image approval expired. Not charged.")
+        _("This image request expired. You weren't charged. Send it again.")
         if decision.disposition is DecisionDisposition.EXPIRED
-        else _("Canceled. Not charged.")
+        else _("Canceled. You weren't charged.")
     )
     await _edit_control(message, text)
 
@@ -260,8 +265,11 @@ async def approve_image_tool(
         message, capability = _callback_context(callback, callback_data.token)
         decision = await service.approve(capability)
         if decision.disposition is DecisionDisposition.EXPIRED:
-            await callback.answer(_("This image approval expired."), show_alert=True)
-            await _edit_control(message, _("This image approval expired. Not charged."))
+            await callback.answer(_("This image request has expired."), show_alert=True)
+            await _edit_control(
+                message,
+                _("This image request expired. You weren't charged. Send it again."),
+            )
             return
         if callback_data.action is ImageApprovalAction.ALWAYS_HERE:
             if (
@@ -280,7 +288,7 @@ async def approve_image_tool(
         claim = await service.claim_resume(capability)
     except ApprovalAuthorizationError:
         await callback.answer(
-            _("This approval is not valid in this chat."),
+            _("I can't use this request in this chat."),
             show_alert=True,
         )
         return
@@ -293,7 +301,7 @@ async def approve_image_tool(
         return
 
     await callback.answer(_("Started"))
-    await _edit_control(message, _("Generating image..."))
+    await _edit_control(message, _("Creating your image..."))
     try:
         if personal_consent is not None:
             ledger, user_id, chat_id = personal_consent
@@ -343,7 +351,7 @@ async def approve_image_tool(
         )
         await _edit_control(
             message,
-            _("Could not finish this image request. Tap Run to retry."),
+            _("I couldn't finish the image. Tap Try again."),
             reply_markup=_retry_keyboard(callback_data.token),
         )
         return
@@ -562,12 +570,12 @@ def _callback_context(
     )
 
 
-def _decision_keyboard(token: str) -> InlineKeyboardMarkup:
+def _decision_keyboard(token: str, *, action_label: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=_("Run"),
+                    text=action_label,
                     callback_data=_pack_callback(ImageApprovalAction.RUN, token),
                 ),
                 InlineKeyboardButton(
@@ -584,7 +592,7 @@ def _retry_keyboard(token: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=_("Run"),
+                    text=_("Try again"),
                     callback_data=_pack_callback(ImageApprovalAction.RUN, token),
                 )
             ]
@@ -599,21 +607,21 @@ def _funding_keyboard(
     purchase_callback: str | None,
 ) -> InlineKeyboardMarkup:
     retry = InlineKeyboardButton(
-        text=_("Run"),
+        text=_("Try again"),
         callback_data=_pack_callback(ImageApprovalAction.RUN, token),
     )
     personal_buttons: list[InlineKeyboardButton] = []
     if personal_once:
         personal_buttons = [
             InlineKeyboardButton(
-                text=_("Use mine once"),
+                text=_("Use my credits once"),
                 callback_data=_pack_callback(
                     ImageApprovalAction.USE_PERSONAL_ONCE,
                     token,
                 ),
             ),
             InlineKeyboardButton(
-                text=_("Always here"),
+                text=_("Always use my credits"),
                 callback_data=_pack_callback(
                     ImageApprovalAction.ALWAYS_HERE,
                     token,
@@ -622,7 +630,7 @@ def _funding_keyboard(
         ]
     funding_buttons = [
         InlineKeyboardButton(
-            text=_("Buy for chat"),
+            text=_("Buy chat credits"),
             callback_data=purchase_callback,
         )
         if purchase_callback is not None
@@ -670,14 +678,22 @@ def _pack_callback(action: ImageApprovalAction, token: str) -> str:
 def _funding_text(outcome: ImageAwaitingFunding) -> str:
     if outcome.reason is ReservationRejection.PERSONAL_CONSENT_REQUIRED:
         return _(
-            "Shared credits cannot cover this image. Use your credits once, "
-            "or add chat credits. Not charged."
+            "This chat can't cover the image. You weren't charged. "
+            "Use your credits once or add chat credits."
         )
     if outcome.reason is ReservationRejection.WALLET_IN_DEBT:
-        return _("Funding is unavailable while this balance is in debt. Not charged.")
-    return _("Funding needed: {credits} credits. Not charged.").format(
-        credits=outcome.quote.credits
-    )
+        return _(
+            "Paid features are paused for this balance. You weren't charged. "
+            "Clear the payment debt to continue."
+        )
+    credit_count = outcome.quote.credits
+    return _(
+        "This image needs {credits} credit. You weren't charged. "
+        "Add credits and try again.",
+        "This image needs {credits} credits. You weren't charged. "
+        "Add credits and try again.",
+        credit_count,
+    ).format(credits=credit_count)
 
 
 async def _render_image_outcome(
@@ -694,14 +710,14 @@ async def _render_image_outcome(
         await _edit_control(
             message,
             _(
-                "Delivery is uncertain. The image may already have arrived. "
-                "Check the chat before resending."
+                "The image may already be in the chat. You won't be charged again. "
+                "Check first, then tap Send again if it's missing."
             ),
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text=_("Resend"),
+                            text=_("Send again"),
                             callback_data=callback_data,
                         )
                     ]
@@ -712,16 +728,17 @@ async def _render_image_outcome(
     if isinstance(outcome, ImageRefunded):
         await _edit_control(
             message,
-            _("Refunded. Delivery failed, so the charged credits were returned."),
+            _("I couldn't deliver the image. Your credits were returned."),
         )
         return
     if isinstance(outcome, ImageNotCharged):
         await _edit_control(
-            message, _("Image generation did not complete. Not charged.")
+            message,
+            _("I couldn't create the image. You weren't charged. Try again."),
         )
         return
     if isinstance(outcome, ImageInProgress):
-        await _edit_control(message, _("The image operation is still in progress."))
+        await _edit_control(message, _("Still working on your image..."))
         return
     if isinstance(outcome, ImageAwaitingFunding):
         raise RuntimeError("funding outcome must release its approval lease")
@@ -756,11 +773,10 @@ async def _answer_unavailable(
         )
         await _edit_control(message, _("Image request complete."))
         return
-    await callback.answer(
-        _("This image approval is no longer active."), show_alert=True
-    )
+    await callback.answer(_("This image request has expired."), show_alert=True)
     await _edit_control(
-        message, _("This image approval is no longer active. Not charged.")
+        message,
+        _("This image request expired. You weren't charged. Send it again."),
     )
 
 

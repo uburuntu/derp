@@ -62,28 +62,42 @@ router = Router(name="image")
 def _funding_text(outcome: ImageAwaitingFunding) -> str:
     if outcome.reason is ReservationRejection.PERSONAL_CONSENT_REQUIRED:
         return _(
-            "Funding approval is required. Not charged. Enable personal credit "
-            "spending for this chat, then retry."
+            "This chat can't cover the image. You weren't charged. Allow personal "
+            "credits here, then try again."
         )
     if outcome.reason is ReservationRejection.WALLET_IN_DEBT:
-        return _("Funding is unavailable while this balance is in debt. Not charged.")
-    return _("Funding needed: {credits} credits. Not charged.").format(
-        credits=outcome.quote.credits
-    )
+        return _(
+            "Paid features are paused for this balance. You weren't charged. "
+            "Clear the payment debt to continue."
+        )
+    credit_count = outcome.quote.credits
+    return _(
+        "This image needs {credits} credit. You weren't charged. "
+        "Add credits and try again.",
+        "This image needs {credits} credits. You weren't charged. "
+        "Add credits and try again.",
+        credit_count,
+    ).format(credits=credit_count)
 
 
 def _not_charged_text(reason: ImageNotChargedReason) -> str:
     if reason is ImageNotChargedReason.INVALID_INPUT:
-        return _("Not charged. The image request is invalid.")
+        return _(
+            "I couldn't use that image request. You weren't charged. "
+            "Check it and try again."
+        )
     if reason is ImageNotChargedReason.POLICY_REJECTION:
-        return _("Not charged. The image request was declined.")
+        return _(
+            "I couldn't create that image. You weren't charged. "
+            "Try a different request."
+        )
     if reason is ImageNotChargedReason.UNUSABLE_OUTPUT:
-        return _("Not charged. The model did not return a usable image.")
+        return _("I couldn't create a usable image. You weren't charged. Try again.")
     if reason is ImageNotChargedReason.QUOTE_EXPIRED:
-        return _("Not charged. The price expired; send the request again.")
+        return _("The price expired. You weren't charged. Send the request again.")
     if reason is ImageNotChargedReason.CANCELED:
-        return _("Not charged. The image request was canceled.")
-    return _("Not charged. Image generation did not complete. Please try again.")
+        return _("Canceled. You weren't charged.")
+    return _("I couldn't create the image. You weren't charged. Try again.")
 
 
 def _outcome_text(outcome: ImageOperationOutcome) -> str:
@@ -94,24 +108,17 @@ def _outcome_text(outcome: ImageOperationOutcome) -> str:
     if isinstance(outcome, ImageNotCharged):
         return _not_charged_text(outcome.reason)
     if isinstance(outcome, ImageRefunded):
-        return _("Refunded. Delivery failed, so the charged credits were returned.")
+        return _("I couldn't deliver the image. Your credits were returned.")
     if isinstance(outcome, ImageDeliveryUncertain):
         return _(
-            "Delivery uncertain. The image may already have arrived. Check the chat "
-            "first, then use Send again only if it is missing. Sending again does "
-            "not charge credits again."
+            "The image may already be in the chat. You won't be charged again. "
+            "Check first, then tap Send again if it's missing."
         )
     if isinstance(outcome, ImageInProgress):
         return {
-            ProgressStage.PREPARING: _(
-                "In progress. This image request is still being prepared."
-            ),
-            ProgressStage.GENERATING: _(
-                "In progress. This image is still being generated."
-            ),
-            ProgressStage.DELIVERING: _(
-                "In progress. This image is still being delivered."
-            ),
+            ProgressStage.PREPARING: _("Preparing your image..."),
+            ProgressStage.GENERATING: _("Creating your image..."),
+            ProgressStage.DELIVERING: _("Sending your image..."),
         }[outcome.stage]
     raise TypeError(f"Unsupported image operation outcome: {type(outcome).__name__}")
 
@@ -279,7 +286,7 @@ async def resend_image_delivery(
     message = callback.message
     if not isinstance(message, Message):
         await callback.answer(
-            _("This delivery control is unavailable."),
+            _("This button is no longer available."),
             show_alert=True,
         )
         return None
@@ -298,7 +305,7 @@ async def resend_image_delivery(
     except DeliveryStateError:
         return await _edit_progress(
             message,
-            _("In progress. Delivery status is still being reconciled."),
+            _("Checking image delivery..."),
         )
     except Exception as exc:
         report_exception(
@@ -317,7 +324,7 @@ async def resend_image_delivery(
 async def reject_malformed_image_resend(callback: CallbackQuery) -> None:
     """Answer malformed or obsolete recovery controls without doing work."""
     await callback.answer(
-        _("This delivery control is invalid or expired."),
+        _("This button is no longer available."),
         show_alert=True,
     )
 
@@ -335,16 +342,16 @@ async def handle_imagine(
     """Present the same exact image quote used by natural-language requests."""
     prompt = meta.target_text
     if not prompt:
-        return await message.reply(_("Usage: /imagine <prompt>"))
+        return await message.reply(_("Send /imagine followed by an image description."))
     if user_model is None or chat_model is None:
-        return await message.reply(
-            _("Could not verify your account. Please try again.")
-        )
+        return await message.reply(_("I couldn't verify your account. Try again."))
 
     try:
         request = ImageGenerateRequest(prompt=prompt)
     except TypeError, ValueError:
-        return await message.reply(_("The image prompt is too long or invalid."))
+        return await message.reply(
+            _("I couldn't use that image description. Change it and try again.")
+        )
     return await _present_command_approval(
         message=message,
         coordinator=image_operation_coordinator,
@@ -368,16 +375,16 @@ async def handle_edit(
     """Present a deferred edit quote while retaining only Telegram references."""
     prompt = meta.target_text
     if not prompt:
-        return await message.reply(_("Reply to an image and use: /edit <prompt>"))
-    if user_model is None or chat_model is None:
         return await message.reply(
-            _("Could not verify your account. Please try again.")
+            _("Reply to an image with /edit followed by your changes.")
         )
+    if user_model is None or chat_model is None:
+        return await message.reply(_("I couldn't verify your account. Try again."))
 
     photo = await Extractor.photo(message)
     if photo is None:
         return await message.reply(
-            _("Reply to or attach an image, then use: /edit <prompt>")
+            _("Attach an image or reply to one, then add /edit and your changes.")
         )
     try:
         request = ImageEditRequest(
@@ -385,7 +392,7 @@ async def handle_edit(
             source=image_reference_from_telegram(photo.media),
         )
     except TypeError, ValueError:
-        return await message.reply(_("That image cannot be edited."))
+        return await message.reply(_("I can't edit that image. Try another one."))
     return await _present_command_approval(
         message=message,
         coordinator=image_operation_coordinator,

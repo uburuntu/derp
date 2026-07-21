@@ -33,7 +33,11 @@ def paid_media_decision_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=_("Run"),
+                    text=(
+                        _("Create voice")
+                        if kind is PaidMediaApprovalKind.TTS
+                        else _("Create video")
+                    ),
                     callback_data=pack_paid_media_callback(
                         kind,
                         PaidMediaApprovalAction.RUN,
@@ -62,7 +66,7 @@ def paid_media_retry_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=_("Run"),
+                    text=_("Try again"),
                     callback_data=pack_paid_media_callback(
                         kind,
                         PaidMediaApprovalAction.RUN,
@@ -87,7 +91,7 @@ def paid_media_funding_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=_("Use mine once"),
+                    text=_("Use my credits once"),
                     callback_data=pack_paid_media_callback(
                         kind,
                         PaidMediaApprovalAction.USE_PERSONAL_ONCE,
@@ -95,7 +99,7 @@ def paid_media_funding_keyboard(
                     ),
                 ),
                 InlineKeyboardButton(
-                    text=_("Always here"),
+                    text=_("Always use my credits"),
                     callback_data=pack_paid_media_callback(
                         kind,
                         PaidMediaApprovalAction.ALWAYS_HERE,
@@ -110,7 +114,7 @@ def paid_media_funding_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        _("Buy for chat")
+                        _("Buy chat credits")
                         if purchase.target is PurchaseTargetCode.CHAT
                         else _("Buy credits")
                     ),
@@ -121,7 +125,7 @@ def paid_media_funding_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
-                text=_("Run"),
+                text=_("Try again"),
                 callback_data=pack_paid_media_callback(
                     kind,
                     PaidMediaApprovalAction.RUN,
