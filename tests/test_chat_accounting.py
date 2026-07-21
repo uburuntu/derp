@@ -643,6 +643,35 @@ async def test_definitive_provider_failure_releases_once_and_never_reexecutes(
 
 
 @pytest.mark.database
+async def test_definitive_delivery_failure_releases_once_and_never_reexecutes(
+    accounting_env: AccountingEnvironment,
+) -> None:
+    scope = await _create_scope(accounting_env)
+    owner = WalletOwner(WalletOwnerKind.USER, scope.user_id)
+    await _fund(accounting_env, owner)
+    invocation = _scope_invocation(scope)
+    assert isinstance(
+        await accounting_env.accounting.authorize(invocation),
+        PaidChatExecutionGrant,
+    )
+
+    released = await accounting_env.accounting.release_delivery_failure(
+        invocation.operation_id
+    )
+    released_again = await accounting_env.accounting.release_delivery_failure(
+        invocation.operation_id
+    )
+    retry = await accounting_env.accounting.authorize(invocation)
+    balance = await accounting_env.ledger.balance(owner)
+
+    assert released.changed and not released_again.changed
+    assert isinstance(retry, ChatExecutionAlreadyHandled)
+    assert retry.state is OperationState.RELEASED
+    assert balance.spendable == 1_000
+    assert balance.reserved == balance.consumed == 0
+
+
+@pytest.mark.database
 async def test_group_spend_is_chat_first_even_when_personal_wallet_can_pay(
     accounting_env: AccountingEnvironment,
 ) -> None:

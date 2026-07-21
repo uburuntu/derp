@@ -90,6 +90,8 @@ from derp.history.snapshot import (
 from derp.history.transcript import extract_tool_rounds, serialize_tool_rounds
 from derp.llm import (
     RELAXED_SAFETY_SETTINGS,
+    AgentContentDelivered,
+    AgentContentUnavailable,
     AgentDeps,
     AgentResult,
     create_chat_agent,
@@ -455,6 +457,25 @@ async def _capture_delivered_paid_chat_turn(
         )
 
 
+async def _release_undelivered_paid_chat_turn(
+    accounting: ChatTurnAccounting | None,
+    operation_id: OperationId | None,
+    message: Message,
+) -> None:
+    if accounting is None or operation_id is None:
+        return
+    try:
+        await accounting.release_delivery_failure(operation_id)
+    except Exception as exc:
+        report_exception(
+            "chat_turn_delivery_release_failed",
+            exception=exc,
+            operation_id=str(operation_id),
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+        )
+
+
 @router.message(Command("context"), F.from_user.id.in_(settings.admin_ids))
 async def show_context(message: Message, chat_model: ChatModel | None) -> None:
     """Admin command to show the context that would be sent to the agent."""
@@ -718,7 +739,7 @@ class ChatAgentHandler(MessageHandler):
                         or approval_service(db),
                     )
                     if delivered is None:
-                        await _release_paid_chat_turn(
+                        await _release_undelivered_paid_chat_turn(
                             chat_turn_accounting,
                             paid_operation_id,
                             self.event,
@@ -749,21 +770,39 @@ class ChatAgentHandler(MessageHandler):
                     )
                     return None
 
-                with capture_outbound_history():
-                    delivered = await agent_result.reply_to(self.event)
-                if delivered is None:
-                    await _release_paid_chat_turn(
+                try:
+                    with capture_outbound_history():
+                        delivery = await agent_result.reply_to(self.event)
+                except Exception:
+                    await _release_undelivered_paid_chat_turn(
+                        chat_turn_accounting,
+                        paid_operation_id,
+                        self.event,
+                    )
+                    paid_operation_id = None
+                    raise
+                if delivery is None:
+                    await _release_undelivered_paid_chat_turn(
                         chat_turn_accounting,
                         paid_operation_id,
                         self.event,
                     )
                     return None
+                if isinstance(delivery, AgentContentUnavailable):
+                    await _release_undelivered_paid_chat_turn(
+                        chat_turn_accounting,
+                        paid_operation_id,
+                        self.event,
+                    )
+                    return delivery.notice
+                if not isinstance(delivery, AgentContentDelivered):
+                    raise TypeError("chat delivery returned an unsupported outcome")
                 await _capture_delivered_paid_chat_turn(
                     chat_turn_accounting,
                     paid_operation_id,
                     self.event,
                 )
-                return delivered
+                return delivery.message
 
         except ModelHTTPError as exc:
             await _release_paid_chat_turn(

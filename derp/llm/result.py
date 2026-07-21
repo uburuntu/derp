@@ -17,6 +17,23 @@ from derp.common.sender import MessageSender
 from derp.observability import report_exception
 
 
+@dataclass(frozen=True, slots=True)
+class AgentContentDelivered:
+    """Telegram acknowledged delivery of actual model-produced content."""
+
+    message: Message
+
+
+@dataclass(frozen=True, slots=True)
+class AgentContentUnavailable:
+    """Only a failure notice was delivered; model content was not delivered."""
+
+    notice: Message
+
+
+type AgentDeliveryOutcome = AgentContentDelivered | AgentContentUnavailable
+
+
 @dataclass
 class AgentResult:
     """Unified result wrapper for agent outputs.
@@ -62,7 +79,7 @@ class AgentResult:
 
     async def reply_to(
         self, message: Message, *, max_length: int = 4000
-    ) -> Message | None:
+    ) -> AgentDeliveryOutcome | None:
         """Send the result as a reply to the given message.
 
         Uses MessageSender's ContentBuilder for automatic handling of:
@@ -76,7 +93,7 @@ class AgentResult:
             max_length: Deprecated, kept for backward compatibility.
 
         Returns:
-            The sent message, or None if nothing was sent.
+            A typed delivery outcome, or None if there was no content to send.
         """
         if not self.has_content:
             # React with 👌 if no content to send
@@ -103,15 +120,33 @@ class AgentResult:
             result = await builder.reply()
             if self.images:
                 logfire.info("images_sent", count=len(self.images))
-            return result if isinstance(result, Message) else result[-1]
-        except Exception:
-            report_exception("send_content_failed", level="warning")
-            # Fallback: try text only if we had images
-            if self.images and text_response:
-                return await sender.reply(text_response)
-            return await message.reply(
-                _("📊 Generated content, but couldn't display it.")
+            delivered = result if isinstance(result, Message) else result[-1]
+            return AgentContentDelivered(delivered)
+        except Exception as exc:
+            report_exception(
+                "send_content_failed",
+                exception=exc,
+                level="warning",
             )
+
+            # A complete text fallback still delivers model-produced content.
+            if self.images and text_response:
+                try:
+                    return AgentContentDelivered(await sender.reply(text_response))
+                except Exception as fallback_exc:
+                    report_exception(
+                        "send_text_fallback_failed",
+                        exception=fallback_exc,
+                        level="warning",
+                    )
+
+            notice = await message.reply(
+                _(
+                    "😅 Something went wrong. I couldn't process that message. "
+                    "Not charged."
+                )
+            )
+            return AgentContentUnavailable(notice)
 
     @classmethod
     def from_run_result(cls, result: AgentRunResult) -> AgentResult:

@@ -32,7 +32,7 @@ from derp.history.core import LogicalTurn, TokenEstimator
 from derp.history.facts import ApprovedFact, render_approved_facts
 from derp.history.media import HydratedMedia
 from derp.history.service import HISTORY_WINDOWS, LoadedHistory
-from derp.llm import AgentResult
+from derp.llm import AgentContentDelivered, AgentContentUnavailable, AgentResult
 from derp.llm.prompts import BASE_SYSTEM_PROMPT
 from derp.operations import (
     ChatQuoteInput,
@@ -439,6 +439,7 @@ def chat_handler_environment(
     accounting = MagicMock(spec=ChatTurnAccounting)
     accounting.authorize = AsyncMock()
     accounting.capture_success = AsyncMock()
+    accounting.release_delivery_failure = AsyncMock()
     accounting.release_provider_failure = AsyncMock()
 
     probe = LoadedHistory(
@@ -469,7 +470,7 @@ def chat_handler_environment(
     agent_result.text = "Delivered answer"
     agent_result.images = []
     agent_result.has_content = True
-    agent_result.reply_to = AsyncMock(return_value=message)
+    agent_result.reply_to = AsyncMock(return_value=AgentContentDelivered(message))
 
     toolset = MagicMock()
     toolset.tools = {}
@@ -547,6 +548,7 @@ async def test_paid_chat_captures_only_after_result_delivery(
     assert delivered is env.message
     env.agent_result.reply_to.assert_awaited_once_with(env.message)
     env.accounting.capture_success.assert_awaited_once_with(invocation.operation_id)
+    env.accounting.release_delivery_failure.assert_not_awaited()
     env.accounting.release_provider_failure.assert_not_awaited()
     assert env.create_agent.call_args.args[0].model.key is GoogleModelKey.CHAT_STANDARD
 
@@ -564,6 +566,7 @@ async def test_provider_failure_releases_paid_turn_before_fallback(
     env.accounting.release_provider_failure.assert_awaited_once_with(
         invocation.operation_id
     )
+    env.accounting.release_delivery_failure.assert_not_awaited()
     env.accounting.capture_success.assert_not_awaited()
     env.message.reply.assert_awaited_once()
     assert "Not charged" in env.message.reply.await_args.args[0]
@@ -582,6 +585,7 @@ async def test_selected_history_failure_releases_before_provider_call(
     env.accounting.release_provider_failure.assert_awaited_once_with(
         invocation.operation_id
     )
+    env.accounting.release_delivery_failure.assert_not_awaited()
     env.agent.run.assert_not_awaited()
     env.accounting.capture_success.assert_not_awaited()
 
@@ -596,11 +600,30 @@ async def test_delivery_failure_releases_paid_turn_and_sends_fallback(
     await env.run()
 
     invocation = env.accounting.authorize.await_args.args[0]
-    env.accounting.release_provider_failure.assert_awaited_once_with(
+    env.accounting.release_delivery_failure.assert_awaited_once_with(
         invocation.operation_id
     )
+    env.accounting.release_provider_failure.assert_not_awaited()
     env.accounting.capture_success.assert_not_awaited()
     env.message.reply.assert_awaited_once()
+
+
+async def test_generic_delivery_notice_releases_paid_turn_without_capture(
+    chat_handler_environment: ChatHandlerEnvironment,
+) -> None:
+    env = chat_handler_environment
+    env.accounting.authorize.side_effect = _paid_decision
+    env.agent_result.reply_to.return_value = AgentContentUnavailable(env.message)
+
+    delivered = await env.run()
+
+    invocation = env.accounting.authorize.await_args.args[0]
+    assert delivered is env.message
+    env.accounting.release_delivery_failure.assert_awaited_once_with(
+        invocation.operation_id
+    )
+    env.accounting.release_provider_failure.assert_not_awaited()
+    env.accounting.capture_success.assert_not_awaited()
 
 
 @pytest.mark.parametrize("reaction_fails", [False, True])

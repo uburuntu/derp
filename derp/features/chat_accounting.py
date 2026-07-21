@@ -300,11 +300,36 @@ class ChatTurnAccounting:
         operation_id: OperationId,
     ) -> ChatTurnSettlement:
         """Release a reservation after provider termination is definitive."""
+        return await self._release_uncaptured(
+            operation_id,
+            transition="release failed chat execution",
+            reason="chat_provider_definitive_failure",
+        )
+
+    async def release_delivery_failure(
+        self,
+        operation_id: OperationId,
+    ) -> ChatTurnSettlement:
+        """Release uncaptured spend when model content was not delivered."""
+        return await self._release_uncaptured(
+            operation_id,
+            transition="release undelivered chat execution",
+            reason="chat_delivery_definitive_failure",
+        )
+
+    async def _release_uncaptured(
+        self,
+        operation_id: OperationId,
+        *,
+        transition: str,
+        reason: str,
+    ) -> ChatTurnSettlement:
+        """Apply one idempotent release before successful delivery capture."""
         snapshot = await self._chat_snapshot(operation_id)
         self._require_state(
             snapshot,
             allowed={OperationState.EXECUTING, OperationState.RELEASED},
-            transition="release failed chat execution",
+            transition=transition,
         )
         with logfire.span(
             "chat.turn.settlement",
@@ -313,7 +338,7 @@ class ChatTurnAccounting:
             self._set_economics(span, snapshot.quote)
             result = await self._ledger.release(
                 operation_id,
-                reason="chat_provider_definitive_failure",
+                reason=reason,
             )
             record_operation_outcome(
                 span,

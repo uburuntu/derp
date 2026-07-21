@@ -11,7 +11,12 @@ from derp.llm.agents import create_chat_agent, create_image_agent, create_inline
 from derp.llm.deps import AgentDeps
 from derp.llm.inline_executor import PydanticAIInlineExecutor
 from derp.llm.providers import RELAXED_SAFETY_SETTINGS, create_model
-from derp.llm.result import AgentResult
+from derp.llm.result import (
+    AgentContentDelivered,
+    AgentContentUnavailable,
+    AgentDeliveryOutcome,
+    AgentResult,
+)
 
 __all__ = [
     # Providers
@@ -28,5 +33,8 @@ __all__ = [
     "create_inline_agent",
     "PydanticAIInlineExecutor",
     # Result
+    "AgentContentDelivered",
+    "AgentContentUnavailable",
+    "AgentDeliveryOutcome",
     "AgentResult",
 ]
