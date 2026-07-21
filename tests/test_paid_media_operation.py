@@ -15,6 +15,7 @@ from derp.catalog import GoogleModelKey, VideoResolution
 from derp.delivery import (
     Delivered,
     DeliveryFailed,
+    DeliveryInspection,
     DeliveryMedia,
     DeliveryService,
     DeliveryState,
@@ -99,6 +100,25 @@ VIDEO_RESULT = PaidMediaResult(
 )
 
 
+def _inspection(
+    state: DeliveryState,
+    *,
+    message_ids: tuple[int, ...] = (),
+    last_error_code: str | None = None,
+) -> DeliveryInspection:
+    return DeliveryInspection(
+        operation_id=OPERATION_ID,
+        state=state,
+        target=DeliveryTarget(-100123, 7, 42),
+        attempt_count=1,
+        artifact_count=1,
+        expires_at=NOW + timedelta(hours=1),
+        updated_at=NOW,
+        message_ids=message_ids,
+        last_error_code=last_error_code,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Environment:
     coordinator: PaidMediaOperationCoordinator
@@ -159,6 +179,7 @@ def env() -> Environment:
     )
     delivery.mark_ready = AsyncMock()
     delivery.deliver = AsyncMock(return_value=Delivered((501,)))
+    delivery.inspect = AsyncMock(return_value=_inspection(DeliveryState.PENDING))
     delivery.issue_resend_token = AsyncMock(return_value="reissued-resend-token")
 
     return Environment(
@@ -924,6 +945,73 @@ async def test_initial_delivery_uncertainty_keeps_prepared_resend_token(
 
 
 @pytest.mark.asyncio
+async def test_post_capture_readiness_failure_returns_reconciling_state(
+    env: Environment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("private database detail")
+    report = MagicMock()
+    monkeypatch.setattr(
+        "derp.features.paid_media_operation.report_exception",
+        report,
+    )
+    env.delivery.mark_ready.side_effect = failure
+    env.ledger.get_snapshot.return_value = _snapshot(
+        state=OperationState.CAPTURED,
+        delivery_state=DeliveryState.NOT_READY,
+        artifact_count=1,
+    )
+    env.delivery.inspect.return_value = _inspection(DeliveryState.NOT_READY)
+
+    outcome = await env.coordinator.run(
+        env.invocation,
+        TTS_PLAN,
+        TTS_QUOTE_INPUT,
+        object(),
+        env.executor,
+    )
+
+    assert outcome == PaidMediaInProgress(
+        OPERATION_ID,
+        ProgressStage.DELIVERING,
+        "delivery_reconciliation_pending",
+    )
+    report.assert_called_once_with(
+        "paid_media_delivery_recovery_needed",
+        exception=failure,
+        level="warning",
+        operation_id=str(OPERATION_ID),
+        feature="tts",
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_acknowledgement_exception_recovers_delivered_truth(
+    env: Environment,
+) -> None:
+    env.delivery.deliver.side_effect = RuntimeError("database unavailable")
+    env.ledger.get_snapshot.return_value = _snapshot(
+        state=OperationState.CAPTURED,
+        delivery_state=DeliveryState.DELIVERED,
+        artifact_count=1,
+    )
+    env.delivery.inspect.return_value = _inspection(
+        DeliveryState.DELIVERED,
+        message_ids=(601,),
+    )
+
+    outcome = await env.coordinator.run(
+        env.invocation,
+        TTS_PLAN,
+        TTS_QUOTE_INPUT,
+        object(),
+        env.executor,
+    )
+
+    assert outcome == PaidMediaDelivered(OPERATION_ID, (601,))
+
+
+@pytest.mark.asyncio
 async def test_restart_uncertainty_reissues_token_without_provider_replay(
     env: Environment,
 ) -> None:
@@ -1025,7 +1113,7 @@ async def test_terminal_delivery_failure_is_refunded_only_after_reversal(
 
 
 @pytest.mark.asyncio
-async def test_terminal_delivery_without_reversal_fails_closed(
+async def test_terminal_delivery_without_reversal_stays_in_reconciliation(
     env: Environment,
 ) -> None:
     env.delivery.deliver.return_value = DeliveryFailed("TelegramBadRequest", False)
@@ -1036,15 +1124,24 @@ async def test_terminal_delivery_without_reversal_fails_closed(
             artifact_count=1,
         )
     )
+    env.delivery.inspect.return_value = _inspection(
+        DeliveryState.FAILED,
+        last_error_code="TelegramBadRequest",
+    )
 
-    with pytest.raises(RuntimeError, match="did not reverse captured spend"):
-        await env.coordinator.run(
-            env.invocation,
-            TTS_PLAN,
-            TTS_QUOTE_INPUT,
-            object(),
-            env.executor,
-        )
+    outcome = await env.coordinator.run(
+        env.invocation,
+        TTS_PLAN,
+        TTS_QUOTE_INPUT,
+        object(),
+        env.executor,
+    )
+
+    assert outcome == PaidMediaInProgress(
+        OPERATION_ID,
+        ProgressStage.DELIVERING,
+        "TelegramBadRequest",
+    )
 
 
 @pytest.mark.asyncio

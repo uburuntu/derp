@@ -426,13 +426,28 @@ class PaidMediaOperationCoordinator:
                     "persisted media result belongs to another operation"
                 )
             await self._capture_persisted_result(invocation.operation_id)
-            await self._delivery_service.mark_ready(invocation.operation_id)
-            return self._record_outcome(
-                span,
-                await self._deliver(
+            try:
+                await self._delivery_service.mark_ready(invocation.operation_id)
+                delivery_outcome = await self._deliver(
                     invocation.operation_id,
                     resend_token=prepared.resend_token,
-                ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                delivery_outcome = await self._recover_captured_delivery(
+                    invocation.operation_id
+                )
+                report_exception(
+                    "paid_media_delivery_recovery_needed",
+                    exception=exc,
+                    level="warning",
+                    operation_id=str(invocation.operation_id),
+                    feature=feature.value,
+                )
+            return self._record_outcome(
+                span,
+                delivery_outcome,
                 authorization=authorization,
             )
 
@@ -643,6 +658,45 @@ class PaidMediaOperationCoordinator:
                 "terminal delivery failure did not reverse captured spend"
             )
         return PaidMediaRefunded(operation_id, outcome.code)
+
+    async def _recover_captured_delivery(
+        self,
+        operation_id: OperationId,
+    ) -> PaidMediaOperationOutcome:
+        """Return the durable truth after an exception beyond spend capture."""
+        snapshot = await self._ledger.get_snapshot(operation_id)
+        if snapshot.state is OperationState.REVERSED:
+            return PaidMediaRefunded(
+                operation_id,
+                snapshot.terminal_reason or "delivery_failed",
+            )
+        if snapshot.state is not OperationState.CAPTURED:
+            raise RuntimeError(
+                "captured media operation changed to an unsupported state"
+            )
+
+        inspection = await self._delivery_service.inspect(operation_id)
+        if inspection.state is DeliveryState.DELIVERED and inspection.message_ids:
+            return PaidMediaDelivered(operation_id, inspection.message_ids)
+        if inspection.state is DeliveryState.UNCERTAIN:
+            try:
+                token = await self._delivery_service.issue_resend_token(operation_id)
+            except Exception:
+                return PaidMediaInProgress(
+                    operation_id,
+                    ProgressStage.DELIVERING,
+                    inspection.last_error_code or "delivery_reconciliation_pending",
+                )
+            return PaidMediaDeliveryUncertain(
+                operation_id,
+                inspection.last_error_code or "delivery_uncertain",
+                token,
+            )
+        return PaidMediaInProgress(
+            operation_id,
+            ProgressStage.DELIVERING,
+            inspection.last_error_code or "delivery_reconciliation_pending",
+        )
 
     async def _release(
         self,
