@@ -23,6 +23,7 @@ from derp.billing import (
     SubscriptionStatus,
 )
 from derp.billing.telegram import TelegramSubscriptionRenewalProvider
+from derp.common.private_delivery import deliver_sensitive_reply
 from derp.common.sender import MessageSender
 from derp.models import User as UserModel
 from derp.observability import report_exception
@@ -108,11 +109,22 @@ async def show_subscription(
     try:
         snapshot = await subscription_management.get_snapshot(user_model.id)
     except SubscriptionStateError:
-        return await sender.reply(
-            "<b>Derp Personal</b>\nYou do not have a personal plan."
-        )
-    text, markup = build_subscription_panel(snapshot)
-    return await sender.reply(text, reply_markup=markup)
+        text = "<b>Derp Personal</b>\nYou do not have a personal plan."
+        markup = None
+    else:
+        text, markup = build_subscription_panel(snapshot)
+    return await deliver_sensitive_reply(
+        message,
+        sender,
+        text,
+        recipient_chat_id=user_model.telegram_id,
+        public_success="I sent your plan details in a private chat.",
+        public_failure=(
+            "I couldn't send your private plan details. Open Derp privately and retry."
+        ),
+        failure_event="private_plan_delivery_failed",
+        reply_markup=markup,
+    )
 
 
 @router.callback_query(SubscriptionCallback.filter())
@@ -127,6 +139,11 @@ async def set_subscription_renewal(
         return await callback.answer("Plan controls are unavailable", show_alert=True)
     if user_model.telegram_id != callback.from_user.id:
         return await callback.answer("Plan identity changed", show_alert=True)
+    if callback.message.chat.type != "private":
+        return await callback.answer(
+            "Open Derp privately to manage your plan.",
+            show_alert=True,
+        )
 
     enabled = callback_data.action is SubscriptionAction.RESUME
     try:

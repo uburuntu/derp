@@ -39,6 +39,7 @@ from derp.billing.telegram import (
     PurchaseTargetCode,
     create_stars_invoice_link,
 )
+from derp.common.private_delivery import deliver_sensitive_reply
 from derp.common.sender import MessageSender
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
@@ -204,21 +205,23 @@ async def handle_successful_payment(
                 payment.telegram_payment_charge_id
             ),
         )
-        await sender.send(
+        await _deliver_payment_reply(
+            message,
+            sender,
             "Telegram charged the payment, but local fulfillment needs review. "
-            "You do not need to buy again; support can reconcile this charge."
+            "You do not need to buy again; support can reconcile this charge.",
         )
         return
 
     if result.state is FulfillmentState.NEEDS_REVIEW:
-        await sender.send(
+        text = (
             "Payment received. Its details need review before credits can be "
             "released. You do not need to buy again."
         )
     elif result.idempotent:
-        await sender.send("This payment was already applied to its wallet.")
+        text = "This payment was already applied to its wallet."
     elif result.subscription_cycle_id is not None:
-        await sender.send(
+        text = (
             "<b>Plan active</b>\n"
             f"Monthly allowance available: {result.available_credits} credits."
         )
@@ -229,7 +232,8 @@ async def handle_successful_payment(
         ]
         if result.debt_offset_credits:
             lines.append(f"Applied to prior payment debt: {result.debt_offset_credits}")
-        await sender.send("\n".join(lines))
+        text = "\n".join(lines)
+    await _deliver_payment_reply(message, sender, text)
 
     logfire.info(
         "payment_reconciled",
@@ -260,9 +264,11 @@ async def handle_refunded_payment(
             error_type=type(exc).__name__,
             charge_fingerprint=charge_fingerprint,
         )
-        await sender.send(
+        await _deliver_refund_reply(
+            message,
+            sender,
             "Refund received, but its details need review. No credits were "
-            "changed; support can reconcile it safely."
+            "changed; support can reconcile it safely.",
         )
         return
     except Exception as exc:
@@ -271,14 +277,16 @@ async def handle_refunded_payment(
             exception=exc,
             charge_fingerprint=charge_fingerprint,
         )
-        await sender.send(
+        await _deliver_refund_reply(
+            message,
+            sender,
             "Refund received, but local reconciliation needs review. No credits "
-            "were changed; support can reconcile it safely."
+            "were changed; support can reconcile it safely.",
         )
         return
 
     if result.idempotent:
-        await sender.send("This refund was already reconciled.")
+        text = "This refund was already reconciled."
     else:
         lines = [
             "<b>Refund reconciled</b>",
@@ -289,7 +297,8 @@ async def handle_refunded_payment(
                 "Credits already used or reserved: "
                 f"{result.debt_created_credits} (recorded as payment debt)."
             )
-        await sender.send("\n".join(lines))
+        text = "\n".join(lines)
+    await _deliver_refund_reply(message, sender, text)
 
     logfire.info(
         "payment_refund_reconciled",
@@ -298,6 +307,44 @@ async def handle_refunded_payment(
         removed_credits=result.removed_available_credits,
         debt_credits=result.debt_created_credits,
         charge_fingerprint=charge_fingerprint,
+    )
+
+
+async def _deliver_payment_reply(
+    message: Message,
+    sender: MessageSender,
+    text: str,
+) -> Message:
+    return await deliver_sensitive_reply(
+        message,
+        sender,
+        text,
+        recipient_chat_id=message.from_user and message.from_user.id,
+        public_success="I sent the payment details in a private chat.",
+        public_failure=(
+            "I couldn't send the private payment details. "
+            "Open Derp privately and check /credits."
+        ),
+        failure_event="private_payment_delivery_failed",
+    )
+
+
+async def _deliver_refund_reply(
+    message: Message,
+    sender: MessageSender,
+    text: str,
+) -> Message:
+    return await deliver_sensitive_reply(
+        message,
+        sender,
+        text,
+        recipient_chat_id=message.from_user and message.from_user.id,
+        public_success="I sent the refund details in a private chat.",
+        public_failure=(
+            "I couldn't send the private refund details. "
+            "Open Derp privately and check /credits."
+        ),
+        failure_event="private_refund_delivery_failed",
     )
 
 

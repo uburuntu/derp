@@ -62,7 +62,7 @@ def mock_operation_ledger():
 @pytest.mark.asyncio
 async def test_show_credits_with_chat(make_message, mock_sender, mock_operation_ledger):
     """Group /credits sends sensitive wallet details only to the actor."""
-    message = make_message(text="/credits")
+    message = make_message(text="/credits", chat_type="supergroup")
     sender = mock_sender(message=message)
 
     user_model = MagicMock()
@@ -98,7 +98,7 @@ async def test_show_credits_private_chat(
     make_message, mock_sender, mock_operation_ledger
 ):
     """Test /credits in private chat shows only user credits."""
-    message = make_message(text="/credits")
+    message = make_message(text="/credits", chat_type="private", chat_id=12345)
     sender = mock_sender(message=message)
 
     user_model = MagicMock()
@@ -121,7 +121,7 @@ async def test_show_credits_private_chat(
 async def test_show_credits_keeps_purchase_controls_out_of_balance_copy(
     make_message, mock_sender, mock_operation_ledger
 ):
-    message = make_message(text="/credits")
+    message = make_message(text="/credits", chat_type="private", chat_id=12345)
     sender = mock_sender(message=message)
     user_model = MagicMock(id=UUID(int=1), telegram_id=12345)
     mock_operation_ledger.statement.return_value = _balance(

@@ -345,8 +345,12 @@ class TestPreCheckout:
         )
 
 
-def _payment_message(make_message, **overrides):
-    message = make_message(text="")
+def _payment_message(make_message, *, chat_type="private", **overrides):
+    message = make_message(
+        text="",
+        chat_type=chat_type,
+        chat_id=12345 if chat_type == "private" else -1001234567890,
+    )
     values = {
         "invoice_payload": "dpi1_opaque-token",
         "telegram_payment_charge_id": "telegram-charge-1",
@@ -368,8 +372,12 @@ def _settlement(result: FulfillmentResult | None = None) -> MagicMock:
     return service
 
 
-def _refund_message(make_message, **overrides):
-    message = make_message(text="")
+def _refund_message(make_message, *, chat_type="private", **overrides):
+    message = make_message(
+        text="",
+        chat_type=chat_type,
+        chat_id=12345 if chat_type == "private" else -1001234567890,
+    )
     values = {
         "invoice_payload": "dpi1_opaque-token",
         "telegram_payment_charge_id": "telegram-refund-1",
@@ -426,8 +434,8 @@ class TestSuccessfulPayment:
                 subscription_expiration_at=expires_at,
             )
         )
-        assert "Plan active" in sender.send.await_args.args[0]
-        assert "1000 credits" in sender.send.await_args.args[0]
+        assert "Plan active" in sender.reply.await_args.args[0]
+        assert "1000 credits" in sender.reply.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_top_up_reports_available_value_and_debt_offset(
@@ -449,10 +457,44 @@ class TestSuccessfulPayment:
 
         await handle_successful_payment(message, sender, settlement)
 
-        text = sender.send.await_args.args[0]
+        text = sender.reply.await_args.args[0]
         assert "Payment complete" in text
         assert "Purchased credits available: 135" in text
         assert "Applied to prior payment debt: 30" in text
+
+    @pytest.mark.asyncio
+    async def test_group_payment_sends_amounts_only_to_protected_private_chat(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _payment_message(make_message, chat_type="supergroup")
+        sender = mock_sender(message=message)
+        settlement = _settlement(
+            FulfillmentResult(
+                receipt_id=UUID(int=42),
+                state=FulfillmentState.FULFILLED,
+                wallet_lot_id=UUID(int=43),
+                available_credits=135,
+                debt_offset_credits=30,
+            )
+        )
+
+        with patch(
+            "derp.common.private_delivery.suppress_outbound_history"
+        ) as suppress_history:
+            await handle_successful_payment(message, sender, settlement)
+
+        private = message.bot.send_message.await_args.kwargs
+        assert private["chat_id"] == message.from_user.id
+        assert private["protect_content"] is True
+        assert "Purchased credits available: 135" in private["text"]
+        assert "Applied to prior payment debt: 30" in private["text"]
+        public = sender.reply.await_args.args[0]
+        assert public == "I sent the payment details in a private chat."
+        assert "135" not in public
+        assert "30" not in public
+        suppress_history.assert_called_once_with()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -488,7 +530,7 @@ class TestSuccessfulPayment:
 
         await handle_successful_payment(message, sender, _settlement(result))
 
-        assert expected in sender.send.await_args.args[0]
+        assert expected in sender.reply.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_fulfillment_failure_does_not_tell_user_to_buy_again(
@@ -505,7 +547,7 @@ class TestSuccessfulPayment:
             await handle_successful_payment(message, sender, settlement)
 
         report.assert_called_once()
-        text = sender.send.await_args.args[0]
+        text = sender.reply.await_args.args[0]
         assert "needs review" in text
         assert "do not need to buy again" in text
 
@@ -523,7 +565,7 @@ class TestSuccessfulPayment:
         await handle_successful_payment(message, sender, settlement)
 
         settlement.fulfill.assert_not_awaited()
-        sender.send.assert_not_awaited()
+        sender.reply.assert_not_awaited()
 
 
 class TestRefundedPayment:
@@ -556,10 +598,44 @@ class TestRefundedPayment:
                 total_amount=150,
             )
         )
-        text = sender.send.await_args.args[0]
+        text = sender.reply.await_args.args[0]
         assert "Unused credits removed: 30" in text
         assert "Credits already used or reserved: 20" in text
         assert "payment debt" in text
+
+    @pytest.mark.asyncio
+    async def test_group_refund_sends_amounts_only_to_protected_private_chat(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _refund_message(make_message, chat_type="supergroup")
+        sender = mock_sender(message=message)
+        settlement = _refund_settlement(
+            ClawbackResult(
+                receipt_id=UUID(int=64),
+                wallet_id=UUID(int=65),
+                removed_available_credits=30,
+                debt_created_credits=20,
+                idempotent=False,
+            )
+        )
+
+        with patch(
+            "derp.common.private_delivery.suppress_outbound_history"
+        ) as suppress_history:
+            await handle_refunded_payment(message, sender, settlement)
+
+        private = message.bot.send_message.await_args.kwargs
+        assert private["chat_id"] == message.from_user.id
+        assert private["protect_content"] is True
+        assert "Unused credits removed: 30" in private["text"]
+        assert "Credits already used or reserved: 20" in private["text"]
+        public = sender.reply.await_args.args[0]
+        assert public == "I sent the refund details in a private chat."
+        assert "30" not in public
+        assert "20" not in public
+        suppress_history.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_idempotent_refund_has_unambiguous_copy(
@@ -593,7 +669,7 @@ class TestRefundedPayment:
                 total_amount=150,
             )
         )
-        assert sender.send.await_args.args[0] == "This refund was already reconciled."
+        assert sender.reply.await_args.args[0] == "This refund was already reconciled."
 
     @pytest.mark.asyncio
     async def test_receipt_mismatch_reports_review_without_sensitive_log_fields(
@@ -609,8 +685,8 @@ class TestRefundedPayment:
         with patch("derp.handlers.payments.logfire.warning") as warning:
             await handle_refunded_payment(message, sender, settlement)
 
-        assert "need review" in sender.send.await_args.args[0]
-        assert "No credits were changed" in sender.send.await_args.args[0]
+        assert "need review" in sender.reply.await_args.args[0]
+        assert "No credits were changed" in sender.reply.await_args.args[0]
         attributes = warning.call_args.kwargs
         assert attributes["error_type"] == "PaymentConflictError"
         assert attributes["charge_fingerprint"] != "telegram-refund-1"
@@ -636,8 +712,8 @@ class TestRefundedPayment:
             exception=error,
             charge_fingerprint=telemetry_fingerprint("telegram-refund-1"),
         )
-        assert "needs review" in sender.send.await_args.args[0]
-        assert "No credits were changed" in sender.send.await_args.args[0]
+        assert "needs review" in sender.reply.await_args.args[0]
+        assert "No credits were changed" in sender.reply.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_missing_refund_returns_without_side_effects(
@@ -653,4 +729,4 @@ class TestRefundedPayment:
         await handle_refunded_payment(message, sender, settlement)
 
         settlement.clawback.assert_not_awaited()
-        sender.send.assert_not_awaited()
+        sender.reply.assert_not_awaited()

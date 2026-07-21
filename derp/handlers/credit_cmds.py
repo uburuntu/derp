@@ -19,13 +19,12 @@ from derp.billing.telegram import (
     PurchaseTargetCode,
     build_purchase_panel,
 )
+from derp.common.private_delivery import deliver_sensitive_reply
 from derp.common.sender import MessageSender
 from derp.credits.purchase_suspension import purchase_suspension_message
 from derp.handlers.context_settings import build_credit_panel
-from derp.history.capture import suppress_outbound_history
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
-from derp.observability import report_exception
 from derp.operations import OperationLedger, WalletOwner, WalletOwnerKind
 
 router = Router(name="credit_cmds")
@@ -71,29 +70,18 @@ async def show_credits(
         ),
         personal_fallback_enabled=consent_enabled,
     )
-    if shared is None:
-        return await sender.reply(text, reply_markup=markup)
-
-    private_sender = MessageSender(
-        bot=message.bot,
-        chat_id=user_model.telegram_id,
-        protect_content=True,
+    return await deliver_sensitive_reply(
+        message,
+        sender,
+        text,
+        recipient_chat_id=user_model.telegram_id,
+        public_success=_("I sent your balance in a private chat."),
+        public_failure=_(
+            "I couldn't send your private balance. Open Derp privately and retry."
+        ),
+        failure_event="private_credit_delivery_failed",
+        reply_markup=markup,
     )
-    try:
-        with suppress_outbound_history():
-            await private_sender.send(text)
-    except Exception as exc:
-        report_exception(
-            "private_credit_delivery_failed",
-            exception=exc,
-            level="warning",
-            telegram_user_id=user_model.telegram_id,
-            telegram_chat_id=chat_model.telegram_id if chat_model else None,
-        )
-        return await sender.reply(
-            _("I couldn't send your private balance. Open Derp privately and retry.")
-        )
-    return await sender.reply(_("I sent your balance in a private chat."))
 
 
 @router.message(Command("buy", "purchase", "shop"))

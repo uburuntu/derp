@@ -1,7 +1,7 @@
 """Tests for personal-plan Telegram controls."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
@@ -101,7 +101,7 @@ async def test_show_subscription_renders_current_state(
     mock_sender,
     mock_user_model,
 ) -> None:
-    message = make_message(text="/plan")
+    message = make_message(text="/plan", chat_type="private", chat_id=12345)
     sender = mock_sender(message=message)
     user = mock_user_model(user_id=UUID(int=2))
     service = _management(_snapshot())
@@ -114,12 +114,60 @@ async def test_show_subscription_renders_current_state(
 
 
 @pytest.mark.asyncio
+async def test_group_plan_sends_sensitive_state_only_to_protected_private_chat(
+    make_message,
+    mock_sender,
+    mock_user_model,
+) -> None:
+    message = make_message(text="/plan", chat_type="supergroup")
+    sender = mock_sender(message=message)
+    user = mock_user_model(user_id=UUID(int=2), telegram_id=12345)
+
+    with patch(
+        "derp.common.private_delivery.suppress_outbound_history"
+    ) as suppress_history:
+        await show_subscription(message, sender, _management(_snapshot()), user)
+
+    private = message.bot.send_message.await_args.kwargs
+    assert private["chat_id"] == user.telegram_id
+    assert private["protect_content"] is True
+    assert "Derp Personal" in private["text"]
+    assert private["reply_markup"] is not None
+    public = sender.reply.await_args.args[0]
+    assert public == "I sent your plan details in a private chat."
+    assert "renews" not in public
+    assert "2026" not in public
+    suppress_history.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_group_plan_dm_failure_remains_content_free(
+    make_message,
+    mock_sender,
+    mock_user_model,
+) -> None:
+    message = make_message(text="/plan", chat_type="supergroup")
+    message.bot.send_message.side_effect = RuntimeError("blocked private chat")
+    sender = mock_sender(message=message)
+    user = mock_user_model(user_id=UUID(int=2), telegram_id=12345)
+
+    with patch("derp.common.private_delivery.report_exception") as report:
+        await show_subscription(message, sender, _management(_snapshot()), user)
+
+    public = sender.reply.await_args.args[0]
+    assert "couldn't send" in public
+    assert "renews" not in public
+    assert "2026" not in public
+    report.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_show_subscription_handles_missing_plan(
     make_message,
     mock_sender,
     mock_user_model,
 ) -> None:
-    message = make_message(text="/plan")
+    message = make_message(text="/plan", chat_type="private", chat_id=12345)
     sender = mock_sender(message=message)
     service = _management(_snapshot())
     service.get_snapshot.side_effect = SubscriptionStateError("missing")
@@ -136,7 +184,7 @@ async def test_cancel_callback_uses_context_actor_and_refreshes_panel(
     mock_user_model,
 ) -> None:
     callback = MagicMock(spec=CallbackQuery)
-    callback.message = make_message(text="plan")
+    callback.message = make_message(text="plan", chat_type="private", chat_id=12345)
     callback.message.edit_text = AsyncMock()
     callback.from_user = make_user(id=12345)
     callback.bot = MagicMock()
@@ -162,6 +210,34 @@ async def test_cancel_callback_uses_context_actor_and_refreshes_panel(
     callback.message.edit_text.assert_awaited_once()
     callback.answer.assert_awaited_once_with(
         "Renewal canceled; your paid period remains active"
+    )
+
+
+@pytest.mark.asyncio
+async def test_group_plan_control_fails_closed_before_provider_io(
+    make_message,
+    make_user,
+    mock_user_model,
+) -> None:
+    callback = MagicMock(spec=CallbackQuery)
+    callback.message = make_message(text="plan", chat_type="supergroup")
+    callback.from_user = make_user(id=12345)
+    callback.answer = AsyncMock()
+    service = _management(_snapshot())
+
+    await set_subscription_renewal(
+        callback,
+        SubscriptionCallback(action=SubscriptionAction.CANCEL),
+        service,
+        mock_user_model(user_id=UUID(int=2), telegram_id=12345),
+    )
+
+    service.set_renewal.assert_not_awaited()
+    service.get_snapshot.assert_not_awaited()
+    callback.message.edit_text.assert_not_awaited()
+    callback.answer.assert_awaited_once_with(
+        "Open Derp privately to manage your plan.",
+        show_alert=True,
     )
 
 
