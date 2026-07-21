@@ -481,9 +481,17 @@ async def show_context(message: Message, chat_model: ChatModel | None) -> None:
     """Admin command to show the context that would be sent to the agent."""
     db = get_db_manager()
     ctx = await build_context_prompt(message, db)
-    stats = _("Context: {chars} chars, {msgs} messages").format(
-        chars=len(ctx),
-        msgs=ctx.count('"message_id"'),
+    char_count = len(ctx)
+    message_count = ctx.count('"message_id"')
+    chars = _("{count} character", "{count} characters", char_count).format(
+        count=char_count
+    )
+    messages = _("{count} message", "{count} messages", message_count).format(
+        count=message_count
+    )
+    stats = _("Context: {chars}, {messages}").format(
+        chars=chars,
+        messages=messages,
     )
     await message.reply(stats)
 

@@ -53,7 +53,17 @@ async def test_proposal_is_scoped_and_control_message_is_not_history() -> None:
         proposer_user_id=UUID(int=2),
         fact_text="The release is Friday.",
     )
+    text = message.reply.await_args.args[0]
     markup = message.reply.await_args.kwargs["reply_markup"]
+    assert text == (
+        "<b>Save this fact?</b>\n"
+        "<blockquote>The release is Friday.</blockquote>\n"
+        "An admin must approve it before Derp can use it."
+    )
+    assert [button.text for button in markup.inline_keyboard[0]] == [
+        "Approve",
+        "Reject",
+    ]
     callback = SharedFactCallback.unpack(markup.inline_keyboard[0][0].callback_data)
     assert callback.fact_id == str(UUID(int=3))
     assert "Do not repeat" in result

@@ -7,6 +7,7 @@ from enum import StrEnum
 from aiogram import Bot
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from aiogram.utils.i18n import gettext as _
 
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
 from derp.billing.types import (
@@ -46,6 +47,18 @@ class TelegramSubscriptionRenewalProvider:
         )
 
 
+def _credit_count(count: int) -> str:
+    return _("{count} credit", "{count} credits", count).format(count=count)
+
+
+def _star_count(count: int) -> str:
+    return _("{count} Star", "{count} Stars", count).format(count=count)
+
+
+def _day_count(count: int) -> str:
+    return _("{count} day", "{count} days", count).format(count=count)
+
+
 def build_purchase_panel(
     *,
     target: PurchaseTargetCode,
@@ -57,7 +70,10 @@ def build_purchase_panel(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{product.credits} credits · {product.stars} Stars",
+                    text=_("{credits} · {stars}").format(
+                        credits=_credit_count(product.credits),
+                        stars=_star_count(product.stars),
+                    ),
                     callback_data=PurchaseCallback(
                         kind=ProductKind.TOP_UP,
                         product_id=product.id,
@@ -69,10 +85,15 @@ def build_purchase_panel(
         )
     if target is PurchaseTargetCode.USER:
         plan = DEFAULT_PRODUCT_CATALOG.subscription_plan
+        period_days = plan.period_seconds // (24 * 60 * 60)
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{plan.name} · {plan.stars} Stars / 30 days",
+                    text=_("{plan} · {stars} / {days}").format(
+                        plan=_("Derp Personal"),
+                        stars=_star_count(plan.stars),
+                        days=_day_count(period_days),
+                    ),
                     callback_data=PurchaseCallback(
                         kind=ProductKind.SUBSCRIPTION,
                         product_id=plan.id,
@@ -81,11 +102,13 @@ def build_purchase_panel(
                 )
             ]
         )
-    owner = "this chat" if target is PurchaseTargetCode.CHAT else "your wallet"
-    text = (
-        f"<b>Add credits to {owner}</b>\n"
-        "Choose an exact Stars price. Telegram confirms the purchase before "
-        "anything is added."
+    heading = (
+        _("Buy chat credits")
+        if target is PurchaseTargetCode.CHAT
+        else _("Buy personal credits")
+    )
+    text = f"<b>{heading}</b>\n" + _(
+        "Choose an option. Telegram asks you to confirm before charging."
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -98,15 +121,34 @@ async def create_stars_invoice_link(
 ) -> str:
     """Create one Telegram Stars invoice from immutable intent terms."""
     title = (
-        "Derp Personal"
+        _("Derp Personal")
         if handle.product_kind is ProductKind.SUBSCRIPTION
-        else "Derp credits"
+        else _("Derp credits")
     )
-    target = "shared chat" if handle.target.kind.value == "chat" else "personal"
-    description = (
-        f"{handle.credits} credits for the {target} wallet. "
-        "Charges apply only after Telegram confirmation."
-    )
+    credit_text = _credit_count(handle.credits)
+    star_text = _star_count(handle.stars)
+    if handle.product_kind is ProductKind.SUBSCRIPTION:
+        if handle.subscription_period_seconds is None:
+            raise ValueError("subscription invoice requires a billing period")
+        period_days = handle.subscription_period_seconds // (24 * 60 * 60)
+        description = _(
+            "{credits} every {days} for {stars}. Renews automatically until canceled. "
+            "Telegram asks you to confirm the first charge."
+        ).format(
+            credits=credit_text,
+            days=_day_count(period_days),
+            stars=star_text,
+        )
+    elif handle.target.kind.value == "chat":
+        description = _(
+            "{credits} for this chat. One-time price: {stars}. "
+            "Telegram charges you only after you confirm."
+        ).format(credits=credit_text, stars=star_text)
+    else:
+        description = _(
+            "{credits} for your account. One-time price: {stars}. "
+            "Telegram charges you only after you confirm."
+        ).format(credits=credit_text, stars=star_text)
     return await bot.create_invoice_link(
         title=title,
         description=description,

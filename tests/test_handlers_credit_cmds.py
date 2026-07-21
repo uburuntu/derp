@@ -184,7 +184,7 @@ async def test_show_buy_options_presents_top_ups_and_personal_plan(
         for button in row
     ]
 
-    assert "your wallet" in response
+    assert "Buy personal credits" in response
     assert {callback.product_id for callback in callbacks} == {
         *DEFAULT_PRODUCT_CATALOG.current_top_ups,
         DEFAULT_PRODUCT_CATALOG.subscription_plan.id,
@@ -249,7 +249,7 @@ async def test_show_buy_chat_options_in_group_has_shared_top_ups_only(
         for button in row
     ]
 
-    assert "this chat" in response
+    assert "Buy chat credits" in response
     assert {callback.product_id for callback in callbacks} == set(
         DEFAULT_PRODUCT_CATALOG.current_top_ups
     )
@@ -278,7 +278,7 @@ async def test_show_buy_chat_options_private_falls_back_to_personal_panel(
         for row in call_args.kwargs["reply_markup"].inline_keyboard
         for button in row
     ]
-    assert "your wallet" in _get_text_from_call_args(call_args)
+    assert "Buy personal credits" in _get_text_from_call_args(call_args)
     assert any(callback.kind is ProductKind.SUBSCRIPTION for callback in callbacks)
     assert all(callback.target is PurchaseTargetCode.USER for callback in callbacks)
 

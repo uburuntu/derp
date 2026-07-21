@@ -7,6 +7,7 @@ from enum import StrEnum
 from aiogram import html
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.utils.i18n import gettext as _
 from pydantic_ai import RunContext, Tool
 
 from derp.db import propose_shared_fact as db_propose_shared_fact
@@ -54,14 +55,14 @@ async def propose_shared_fact(ctx: RunContext[AgentDeps], fact_text: str) -> str
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Approve",
+                    text=_("Approve"),
                     callback_data=SharedFactCallback(
                         action=SharedFactAction.APPROVE,
                         fact_id=str(proposal.id),
                     ).pack(),
                 ),
                 InlineKeyboardButton(
-                    text="Reject",
+                    text=_("Reject"),
                     callback_data=SharedFactCallback(
                         action=SharedFactAction.REJECT,
                         fact_id=str(proposal.id),
@@ -71,10 +72,12 @@ async def propose_shared_fact(ctx: RunContext[AgentDeps], fact_text: str) -> str
         ]
     )
     with suppress_outbound_history():
+        title = html.quote(_("Save this fact?"))
+        review_note = html.quote(_("An admin must approve it before Derp can use it."))
         await deps.message.reply(
-            "<b>Shared fact proposal</b>\n"
+            f"<b>{title}</b>\n"
             f"<blockquote>{html.quote(proposal.fact_text)}</blockquote>\n"
-            "An admin must approve this before Derp can use it.",
+            f"{review_note}",
             reply_markup=markup,
         )
     return _SENT_DIRECTLY
