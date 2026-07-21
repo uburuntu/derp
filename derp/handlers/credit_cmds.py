@@ -40,7 +40,7 @@ async def show_credits(
 ) -> Message:
     """Show the user's credit balance."""
     if not user_model:
-        return await message.reply(_("😅 Could not find your user info."))
+        return await message.reply(_("I couldn't find your account. Try again."))
 
     personal = await operation_ledger.statement(
         WalletOwner(WalletOwnerKind.USER, user_model.id)
@@ -75,9 +75,9 @@ async def show_credits(
         sender,
         text,
         recipient_chat_id=user_model.telegram_id,
-        public_success=_("I sent your balance in a private chat."),
+        public_success=_("I sent your credit details in a private chat."),
         public_failure=_(
-            "I couldn't send your private balance. Open Derp privately and retry."
+            "I couldn't send your credit details. Open Derp privately and use /credits."
         ),
         failure_event="private_credit_delivery_failed",
         reply_markup=markup,
@@ -95,7 +95,7 @@ async def show_buy_options(
     if not commerce_policy.public_intake_enabled:
         return await sender.reply(purchase_suspension_message())
     if not user_model:
-        return await message.reply(_("Could not find your user info."))
+        return await message.reply(_("I couldn't find your account. Try again."))
     text, markup = build_purchase_panel(target=PurchaseTargetCode.USER)
     return await sender.reply(text, reply_markup=markup)
 
@@ -112,7 +112,7 @@ async def show_buy_chat_options(
     if not commerce_policy.public_intake_enabled:
         return await sender.reply(purchase_suspension_message())
     if not user_model or not chat_model:
-        return await message.reply(_("Could not find this chat."))
+        return await message.reply(_("I couldn't find this chat. Try again."))
     if chat_model.type == "private":
         text, markup = build_purchase_panel(target=PurchaseTargetCode.USER)
         return await sender.reply(text, reply_markup=markup)

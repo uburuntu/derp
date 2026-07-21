@@ -88,7 +88,7 @@ async def test_show_credits_with_chat(make_message, mock_sender, mock_operation_
     assert "25" in private["text"]
     assert "This chat" in private["text"]
     public = _get_text_from_call_args(sender.reply.await_args)
-    assert public == "I sent your balance in a private chat."
+    assert public == "I sent your credit details in a private chat."
     assert "50" not in public
     assert "25" not in public
 
@@ -113,8 +113,8 @@ async def test_show_credits_private_chat(
     await show_credits(message, sender, mock_operation_ledger, user_model, chat_model)
 
     response = _get_text_from_call_args(sender.reply.call_args)
-    assert "Monthly allowance: 40" in response
-    assert "Purchased: 60" in response
+    assert "Monthly plan: 40 credits" in response
+    assert "Purchased: 60 credits" in response
 
 
 @pytest.mark.asyncio
@@ -144,7 +144,7 @@ async def test_show_credits_no_user(make_message, mock_sender, mock_operation_le
 
     message.reply.assert_awaited_once()
     text = _get_text_from_call_args(message.reply.call_args)
-    assert "Could not find" in text
+    assert "couldn't find your account" in text
 
 
 @pytest.mark.asyncio
@@ -202,7 +202,7 @@ async def test_show_buy_options_no_user(make_message, mock_sender):
 
     message.reply.assert_awaited_once()
     sender.reply.assert_not_awaited()
-    assert "Could not find" in message.reply.await_args.args[0]
+    assert "couldn't find your account" in message.reply.await_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -296,4 +296,4 @@ async def test_show_buy_chat_options_no_user(make_message, mock_sender):
 
     message.reply.assert_awaited_once()
     sender.reply.assert_not_awaited()
-    assert "Could not find this chat" in message.reply.await_args.args[0]
+    assert "couldn't find this chat" in message.reply.await_args.args[0]

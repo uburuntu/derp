@@ -45,6 +45,7 @@ def _intent(
     kind: ProductKind = ProductKind.TOP_UP,
     target: PurchaseTarget | None = None,
     product_id: str = "starter",
+    stars: int | None = None,
 ) -> PurchaseIntentHandle:
     product = (
         DEFAULT_PRODUCT_CATALOG.subscription_plan
@@ -59,7 +60,7 @@ def _intent(
         product_version=product.version,
         target=target or PurchaseTarget.user(UUID(int=1)),
         credits=product.credits,
-        stars=product.stars,
+        stars=product.stars if stars is None else stars,
         currency=product.currency,
         expires_at=NOW,
         subscription_period_seconds=getattr(product, "period_seconds", None),
@@ -112,7 +113,7 @@ class TestBuyCallback:
         service.create_top_up_intent.assert_not_awaited()
         callback.bot.create_invoice_link.assert_not_awaited()
         callback.answer.assert_awaited_once_with(
-            "Purchases are not enabled yet",
+            "Credit purchases aren't available yet. You won't be charged.",
             show_alert=True,
         )
 
@@ -190,6 +191,41 @@ class TestBuyCallback:
         )
         assert "this chat" in callback.message.answer.await_args.args[0]
 
+    @pytest.mark.parametrize(
+        ("stars", "expected"),
+        [(1, "1 Star"), (2, "2 Stars")],
+    )
+    @pytest.mark.asyncio
+    async def test_invoice_pluralizes_stars(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+        stars: int,
+        expected: str,
+    ) -> None:
+        user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+        service = _purchase_intents(
+            handle=_intent(target=PurchaseTarget.user(user.id), stars=stars)
+        )
+        callback = _callback(make_message, make_user)
+
+        await handle_buy_callback(
+            callback,
+            PurchaseCallback(
+                kind=ProductKind.TOP_UP,
+                product_id="starter",
+                target=PurchaseTargetCode.USER,
+            ),
+            service,
+            user,
+            commerce_policy=OPEN_COMMERCE,
+        )
+
+        markup = callback.message.answer.await_args.kwargs["reply_markup"]
+        assert markup.inline_keyboard[0][0].text == f"Pay {expected}"
+        assert expected in callback.message.answer.await_args.args[0]
+
     @pytest.mark.asyncio
     async def test_subscription_uses_personal_plan_intent(
         self,
@@ -250,7 +286,7 @@ class TestBuyCallback:
 
         service.create_top_up_intent.assert_not_awaited()
         callback.answer.assert_awaited_once_with(
-            "Purchase identity changed", show_alert=True
+            "This purchase is no longer valid. Open /buy again.", show_alert=True
         )
 
     @pytest.mark.asyncio
@@ -278,7 +314,7 @@ class TestBuyCallback:
         )
 
         callback.answer.assert_awaited_once_with(
-            "Your current plan is already active", show_alert=True
+            "Your monthly plan is already active", show_alert=True
         )
         callback.message.answer.assert_not_awaited()
 
@@ -290,7 +326,7 @@ class TestBuyCallback:
         await reject_malformed_buy_callback(callback)
 
         callback.answer.assert_awaited_once_with(
-            "This purchase option expired. Open /buy again.",
+            "This purchase option expired. Open /buy again. You haven't been charged.",
             show_alert=True,
         )
 
@@ -341,7 +377,10 @@ class TestPreCheckout:
 
         pre_checkout.answer.assert_awaited_once_with(
             ok=False,
-            error_message=("This invoice expired or changed. Open /buy and try again."),
+            error_message=(
+                "This invoice expired or changed. Open /buy and try again. You won't "
+                "be charged."
+            ),
         )
 
 
@@ -435,7 +474,7 @@ class TestSuccessfulPayment:
             )
         )
         assert "Plan active" in sender.reply.await_args.args[0]
-        assert "1000 credits" in sender.reply.await_args.args[0]
+        assert "1000 monthly credits" in sender.reply.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_top_up_reports_available_value_and_debt_offset(
@@ -460,7 +499,34 @@ class TestSuccessfulPayment:
         text = sender.reply.await_args.args[0]
         assert "Payment complete" in text
         assert "Purchased credits available: 135" in text
-        assert "Applied to prior payment debt: 30" in text
+        assert "Used to repay payment debt: 30 credits" in text
+
+    @pytest.mark.parametrize(
+        ("credits", "expected"),
+        [(1, "Purchased credit available: 1"), (2, "Purchased credits available: 2")],
+    )
+    @pytest.mark.asyncio
+    async def test_top_up_pluralizes_available_credits(
+        self,
+        make_message,
+        mock_sender,
+        credits: int,
+        expected: str,
+    ) -> None:
+        message = _payment_message(make_message)
+        sender = mock_sender(message=message)
+        settlement = _settlement(
+            FulfillmentResult(
+                receipt_id=UUID(int=44),
+                state=FulfillmentState.FULFILLED,
+                wallet_lot_id=UUID(int=45),
+                available_credits=credits,
+            )
+        )
+
+        await handle_successful_payment(message, sender, settlement)
+
+        assert expected in sender.reply.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_group_payment_sends_amounts_only_to_protected_private_chat(
@@ -489,7 +555,7 @@ class TestSuccessfulPayment:
         assert private["chat_id"] == message.from_user.id
         assert private["protect_content"] is True
         assert "Purchased credits available: 135" in private["text"]
-        assert "Applied to prior payment debt: 30" in private["text"]
+        assert "Used to repay payment debt: 30 credits" in private["text"]
         public = sender.reply.await_args.args[0]
         assert public == "I sent the payment details in a private chat."
         assert "135" not in public
@@ -549,7 +615,7 @@ class TestSuccessfulPayment:
         report.assert_called_once()
         text = sender.reply.await_args.args[0]
         assert "needs review" in text
-        assert "do not need to buy again" in text
+        assert "Don't buy again" in text
 
     @pytest.mark.asyncio
     async def test_missing_payment_returns_without_side_effects(
@@ -600,8 +666,8 @@ class TestRefundedPayment:
         )
         text = sender.reply.await_args.args[0]
         assert "Unused credits removed: 30" in text
-        assert "Credits already used or reserved: 20" in text
-        assert "payment debt" in text
+        assert "Payment debt added: 20 credits" in text
+        assert "Paid features are paused" in text
 
     @pytest.mark.asyncio
     async def test_group_refund_sends_amounts_only_to_protected_private_chat(
@@ -630,7 +696,7 @@ class TestRefundedPayment:
         assert private["chat_id"] == message.from_user.id
         assert private["protect_content"] is True
         assert "Unused credits removed: 30" in private["text"]
-        assert "Credits already used or reserved: 20" in private["text"]
+        assert "Payment debt added: 20 credits" in private["text"]
         public = sender.reply.await_args.args[0]
         assert public == "I sent the refund details in a private chat."
         assert "30" not in public
@@ -669,7 +735,10 @@ class TestRefundedPayment:
                 total_amount=150,
             )
         )
-        assert sender.reply.await_args.args[0] == "This refund was already reconciled."
+        assert (
+            sender.reply.await_args.args[0]
+            == "This refund was already applied. No credits changed this time."
+        )
 
     @pytest.mark.asyncio
     async def test_receipt_mismatch_reports_review_without_sensitive_log_fields(
@@ -685,8 +754,8 @@ class TestRefundedPayment:
         with patch("derp.handlers.payments.logfire.warning") as warning:
             await handle_refunded_payment(message, sender, settlement)
 
-        assert "need review" in sender.reply.await_args.args[0]
-        assert "No credits were changed" in sender.reply.await_args.args[0]
+        assert "needs review" in sender.reply.await_args.args[0]
+        assert "No credits changed" in sender.reply.await_args.args[0]
         attributes = warning.call_args.kwargs
         assert attributes["error_type"] == "PaymentConflictError"
         assert attributes["charge_fingerprint"] != "telegram-refund-1"
@@ -713,7 +782,7 @@ class TestRefundedPayment:
             charge_fingerprint=telemetry_fingerprint("telegram-refund-1"),
         )
         assert "needs review" in sender.reply.await_args.args[0]
-        assert "No credits were changed" in sender.reply.await_args.args[0]
+        assert "No credits changed" in sender.reply.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_missing_refund_returns_without_side_effects(

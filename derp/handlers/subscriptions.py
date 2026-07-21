@@ -15,6 +15,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+from aiogram.utils.i18n import gettext as _
 
 from derp.billing import (
     SubscriptionManagementService,
@@ -59,17 +60,19 @@ def build_subscription_panel(
         or snapshot.current_period_end <= observed_at
     )
     if expired:
-        state = "Expired"
-        timing = f"Last paid period ended {period_end}."
+        state = _("Expired")
+        timing = _("Your last paid period ended {date}.").format(date=period_end)
         markup = None
     elif snapshot.renewal_enabled:
-        state = "Active · renews automatically"
-        timing = f"Current allowance period ends {period_end}."
+        state = _("Active · renews automatically")
+        timing = _("Your current credits are available until {date}.").format(
+            date=period_end
+        )
         markup = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="Cancel renewal",
+                        text=_("Cancel automatic renewal"),
                         callback_data=SubscriptionCallback(
                             action=SubscriptionAction.CANCEL
                         ).pack(),
@@ -78,13 +81,15 @@ def build_subscription_panel(
             ]
         )
     else:
-        state = "Active · renewal off"
-        timing = f"Allowance remains available until {period_end}."
+        state = _("Active · renewal off")
+        timing = _("Your credits remain available until {date}.").format(
+            date=period_end
+        )
         markup = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="Re-enable renewal",
+                        text=_("Turn renewal back on"),
                         callback_data=SubscriptionCallback(
                             action=SubscriptionAction.RESUME
                         ).pack(),
@@ -92,7 +97,10 @@ def build_subscription_panel(
                 ]
             ]
         )
-    text = f"<b>Derp Personal</b>\n{state}\n\n{timing}"
+    text = _("<b>Derp Personal</b>\n{state}\n\n{timing}").format(
+        state=state,
+        timing=timing,
+    )
     return text, markup
 
 
@@ -105,11 +113,11 @@ async def show_subscription(
 ) -> Message:
     """Show the caller's current personal-plan renewal state."""
     if not user_model:
-        return await message.reply("Could not find your account.")
+        return await message.reply(_("I couldn't find your account. Try again."))
     try:
         snapshot = await subscription_management.get_snapshot(user_model.id)
     except SubscriptionStateError:
-        text = "<b>Derp Personal</b>\nYou do not have a personal plan."
+        text = _("<b>Derp Personal</b>\nYou don't have a monthly plan.")
         markup = None
     else:
         text, markup = build_subscription_panel(snapshot)
@@ -118,9 +126,9 @@ async def show_subscription(
         sender,
         text,
         recipient_chat_id=user_model.telegram_id,
-        public_success="I sent your plan details in a private chat.",
-        public_failure=(
-            "I couldn't send your private plan details. Open Derp privately and retry."
+        public_success=_("I sent your plan details in a private chat."),
+        public_failure=_(
+            "I couldn't send your plan details. Open Derp privately and use /plan."
         ),
         failure_event="private_plan_delivery_failed",
         reply_markup=markup,
@@ -136,12 +144,17 @@ async def set_subscription_renewal(
 ) -> None:
     """Apply Telegram renewal state first, then render confirmed local state."""
     if not isinstance(callback.message, Message) or not user_model:
-        return await callback.answer("Plan controls are unavailable", show_alert=True)
+        return await callback.answer(
+            _("Plan controls are unavailable"), show_alert=True
+        )
     if user_model.telegram_id != callback.from_user.id:
-        return await callback.answer("Plan identity changed", show_alert=True)
+        return await callback.answer(
+            _("These plan controls are no longer valid. Open /plan again."),
+            show_alert=True,
+        )
     if callback.message.chat.type != "private":
         return await callback.answer(
-            "Open Derp privately to manage your plan.",
+            _("Open Derp privately to manage your plan."),
             show_alert=True,
         )
 
@@ -155,7 +168,7 @@ async def set_subscription_renewal(
         snapshot = await subscription_management.get_snapshot(user_model.id)
     except SubscriptionStateError:
         return await callback.answer(
-            "This plan changed or expired. Open /plan again.",
+            _("This plan changed or expired. Open /plan again."),
             show_alert=True,
         )
     except TelegramAPIError:
@@ -165,7 +178,7 @@ async def set_subscription_renewal(
             user_id=user_model.telegram_id,
         )
         return await callback.answer(
-            "Telegram could not update renewal. Try again.",
+            _("Telegram couldn't update renewal. Try again."),
             show_alert=True,
         )
     except Exception:
@@ -174,7 +187,7 @@ async def set_subscription_renewal(
             user_id=user_model.telegram_id,
         )
         return await callback.answer(
-            "Renewal may have changed, but status needs reconciliation. Open /plan.",
+            _("Renewal may have changed. Open /plan to check its current status."),
             show_alert=True,
         )
 
@@ -188,9 +201,9 @@ async def set_subscription_renewal(
             user_id=user_model.telegram_id,
         )
     notice = (
-        "Renewal enabled"
+        _("Automatic renewal is on")
         if result.renewal_enabled
-        else "Renewal canceled; your paid period remains active"
+        else _("Automatic renewal is off. Your paid period stays active.")
     )
     await callback.answer(notice)
 
@@ -199,7 +212,7 @@ async def set_subscription_renewal(
 async def reject_stale_subscription_callback(callback: CallbackQuery) -> None:
     """Fail closed when an old plan button cannot be parsed."""
     await callback.answer(
-        "This plan control expired. Open /plan again.", show_alert=True
+        _("This plan control expired. Open /plan again."), show_alert=True
     )
 
 

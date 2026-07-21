@@ -58,8 +58,8 @@ def creation_command_specs() -> tuple[CommandSpec, ...]:
     """Return only creation commands backed by durable paid operations."""
     return (
         CommandSpec("imagine", _("Create an image")),
-        CommandSpec("edit", _("Reply to an image and describe changes")),
-        CommandSpec("tts", _("Turn text into a voice message")),
+        CommandSpec("edit", _("Edit an image you reply to")),
+        CommandSpec("tts", _("Turn text into speech")),
     )
 
 
@@ -77,17 +77,17 @@ def command_specs_for(
     creation = creation_command_specs()
     if audience is CommandAudience.PRIVATE:
         commands = [
-            CommandSpec("help", _("Open help and available actions")),
-            CommandSpec("settings", _("Privacy and personal settings")),
+            CommandSpec("help", _("See what Derp can do")),
+            CommandSpec("settings", _("Manage privacy and history")),
             *creation,
-            CommandSpec("credits", _("View your credits and activity")),
+            CommandSpec("credits", _("See credits and recent charges")),
         ]
         if public_purchases_enabled:
-            commands.append(CommandSpec("buy", _("Buy personal credits")))
+            commands.append(CommandSpec("buy", _("Buy credits for yourself")))
         commands.extend(
             (
-                CommandSpec("plan", _("Manage your personal plan")),
-                CommandSpec("forget", _("Delete a replied message from history")),
+                CommandSpec("plan", _("Manage your monthly plan")),
+                CommandSpec("forget", _("Forget a message you reply to")),
                 CommandSpec("donate", _("Support Derp with Stars")),
             )
         )
@@ -99,17 +99,17 @@ def command_specs_for(
         else _("View chat settings")
     )
     commands = [
-        CommandSpec("derp", _("Ask Derp in this chat")),
-        CommandSpec("help", _("Open help and available actions")),
+        CommandSpec("derp", _("Ask Derp")),
+        CommandSpec("help", _("See what Derp can do")),
         CommandSpec("settings", settings_description),
         *creation,
-        CommandSpec("credits", _("View personal and shared credits")),
+        CommandSpec("credits", _("See personal and chat credits")),
     ]
     if public_purchases_enabled:
         commands.append(CommandSpec("buy_chat", _("Buy credits for this chat")))
     commands.extend(
         (
-            CommandSpec("forget", _("Delete a replied message from history")),
+            CommandSpec("forget", _("Forget a message you reply to")),
             CommandSpec("donate", _("Support Derp with Stars")),
         )
     )

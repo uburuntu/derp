@@ -10,8 +10,10 @@ from aiogram.types import CallbackQuery, ChatMemberAdministrator, User
 
 from derp.execution import Feature
 from derp.handlers.context_settings import (
+    AdminPolicyReplyFilter,
     ContextAction,
     ContextCallback,
+    admin_policy_prompt,
     ambient_delivery_available,
     build_context_panel,
     build_creation_panel,
@@ -79,12 +81,12 @@ def test_context_panel_has_a_first_class_creation_entry(mock_chat_model) -> None
     )
 
     buttons = [button for row in markup.inline_keyboard for button in row]
-    creation = next(button for button in buttons if button.text == "Creation")
+    creation = next(button for button in buttons if button.text == "Create")
     assert creation.callback_data is not None
     callback = ContextCallback.unpack(creation.callback_data)
     assert callback.action is ContextAction.CREATION
     personal_spending = next(
-        button for button in buttons if button.text == "Personal spending"
+        button for button in buttons if button.text == "Use my credits here"
     )
     assert personal_spending.callback_data is not None
     spending_callback = ContextCallback.unpack(personal_spending.callback_data)
@@ -126,7 +128,7 @@ def test_privacy_panel_exposes_personal_deletion_to_non_admin(
 ) -> None:
     text, markup = build_privacy_panel(mock_chat_model(), can_manage=False)
 
-    assert "remove your own stored messages" in text
+    assert "delete your own saved messages" in text
     labels = [button.text for row in markup.inline_keyboard for button in row]
     assert "Delete my messages" in labels
     assert "Clear this chat" not in labels
@@ -171,13 +173,56 @@ def test_credit_panel_shows_inventories_debt_and_personal_preference() -> None:
         personal_fallback_enabled=True,
     )
 
-    assert "Monthly allowance: 12" in text
+    assert "Monthly plan: 12 credits" in text
     assert "renews 19 Aug 2026" in text
-    assert "Purchased: 34" in text
-    assert "Payment debt: 7" in text
-    assert "Image generation refund: +5" in text
-    assert "Shared purchased: 56 · paused by admins" in text
-    assert markup.inline_keyboard[0][0].text == "Personal fallback: Always"
+    assert "Purchased: 34 credits" in text
+    assert "Payment debt: 7 credits" in text
+    assert "Image generation refund: +5 credits" in text
+    assert "Purchased: 56 credits · paused by admins" in text
+    assert markup.inline_keyboard[0][0].text == "Use my credits here: Always"
+
+
+@pytest.mark.parametrize(
+    ("credits", "expected"),
+    [(1, "Purchased: 1 credit"), (2, "Purchased: 2 credits")],
+)
+def test_credit_panel_pluralizes_credit_counts(credits: int, expected: str) -> None:
+    personal = WalletStatement(
+        WalletBalance(
+            WalletOwner(WalletOwnerKind.USER, UUID(int=1)),
+            allowance_available=credits,
+            purchased_available=credits,
+            reserved=0,
+            consumed=0,
+            debt=0,
+        )
+    )
+
+    text, _ = build_credit_panel(
+        personal,
+        shared=None,
+        shared_spending_enabled=False,
+        personal_fallback_enabled=False,
+    )
+
+    assert expected in text
+
+
+@pytest.mark.parametrize(
+    ("days", "expected"),
+    [(1, "after 1 day"), (2, "after 2 days")],
+)
+def test_privacy_panel_pluralizes_retention_days(
+    mock_chat_model,
+    days: int,
+    expected: str,
+) -> None:
+    text, _ = build_privacy_panel(
+        mock_chat_model(retention_days=days),
+        can_manage=False,
+    )
+
+    assert expected in text
 
 
 @pytest.mark.asyncio
@@ -226,7 +271,7 @@ async def test_personal_fallback_toggle_is_scoped_to_callback_actor(
     ledger.revoke_personal_consent.assert_not_awaited()
     ledger.personal_consent_enabled.assert_awaited_once_with(user.id, chat.id)
     query.answer.assert_awaited_once_with(
-        "Personal fallback: Always here",
+        "Use my credits here: Always",
         show_alert=True,
     )
     message.edit_text.assert_not_awaited()
@@ -269,9 +314,9 @@ async def test_group_credit_callback_keeps_personal_balances_actor_only(
 
     message.edit_text.assert_not_awaited()
     alert = query.answer.await_args.args[0]
-    assert "Monthly: 12" in alert
-    assert "Purchased: 34" in alert
-    assert "This chat: 56" in alert
+    assert "Monthly plan: 12 credits" in alert
+    assert "Purchased: 34 credits" in alert
+    assert "This chat: 56 purchased credits" in alert
     assert len(alert) <= 200
     assert query.answer.await_args.kwargs == {"show_alert": True}
 
@@ -391,7 +436,7 @@ async def test_toggle_requires_live_admin_and_purges_when_disabled(
         enabled=False,
     )
     assert chat.ambient_history_enabled is False
-    assert "removed 4 messages" in query.answer.await_args.args[0]
+    assert "4 saved messages deleted" in query.answer.await_args.args[0]
     message.edit_text.assert_awaited_once()
 
 
@@ -423,11 +468,17 @@ async def test_non_admin_toggle_fails_before_database_access(
     assert query.answer.await_args.kwargs["show_alert"] is True
 
 
+@pytest.mark.parametrize(
+    ("removed", "expected"),
+    [(1, "Deleted 1 saved message"), (2, "Deleted 2 saved messages")],
+)
 @pytest.mark.asyncio
 async def test_personal_deletion_uses_callback_actor_identity(
     make_message,
     make_user,
     mock_chat_model,
+    removed: int,
+    expected: str,
 ) -> None:
     message = make_message(text="panel")
     message.edit_text = AsyncMock()
@@ -443,7 +494,7 @@ async def test_personal_deletion_uses_callback_actor_identity(
     with (
         patch(
             "derp.handlers.context_settings.tombstone_user_messages",
-            new=AsyncMock(return_value=3),
+            new=AsyncMock(return_value=removed),
         ) as tombstone,
         patch(
             "derp.handlers.context_settings.actor_can_manage",
@@ -462,7 +513,7 @@ async def test_personal_deletion_uses_callback_actor_identity(
         chat_telegram_id=message.chat.id,
         actor_telegram_id=42,
     )
-    assert "Removed 3" in query.answer.await_args.args[0]
+    assert query.answer.await_args.args[0] == expected
 
 
 @pytest.mark.asyncio
@@ -489,7 +540,18 @@ async def test_forget_targets_replied_message_and_never_trusts_its_sender(
         actor_telegram_id=42,
         telegram_message_id=77,
     )
-    assert "does not belong to you" in command.reply.await_args.args[0]
+    assert "doesn't belong to you" in command.reply.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_admin_policy_reply_filter_matches_current_locale_prompt(
+    make_message,
+) -> None:
+    prompt = make_message(text=admin_policy_prompt())
+    message = make_message(text="Keep replies concise.")
+    message.reply_to_message = prompt
+
+    assert await AdminPolicyReplyFilter()(message)
 
 
 @pytest.mark.asyncio

@@ -679,8 +679,8 @@ async def test_m1_dispatch_journey_matrix(
             for method in telegram.requests
             if isinstance(method, AnswerCallbackQuery) and method.text
         ]
-        assert any(text.startswith("Cleared ") for text in callback_answers)
-        assert "Forgot 1 approved facts" in callback_answers
+        assert any(text.startswith("Deleted ") for text in callback_answers)
+        assert "Forgot 1 approved fact" in callback_answers
     finally:
         await dispatcher.emit_shutdown(bot=bot)
         await bot.session.close()

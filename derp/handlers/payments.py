@@ -18,6 +18,7 @@ from aiogram.types import (
 from aiogram.types import (
     RefundedPayment as TelegramRefundedPayment,
 )
+from aiogram.utils.i18n import gettext as _
 
 from derp.billing import (
     CLOSED_COMMERCE_POLICY,
@@ -51,6 +52,10 @@ reconciliation_router = Router(name="credit_payment_reconciliation")
 router.include_routers(intake_router, reconciliation_router)
 
 
+def _star_amount(stars: int) -> str:
+    return _("{stars} Star", "{stars} Stars", stars).format(stars=stars)
+
+
 @intake_router.callback_query(PurchaseCallback.filter())
 async def handle_buy_callback(
     callback: CallbackQuery,
@@ -63,13 +68,16 @@ async def handle_buy_callback(
     """Create one server-bound intent, then expose its Telegram invoice link."""
     if not commerce_policy.public_intake_enabled:
         return await callback.answer(
-            "Purchases are not enabled yet",
+            _("Credit purchases aren't available yet. You won't be charged."),
             show_alert=True,
         )
     if not isinstance(callback.message, Message) or not user_model:
-        return await callback.answer("Purchase is unavailable", show_alert=True)
+        return await callback.answer(_("This purchase is unavailable"), show_alert=True)
     if user_model.telegram_id != callback.from_user.id:
-        return await callback.answer("Purchase identity changed", show_alert=True)
+        return await callback.answer(
+            _("This purchase is no longer valid. Open /buy again."),
+            show_alert=True,
+        )
 
     try:
         if callback_data.kind is ProductKind.SUBSCRIPTION:
@@ -99,12 +107,12 @@ async def handle_buy_callback(
         )
     except ActiveSubscriptionError:
         return await callback.answer(
-            "Your current plan is already active",
+            _("Your monthly plan is already active"),
             show_alert=True,
         )
     except LookupError, UnknownProductError, ValueError:
         return await callback.answer(
-            "This purchase option is no longer available",
+            _("This purchase option is no longer available"),
             show_alert=True,
         )
     except TelegramAPIError:
@@ -115,7 +123,7 @@ async def handle_buy_callback(
             user_id=user_model.telegram_id,
         )
         return await callback.answer(
-            "Telegram could not prepare the invoice. Try again.",
+            _("Telegram couldn't prepare the invoice. Try again."),
             show_alert=True,
         )
 
@@ -123,19 +131,28 @@ async def handle_buy_callback(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"Pay {handle.stars} Stars",
+                    text=_("Pay {price}").format(price=_star_amount(handle.stars)),
                     url=invoice_link,
                 )
             ]
         ]
     )
-    owner = "this chat" if handle.target.kind.value == "chat" else "your wallet"
+    owner = _("this chat") if handle.target.kind.value == "chat" else _("you")
     await callback.message.answer(
-        f"<b>{handle.credits} credits for {owner}</b>\n"
-        "Telegram shows the final confirmation before charging.",
+        _(
+            "<b>{credits} credit for {owner}</b>\n"
+            "Telegram will ask you to confirm before charging {price}.",
+            "<b>{credits} credits for {owner}</b>\n"
+            "Telegram will ask you to confirm before charging {price}.",
+            handle.credits,
+        ).format(
+            credits=handle.credits,
+            owner=owner,
+            price=_star_amount(handle.stars),
+        ),
         reply_markup=markup,
     )
-    await callback.answer("Invoice ready")
+    await callback.answer(_("Invoice ready"))
     logfire.info(
         "purchase_intent_presented",
         intent_id=str(handle.intent_id),
@@ -150,7 +167,7 @@ async def handle_buy_callback(
 async def reject_malformed_buy_callback(callback: CallbackQuery) -> None:
     """Fail closed for stale selectors that do not match the typed callback."""
     await callback.answer(
-        "This purchase option expired. Open /buy again.",
+        _("This purchase option expired. Open /buy again. You haven't been charged."),
         show_alert=True,
     )
 
@@ -179,7 +196,10 @@ async def handle_pre_checkout(
     )
     await pre_checkout.answer(
         ok=False,
-        error_message="This invoice expired or changed. Open /buy and try again.",
+        error_message=_(
+            "This invoice expired or changed. Open /buy and try again. You won't "
+            "be charged."
+        ),
     )
 
 
@@ -208,30 +228,44 @@ async def handle_successful_payment(
         await _deliver_payment_reply(
             message,
             sender,
-            "Telegram charged the payment, but local fulfillment needs review. "
-            "You do not need to buy again; support can reconcile this charge.",
+            _(
+                "Telegram charged this payment, but your credits haven't been "
+                "added. The payment needs review. Don't buy again; contact support "
+                "with the receipt."
+            ),
         )
         return
 
     if result.state is FulfillmentState.NEEDS_REVIEW:
-        text = (
-            "Payment received. Its details need review before credits can be "
-            "released. You do not need to buy again."
+        text = _(
+            "Telegram charged this payment, but no credits were added because the "
+            "details need review. Don't buy again; contact support."
         )
     elif result.idempotent:
-        text = "This payment was already applied to its wallet."
+        text = _("This payment was already applied. No credits changed this time.")
     elif result.subscription_cycle_id is not None:
-        text = (
-            "<b>Plan active</b>\n"
-            f"Monthly allowance available: {result.available_credits} credits."
-        )
+        text = _(
+            "<b>Plan active</b>\n{credits} monthly credit is available.",
+            "<b>Plan active</b>\n{credits} monthly credits are available.",
+            result.available_credits,
+        ).format(credits=result.available_credits)
     else:
         lines = [
-            "<b>Payment complete</b>",
-            f"Purchased credits available: {result.available_credits}",
+            _("<b>Payment complete</b>"),
+            _(
+                "Purchased credit available: {credits}",
+                "Purchased credits available: {credits}",
+                result.available_credits,
+            ).format(credits=result.available_credits),
         ]
         if result.debt_offset_credits:
-            lines.append(f"Applied to prior payment debt: {result.debt_offset_credits}")
+            lines.append(
+                _(
+                    "Used to repay payment debt: {credits} credit",
+                    "Used to repay payment debt: {credits} credits",
+                    result.debt_offset_credits,
+                ).format(credits=result.debt_offset_credits)
+            )
         text = "\n".join(lines)
     await _deliver_payment_reply(message, sender, text)
 
@@ -267,8 +301,10 @@ async def handle_refunded_payment(
         await _deliver_refund_reply(
             message,
             sender,
-            "Refund received, but its details need review. No credits were "
-            "changed; support can reconcile it safely.",
+            _(
+                "Telegram sent a refund, but it needs review. No credits changed. "
+                "Contact support."
+            ),
         )
         return
     except Exception as exc:
@@ -280,22 +316,31 @@ async def handle_refunded_payment(
         await _deliver_refund_reply(
             message,
             sender,
-            "Refund received, but local reconciliation needs review. No credits "
-            "were changed; support can reconcile it safely.",
+            _(
+                "Telegram sent a refund, but it needs review. No credits changed. "
+                "Contact support."
+            ),
         )
         return
 
     if result.idempotent:
-        text = "This refund was already reconciled."
+        text = _("This refund was already applied. No credits changed this time.")
     else:
         lines = [
-            "<b>Refund reconciled</b>",
-            f"Unused credits removed: {result.removed_available_credits}",
+            _("<b>Refund complete</b>"),
+            _(
+                "Unused credit removed: {credits}",
+                "Unused credits removed: {credits}",
+                result.removed_available_credits,
+            ).format(credits=result.removed_available_credits),
         ]
         if result.debt_created_credits:
             lines.append(
-                "Credits already used or reserved: "
-                f"{result.debt_created_credits} (recorded as payment debt)."
+                _(
+                    "Payment debt added: {credits} credit. Paid features are paused.",
+                    "Payment debt added: {credits} credits. Paid features are paused.",
+                    result.debt_created_credits,
+                ).format(credits=result.debt_created_credits)
             )
         text = "\n".join(lines)
     await _deliver_refund_reply(message, sender, text)
@@ -320,10 +365,10 @@ async def _deliver_payment_reply(
         sender,
         text,
         recipient_chat_id=message.from_user and message.from_user.id,
-        public_success="I sent the payment details in a private chat.",
-        public_failure=(
-            "I couldn't send the private payment details. "
-            "Open Derp privately and check /credits."
+        public_success=_("I sent the payment details in a private chat."),
+        public_failure=_(
+            "I couldn't send the payment details. Open Derp privately and check "
+            "/credits."
         ),
         failure_event="private_payment_delivery_failed",
     )
@@ -339,10 +384,10 @@ async def _deliver_refund_reply(
         sender,
         text,
         recipient_chat_id=message.from_user and message.from_user.id,
-        public_success="I sent the refund details in a private chat.",
-        public_failure=(
-            "I couldn't send the private refund details. "
-            "Open Derp privately and check /credits."
+        public_success=_("I sent the refund details in a private chat."),
+        public_failure=_(
+            "I couldn't send the refund details. Open Derp privately and check "
+            "/credits."
         ),
         failure_event="private_refund_delivery_failed",
     )

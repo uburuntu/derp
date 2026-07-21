@@ -7,7 +7,7 @@ from uuid import UUID
 
 import logfire
 from aiogram import Bot, F, Router, html
-from aiogram.filters import Command
+from aiogram.filters import BaseFilter, Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.filters.chat_member_updated import (
     JOIN_TRANSITION,
@@ -55,9 +55,21 @@ from derp.operations import (
 from derp.tools.shared_facts import SharedFactAction, SharedFactCallback
 
 router = Router(name="context_settings")
-ADMIN_POLICY_PROMPT = (
-    "Reply with one short admin policy paragraph, or reply with clear to remove it."
-)
+
+
+def admin_policy_prompt() -> str:
+    """Return the ForceReply prompt in the current request locale."""
+    return _(
+        "Reply with one short instruction for this chat, or send {clear} to remove it."
+    ).format(clear='"clear"')
+
+
+class AdminPolicyReplyFilter(BaseFilter):
+    """Match the localized ForceReply prompt in the current request locale."""
+
+    async def __call__(self, message: Message) -> bool:
+        reply = message.reply_to_message
+        return bool(reply and reply.text == admin_policy_prompt())
 
 
 class ContextAction(StrEnum):
@@ -142,31 +154,44 @@ def build_context_panel(
     is_private = bool(chat and chat.type == "private")
     enabled = bool(chat and chat.ambient_history_enabled and ambient_available)
     if is_private:
-        state = "On"
-        context_line = f"History: On · {retention_days} days"
+        state = _("On")
+        context_line = _(
+            "History: On · {days} day",
+            "History: On · {days} days",
+            retention_days,
+        ).format(days=retention_days)
     elif ambient_available:
-        state = "On" if enabled else "Off"
-        context_line = f"Context: {state} · {retention_days} days"
+        state = _("On") if enabled else _("Off")
+        context_line = _(
+            "Context: {state} · {days} day",
+            "Context: {state} · {days} days",
+            retention_days,
+        ).format(
+            state=state,
+            days=retention_days,
+        )
     else:
-        state = "Mentions only"
-        context_line = "Context: Mentions only"
+        state = _("Mentions only")
+        context_line = _("Context: Mentions only")
 
-    text = (
+    text = _(
         "<b>Derp</b>\n"
-        "Ask naturally in private, or mention/reply to Derp in a group.\n\n"
-        f"{context_line}\n"
-        "Recent chat messages help with follow-ups. Members can inspect this "
-        "state and remove their own stored messages."
-    )
+        "Message me privately, or mention or reply to me in a group.\n\n"
+        "{context_line}\n"
+        "Recent messages help me answer follow-ups. Anyone can check this setting "
+        "and delete their own saved messages."
+    ).format(context_line=context_line)
     rows = [
         [
             InlineKeyboardButton(
-                text="Try Derp",
+                text=_("Ask Derp"),
                 switch_inline_query_current_chat="",
             ),
             InlineKeyboardButton(
                 text=(
-                    f"History: {retention_days}d" if is_private else f"Context: {state}"
+                    _("History: {days}d").format(days=retention_days)
+                    if is_private
+                    else _("Context: {state}").format(state=state)
                 ),
                 callback_data=ContextCallback(
                     action=(
@@ -185,7 +210,10 @@ def build_context_panel(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{days}d{' ✓' if retention_days == days else ''}",
+                    text=_("{days}d{selected}").format(
+                        days=days,
+                        selected=" ✓" if retention_days == days else "",
+                    ),
                     callback_data=ContextCallback(
                         action=ContextAction.RETENTION,
                         value=days,
@@ -200,9 +228,9 @@ def build_context_panel(
                 [
                     InlineKeyboardButton(
                         text=(
-                            "Facts: Members"
+                            _("Facts: Members can edit")
                             if chat.shared_facts_member_edit
-                            else "Facts: Admin review"
+                            else _("Facts: Admin review")
                         ),
                         callback_data=ContextCallback(
                             action=ContextAction.FACT_MEMBER_EDIT,
@@ -211,9 +239,9 @@ def build_context_panel(
                     ),
                     InlineKeyboardButton(
                         text=(
-                            "Shared spend: On"
+                            _("Use chat credits: On")
                             if chat.shared_credit_spending_enabled
-                            else "Shared spend: Off"
+                            else _("Use chat credits: Off")
                         ),
                         callback_data=ContextCallback(
                             action=ContextAction.SHARED_SPEND,
@@ -226,9 +254,9 @@ def build_context_panel(
             [
                 InlineKeyboardButton(
                     text=(
-                        "Expensive tools: On"
+                        _("Paid tools: On")
                         if chat.expensive_tools_enabled
-                        else "Expensive tools: Off"
+                        else _("Paid tools: Off")
                     ),
                     callback_data=ContextCallback(
                         action=ContextAction.EXPENSIVE_TOOLS,
@@ -236,7 +264,7 @@ def build_context_panel(
                     ).pack(),
                 ),
                 InlineKeyboardButton(
-                    text="Admin policy",
+                    text=_("Set chat instructions"),
                     callback_data=ContextCallback(
                         action=ContextAction.ADMIN_POLICY
                     ).pack(),
@@ -246,7 +274,7 @@ def build_context_panel(
     rows.append(
         [
             InlineKeyboardButton(
-                text=_("Creation"),
+                text=_("Create"),
                 callback_data=ContextCallback(action=ContextAction.CREATION).pack(),
             ),
             InlineKeyboardButton(
@@ -264,7 +292,7 @@ def build_context_panel(
     if not is_private:
         personal_rows.append(
             InlineKeyboardButton(
-                text=_("Personal spending"),
+                text=_("Use my credits here"),
                 callback_data=ContextCallback(
                     action=ContextAction.PERSONAL_SPEND,
                     value=-1,
@@ -279,7 +307,7 @@ def build_creation_panel() -> tuple[str, InlineKeyboardMarkup]:
     """Render the small set of creation paths that are safe to advertise."""
     commands = creation_command_specs()
     lines = [
-        f"<b>{html.quote(_('Creation'))}</b>",
+        f"<b>{html.quote(_('Create'))}</b>",
         "",
         *(
             f"{html.code(f'/{command.command}')} - {html.quote(command.description)}"
@@ -308,53 +336,89 @@ def build_credit_panel(
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build a truthful balance and per-chat funding preference surface."""
     personal_balance = personal.balance
-    allowance_line = f"Monthly allowance: {personal_balance.allowance_available}"
+    allowance_line = _(
+        "Monthly plan: {credits} credit",
+        "Monthly plan: {credits} credits",
+        personal_balance.allowance_available,
+    ).format(credits=personal_balance.allowance_available)
     if personal.allowance_period_end is not None:
-        renewal = "renews" if personal.renewal_enabled else "ends"
-        allowance_line += (
-            f" · {renewal} {personal.allowance_period_end.strftime('%d %b %Y')}"
+        renewal = _("renews") if personal.renewal_enabled else _("ends")
+        allowance_line = _("{allowance} · {renewal} {date}").format(
+            allowance=allowance_line,
+            renewal=renewal,
+            date=personal.allowance_period_end.strftime("%d %b %Y"),
         )
     elif personal_balance.allowance_available == 0:
-        allowance_line += " · no active plan"
+        allowance_line = _("{allowance} · no active plan").format(
+            allowance=allowance_line
+        )
     lines = [
-        "<b>Credits</b>",
+        _("<b>Credits</b>"),
         "",
-        "<b>Personal</b>",
+        _("<b>Your credits</b>"),
         allowance_line,
-        f"Purchased: {personal_balance.purchased_available}",
+        _(
+            "Purchased: {credits} credit",
+            "Purchased: {credits} credits",
+            personal_balance.purchased_available,
+        ).format(credits=personal_balance.purchased_available),
     ]
     if personal_balance.reserved:
-        lines.append(f"In progress: {personal_balance.reserved}")
+        lines.append(
+            _(
+                "Pending charge: {credits} credit",
+                "Pending charges: {credits} credits",
+                personal_balance.reserved,
+            ).format(credits=personal_balance.reserved)
+        )
     if personal_balance.debt:
-        lines.append(f"Payment debt: {personal_balance.debt} · paid use is paused")
+        lines.append(
+            _(
+                "Payment debt: {credits} credit · paid features are paused",
+                "Payment debt: {credits} credits · paid features are paused",
+                personal_balance.debt,
+            ).format(credits=personal_balance.debt)
+        )
     if personal.recent_activity:
-        lines.extend(["", "<b>Recent activity</b>"])
+        lines.extend(["", _("<b>Recent activity</b>")])
         lines.extend(_wallet_activity_line(item) for item in personal.recent_activity)
 
     rows: list[list[InlineKeyboardButton]] = []
     if shared is not None:
         shared_balance = shared.balance
-        state = "available" if shared_spending_enabled else "paused by admins"
+        state = _("available") if shared_spending_enabled else _("paused by admins")
         lines.extend(
             [
                 "",
-                "<b>This chat</b>",
-                f"Shared purchased: {shared_balance.purchased_available} · {state}",
+                _("<b>This chat's credits</b>"),
+                _(
+                    "Purchased: {credits} credit · {state}",
+                    "Purchased: {credits} credits · {state}",
+                    shared_balance.purchased_available,
+                ).format(
+                    credits=shared_balance.purchased_available,
+                    state=state,
+                ),
             ]
         )
         if shared_balance.reserved:
-            lines.append(f"Shared in progress: {shared_balance.reserved}")
-        lines.extend(
-            f"Shared {_wallet_activity_line(item).lower()}"
-            for item in shared.recent_activity
-        )
+            lines.append(
+                _(
+                    "Pending charge: {credits} credit",
+                    "Pending charges: {credits} credits",
+                    shared_balance.reserved,
+                ).format(credits=shared_balance.reserved)
+            )
+        if shared.recent_activity:
+            lines.extend(["", _("<b>Recent chat activity</b>")])
+            lines.extend(_wallet_activity_line(item) for item in shared.recent_activity)
         rows.append(
             [
                 InlineKeyboardButton(
                     text=(
-                        "Personal fallback: Always"
+                        _("Use my credits here: Always")
                         if personal_fallback_enabled
-                        else "Personal fallback: Ask me"
+                        else _("Use my credits here: Ask first")
                     ),
                     callback_data=ContextCallback(
                         action=ContextAction.PERSONAL_SPEND,
@@ -367,7 +431,7 @@ def build_credit_panel(
     rows.append(
         [
             InlineKeyboardButton(
-                text="Back",
+                text=_("Back"),
                 callback_data=ContextCallback(action=ContextAction.MENU).pack(),
             )
         ]
@@ -377,22 +441,52 @@ def build_credit_panel(
 
 def _wallet_activity_line(activity: WalletActivity) -> str:
     feature = {
-        "chat": "Chat",
-        "inline_chat": "Inline chat",
-        "deep_think": "Deep thinking",
-        "image_generate": "Image generation",
-        "image_edit": "Image editing",
-        "tts": "Voice",
-        "video_generate": "Video generation",
-    }.get(activity.feature and activity.feature.value, "Paid operation")
+        "chat": _("Chat"),
+        "inline_chat": _("Inline chat"),
+        "deep_think": _("Deep thinking"),
+        "image_generate": _("Image generation"),
+        "image_edit": _("Image editing"),
+        "tts": _("Voice"),
+        "video_generate": _("Video generation"),
+    }.get(activity.feature and activity.feature.value, _("Paid feature"))
     date = activity.occurred_at.strftime("%d %b")
     if activity.kind is WalletActivityKind.CHARGE:
-        return f"{feature}: -{activity.credits} · {date}"
+        return _(
+            "{feature}: -{credits} credit · {date}",
+            "{feature}: -{credits} credits · {date}",
+            activity.credits,
+        ).format(
+            feature=feature,
+            credits=activity.credits,
+            date=date,
+        )
     if activity.kind is WalletActivityKind.REFUND:
-        return f"{feature} refund: +{activity.credits} · {date}"
+        return _(
+            "{feature} refund: +{credits} credit · {date}",
+            "{feature} refund: +{credits} credits · {date}",
+            activity.credits,
+        ).format(
+            feature=feature,
+            credits=activity.credits,
+            date=date,
+        )
     if activity.kind is WalletActivityKind.PAYMENT_CLAWBACK:
-        return f"Payment refund: -{activity.credits} · {date}"
-    return f"Payment debt: {activity.credits} · {date}"
+        return _(
+            "Payment refund: -{credits} credit · {date}",
+            "Payment refund: -{credits} credits · {date}",
+            activity.credits,
+        ).format(
+            credits=activity.credits,
+            date=date,
+        )
+    return _(
+        "Payment debt: {credits} credit · {date}",
+        "Payment debt: {credits} credits · {date}",
+        activity.credits,
+    ).format(
+        credits=activity.credits,
+        date=date,
+    )
 
 
 def build_privacy_panel(
@@ -403,11 +497,11 @@ def build_privacy_panel(
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build discoverable personal deletion and scoped admin cleanup controls."""
     retention_days = chat.retention_days if chat else 30
-    scope_label = "topic" if thread_id is not None else "chat"
+    scope_label = _("topic") if thread_id is not None else _("chat")
     rows = [
         [
             InlineKeyboardButton(
-                text="Delete my messages",
+                text=_("Delete my messages"),
                 callback_data=ContextCallback(
                     action=ContextAction.DELETE_MINE_CONFIRM
                 ).pack(),
@@ -418,13 +512,13 @@ def build_privacy_panel(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"Clear this {scope_label}",
+                    text=_("Clear this {scope}").format(scope=scope_label),
                     callback_data=ContextCallback(
                         action=ContextAction.CLEAR_CONFIRM
                     ).pack(),
                 ),
                 InlineKeyboardButton(
-                    text="Forget shared facts",
+                    text=_("Forget shared facts"),
                     callback_data=ContextCallback(
                         action=ContextAction.FORGET_FACTS_CONFIRM
                     ).pack(),
@@ -434,18 +528,22 @@ def build_privacy_panel(
     rows.append(
         [
             InlineKeyboardButton(
-                text="Back",
+                text=_("Back"),
                 callback_data=ContextCallback(action=ContextAction.MENU).pack(),
             )
         ]
     )
-    text = (
+    text = _(
         "<b>Privacy and history</b>\n"
-        f"Stored conversation context expires after {retention_days} days.\n\n"
-        "You can remove your own stored messages at any time. "
-        "Chat admins can clear the current chat or forum topic without removing "
-        "separately approved shared facts."
-    )
+        "Saved messages are deleted after {days} day.\n\n"
+        "You can delete your own saved messages at any time. Chat admins can clear "
+        "this chat or topic. Approved shared facts are kept separately.",
+        "<b>Privacy and history</b>\n"
+        "Saved messages are deleted after {days} days.\n\n"
+        "You can delete your own saved messages at any time. Chat admins can clear "
+        "this chat or topic. Approved shared facts are kept separately.",
+        retention_days,
+    ).format(days=retention_days)
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -453,22 +551,23 @@ def build_destructive_confirmation(
     *,
     action: ContextAction,
     label: str,
-    detail: str = (
-        "This removes Derp's stored source, media references, and derived history. "
-        "It cannot remove Telegram's copy or text another member copied."
-    ),
+    detail: str | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build a compact confirmation that states Telegram's deletion boundary."""
-    text = f"<b>{label}?</b>\n{detail}"
+    detail = detail or _(
+        "This deletes Derp's saved messages and media references. Telegram messages "
+        "and copies made by other people remain."
+    )
+    text = _("<b>{label}?</b>\n{detail}").format(label=label, detail=detail)
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Delete",
+                    text=_("Delete"),
                     callback_data=ContextCallback(action=action).pack(),
                 ),
                 InlineKeyboardButton(
-                    text="Cancel",
+                    text=_("Cancel"),
                     callback_data=ContextCallback(action=ContextAction.PRIVACY).pack(),
                 ),
             ]
@@ -645,21 +744,39 @@ def _private_credit_alert(
     balance = personal.balance
     lines = [
         _("Your credits"),
-        _("Monthly: {credits}").format(credits=balance.allowance_available),
-        _("Purchased: {credits}").format(credits=balance.purchased_available),
+        _(
+            "Monthly plan: {credits} credit",
+            "Monthly plan: {credits} credits",
+            balance.allowance_available,
+        ).format(credits=balance.allowance_available),
+        _(
+            "Purchased: {credits} credit",
+            "Purchased: {credits} credits",
+            balance.purchased_available,
+        ).format(credits=balance.purchased_available),
     ]
     if balance.debt:
-        lines.append(_("Payment debt: {credits}").format(credits=balance.debt))
+        lines.append(
+            _(
+                "Payment debt: {credits} credit",
+                "Payment debt: {credits} credits",
+                balance.debt,
+            ).format(credits=balance.debt)
+        )
     if shared is not None:
         shared_state = _("available") if shared_spending_enabled else _("paused")
         lines.append(
-            _("This chat: {credits} ({state})").format(
+            _(
+                "This chat: {credits} purchased credit ({state})",
+                "This chat: {credits} purchased credits ({state})",
+                shared.balance.purchased_available,
+            ).format(
                 credits=shared.balance.purchased_available,
                 state=shared_state,
             )
         )
-        fallback = _("Always here") if personal_fallback_enabled else _("Ask me")
-        lines.append(_("Personal fallback: {state}").format(state=fallback))
+        personal_use = _("always") if personal_fallback_enabled else _("ask first")
+        lines.append(_("Use my credits here: {state}").format(state=personal_use))
     return "\n".join(lines)
 
 
@@ -676,7 +793,7 @@ async def show_credit_menu(
         or not user_model
         or user_model.telegram_id != query.from_user.id
     ):
-        return await query.answer("Credits are unavailable", show_alert=True)
+        return await query.answer(_("Credits are unavailable"), show_alert=True)
     if query.message.chat.type != "private":
         personal, shared, consent_enabled = await _credit_statements_for(
             operation_ledger,
@@ -715,13 +832,15 @@ async def toggle_personal_spend(
         or not chat_model
         or chat_model.type == "private"
     ):
-        return await query.answer("This preference applies to groups", show_alert=True)
+        return await query.answer(
+            _("This setting only applies in groups"), show_alert=True
+        )
     if user_model.telegram_id != query.from_user.id or callback_data.value not in {
         -1,
         0,
         1,
     }:
-        return await query.answer("Invalid preference", show_alert=True)
+        return await query.answer(_("This setting is no longer valid"), show_alert=True)
 
     enabled = (
         not await operation_ledger.personal_consent_enabled(
@@ -737,9 +856,9 @@ async def toggle_personal_spend(
         await operation_ledger.revoke_personal_consent(user_model.id, chat_model.id)
     await query.answer(
         (
-            _("Personal fallback: Always here")
+            _("Use my credits here: Always")
             if enabled
-            else _("Personal fallback: Ask me")
+            else _("Use my credits here: Ask first")
         ),
         show_alert=True,
     )
@@ -773,7 +892,7 @@ async def confirm_delete_my_history(query: CallbackQuery) -> None:
         return await query.answer()
     text, markup = build_destructive_confirmation(
         action=ContextAction.DELETE_MINE,
-        label="Delete your stored messages from this chat",
+        label=_("Delete your saved messages from this chat"),
     )
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer()
@@ -788,7 +907,7 @@ async def delete_my_history(
 ) -> None:
     """Anonymize every retained message owned by the requesting member."""
     if not isinstance(query.message, Message):
-        return await query.answer("History is unavailable", show_alert=True)
+        return await query.answer(_("History is unavailable"), show_alert=True)
     async with db.session() as session:
         removed = await tombstone_user_messages(
             session,
@@ -802,7 +921,13 @@ async def delete_my_history(
         thread_id=query.message.message_thread_id,
     )
     await query.message.edit_text(text, reply_markup=markup)
-    await query.answer(f"Removed {removed} stored messages")
+    await query.answer(
+        _(
+            "Deleted {count} saved message",
+            "Deleted {count} saved messages",
+            removed,
+        ).format(count=removed)
+    )
 
 
 @router.callback_query(ContextCallback.filter(F.action == ContextAction.CLEAR_CONFIRM))
@@ -811,11 +936,13 @@ async def confirm_clear_history(query: CallbackQuery, bot: Bot) -> None:
     if not isinstance(query.message, Message):
         return await query.answer()
     if not await actor_can_manage(bot, query.message, query.from_user.id):
-        return await query.answer("Only chat admins can clear history", show_alert=True)
-    scope = "topic" if query.message.message_thread_id is not None else "chat"
+        return await query.answer(
+            _("Only chat admins can clear history"), show_alert=True
+        )
+    scope = _("topic") if query.message.message_thread_id is not None else _("chat")
     text, markup = build_destructive_confirmation(
         action=ContextAction.CLEAR,
-        label=f"Clear this {scope}'s stored history",
+        label=_("Clear saved history for this {scope}").format(scope=scope),
     )
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer()
@@ -830,9 +957,11 @@ async def clear_current_history(
 ) -> None:
     """Purge exactly the current chat/topic after live admin authorization."""
     if not isinstance(query.message, Message):
-        return await query.answer("History is unavailable", show_alert=True)
+        return await query.answer(_("History is unavailable"), show_alert=True)
     if not await actor_can_manage(bot, query.message, query.from_user.id):
-        return await query.answer("Only chat admins can clear history", show_alert=True)
+        return await query.answer(
+            _("Only chat admins can clear history"), show_alert=True
+        )
     async with db.session() as session:
         removed = await clear_history_scope(
             session,
@@ -845,7 +974,13 @@ async def clear_current_history(
         thread_id=query.message.message_thread_id,
     )
     await query.message.edit_text(text, reply_markup=markup)
-    await query.answer(f"Cleared {removed} stored messages")
+    await query.answer(
+        _(
+            "Deleted {count} saved message",
+            "Deleted {count} saved messages",
+            removed,
+        ).format(count=removed)
+    )
 
 
 @router.callback_query(
@@ -857,16 +992,16 @@ async def confirm_forget_shared_facts(query: CallbackQuery, bot: Bot) -> None:
         return await query.answer()
     if not await actor_can_manage(bot, query.message, query.from_user.id):
         return await query.answer(
-            "Only chat admins can forget shared facts",
+            _("Only chat admins can forget shared facts"),
             show_alert=True,
         )
-    scope = "topic" if query.message.message_thread_id is not None else "chat"
+    scope = _("topic") if query.message.message_thread_id is not None else _("chat")
     text, markup = build_destructive_confirmation(
         action=ContextAction.FORGET_FACTS,
-        label=f"Forget approved facts in this {scope}",
-        detail=(
-            "This removes approved factual memory in this scope. "
-            "Conversation history is unchanged."
+        label=_("Forget approved facts in this {scope}").format(scope=scope),
+        detail=_(
+            "This deletes approved facts here. Saved conversation history stays "
+            "unchanged."
         ),
     )
     await query.message.edit_text(text, reply_markup=markup)
@@ -882,10 +1017,10 @@ async def forget_current_shared_facts(
 ) -> None:
     """Delete approved facts without changing conversation history."""
     if not isinstance(query.message, Message) or not chat_model:
-        return await query.answer("Shared facts are unavailable", show_alert=True)
+        return await query.answer(_("Shared facts are unavailable"), show_alert=True)
     if not await actor_can_manage(bot, query.message, query.from_user.id):
         return await query.answer(
-            "Only chat admins can forget shared facts",
+            _("Only chat admins can forget shared facts"),
             show_alert=True,
         )
     async with db.session() as session:
@@ -900,7 +1035,13 @@ async def forget_current_shared_facts(
         thread_id=query.message.message_thread_id,
     )
     await query.message.edit_text(text, reply_markup=markup)
-    await query.answer(f"Forgot {removed} approved facts")
+    await query.answer(
+        _(
+            "Forgot {count} approved fact",
+            "Forgot {count} approved facts",
+            removed,
+        ).format(count=removed)
+    )
 
 
 @router.callback_query(SharedFactCallback.filter())
@@ -914,14 +1055,18 @@ async def review_shared_fact_proposal(
 ) -> None:
     """Approve or reject one exact topic-scoped proposal after live authorization."""
     if not isinstance(query.message, Message) or not chat_model or not user_model:
-        return await query.answer("This proposal is unavailable", show_alert=True)
+        return await query.answer(_("This proposal is unavailable"), show_alert=True)
     is_admin = await actor_can_manage(bot, query.message, query.from_user.id)
     if not is_admin and not chat_model.shared_facts_member_edit:
-        return await query.answer("An admin must review this fact", show_alert=True)
+        return await query.answer(
+            _("A chat admin must review this fact"), show_alert=True
+        )
     try:
         fact_id = UUID(callback_data.fact_id)
     except ValueError:
-        return await query.answer("Invalid proposal", show_alert=True)
+        return await query.answer(
+            _("This proposal is no longer valid"), show_alert=True
+        )
     try:
         async with db.session() as session:
             decide = (
@@ -936,15 +1081,22 @@ async def review_shared_fact_proposal(
                 thread_id=query.message.message_thread_id,
                 admin_actor_id=user_model.id,
             )
-    except (LookupError, SharedFactDecisionConflictError) as exc:
-        return await query.answer(str(exc), show_alert=True)
+    except LookupError, SharedFactDecisionConflictError:
+        return await query.answer(
+            _("This fact was already reviewed or is no longer available"),
+            show_alert=True,
+        )
 
     state = (
-        "Approved" if callback_data.action is SharedFactAction.APPROVE else "Rejected"
+        _("Approved")
+        if callback_data.action is SharedFactAction.APPROVE
+        else _("Rejected")
     )
     await query.message.edit_text(
-        f"<b>{state} shared fact</b>\n"
-        f"<blockquote>{html.quote(fact.fact_text)}</blockquote>"
+        _("<b>{state} shared fact</b>\n<blockquote>{fact}</blockquote>").format(
+            state=state,
+            fact=html.quote(fact.fact_text),
+        )
     )
     await query.answer(state)
 
@@ -959,16 +1111,18 @@ async def toggle_context(
 ) -> None:
     """Enable or disable ambient capture after live admin authorization."""
     if not isinstance(query.message, Message) or not chat_model:
-        return await query.answer("Settings are unavailable", show_alert=True)
+        return await query.answer(_("Settings are unavailable"), show_alert=True)
     if not await actor_can_manage(bot, query.message, query.from_user.id):
-        return await query.answer("Only chat admins can change this", show_alert=True)
+        return await query.answer(
+            _("Only chat admins can change this"), show_alert=True
+        )
     enable = bool(callback_data.value)
     available = query.message.chat.type == "private" or (
         await ambient_delivery_available(bot, query.message.chat.id)
     )
     if enable and not available:
         return await query.answer(
-            "Telegram currently delivers mentions only",
+            _("Telegram only sends me mentions right now"),
             show_alert=True,
         )
     async with db.session() as session:
@@ -985,7 +1139,13 @@ async def toggle_context(
     )
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer(
-        "Context enabled" if enable else f"Context disabled · removed {purged} messages"
+        _("Context is on")
+        if enable
+        else _(
+            "Context is off · {count} saved message deleted",
+            "Context is off · {count} saved messages deleted",
+            purged,
+        ).format(count=purged)
     )
     logfire.info(
         "ambient_context_changed",
@@ -1005,9 +1165,11 @@ async def change_retention(
 ) -> None:
     """Apply an approved retention period after live admin authorization."""
     if not isinstance(query.message, Message) or not chat_model:
-        return await query.answer("Settings are unavailable", show_alert=True)
+        return await query.answer(_("Settings are unavailable"), show_alert=True)
     if not await actor_can_manage(bot, query.message, query.from_user.id):
-        return await query.answer("Only chat admins can change this", show_alert=True)
+        return await query.answer(
+            _("Only chat admins can change this"), show_alert=True
+        )
     async with db.session() as session:
         await set_history_retention(
             session,
@@ -1024,7 +1186,13 @@ async def change_retention(
         can_manage=True,
     )
     await query.message.edit_text(text, reply_markup=markup)
-    await query.answer(f"Retention set to {callback_data.value} days")
+    await query.answer(
+        _(
+            "Messages will be kept for {days} day",
+            "Messages will be kept for {days} days",
+            callback_data.value,
+        ).format(days=callback_data.value)
+    )
 
 
 @router.callback_query(ContextCallback.filter(F.action.in_(set(_POLICY_FLAGS))))
@@ -1037,14 +1205,18 @@ async def change_policy_flag(
 ) -> None:
     """Apply one typed policy flag after live admin authorization."""
     if not isinstance(query.message, Message) or not chat_model:
-        return await query.answer("Settings are unavailable", show_alert=True)
+        return await query.answer(_("Settings are unavailable"), show_alert=True)
     if not await actor_can_manage(bot, query.message, query.from_user.id):
-        return await query.answer("Only chat admins can change this", show_alert=True)
+        return await query.answer(
+            _("Only chat admins can change this"), show_alert=True
+        )
     if callback_data.value not in {0, 1}:
-        return await query.answer("Invalid setting", show_alert=True)
+        return await query.answer(_("This setting is no longer valid"), show_alert=True)
     flag = _POLICY_FLAGS[callback_data.action]
     if chat_model.type == "private" and flag is not ChatPolicyFlag.EXPENSIVE_TOOLS:
-        return await query.answer("This setting applies to groups", show_alert=True)
+        return await query.answer(
+            _("This setting only applies in groups"), show_alert=True
+        )
     enabled = bool(callback_data.value)
     async with db.session() as session:
         await set_chat_policy_flag(
@@ -1063,7 +1235,7 @@ async def change_policy_flag(
         can_manage=True,
     )
     await query.message.edit_text(text, reply_markup=markup)
-    await query.answer("Setting updated")
+    await query.answer(_("Setting saved"))
 
 
 @router.callback_query(ContextCallback.filter(F.action == ContextAction.ADMIN_POLICY))
@@ -1075,18 +1247,20 @@ async def request_admin_policy(
     if not isinstance(query.message, Message):
         return await query.answer()
     if not await actor_can_manage(bot, query.message, query.from_user.id):
-        return await query.answer("Only chat admins can set policy", show_alert=True)
+        return await query.answer(
+            _("Only chat admins can set instructions"), show_alert=True
+        )
     await query.message.answer(
-        ADMIN_POLICY_PROMPT,
+        admin_policy_prompt(),
         reply_markup=ForceReply(
             selective=True,
-            input_field_placeholder="One policy paragraph",
+            input_field_placeholder=_("One short instruction"),
         ),
     )
     await query.answer()
 
 
-@router.message(F.reply_to_message.text == ADMIN_POLICY_PROMPT)
+@router.message(AdminPolicyReplyFilter())
 async def save_admin_policy(
     message: Message,
     db: DatabaseManager,
@@ -1097,7 +1271,7 @@ async def save_admin_policy(
     if not chat_model or not message.from_user:
         return
     if not await actor_can_manage(bot, message, message.from_user.id):
-        await message.reply("Only chat admins can set policy.")
+        await message.reply(_("Only chat admins can set instructions."))
         return
     submitted = (message.text or "").strip()
     policy = None if submitted.casefold() == "clear" else submitted
@@ -1113,18 +1287,20 @@ async def save_admin_policy(
                 chat_telegram_id=message.chat.id,
                 telegram_message_id=message.message_id,
             )
-    except ValueError as exc:
-        await message.reply(str(exc))
+    except ValueError:
+        await message.reply(_("Keep the instruction under 2,048 characters."))
         return
     chat_model.admin_policy = stored
-    await message.reply("Admin policy updated." if stored else "Admin policy cleared.")
+    await message.reply(
+        _("Chat instructions saved.") if stored else _("Chat instructions cleared.")
+    )
 
 
 @router.message(Command("forget"))
 async def forget_replied_message(message: Message, db: DatabaseManager) -> None:
     """Precisely anonymize one replied-to message owned by the requester."""
     if not message.from_user or not message.reply_to_message:
-        await message.reply("Reply /forget to one of your own messages.")
+        await message.reply(_("Reply to one of your own messages with /forget."))
         return
     async with db.session() as session:
         removed = await tombstone_user_messages(
@@ -1135,12 +1311,14 @@ async def forget_replied_message(message: Message, db: DatabaseManager) -> None:
         )
     if not removed:
         await message.reply(
-            "That message is not stored here or does not belong to you."
+            _("That message isn't saved here or doesn't belong to you.")
         )
         return
     await message.reply(
-        "Removed Derp's stored copy. Telegram's message and text copied by others "
-        "are unchanged."
+        _(
+            "Deleted Derp's saved copy. The Telegram message and copies made by "
+            "other people remain."
+        )
     )
 
 
@@ -1161,8 +1339,10 @@ async def disclose_context_to_new_members(
         )
     if claimed:
         await message.answer(
-            "Derp uses recent messages in this chat for follow-ups. "
-            "Open /settings to inspect context, retention, and deletion controls."
+            _(
+                "Derp uses recent messages for follow-up answers. Open /settings "
+                "to view history and deletion settings."
+            )
         )
 
 

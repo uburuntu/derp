@@ -28,8 +28,8 @@ class PurchaseIntakeSource(StrEnum):
 def purchase_suspension_message() -> str:
     """Return the single user-facing explanation for rejected purchases."""
     return _(
-        "Credit purchases are temporarily unavailable while billing is being "
-        "upgraded. Existing credits and free features still work."
+        "Credit purchases are temporarily unavailable. You won't be charged. "
+        "Your existing credits and free features still work."
     )
 
 

@@ -75,7 +75,7 @@ def test_panel_keeps_paid_period_when_renewal_is_off() -> None:
     )
 
     assert "renewal off" in text
-    assert "remains available" in text
+    assert "remain available" in text
     assert markup is not None
     callback = SubscriptionCallback.unpack(markup.inline_keyboard[0][0].callback_data)
     assert callback.action is SubscriptionAction.RESUME
@@ -174,7 +174,7 @@ async def test_show_subscription_handles_missing_plan(
 
     await show_subscription(message, sender, service, mock_user_model())
 
-    assert "do not have" in sender.reply.await_args.args[0]
+    assert "don't have" in sender.reply.await_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -209,7 +209,7 @@ async def test_cancel_callback_uses_context_actor_and_refreshes_panel(
     assert isinstance(call.kwargs["provider"], TelegramSubscriptionRenewalProvider)
     callback.message.edit_text.assert_awaited_once()
     callback.answer.assert_awaited_once_with(
-        "Renewal canceled; your paid period remains active"
+        "Automatic renewal is off. Your paid period stays active."
     )
 
 
@@ -262,6 +262,6 @@ async def test_callback_rejects_changed_actor_before_provider_io(
 
     service.set_renewal.assert_not_awaited()
     callback.answer.assert_awaited_once_with(
-        "Plan identity changed",
+        "These plan controls are no longer valid. Open /plan again.",
         show_alert=True,
     )
