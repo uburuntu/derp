@@ -167,6 +167,12 @@ def test_route_plans_cover_every_declared_dynamic_handler_dependency() -> None:
     assert debug_callback_plan.commerce == frozenset(
         {CommerceDependency.PURCHASE_INTENTS}
     )
+    operator_callback_plan = ROUTE_DEPENDENCY_PLANS[
+        RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "operator")
+    ]
+    assert operator_callback_plan.models
+    assert not operator_callback_plan.legacy_credit
+    assert not operator_callback_plan.commerce
     for event in (RouteEvent.MESSAGE, RouteEvent.CALLBACK_QUERY):
         tts_plan = ROUTE_DEPENDENCY_PLANS[RouteDependencyKey(event, "tts")]
         assert tts_plan.models

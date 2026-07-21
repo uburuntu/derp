@@ -1,6 +1,7 @@
 """Private, aggregate-only operations console domain."""
 
 from derp.operator.access import OperatorAccessPolicy, OperatorOnlyFilter
+from derp.operator.config import OperatorControlConfig
 from derp.operator.confirmations import (
     DEFAULT_CONFIRMATION_TTL,
     DEFAULT_MAX_CONFIRMATIONS,
@@ -39,6 +40,7 @@ __all__ = [
     "OperatorArtifactTotals",
     "OperatorConfirmationCapacityError",
     "OperatorConfirmationStore",
+    "OperatorControlConfig",
     "OperatorConsoleService",
     "OperatorConsoleSnapshot",
     "OperatorDatabaseSnapshot",

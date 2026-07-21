@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from derp.application import APPLICATION_ROUTERS, open_runtime
-from derp.handlers import chat, debug, donations, payments, premium_suspension
+from derp.handlers import chat, debug, donations, operator, payments, premium_suspension
 
 
 def test_payment_router_order_preserves_donations_and_one_reconciliation_path() -> None:
@@ -19,6 +19,18 @@ def test_payment_router_order_preserves_donations_and_one_reconciliation_path() 
         payments.router
     )
     assert payments.reconciliation_router in payments.router.sub_routers
+
+
+def test_operator_controls_precede_rejections_and_conversation_routes() -> None:
+    assert APPLICATION_ROUTERS.index(operator.router) < APPLICATION_ROUTERS.index(
+        operator.rejection_router
+    )
+    assert APPLICATION_ROUTERS.index(operator.rejection_router) < (
+        APPLICATION_ROUTERS.index(chat.router)
+    )
+    assert APPLICATION_ROUTERS.index(debug.router) < APPLICATION_ROUTERS.index(
+        debug.rejection_router
+    )
 
 
 def test_premium_suspension_precedes_catch_all_chat() -> None:
@@ -148,11 +160,11 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
         patch(
             "derp.application.HistoryRetentionWorker",
             return_value=FakeRetentionWorker(events),
-        ),
+        ) as retention_worker,
         patch(
             "derp.application.SubscriptionExpiryWorker",
             return_value=FakeSubscriptionExpiryWorker(events),
-        ),
+        ) as expiry_worker,
         patch(
             "derp.application.OperationReconciliationWorker",
             return_value=FakeOperationReconciliationWorker(events),
@@ -212,6 +224,26 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
             assert (
                 approval_expiry_worker.call_args.args[0]
                 is runtime.deferred_tool_approval_service
+            )
+            assert (
+                runtime.operator_console._history_retention
+                is retention_worker.return_value
+            )
+            assert (
+                runtime.operator_console._subscription_expiry
+                is expiry_worker.return_value
+            )
+            assert (
+                runtime.operator_console._operation_reconciliation
+                is reconciliation_worker.return_value
+            )
+            assert (
+                runtime.operator_console._delivery_maintenance
+                is delivery_maintenance_worker.return_value
+            )
+            assert (
+                runtime.operator_console._approval_expiry
+                is approval_expiry_worker.return_value
             )
             events.append("running")
 

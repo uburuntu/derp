@@ -17,6 +17,7 @@ from aiogram.utils.chat_action import ChatActionMiddleware
 from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
+from derp import __version__
 from derp.approvals.maintenance import DeferredApprovalExpiryWorker
 from derp.approvals.paid_media import PaidMediaApprovalCoordinator
 from derp.approvals.service import DeferredToolApprovalService
@@ -56,6 +57,7 @@ from derp.handlers import (
     donations,
     image,
     inline,
+    operator,
     paid_media_delivery,
     payments,
     premium_suspension,
@@ -82,12 +84,21 @@ from derp.operations import (
     OperationRequestBinder,
     QuoteEngine,
 )
+from derp.operator import (
+    OperatorAccessPolicy,
+    OperatorConfirmationStore,
+    OperatorConsoleService,
+    OperatorControlConfig,
+)
 from derp.tools.authorization import ActorRoleResolver
 
 logger = logging.getLogger(__name__)
 
 APPLICATION_ROUTERS = (
+    operator.router,
+    operator.rejection_router,
     debug.router,
+    debug.rejection_router,
     context_settings.router,
     basic.router,
     donations.router,
@@ -121,6 +132,7 @@ class Runtime:
     tts_paid_media_adapter: TtsPaidMediaAdapter
     inline_chat_service: InlineChatFeatureService
     deferred_tool_approval_service: DeferredToolApprovalService
+    operator_console: OperatorConsoleService
 
 
 def create_bot(settings: Settings) -> Bot:
@@ -207,18 +219,28 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             PostgresInlineAllowance(db.session),
             PydanticAIInlineExecutor(),
         )
-        await stack.enter_async_context(HistoryRetentionWorker(db))
-        await stack.enter_async_context(
+        history_retention = await stack.enter_async_context(HistoryRetentionWorker(db))
+        subscription_expiry = await stack.enter_async_context(
             SubscriptionExpiryWorker(PaymentSettlementService(db.session))
         )
-        await stack.enter_async_context(
+        operation_reconciliation = await stack.enter_async_context(
             OperationReconciliationWorker(
                 OperationReconciler(db.session, delivery_service)
             )
         )
-        await stack.enter_async_context(DeliveryMaintenanceWorker(delivery_service))
-        await stack.enter_async_context(
+        delivery_maintenance = await stack.enter_async_context(
+            DeliveryMaintenanceWorker(delivery_service)
+        )
+        approval_expiry = await stack.enter_async_context(
             DeferredApprovalExpiryWorker(deferred_tool_approval_service)
+        )
+        operator_console = OperatorConsoleService(
+            db,
+            history_retention=history_retention,
+            subscription_expiry=subscription_expiry,
+            operation_reconciliation=operation_reconciliation,
+            delivery_maintenance=delivery_maintenance,
+            approval_expiry=approval_expiry,
         )
         yield Runtime(
             bot=bot,
@@ -235,6 +257,7 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             tts_paid_media_adapter=tts_paid_media_adapter,
             inline_chat_service=inline_chat_service,
             deferred_tool_approval_service=deferred_tool_approval_service,
+            operator_console=operator_console,
         )
 
 
@@ -259,6 +282,18 @@ def create_dispatcher(
         tts_paid_media_adapter=runtime.tts_paid_media_adapter,
         inline_chat_service=runtime.inline_chat_service,
         deferred_tool_approval_service=runtime.deferred_tool_approval_service,
+        operator_console=runtime.operator_console,
+        operator_confirmations=OperatorConfirmationStore(),
+        operator_access=OperatorAccessPolicy.from_ids(settings.operator_ids),
+        operator_config=OperatorControlConfig(
+            environment=settings.environment,
+            service_version=__version__,
+            public_purchases_enabled=settings.public_purchases_enabled,
+            ai_content_capture_enabled=(
+                settings.environment == "dev" and settings.logfire_capture_ai_content
+            ),
+            operator_ids=settings.operator_ids,
+        ),
         commerce_policy=CommercePolicy(
             public_intake_enabled=settings.public_purchases_enabled
         ),

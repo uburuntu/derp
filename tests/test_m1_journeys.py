@@ -459,6 +459,7 @@ async def test_m1_dispatch_journey_matrix(
         tts_paid_media_adapter=MagicMock(),
         inline_chat_service=MagicMock(),
         deferred_tool_approval_service=MagicMock(),
+        operator_console=MagicMock(),
     )
     dispatcher = create_dispatcher(
         runtime,
