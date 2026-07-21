@@ -25,7 +25,15 @@ from aiogram.types import (
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from derp.artifacts import ArtifactTooLargeError, FilesystemArtifactStore
+from derp.artifacts import (
+    ArtifactKey,
+    ArtifactKind,
+    ArtifactMetadata,
+    ArtifactStore,
+    ArtifactTooLargeError,
+    FilesystemArtifactStore,
+    StoredArtifact,
+)
 from derp.delivery import (
     MAX_TELEGRAM_PHOTO_BYTES,
     Delivered,
@@ -75,6 +83,38 @@ class DeliveryEnvironment:
     bot: MagicMock
     reversal: MagicMock
     clock: MutableClock
+
+
+class PausingArtifactStore:
+    """Pause after an atomic file write so caller cancellation can be tested."""
+
+    def __init__(self, backing: ArtifactStore) -> None:
+        self.backing = backing
+        self.written = asyncio.Event()
+        self.resume = asyncio.Event()
+        self.metadata: ArtifactMetadata | None = None
+
+    async def put(
+        self,
+        *,
+        kind: ArtifactKind,
+        mime_type: str,
+        data: bytes,
+    ) -> ArtifactMetadata:
+        self.metadata = await self.backing.put(
+            kind=kind,
+            mime_type=mime_type,
+            data=data,
+        )
+        self.written.set()
+        await self.resume.wait()
+        return self.metadata
+
+    async def read(self, key: ArtifactKey | str) -> StoredArtifact:
+        return await self.backing.read(key)
+
+    async def delete(self, key: ArtifactKey | str) -> bool:
+        return await self.backing.delete(key)
 
 
 @pytest_asyncio.fixture
@@ -226,6 +266,47 @@ async def _requester_telegram_id(
         )
     assert telegram_id is not None
     return telegram_id
+
+
+async def test_cancellation_after_file_write_finishes_discoverable_persistence(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    operation_id = await _operation(delivery_env)
+    backing = delivery_env.service._artifact_store
+    pausing = PausingArtifactStore(backing)
+    delivery_env.service._artifact_store = pausing
+    task = asyncio.create_task(
+        delivery_env.service.persist_result(
+            operation_id,
+            media=(
+                DeliveryMedia(
+                    TelegramMediaKind.PHOTO,
+                    "image/png",
+                    b"private-generated-image",
+                ),
+            ),
+            target=DeliveryTarget(-1001, 77, 42),
+        )
+    )
+    await pausing.written.wait()
+
+    task.cancel()
+    pausing.resume.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert pausing.metadata is not None
+    stored = await backing.read(pausing.metadata.key)
+    assert stored.data == b"private-generated-image"
+    async with delivery_env.transactions() as session:
+        assert await session.scalar(
+            select(Artifact).where(Artifact.operation_id == operation_id.value)
+        )
+        assert await session.scalar(
+            select(DeliveryIntent).where(
+                DeliveryIntent.operation_id == operation_id.value
+            )
+        )
 
 
 def _message(message_id: int) -> MagicMock:

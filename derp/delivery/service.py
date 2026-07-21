@@ -7,7 +7,7 @@ import hashlib
 import re
 import uuid
 from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -185,6 +185,32 @@ class DeliveryService:
         if existing is not None:
             return existing
 
+        persistence = asyncio.create_task(
+            self._persist_new_result(
+                operation_id,
+                delivery_media=delivery_media,
+                target=target,
+                caption=normalized_caption,
+            ),
+            name=f"persist-delivery-{operation_id}",
+        )
+        try:
+            return await asyncio.shield(persistence)
+        except asyncio.CancelledError:
+            # Once a file write starts, let the filesystem/DB unit finish or clean
+            # itself so cancellation cannot leave an undiscoverable private blob.
+            with suppress(Exception, asyncio.CancelledError):
+                await persistence
+            raise
+
+    async def _persist_new_result(
+        self,
+        operation_id: OperationId,
+        *,
+        delivery_media: tuple[DeliveryMedia, ...],
+        target: DeliveryTarget,
+        caption: str | None,
+    ) -> PreparedDelivery:
         stored: list[ArtifactMetadata] = []
         try:
             for item in delivery_media:
@@ -254,7 +280,7 @@ class DeliveryService:
                         resend_token_hash=self._token_codec.digest(resend_token),
                         state="not_ready",
                         expires_at=expires_at,
-                        caption=normalized_caption,
+                        caption=caption,
                         created_at=now,
                         updated_at=now,
                     )
@@ -270,19 +296,28 @@ class DeliveryService:
                 resend_token,
                 len(stored),
             )
-        except Exception:
-            for metadata in stored:
-                try:
-                    await self._artifact_store.delete(metadata.key)
-                except ArtifactStoreError:
-                    logfire.warning(
-                        "artifact_orphan_cleanup_failed",
-                        operation_id=str(operation_id),
-                        artifact_key_fingerprint=hashlib.sha256(
-                            str(metadata.key).encode()
-                        ).hexdigest()[:12],
-                    )
+        except BaseException:
+            await asyncio.shield(
+                self._delete_uncommitted_artifacts(operation_id, stored)
+            )
             raise
+
+    async def _delete_uncommitted_artifacts(
+        self,
+        operation_id: OperationId,
+        stored: list[ArtifactMetadata],
+    ) -> None:
+        for metadata in stored:
+            try:
+                await self._artifact_store.delete(metadata.key)
+            except ArtifactStoreError:
+                logfire.warning(
+                    "artifact_orphan_cleanup_failed",
+                    operation_id=str(operation_id),
+                    artifact_key_fingerprint=hashlib.sha256(
+                        str(metadata.key).encode()
+                    ).hexdigest()[:12],
+                )
 
     async def mark_ready(self, operation_id: OperationId) -> bool:
         """Open delivery only after the operation's spend has been captured."""
