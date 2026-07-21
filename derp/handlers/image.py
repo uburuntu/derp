@@ -10,8 +10,17 @@ from aiogram.types import (
     Message,
 )
 from aiogram.utils.i18n import gettext as _
+from pydantic_ai import (
+    DeferredToolRequests,
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+)
+from pydantic_ai.messages import UserPromptPart
 
-from derp.catalog import GoogleModelKey
+from derp.approvals import DeferredToolApprovalService
+from derp.approvals.image_tools import ImageToolRunContext
+from derp.catalog import GoogleModelKey, get_google_model
 from derp.common.extractor import Extractor
 from derp.delivery import (
     Delivered,
@@ -20,13 +29,11 @@ from derp.delivery import (
     DeliveryResendCallback,
     DeliveryService,
     DeliveryStateError,
-    DeliveryTarget,
     DeliveryUncertain,
     ProgressStage,
     ResendCallbackAuthorization,
     ResendResult,
 )
-from derp.execution import Feature, plan_execution
 from derp.features import (
     ImageAwaitingFunding,
     ImageDelivered,
@@ -34,7 +41,6 @@ from derp.features import (
     ImageEditRequest,
     ImageGenerateRequest,
     ImageInProgress,
-    ImageInvocation,
     ImageNotCharged,
     ImageNotChargedReason,
     ImageOperationCoordinator,
@@ -43,12 +49,12 @@ from derp.features import (
     ImageRequest,
 )
 from derp.filters.meta import MetaCommand, MetaInfo
-from derp.history.core import DEFAULT_TOKEN_ESTIMATOR
+from derp.handlers.tool_approvals import present_image_approvals
 from derp.media import image_reference_from_telegram
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
-from derp.operations import OperationId, ReservationRejection
+from derp.operations import ReservationRejection
 
 router = Router(name="image")
 
@@ -213,64 +219,54 @@ async def _finish_outcome(
     )
 
 
-def _delivery_target(message: Message, reply_to: Message) -> DeliveryTarget:
-    return DeliveryTarget(
-        chat_id=message.chat.id,
-        thread_id=message.message_thread_id,
-        reply_to_message_id=reply_to.message_id,
-        business_connection_id=message.business_connection_id,
-    )
-
-
-async def _run_image_operation(
+async def _present_command_approval(
     *,
     message: Message,
-    meta: MetaInfo,
     coordinator: ImageOperationCoordinator,
+    approvals: DeferredToolApprovalService,
     user_model: UserModel,
     chat_model: ChatModel,
-    feature: Feature,
     request: ImageRequest,
-) -> Message:
-    operation_id = OperationId.for_command(
-        feature=feature,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-    )
-    target_message = meta.target_message
-    target = _delivery_target(message, target_message)
-    invocation = ImageInvocation(
-        operation_id=operation_id,
-        request_key=(
-            f"telegram:command:{feature.value}:{message.chat.id}:{message.message_id}"
-        ),
-        requester_id=user_model.id,
-        chat_id=chat_model.id,
-        thread_id=target.thread_id,
-        target=target,
-        input_tokens=DEFAULT_TOKEN_ESTIMATOR.estimate_text(request.prompt),
-    )
-    plan = plan_execution(feature, GoogleModelKey.IMAGE)
+) -> Message | None:
+    """Map an explicit command into the same deferred tool contract as chat."""
+    if isinstance(request, ImageGenerateRequest):
+        tool_call = ToolCallPart(
+            "generate_image",
+            {"prompt": request.prompt, "style": request.style},
+            "command-image",
+        )
+        source = None
+    else:
+        tool_call = ToolCallPart(
+            "edit_image",
+            {"edit_prompt": request.prompt},
+            "command-image",
+        )
+        source = request.source
 
-    progress = await message.reply(_("Preparing image..."))
-    progress = await _edit_progress(progress, _("Generating image..."))
-    try:
-        outcome = await coordinator.run(invocation, plan, request)
-    except Exception as exc:
-        report_exception(
-            "image_operation_failed",
-            exception=exc,
-            operation_id=str(operation_id),
-            feature=feature.value,
-        )
-        return await _edit_progress(
-            progress,
-            _(
-                "The image request could not be completed. "
-                "Check your credit balance before retrying."
-            ),
-        )
-    return await _finish_outcome(progress, outcome)
+    model = get_google_model(GoogleModelKey.CHAT_ECONOMY)
+    history = (
+        ModelRequest(parts=[UserPromptPart(request.prompt)]),
+        ModelResponse(parts=[tool_call], model_name=model.provider_model_id),
+    )
+    context = ImageToolRunContext(
+        requester_id=user_model.id,
+        requester_telegram_id=user_model.telegram_id,
+        chat_id=chat_model.id,
+        chat_telegram_id=message.chat.id,
+        message_id=message.message_id,
+        thread_id=message.message_thread_id,
+        business_connection_id=message.business_connection_id,
+        source=source,
+    )
+    return await present_image_approvals(
+        message=message,
+        requests=DeferredToolRequests(approvals=[tool_call]),
+        original_history=history,
+        context=context,
+        image_operations=coordinator,
+        approvals=approvals,
+    )
 
 
 @router.callback_query(DeliveryResendCallback.filter())
@@ -332,10 +328,11 @@ async def handle_imagine(
     message: Message,
     meta: MetaInfo,
     image_operation_coordinator: ImageOperationCoordinator,
+    deferred_tool_approval_service: DeferredToolApprovalService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
-) -> Message:
-    """Create one durable image-generation operation from a Telegram command."""
+) -> Message | None:
+    """Present the same exact image quote used by natural-language requests."""
     prompt = meta.target_text
     if not prompt:
         return await message.reply(_("Usage: /imagine <prompt>"))
@@ -348,13 +345,12 @@ async def handle_imagine(
         request = ImageGenerateRequest(prompt=prompt)
     except TypeError, ValueError:
         return await message.reply(_("The image prompt is too long or invalid."))
-    return await _run_image_operation(
+    return await _present_command_approval(
         message=message,
-        meta=meta,
         coordinator=image_operation_coordinator,
+        approvals=deferred_tool_approval_service,
         user_model=user_model,
         chat_model=chat_model,
-        feature=Feature.IMAGE_GENERATE,
         request=request,
     )
 
@@ -365,10 +361,11 @@ async def handle_edit(
     message: Message,
     meta: MetaInfo,
     image_operation_coordinator: ImageOperationCoordinator,
+    deferred_tool_approval_service: DeferredToolApprovalService,
     user_model: UserModel | None = None,
     chat_model: ChatModel | None = None,
-) -> Message:
-    """Create one durable image-edit operation from Telegram source metadata."""
+) -> Message | None:
+    """Present a deferred edit quote while retaining only Telegram references."""
     prompt = meta.target_text
     if not prompt:
         return await message.reply(_("Reply to an image and use: /edit <prompt>"))
@@ -389,12 +386,11 @@ async def handle_edit(
         )
     except TypeError, ValueError:
         return await message.reply(_("That image cannot be edited."))
-    return await _run_image_operation(
+    return await _present_command_approval(
         message=message,
-        meta=meta,
         coordinator=image_operation_coordinator,
+        approvals=deferred_tool_approval_service,
         user_model=user_model,
         chat_model=chat_model,
-        feature=Feature.IMAGE_EDIT,
         request=request,
     )

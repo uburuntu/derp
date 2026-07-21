@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 from aiogram.types import CallbackQuery, PhotoSize
+from pydantic_ai import DeferredToolRequests, ModelResponse
 
-from derp.catalog import GoogleModelKey, ImageResolution
+from derp.approvals import DeferredToolApprovalService
+from derp.catalog import GoogleModelKey, ImageResolution, get_google_model
 from derp.delivery import (
     Delivered,
     DeliveryAuthorizationError,
@@ -28,8 +30,6 @@ from derp.features import (
     ImageAwaitingFunding,
     ImageDelivered,
     ImageDeliveryUncertain,
-    ImageEditRequest,
-    ImageGenerateRequest,
     ImageInProgress,
     ImageNotCharged,
     ImageNotChargedReason,
@@ -56,7 +56,10 @@ RESEND_TOKEN = "A" * 43
 
 
 def _models() -> tuple[SimpleNamespace, SimpleNamespace]:
-    return SimpleNamespace(id=uuid4()), SimpleNamespace(id=uuid4())
+    return (
+        SimpleNamespace(id=uuid4(), telegram_id=12345),
+        SimpleNamespace(id=uuid4(), telegram_id=-100_500),
+    )
 
 
 def _meta(*, prompt: str, target_message) -> SimpleNamespace:
@@ -67,11 +70,13 @@ def _meta(*, prompt: str, target_message) -> SimpleNamespace:
 async def test_imagine_requires_prompt_before_creating_operation(make_message) -> None:
     message = make_message(text="/imagine", business_connection_id=None)
     coordinator = AsyncMock(spec=ImageOperationCoordinator)
+    approvals = MagicMock(spec=DeferredToolApprovalService)
 
     await handle_imagine(
         message,
         _meta(prompt="", target_message=message),
         coordinator,
+        approvals,
     )
 
     assert "Usage" in message.reply.await_args.args[0]
@@ -79,7 +84,7 @@ async def test_imagine_requires_prompt_before_creating_operation(make_message) -
 
 
 @pytest.mark.asyncio
-async def test_imagine_builds_stable_scoped_operation_and_uses_coordinator(
+async def test_imagine_builds_stable_scoped_deferred_approval(
     make_message,
 ) -> None:
     message = make_message(
@@ -91,46 +96,55 @@ async def test_imagine_builds_stable_scoped_operation_and_uses_coordinator(
     )
     user_model, chat_model = _models()
     coordinator = AsyncMock(spec=ImageOperationCoordinator)
-    operation_id = OperationId.for_command(
-        feature=Feature.IMAGE_GENERATE,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-    )
-    coordinator.run.return_value = ImageDelivered(operation_id, (9001,))
+    approvals = MagicMock(spec=DeferredToolApprovalService)
 
-    result = await handle_imagine(
-        message,
-        _meta(prompt="a lighthouse", target_message=message),
-        coordinator,
-        user_model,
-        chat_model,
-    )
+    with patch(
+        "derp.handlers.image.present_image_approvals",
+        new=AsyncMock(return_value=message),
+    ) as present:
+        result = await handle_imagine(
+            message,
+            _meta(prompt="a lighthouse", target_message=message),
+            coordinator,
+            approvals,
+            user_model,
+            chat_model,
+        )
 
-    invocation, plan, request = coordinator.run.await_args.args
-    assert invocation.operation_id == operation_id
-    assert invocation.request_key == ("telegram:command:image_generate:-100500:77")
-    assert invocation.requester_id == user_model.id
-    assert invocation.chat_id == chat_model.id
-    assert invocation.thread_id == 42
-    assert invocation.target.chat_id == -100_500
-    assert invocation.target.thread_id == 42
-    assert invocation.target.reply_to_message_id == 77
-    assert invocation.target.business_connection_id == "business-1"
-    assert invocation.input_tokens > 0
-    assert plan.feature is Feature.IMAGE_GENERATE
-    assert plan.model.key is GoogleModelKey.IMAGE
-    assert request == ImageGenerateRequest("a lighthouse")
-    assert coordinator.run.await_args.kwargs == {}
-    message.edit_text.assert_awaited_once_with(
-        "Generating image...",
-        reply_markup=None,
+    kwargs = present.await_args.kwargs
+    requests = kwargs["requests"]
+    assert isinstance(requests, DeferredToolRequests)
+    assert len(requests.approvals) == 1
+    tool_call = requests.approvals[0]
+    assert tool_call.tool_name == "generate_image"
+    assert tool_call.tool_call_id == "command-image"
+    assert tool_call.args_as_dict(raise_if_invalid=True) == {
+        "prompt": "a lighthouse",
+        "style": None,
+    }
+    context = kwargs["context"]
+    assert context.requester_id == user_model.id
+    assert context.requester_telegram_id == user_model.telegram_id
+    assert context.chat_id == chat_model.id
+    assert context.chat_telegram_id == -100_500
+    assert context.message_id == 77
+    assert context.thread_id == 42
+    assert context.business_connection_id == "business-1"
+    assert context.source is None
+    assert kwargs["image_operations"] is coordinator
+    assert kwargs["approvals"] is approvals
+    response = kwargs["original_history"][-1]
+    assert isinstance(response, ModelResponse)
+    assert (
+        response.model_name
+        == get_google_model(GoogleModelKey.CHAT_ECONOMY).provider_model_id
     )
-    message.delete.assert_awaited_once_with()
+    coordinator.run.assert_not_awaited()
     assert result is message
 
 
 @pytest.mark.asyncio
-async def test_delivered_image_edits_status_when_progress_delete_fails(
+async def test_imagine_never_executes_before_the_run_callback(
     make_message,
 ) -> None:
     message = make_message(
@@ -138,28 +152,26 @@ async def test_delivered_image_edits_status_when_progress_delete_fails(
         text="/imagine a lighthouse",
         business_connection_id=None,
     )
-    message.delete.side_effect = RuntimeError("delete failed")
     user_model, chat_model = _models()
     coordinator = AsyncMock(spec=ImageOperationCoordinator)
-    operation_id = OperationId.for_command(
-        feature=Feature.IMAGE_GENERATE,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-    )
-    coordinator.run.return_value = ImageDelivered(operation_id, (9001,))
+    approvals = MagicMock(spec=DeferredToolApprovalService)
 
-    await handle_imagine(
-        message,
-        _meta(prompt="a lighthouse", target_message=message),
-        coordinator,
-        user_model,
-        chat_model,
-    )
+    with patch(
+        "derp.handlers.image.present_image_approvals",
+        new=AsyncMock(return_value=message),
+    ):
+        await handle_imagine(
+            message,
+            _meta(prompt="a lighthouse", target_message=message),
+            coordinator,
+            approvals,
+            user_model,
+            chat_model,
+        )
 
-    assert message.edit_text.await_args_list == [
-        call("Generating image...", reply_markup=None),
-        call("Image delivered.", reply_markup=None),
-    ]
+    coordinator.run.assert_not_awaited()
+    message.edit_text.assert_not_awaited()
+    message.delete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -189,31 +201,31 @@ async def test_edit_passes_stable_telegram_reference_without_downloading(
     )
     user_model, chat_model = _models()
     coordinator = AsyncMock(spec=ImageOperationCoordinator)
-    operation_id = OperationId.for_command(
-        feature=Feature.IMAGE_EDIT,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-    )
-    coordinator.run.return_value = ImageDelivered(operation_id, (9002,))
+    approvals = MagicMock(spec=DeferredToolApprovalService)
 
-    await handle_edit(
-        message,
-        _meta(prompt="add fog", target_message=message),
-        coordinator,
-        user_model,
-        chat_model,
-    )
+    with patch(
+        "derp.handlers.image.present_image_approvals",
+        new=AsyncMock(return_value=message),
+    ) as present:
+        await handle_edit(
+            message,
+            _meta(prompt="add fog", target_message=message),
+            coordinator,
+            approvals,
+            user_model,
+            chat_model,
+        )
 
-    invocation, plan, request = coordinator.run.await_args.args
-    assert invocation.operation_id == operation_id
-    assert invocation.target.reply_to_message_id == message.message_id
-    assert plan.feature is Feature.IMAGE_EDIT
-    assert isinstance(request, ImageEditRequest)
-    assert request.prompt == "add fog"
-    assert request.source.file_id == "telegram-file"
-    assert request.source.file_unique_id == "stable-file"
-    assert request.source.metadata.mime_type == "image/jpeg"
-    assert request.source.metadata.file_size == 321
+    kwargs = present.await_args.kwargs
+    tool_call = kwargs["requests"].approvals[0]
+    assert tool_call.tool_name == "edit_image"
+    assert tool_call.args_as_dict(raise_if_invalid=True) == {"edit_prompt": "add fog"}
+    source_reference = kwargs["context"].source
+    assert source_reference.file_id == "telegram-file"
+    assert source_reference.file_unique_id == "stable-file"
+    assert source_reference.metadata.mime_type == "image/jpeg"
+    assert source_reference.metadata.file_size == 321
+    coordinator.run.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -224,11 +236,13 @@ async def test_edit_requires_source_image(make_message) -> None:
     )
     user_model, chat_model = _models()
     coordinator = AsyncMock(spec=ImageOperationCoordinator)
+    approvals = MagicMock(spec=DeferredToolApprovalService)
 
     await handle_edit(
         message,
         _meta(prompt="add fog", target_message=message),
         coordinator,
+        approvals,
         user_model,
         chat_model,
     )
