@@ -24,6 +24,10 @@ This directory contains localization files for the bot, managed using `pybabel` 
     make i18n-update
     ```
 
+    The update command disables fuzzy matching. Changed source strings stay
+    untranslated until a person reviews them instead of inheriting a similar,
+    potentially incorrect translation.
+
     * **New Language?**: If adding a new language (e.g., `fr` for French), initialize its `.po` file first:
 
         ```bash
@@ -50,4 +54,6 @@ Run `make i18n` to extract, update, and compile in one step.
 
 * Keep `.po` files in version control so translations are tracked.
 * Regularly run the `extract`, `update`, and `compile` steps as you modify the code.
+* Keep the Russian catalog complete and free of fuzzy entries; `tests/test_locales.py`
+  enforces this together with placeholder validity and the `Дерп` persona name.
 * Use descriptive comments in the code for translators if necessary (e.g., `# Translators: ...`). They can be extracted using `pybabel extract --add-comments=Translators: ...`.

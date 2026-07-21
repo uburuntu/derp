@@ -140,7 +140,7 @@ i18n-extract:
 
 ## Update .po files from messages.pot
 i18n-update:
-	uv run pybabel update --ignore-obsolete -d derp/locales -D messages -i derp/locales/messages.pot
+	uv run pybabel update --ignore-obsolete --no-fuzzy-matching -d derp/locales -D messages -i derp/locales/messages.pot
 
 ## Compile .po to .mo
 i18n-compile:
