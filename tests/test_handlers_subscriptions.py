@@ -18,6 +18,7 @@ from derp.handlers.subscriptions import (
     SubscriptionAction,
     SubscriptionCallback,
     build_subscription_panel,
+    reject_stale_subscription_callback,
     set_subscription_renewal,
     show_subscription,
 )
@@ -62,10 +63,18 @@ def test_panel_shows_cancel_for_active_renewal_without_charge_id() -> None:
     text, markup = build_subscription_panel(_snapshot(), now=NOW)
 
     assert "renews automatically" in text
+    assert "19 Aug 2026, 12:00 UTC" in text
     assert "private-charge-id" not in text
     assert markup is not None
     callback = SubscriptionCallback.unpack(markup.inline_keyboard[0][0].callback_data)
     assert callback.action is SubscriptionAction.CANCEL
+
+
+def test_panel_localizes_utc_date_in_russian(setup_i18n) -> None:
+    with setup_i18n.use_locale("ru"):
+        text, _ = build_subscription_panel(_snapshot(), now=NOW)
+
+    assert "19 авг. 2026, 12:00 UTC" in text
 
 
 def test_panel_keeps_paid_period_when_renewal_is_off() -> None:
@@ -262,6 +271,38 @@ async def test_callback_rejects_changed_actor_before_provider_io(
 
     service.set_renewal.assert_not_awaited()
     callback.answer.assert_awaited_once_with(
-        "These plan controls are no longer valid. Open /plan again.",
+        "This plan link is no longer valid. Open /plan again.",
+        show_alert=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_callback_reports_when_plan_cannot_be_managed() -> None:
+    callback = MagicMock(spec=CallbackQuery)
+    callback.message = None
+    callback.answer = AsyncMock()
+    service = MagicMock()
+
+    await set_subscription_renewal(
+        callback,
+        SubscriptionCallback(action=SubscriptionAction.CANCEL),
+        service,
+    )
+
+    callback.answer.assert_awaited_once_with(
+        "I can't manage this plan right now",
+        show_alert=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_plan_button_names_the_expired_action() -> None:
+    callback = MagicMock(spec=CallbackQuery)
+    callback.answer = AsyncMock()
+
+    await reject_stale_subscription_callback(callback)
+
+    callback.answer.assert_awaited_once_with(
+        "This plan button expired. Open /plan again.",
         show_alert=True,
     )
