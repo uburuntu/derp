@@ -61,7 +61,7 @@ def mock_operation_ledger():
 
 @pytest.mark.asyncio
 async def test_show_credits_with_chat(make_message, mock_sender, mock_operation_ledger):
-    """Test /credits shows user and chat credits."""
+    """Group /credits sends sensitive wallet details only to the actor."""
     message = make_message(text="/credits")
     sender = mock_sender(message=message)
 
@@ -81,11 +81,16 @@ async def test_show_credits_with_chat(make_message, mock_sender, mock_operation_
 
     await show_credits(message, sender, mock_operation_ledger, user_model, chat_model)
 
-    sender.reply.assert_awaited_once()
-    response = _get_text_from_call_args(sender.reply.call_args)
-    assert "50" in response
-    assert "25" in response
-    assert "This chat" in response
+    private = message.bot.send_message.await_args.kwargs
+    assert private["chat_id"] == user_model.telegram_id
+    assert private["protect_content"] is True
+    assert "50" in private["text"]
+    assert "25" in private["text"]
+    assert "This chat" in private["text"]
+    public = _get_text_from_call_args(sender.reply.await_args)
+    assert public == "I sent your balance in a private chat."
+    assert "50" not in public
+    assert "25" not in public
 
 
 @pytest.mark.asyncio

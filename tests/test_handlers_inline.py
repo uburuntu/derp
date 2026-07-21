@@ -1,10 +1,20 @@
 """Tests for inline query handler."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 import pytest
 
+from derp.features.inline_chat import (
+    InlineChatCompleted,
+    InlineChatExhausted,
+    InlineChatFailed,
+    InlineChatFailureReason,
+    InlineChatInvalid,
+)
 from derp.handlers.inline import (
     chosen_inline_result,
     inline_query_empty,
@@ -72,107 +82,150 @@ async def test_chosen_inline_result_no_message_id():
     bot = MagicMock()
     bot.edit_message_text = AsyncMock()
 
-    await chosen_inline_result(result, bot)
+    service = AsyncMock()
+
+    await chosen_inline_result(result, bot, service)
 
     bot.edit_message_text.assert_not_awaited()
+    service.answer.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_chosen_inline_result_success():
-    """Test chosen result generates and sends response via MessageSender."""
+    """A typed successful answer is edited without serializing the Telegram user."""
     result = MagicMock()
     result.inline_message_id = str(uuid.uuid4())
     result.from_user.id = 12345
-    result.from_user.model_dump_json.return_value = '{"id": 12345}'
+    result.from_user.model_dump_json = MagicMock(
+        side_effect=AssertionError("profile must not be serialized")
+    )
     result.query = "What is Python?"
 
     bot = MagicMock()
     bot.edit_message_text = AsyncMock()
+    service = AsyncMock()
+    service.answer.return_value = InlineChatCompleted(
+        "Python is a programming language.",
+        9,
+    )
+    user_id = UUID("52ee6f22-6411-41bb-b8e5-1af379ecf508")
 
-    with patch("derp.handlers.inline.create_inline_agent") as mock_create:
-        mock_agent = mock_create.return_value
-        mock_agent.run = AsyncMock()
-        mock_agent.run.return_value.output = "Python is a programming language."
+    await chosen_inline_result(
+        result,
+        bot,
+        service,
+        SimpleNamespace(id=user_id),
+    )
 
-        await chosen_inline_result(result, bot)
-
-        mock_create.assert_called_once()
-        mock_agent.run.assert_awaited_once()
-        # MessageSender uses bot.edit_message_text internally
-        bot.edit_message_text.assert_awaited_once()
-
-        call_args = bot.edit_message_text.call_args
-        text = _get_text_from_call_args(call_args)
-        assert "Python" in text
+    service.answer.assert_awaited_once_with(
+        user_id=user_id,
+        query="What is Python?",
+    )
+    result.from_user.model_dump_json.assert_not_called()
+    bot.edit_message_text.assert_awaited_once()
+    text = _get_text_from_call_args(bot.edit_message_text.call_args)
+    assert "Python" in text
+    assert "What is Python?" not in text
 
 
 @pytest.mark.asyncio
-async def test_chosen_inline_result_empty_response():
-    """Test chosen result with empty agent response."""
+async def test_chosen_inline_result_missing_user_model_is_clear():
     result = MagicMock()
     result.inline_message_id = str(uuid.uuid4())
     result.from_user.id = 12345
-    result.from_user.model_dump_json.return_value = '{"id": 12345}'
     result.query = "test"
 
     bot = MagicMock()
     bot.edit_message_text = AsyncMock()
+    service = AsyncMock()
 
-    with patch("derp.handlers.inline.create_inline_agent") as mock_create:
-        mock_agent = mock_create.return_value
-        mock_agent.run = AsyncMock()
-        mock_agent.run.return_value.output = ""
+    await chosen_inline_result(result, bot, service)
 
-        await chosen_inline_result(result, bot)
-
-        bot.edit_message_text.assert_awaited_once()
-        text = _get_text_from_call_args(bot.edit_message_text.call_args)
-        assert "tangled" in text
+    service.answer.assert_not_awaited()
+    text = _get_text_from_call_args(bot.edit_message_text.call_args)
+    assert "verify your inline allowance" in text
 
 
 @pytest.mark.asyncio
-async def test_chosen_inline_result_rate_limited():
-    """Test chosen result handles rate limiting."""
-    from pydantic_ai.exceptions import UnexpectedModelBehavior
-
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (
+            InlineChatExhausted(datetime(2026, 7, 22, tzinfo=UTC), 10),
+            "Daily inline limit reached",
+        ),
+        (InlineChatInvalid(), "empty or too long"),
+        (
+            InlineChatFailed(
+                InlineChatFailureReason.ALLOWANCE_UNAVAILABLE,
+                None,
+            ),
+            "verify your inline allowance",
+        ),
+        (
+            InlineChatFailed(InlineChatFailureReason.PROVIDER_TIMEOUT, 8),
+            "took too long",
+        ),
+        (
+            InlineChatFailed(InlineChatFailureReason.PROVIDER_REJECTED, 8),
+            "different question",
+        ),
+        (
+            InlineChatFailed(InlineChatFailureReason.UNUSABLE_OUTPUT, 8),
+            "no usable answer",
+        ),
+        (
+            InlineChatFailed(InlineChatFailureReason.PROVIDER_ERROR, 8),
+            "right now",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chosen_inline_result_renders_every_non_success_state(
+    outcome: object,
+    expected: str,
+) -> None:
     result = MagicMock()
     result.inline_message_id = str(uuid.uuid4())
     result.from_user.id = 12345
-    result.from_user.model_dump_json.return_value = '{"id": 12345}'
     result.query = "test"
-
     bot = MagicMock()
     bot.edit_message_text = AsyncMock()
+    service = AsyncMock()
+    service.answer.return_value = outcome
 
-    with patch("derp.handlers.inline.create_inline_agent") as mock_create:
-        mock_agent = mock_create.return_value
-        mock_agent.run = AsyncMock(side_effect=UnexpectedModelBehavior("Rate limited"))
+    await chosen_inline_result(
+        result,
+        bot,
+        service,
+        SimpleNamespace(id=UUID("52ee6f22-6411-41bb-b8e5-1af379ecf508")),
+    )
 
-        await chosen_inline_result(result, bot)
-
-        bot.edit_message_text.assert_awaited_once()
-        text = _get_text_from_call_args(bot.edit_message_text.call_args)
-        assert "too many requests" in text
+    bot.edit_message_text.assert_awaited_once()
+    assert expected in _get_text_from_call_args(bot.edit_message_text.call_args)
 
 
 @pytest.mark.asyncio
 async def test_chosen_inline_result_exception():
-    """Test chosen result handles unexpected errors."""
+    """Unexpected subsystem failure is redacted and rendered generically."""
     result = MagicMock()
     result.inline_message_id = str(uuid.uuid4())
     result.from_user.id = 12345
-    result.from_user.model_dump_json.return_value = '{"id": 12345}'
     result.query = "test"
 
     bot = MagicMock()
     bot.edit_message_text = AsyncMock()
+    service = AsyncMock()
+    service.answer.side_effect = RuntimeError("private failure detail")
 
-    with patch("derp.handlers.inline.create_inline_agent") as mock_create:
-        mock_agent = mock_create.return_value
-        mock_agent.run = AsyncMock(side_effect=Exception("Unexpected error"))
+    await chosen_inline_result(
+        result,
+        bot,
+        service,
+        SimpleNamespace(id=UUID("52ee6f22-6411-41bb-b8e5-1af379ecf508")),
+    )
 
-        await chosen_inline_result(result, bot)
-
-        bot.edit_message_text.assert_awaited_once()
-        text = _get_text_from_call_args(bot.edit_message_text.call_args)
-        assert "Something went wrong" in text
+    bot.edit_message_text.assert_awaited_once()
+    text = _get_text_from_call_args(bot.edit_message_text.call_args)
+    assert "right now" in text
+    assert "private failure detail" not in text

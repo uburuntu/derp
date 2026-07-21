@@ -457,6 +457,7 @@ async def test_m1_dispatch_journey_matrix(
         paid_media_operation_coordinator=MagicMock(),
         paid_media_approval_coordinator=MagicMock(),
         tts_paid_media_adapter=MagicMock(),
+        inline_chat_service=MagicMock(),
         deferred_tool_approval_service=MagicMock(),
     )
     dispatcher = create_dispatcher(

@@ -9,6 +9,7 @@ This module provides LLM access with:
 from derp.catalog import GoogleModelKey, GoogleModelSpec, get_google_model
 from derp.llm.agents import create_chat_agent, create_image_agent, create_inline_agent
 from derp.llm.deps import AgentDeps
+from derp.llm.inline_executor import PydanticAIInlineExecutor
 from derp.llm.providers import RELAXED_SAFETY_SETTINGS, create_model
 from derp.llm.result import AgentResult
 
@@ -25,6 +26,7 @@ __all__ = [
     "create_chat_agent",
     "create_image_agent",
     "create_inline_agent",
+    "PydanticAIInlineExecutor",
     # Result
     "AgentResult",
 ]

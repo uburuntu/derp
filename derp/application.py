@@ -6,6 +6,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
+from functools import partial
 
 import httpx
 import logfire
@@ -26,9 +27,11 @@ from derp.billing import (
     PaymentSettlementService,
     SubscriptionExpiryWorker,
 )
+from derp.command_menu import configure_bot_command_menu
 from derp.common.audio import convert_to_ogg_opus
 from derp.config import Settings
 from derp.db import DatabaseManager, init_db_manager
+from derp.db.inline_allowance import PostgresInlineAllowance
 from derp.delivery import (
     MAX_TELEGRAM_FILE_BYTES,
     DeliveryMaintenanceWorker,
@@ -38,6 +41,7 @@ from derp.delivery import (
 from derp.features import (
     ImageFeatureService,
     ImageOperationCoordinator,
+    InlineChatFeatureService,
     TtsFeatureService,
 )
 from derp.features.chat_accounting import ChatTurnAccounting
@@ -54,14 +58,14 @@ from derp.handlers import (
     inline,
     paid_media_delivery,
     payments,
+    premium_suspension,
     subscriptions,
-    think,
     tts,
-    video,
 )
 from derp.health import RuntimeHeartbeat
 from derp.history.retention import HistoryRetentionWorker
 from derp.llm.image_executor import PydanticAIImageExecutor
+from derp.llm.inline_executor import PydanticAIInlineExecutor
 from derp.llm.tts_executor import GoogleTtsExecutor
 from derp.media import MediaGateway, TelegramImageSourceLoader
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
@@ -88,12 +92,11 @@ APPLICATION_ROUTERS = (
     basic.router,
     donations.router,
     credit_cmds.router,
-    think.router,
+    premium_suspension.router,
     payments.router,
     subscriptions.router,
     paid_media_delivery.router,
     image.router,
-    video.router,
     tts.router,
     inline.router,
     chat.router,
@@ -116,6 +119,7 @@ class Runtime:
     paid_media_operation_coordinator: PaidMediaOperationCoordinator
     paid_media_approval_coordinator: PaidMediaApprovalCoordinator
     tts_paid_media_adapter: TtsPaidMediaAdapter
+    inline_chat_service: InlineChatFeatureService
     deferred_tool_approval_service: DeferredToolApprovalService
 
 
@@ -199,6 +203,10 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             operation_ledger,
             request_binder,
         )
+        inline_chat_service = InlineChatFeatureService(
+            PostgresInlineAllowance(db.session),
+            PydanticAIInlineExecutor(),
+        )
         await stack.enter_async_context(HistoryRetentionWorker(db))
         await stack.enter_async_context(
             SubscriptionExpiryWorker(PaymentSettlementService(db.session))
@@ -225,6 +233,7 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             paid_media_operation_coordinator=paid_media_operation_coordinator,
             paid_media_approval_coordinator=paid_media_approval_coordinator,
             tts_paid_media_adapter=tts_paid_media_adapter,
+            inline_chat_service=inline_chat_service,
             deferred_tool_approval_service=deferred_tool_approval_service,
         )
 
@@ -248,6 +257,7 @@ def create_dispatcher(
         paid_media_operation_coordinator=runtime.paid_media_operation_coordinator,
         paid_media_approval_coordinator=runtime.paid_media_approval_coordinator,
         tts_paid_media_adapter=runtime.tts_paid_media_adapter,
+        inline_chat_service=runtime.inline_chat_service,
         deferred_tool_approval_service=runtime.deferred_tool_approval_service,
         commerce_policy=CommercePolicy(
             public_intake_enabled=settings.public_purchases_enabled
@@ -259,6 +269,13 @@ def create_dispatcher(
 
     bot.session.middleware(ResilientRequestMiddleware(max_retries=3))
     bot.session.middleware(PersistBotActionsMiddleware(db=db))
+    dispatcher.startup.register(
+        partial(
+            configure_bot_command_menu,
+            i18n=i18n,
+            public_purchases_enabled=settings.public_purchases_enabled,
+        )
+    )
 
     dispatcher.update.outer_middleware(LogUpdatesMiddleware(logfire_instance))
     dispatcher.update.outer_middleware(

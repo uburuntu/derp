@@ -11,6 +11,7 @@ from derp.llm.deps import AgentDeps
 from derp.tools.policy import (
     ActorRole,
     ChatTool,
+    ChatToolAccess,
     ChatToolPolicy,
     derive_chat_tool_access,
 )
@@ -122,7 +123,7 @@ def test_owner_and_admin_get_review_and_deletion(actor_role: ActorRole) -> None:
     }
 
 
-def test_expensive_policy_adds_every_generation_and_reasoning_tool() -> None:
+def test_expensive_policy_exposes_only_migrated_generation_tools() -> None:
     access = derive_chat_tool_access(
         ActorRole.MEMBER,
         policy(expensive=True),
@@ -131,10 +132,26 @@ def test_expensive_policy_adds_every_generation_and_reasoning_tool() -> None:
     assert set(create_chat_toolset(access).tools) == {
         "edit_image",
         "generate_image",
-        "think_deep",
-        "video_generate",
         "web_search",
     }
+    assert ChatTool.THINK_DEEP not in access.allowed_tools
+    assert ChatTool.VIDEO_GENERATE not in access.allowed_tools
+
+
+def test_manual_access_cannot_restore_suspended_premium_tools() -> None:
+    access = ChatToolAccess(
+        actor_role=ActorRole.ADMIN,
+        allowed_tools=frozenset(
+            {
+                ChatTool.WEB_SEARCH,
+                ChatTool.THINK_DEEP,
+                ChatTool.VIDEO_GENERATE,
+            }
+        ),
+        shared_credit_spending_enabled=True,
+    )
+
+    assert set(create_chat_toolset(access).tools) == {"web_search"}
 
 
 def test_expensive_policy_removes_generation_reasoning_and_legacy_memory() -> None:

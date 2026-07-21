@@ -10,9 +10,7 @@ from pydantic_ai import FunctionToolset, Tool
 from derp.approvals.image_tools import EDIT_IMAGE_TOOL, GENERATE_IMAGE_TOOL
 from derp.llm.deps import AgentDeps
 from derp.tools.gemini_image import edit_image, generate_image
-from derp.tools.gemini_think import think_deep
 from derp.tools.policy import ChatTool, ChatToolAccess
-from derp.tools.veo_video import video_generate
 from derp.tools.web_search import web_search
 
 
@@ -39,8 +37,8 @@ def create_chat_toolset(
     """Create exactly the tools authorized for one actor and chat policy.
 
     Image calls pause after framework argument validation and execute only from
-    a server-authorized deferred resume. TTS stays command-only until natural
-    calls can resume with the same quote and finishing-cost guarantees.
+    a server-authorized deferred resume. Suspended premium capabilities are not
+    registered even if a caller manually includes them in ``access``.
     ``access.shared_credit_spending_enabled`` is settlement metadata and never
     changes which tools the model can see.
     """
@@ -54,10 +52,6 @@ def create_chat_toolset(
         toolset.tool(generate_image, requires_approval=True)
     if access.allows(ChatTool.EDIT_IMAGE):
         toolset.tool(edit_image, requires_approval=True)
-    if access.allows(ChatTool.VIDEO_GENERATE):
-        toolset.tool(video_generate)
-    if access.allows(ChatTool.THINK_DEEP):
-        toolset.tool(think_deep)
 
     if shared_fact_tools is not None:
         for capability in _SHARED_FACT_TOOLS:

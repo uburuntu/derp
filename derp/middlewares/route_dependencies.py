@@ -22,6 +22,7 @@ class RouteEvent(StrEnum):
 
     MESSAGE = "message"
     CALLBACK_QUERY = "callback_query"
+    CHOSEN_INLINE_RESULT = "chosen_inline_result"
     PRE_CHECKOUT_QUERY = "pre_checkout_query"
     MY_CHAT_MEMBER = "my_chat_member"
 
@@ -58,7 +59,6 @@ ROUTE_DEPENDENCY_PLANS: Final[Mapping[RouteDependencyKey, RouteDependencyPlan]] 
             RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "context_settings"): _MODELS,
             RouteDependencyKey(RouteEvent.MY_CHAT_MEMBER, "context_settings"): _MODELS,
             RouteDependencyKey(RouteEvent.MESSAGE, "credit_cmds"): _MODELS,
-            RouteDependencyKey(RouteEvent.MESSAGE, "think"): _MODELS_AND_CREDIT,
             RouteDependencyKey(
                 RouteEvent.CALLBACK_QUERY, "credit_purchase_intake"
             ): RouteDependencyPlan(
@@ -88,9 +88,12 @@ ROUTE_DEPENDENCY_PLANS: Final[Mapping[RouteDependencyKey, RouteDependencyPlan]] 
                 )
             ),
             RouteDependencyKey(RouteEvent.MESSAGE, "image"): _MODELS,
-            RouteDependencyKey(RouteEvent.MESSAGE, "video"): _MODELS_AND_CREDIT,
             RouteDependencyKey(RouteEvent.MESSAGE, "tts"): _MODELS,
             RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "tts"): _MODELS,
+            RouteDependencyKey(
+                RouteEvent.CHOSEN_INLINE_RESULT,
+                "inline",
+            ): _MODELS,
             RouteDependencyKey(RouteEvent.MESSAGE, "chat"): _MODELS,
             RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "tool_approvals"): _MODELS,
         }

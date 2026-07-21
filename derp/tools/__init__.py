@@ -9,7 +9,6 @@ from typing import Any
 __all__ = [
     "web_search",
     "generate_image",
-    "think_deep",
     "create_chat_toolset",
     "credit_aware_tool",
 ]
@@ -26,10 +25,6 @@ def __getattr__(name: str) -> Any:
             from derp.tools.gemini_image import generate_image
 
             return generate_image
-        case "think_deep":
-            from derp.tools.gemini_think import think_deep
-
-            return think_deep
         case "create_chat_toolset":
             from derp.tools.toolsets import create_chat_toolset
 

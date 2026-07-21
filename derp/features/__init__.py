@@ -14,6 +14,21 @@ from derp.features.image import (
     ImageSourceLoader,
     PreparedImageEditRequest,
 )
+from derp.features.inline_chat import (
+    DEFAULT_INLINE_DAILY_REQUESTS,
+    INLINE_CHAT_PLAN,
+    MAX_INLINE_OUTPUT_CHARS,
+    MAX_INLINE_OUTPUT_TOKENS,
+    MAX_INLINE_QUERY_CHARS,
+    InlineChatCompleted,
+    InlineChatExhausted,
+    InlineChatFailed,
+    InlineChatFailureReason,
+    InlineChatFeatureService,
+    InlineChatInvalid,
+    InlineChatOutcome,
+    InlineChatPolicy,
+)
 from derp.features.think import (
     MAX_THINK_OUTPUT_CHARS,
     MAX_THINK_OUTPUT_TOKENS,
@@ -68,7 +83,12 @@ _IMAGE_OPERATION_EXPORTS = frozenset(
 )
 
 __all__ = [
+    "DEFAULT_INLINE_DAILY_REQUESTS",
+    "INLINE_CHAT_PLAN",
     "MAX_IMAGE_OUTPUT_BYTES",
+    "MAX_INLINE_OUTPUT_CHARS",
+    "MAX_INLINE_OUTPUT_TOKENS",
+    "MAX_INLINE_QUERY_CHARS",
     "MAX_THINK_OUTPUT_CHARS",
     "MAX_THINK_OUTPUT_TOKENS",
     "MAX_THINK_PROBLEM_CHARS",
@@ -94,6 +114,14 @@ __all__ = [
     "ImageRefunded",
     "ImageRequest",
     "ImageSourceLoader",
+    "InlineChatCompleted",
+    "InlineChatExhausted",
+    "InlineChatFailed",
+    "InlineChatFailureReason",
+    "InlineChatFeatureService",
+    "InlineChatInvalid",
+    "InlineChatOutcome",
+    "InlineChatPolicy",
     "MediaContent",
     "PreparedImageEditRequest",
     "PreparedThinkRequest",

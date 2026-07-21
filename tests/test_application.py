@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from derp.application import APPLICATION_ROUTERS, open_runtime
-from derp.handlers import debug, donations, payments
+from derp.handlers import chat, debug, donations, payments, premium_suspension
 
 
 def test_payment_router_order_preserves_donations_and_one_reconciliation_path() -> None:
@@ -19,6 +19,16 @@ def test_payment_router_order_preserves_donations_and_one_reconciliation_path() 
         payments.router
     )
     assert payments.reconciliation_router in payments.router.sub_routers
+
+
+def test_premium_suspension_precedes_catch_all_chat() -> None:
+    assert premium_suspension.router in APPLICATION_ROUTERS
+    assert APPLICATION_ROUTERS.index(
+        premium_suspension.router
+    ) < APPLICATION_ROUTERS.index(chat.router)
+    assert {router.name for router in APPLICATION_ROUTERS}.isdisjoint(
+        {"think", "video"}
+    )
 
 
 class FakeBot:
@@ -189,6 +199,10 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
                 is runtime.image_operation_coordinator._request_binder
             )
             assert runtime.tts_paid_media_adapter.service._executor is tts_executor
+            assert (
+                runtime.inline_chat_service._allowance._transactions.__self__
+                is database
+            )
             reconciler = reconciliation_worker.call_args.args[0]
             assert reconciler._delivery is runtime.delivery_service
             assert (

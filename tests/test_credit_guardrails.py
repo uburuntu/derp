@@ -253,21 +253,6 @@ class TestToolCatalogParity:
             assert tool.resolve_plan({}) is None
             assert tool.model_credit_cost(None, {}) == 0
 
-    def test_video_quality_selects_one_model_for_billing_and_execution(self) -> None:
-        tool = get_tool("video_generate")
-        fast = tool.resolve_plan({"quality": "fast"})
-        standard = tool.resolve_plan({"quality": "standard"})
-        assert fast and fast.model.key is GoogleModelKey.VIDEO_FAST
-        assert standard and standard.model.key is GoogleModelKey.VIDEO_STANDARD
-
-    def test_video_duration_changes_the_billed_provider_cost(self) -> None:
-        tool = get_tool("video_generate")
-        plan = plan_execution(Feature.VIDEO_GENERATE, GoogleModelKey.VIDEO_FAST)
-        assert tool.model_credit_cost(plan, {"duration_seconds": 6}) == 858
-        assert tool.model_credit_cost(plan, {"duration_seconds": 8}) == 1143
-        with pytest.raises(ValueError, match="Unsupported video duration"):
-            tool.model_credit_cost(plan, {"duration_seconds": 7})
-
     def test_tool_total_cost_includes_current_catalog_estimate(self) -> None:
         tool = get_tool("image_generate")
         plan = tool.resolve_plan({})
@@ -316,7 +301,7 @@ class TestCreditCheckResult:
         chat = MagicMock()
         rejected = CreditCheckResult(
             allowed=False,
-            plan=plan_execution(Feature.DEEP_THINK, GoogleModelKey.CHAT_REASONING),
+            plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
             source="rejected",
             credits_to_deduct=0,
             credits_remaining=0,
@@ -324,7 +309,7 @@ class TestCreditCheckResult:
             reject_reason="No access",
         )
         with pytest.raises(ValueError, match="rejected"):
-            await service.deduct(rejected, user, chat, "think_deep")
+            await service.deduct(rejected, user, chat, "image_generate")
 
         image_generation = CreditCheckResult(
             allowed=True,

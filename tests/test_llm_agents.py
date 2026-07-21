@@ -4,6 +4,7 @@ import pytest
 from pydantic_ai import models
 
 from derp.catalog import GoogleModelKey
+from derp.execution import Feature, plan_execution
 from derp.llm.agents import (
     create_chat_agent,
     create_image_agent,
@@ -28,6 +29,10 @@ def test_agent_factories_reject_incompatible_catalog_models() -> None:
         create_image_agent(GoogleModelKey.CHAT_STANDARD)
     with pytest.raises(ValueError, match="tools"):
         create_chat_agent(GoogleModelKey.IMAGE)
+    with pytest.raises(ValueError, match="deep_think"):
+        create_chat_agent(
+            plan_execution(Feature.DEEP_THINK, GoogleModelKey.CHAT_REASONING)
+        )
 
 
 def test_chat_toolset_has_one_policy_aware_tool_per_capability() -> None:
@@ -44,8 +49,6 @@ def test_chat_toolset_has_one_policy_aware_tool_per_capability() -> None:
     assert set(toolset.tools) == {
         "edit_image",
         "generate_image",
-        "think_deep",
-        "video_generate",
         "web_search",
     }
 

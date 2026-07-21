@@ -14,6 +14,7 @@ from derp.handlers.context_settings import (
     ContextCallback,
     ambient_delivery_available,
     build_context_panel,
+    build_creation_panel,
     build_credit_panel,
     build_privacy_panel,
     change_policy_flag,
@@ -22,6 +23,8 @@ from derp.handlers.context_settings import (
     forget_replied_message,
     review_shared_fact_proposal,
     save_admin_policy,
+    show_creation_menu,
+    show_credit_menu,
     toggle_context,
     toggle_personal_spend,
 )
@@ -66,6 +69,56 @@ def test_private_panel_reports_always_on_history_without_ambient_toggle(
     assert "History: On · 30 days" in text
     callback = ContextCallback.unpack(markup.inline_keyboard[0][1].callback_data)
     assert callback.action is ContextAction.PRIVACY
+
+
+def test_context_panel_has_a_first_class_creation_entry(mock_chat_model) -> None:
+    _, markup = build_context_panel(
+        mock_chat_model(),
+        ambient_available=True,
+        can_manage=False,
+    )
+
+    buttons = [button for row in markup.inline_keyboard for button in row]
+    creation = next(button for button in buttons if button.text == "Creation")
+    assert creation.callback_data is not None
+    callback = ContextCallback.unpack(creation.callback_data)
+    assert callback.action is ContextAction.CREATION
+    personal_spending = next(
+        button for button in buttons if button.text == "Personal spending"
+    )
+    assert personal_spending.callback_data is not None
+    spending_callback = ContextCallback.unpack(personal_spending.callback_data)
+    assert spending_callback.action is ContextAction.PERSONAL_SPEND
+    assert spending_callback.value == -1
+
+
+def test_creation_panel_exposes_only_durable_creation_commands() -> None:
+    text, markup = build_creation_panel()
+
+    assert "<code>/imagine</code>" in text
+    assert "<code>/edit</code>" in text
+    assert "<code>/tts</code>" in text
+    assert "/think" not in text
+    assert "/video" not in text
+    back = markup.inline_keyboard[0][0]
+    assert back.callback_data is not None
+    callback = ContextCallback.unpack(back.callback_data)
+    assert callback.action is ContextAction.MENU
+
+
+@pytest.mark.asyncio
+async def test_creation_callback_edits_the_existing_panel(make_message) -> None:
+    message = make_message(text="panel", chat_type="supergroup")
+    message.edit_text = AsyncMock()
+    query = MagicMock(spec=CallbackQuery)
+    query.message = message
+    query.answer = AsyncMock()
+
+    await show_creation_menu(query)
+
+    text, markup = build_creation_panel()
+    message.edit_text.assert_awaited_once_with(text, reply_markup=markup)
+    query.answer.assert_awaited_once_with()
 
 
 def test_privacy_panel_exposes_personal_deletion_to_non_admin(
@@ -145,7 +198,7 @@ async def test_personal_fallback_toggle_is_scoped_to_callback_actor(
     ledger = MagicMock()
     ledger.grant_personal_consent = AsyncMock()
     ledger.revoke_personal_consent = AsyncMock()
-    ledger.personal_consent_enabled = AsyncMock(return_value=True)
+    ledger.personal_consent_enabled = AsyncMock(return_value=False)
     ledger.statement = AsyncMock(
         side_effect=[
             WalletStatement(
@@ -163,7 +216,7 @@ async def test_personal_fallback_toggle_is_scoped_to_callback_actor(
 
     await toggle_personal_spend(
         query,
-        ContextCallback(action=ContextAction.PERSONAL_SPEND, value=1),
+        ContextCallback(action=ContextAction.PERSONAL_SPEND, value=-1),
         ledger,
         user,
         chat,
@@ -171,7 +224,56 @@ async def test_personal_fallback_toggle_is_scoped_to_callback_actor(
 
     ledger.grant_personal_consent.assert_awaited_once_with(user.id, chat.id)
     ledger.revoke_personal_consent.assert_not_awaited()
-    assert "Personal fallback updated" in query.answer.await_args.args[0]
+    ledger.personal_consent_enabled.assert_awaited_once_with(user.id, chat.id)
+    query.answer.assert_awaited_once_with(
+        "Personal fallback: Always here",
+        show_alert=True,
+    )
+    message.edit_text.assert_not_awaited()
+    ledger.statement.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_group_credit_callback_keeps_personal_balances_actor_only(
+    make_message,
+    make_user,
+    mock_chat_model,
+    mock_user_model,
+) -> None:
+    message = make_message(text="panel", chat_type="supergroup")
+    message.edit_text = AsyncMock()
+    query = MagicMock(spec=CallbackQuery)
+    query.message = message
+    query.from_user = make_user(id=42)
+    query.answer = AsyncMock()
+    user = mock_user_model(user_id=UUID(int=1), telegram_id=42)
+    chat = mock_chat_model(chat_id=UUID(int=2))
+    ledger = MagicMock()
+    ledger.personal_consent_enabled = AsyncMock(return_value=True)
+    ledger.statement = AsyncMock(
+        side_effect=[
+            WalletStatement(
+                WalletBalance(
+                    WalletOwner(WalletOwnerKind.USER, user.id), 12, 34, 0, 0, 0
+                )
+            ),
+            WalletStatement(
+                WalletBalance(
+                    WalletOwner(WalletOwnerKind.CHAT, chat.id), 0, 56, 0, 0, 0
+                )
+            ),
+        ]
+    )
+
+    await show_credit_menu(query, ledger, user, chat)
+
+    message.edit_text.assert_not_awaited()
+    alert = query.answer.await_args.args[0]
+    assert "Monthly: 12" in alert
+    assert "Purchased: 34" in alert
+    assert "This chat: 56" in alert
+    assert len(alert) <= 200
+    assert query.answer.await_args.kwargs == {"show_alert": True}
 
 
 @pytest.mark.asyncio

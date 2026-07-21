@@ -13,6 +13,7 @@ from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.types import (
     CallbackQuery,
     Chat,
+    ChosenInlineResult,
     Message,
     PreCheckoutQuery,
     Update,
@@ -100,6 +101,18 @@ def _pre_checkout_update() -> Update:
     )
 
 
+def _chosen_inline_update() -> Update:
+    return Update(
+        update_id=4,
+        chosen_inline_result=ChosenInlineResult(
+            result_id="inline-1",
+            from_user=_user(),
+            query="bounded question",
+            inline_message_id="inline-message-1",
+        ),
+    )
+
+
 def _domain_snapshot(data: dict[str, object]) -> dict[str, object]:
     return {key: data[key] for key in _DOMAIN_DEPENDENCIES if key in data}
 
@@ -145,6 +158,17 @@ def test_route_plans_cover_every_declared_dynamic_handler_dependency() -> None:
         tts_plan = ROUTE_DEPENDENCY_PLANS[RouteDependencyKey(event, "tts")]
         assert tts_plan.models
         assert not tts_plan.legacy_credit
+    inline_plan = ROUTE_DEPENDENCY_PLANS[
+        RouteDependencyKey(RouteEvent.CHOSEN_INLINE_RESULT, "inline")
+    ]
+    assert inline_plan.models
+    assert not inline_plan.legacy_credit
+    assert RouteDependencyKey(RouteEvent.MESSAGE, "think") not in ROUTE_DEPENDENCY_PLANS
+    assert RouteDependencyKey(RouteEvent.MESSAGE, "video") not in ROUTE_DEPENDENCY_PLANS
+    assert (
+        RouteDependencyKey(RouteEvent.MESSAGE, "premium_suspension")
+        not in ROUTE_DEPENDENCY_PLANS
+    )
 
 
 @pytest.mark.asyncio
@@ -169,6 +193,39 @@ async def test_pre_checkout_gets_only_purchase_intents(
     assert set(observed) == {"purchase_intents"}
     assert isinstance(observed["purchase_intents"], PurchaseIntentService)
     route_db.read_session.assert_not_called()
+    route_db.session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chosen_inline_result_loads_only_its_user_model(
+    route_db: MagicMock,
+    route_bot: Bot,
+) -> None:
+    dispatcher = Dispatcher(inline_chat_service=object())
+    setup_route_dependencies(dispatcher, route_db)
+    router = Router(name="inline")
+    observed: dict[str, object] = {}
+    user_model = object()
+
+    @router.chosen_inline_result()
+    async def capture(_chosen: ChosenInlineResult, **data: object) -> None:
+        observed.update(_domain_snapshot(data))
+        observed["inline_chat_service"] = data["inline_chat_service"]
+
+    dispatcher.include_router(router)
+    with patch(
+        "derp.middlewares.db_models.get_user_by_telegram_id",
+        new=AsyncMock(return_value=user_model),
+    ):
+        await dispatcher.feed_update(route_bot, _chosen_inline_update())
+
+    assert observed["user_model"] is user_model
+    assert "chat_model" not in observed
+    assert (
+        observed["inline_chat_service"]
+        is dispatcher.workflow_data["inline_chat_service"]
+    )
+    route_db.read_session.assert_called_once()
     route_db.session.assert_not_called()
 
 

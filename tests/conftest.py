@@ -727,18 +727,7 @@ def make_credit_check_result():
 
 @pytest.fixture
 def mock_credit_service_factory(make_credit_check_result):
-    """Create a pre-configured mock CreditService.
-
-    Returns a mock that can be passed directly to handlers.
-
-    Usage:
-        async def test_with_credits(mock_credit_service_factory, make_credit_check_result):
-            service = mock_credit_service_factory(
-                check_result=make_credit_check_result(allowed=True)
-            )
-            await handle_video(message, meta, service, user_model=user, chat_model=chat)
-            service.deduct.assert_awaited_once()
-    """
+    """Create a pre-configured mock CreditService for remaining legacy routes."""
 
     def _make(
         check_result=None,
@@ -804,14 +793,7 @@ def mock_credit_service(mock_credit_service_factory, make_credit_check_result):
 
 @pytest.fixture
 def mock_sender(make_message):
-    """Create a mock MessageSender for handler tests.
-
-    Usage:
-        async def test_handler(mock_sender):
-            sender = mock_sender()
-            await handle_think(message, sender, credit_service, ...)
-            sender.reply.assert_awaited_once()
-    """
+    """Create a mock MessageSender for handler tests."""
     from derp.common.sender import MessageSender
 
     def _make(message=None, **kwargs):

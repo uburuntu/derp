@@ -14,6 +14,7 @@ from derp.db.history import (
     store_tool_transcript,
     tombstone_user_messages,
 )
+from derp.db.inline_allowance import PostgresInlineAllowance
 from derp.db.queries import (
     get_chat_by_telegram_id,
     get_chat_settings,
@@ -69,4 +70,5 @@ __all__ = [
     "list_approved_shared_facts",
     "propose_shared_fact",
     "reject_shared_fact",
+    "PostgresInlineAllowance",
 ]

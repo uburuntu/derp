@@ -60,7 +60,7 @@ def create_chat_agent(
     plan = _resolve_plan(
         model,
         default_feature=Feature.CHAT,
-        allowed_features=frozenset({Feature.CHAT, Feature.DEEP_THINK}),
+        allowed_features=frozenset({Feature.CHAT}),
     )
     spec = plan.model
     provider_model = create_model(spec)

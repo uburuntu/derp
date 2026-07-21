@@ -86,8 +86,6 @@ _EXPENSIVE_TOOLS = frozenset(
     {
         ChatTool.GENERATE_IMAGE,
         ChatTool.EDIT_IMAGE,
-        ChatTool.VIDEO_GENERATE,
-        ChatTool.THINK_DEEP,
     }
 )
 _PRIVILEGED_FACT_TOOLS = frozenset(

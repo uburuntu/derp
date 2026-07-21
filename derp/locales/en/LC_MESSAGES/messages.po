@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-21 10:15+0100\n"
+"POT-Creation-Date: 2026-07-21 10:51+0100\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -17,6 +17,70 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
+
+#: derp/command_menu.py:60
+msgid "Create an image"
+msgstr ""
+
+#: derp/command_menu.py:61
+#, fuzzy
+msgid "Reply to an image and describe changes"
+msgstr "Reply to an image and use: /edit <prompt>"
+
+#: derp/command_menu.py:62
+msgid "Turn text into a voice message"
+msgstr ""
+
+#: derp/command_menu.py:80 derp/command_menu.py:103
+msgid "Open help and available actions"
+msgstr ""
+
+#: derp/command_menu.py:81
+msgid "Privacy and personal settings"
+msgstr ""
+
+#: derp/command_menu.py:83
+msgid "View your credits and activity"
+msgstr ""
+
+#: derp/command_menu.py:86
+#, fuzzy
+msgid "Buy personal credits"
+msgstr "Start personal chat"
+
+#: derp/command_menu.py:89
+msgid "Manage your personal plan"
+msgstr ""
+
+#: derp/command_menu.py:90 derp/command_menu.py:112
+msgid "Delete a replied message from history"
+msgstr ""
+
+#: derp/command_menu.py:91 derp/command_menu.py:113
+#, fuzzy
+msgid "Support Derp with Stars"
+msgstr "Support Derp"
+
+#: derp/command_menu.py:97
+msgid "Manage chat settings"
+msgstr ""
+
+#: derp/command_menu.py:99
+msgid "View chat settings"
+msgstr ""
+
+#: derp/command_menu.py:102
+#, fuzzy
+msgid "Ask Derp in this chat"
+msgstr "Add Derp to your chat"
+
+#: derp/command_menu.py:106
+msgid "View personal and shared credits"
+msgstr ""
+
+#: derp/command_menu.py:109
+msgid "Buy credits for this chat"
+msgstr ""
 
 #: derp/credits/purchase_suspension.py:31
 msgid ""
@@ -36,8 +100,7 @@ msgstr ""
 msgid "Context: {chars} chars, {msgs} messages"
 msgstr ""
 
-#: derp/handlers/chat.py:505 derp/handlers/think.py:57
-#: derp/handlers/video.py:66
+#: derp/handlers/chat.py:505
 msgid "😅 Could not verify your access. Please try again."
 msgstr ""
 
@@ -60,15 +123,101 @@ msgstr "😅 Something went wrong with Gemini. I couldn't process that message."
 msgid "⚠️ Too many tool calls. Please try a simpler request. Not charged."
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:42
+#: derp/handlers/context_settings.py:249 derp/handlers/context_settings.py:282
+#, fuzzy
+msgid "Creation"
+msgstr "Donation"
+
+#: derp/handlers/context_settings.py:253
+msgid "Credits"
+msgstr ""
+
+#: derp/handlers/context_settings.py:260
+msgid "Privacy & history"
+msgstr ""
+
+#: derp/handlers/context_settings.py:267
+#, fuzzy
+msgid "Personal spending"
+msgstr "Start personal chat"
+
+#: derp/handlers/context_settings.py:293
+msgid "Back"
+msgstr ""
+
+#: derp/handlers/context_settings.py:647
+#, fuzzy
+msgid "Your credits"
+msgstr "Start personal chat"
+
+#: derp/handlers/context_settings.py:648
+#, python-brace-format
+msgid "Monthly: {credits}"
+msgstr ""
+
+#: derp/handlers/context_settings.py:649
+#, python-brace-format
+msgid "Purchased: {credits}"
+msgstr ""
+
+#: derp/handlers/context_settings.py:652
+#, python-brace-format
+msgid "Payment debt: {credits}"
+msgstr ""
+
+#: derp/handlers/context_settings.py:654
+msgid "available"
+msgstr ""
+
+#: derp/handlers/context_settings.py:654
+msgid "paused"
+msgstr ""
+
+#: derp/handlers/context_settings.py:656
+#, python-brace-format
+msgid "This chat: {credits} ({state})"
+msgstr ""
+
+#: derp/handlers/context_settings.py:661
+#: derp/handlers/paid_media_controls.py:98 derp/handlers/tool_approvals.py:616
+msgid "Always here"
+msgstr ""
+
+#: derp/handlers/context_settings.py:661
+#, fuzzy
+msgid "Ask me"
+msgstr "🤖 Ask Derp"
+
+#: derp/handlers/context_settings.py:662
+#, python-brace-format
+msgid "Personal fallback: {state}"
+msgstr ""
+
+#: derp/handlers/context_settings.py:740
+msgid "Personal fallback: Always here"
+msgstr ""
+
+#: derp/handlers/context_settings.py:742
+msgid "Personal fallback: Ask me"
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:44
 msgid "😅 Could not find your user info."
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:87
+#: derp/handlers/credit_cmds.py:94
+msgid "I couldn't send your private balance. Open Derp privately and retry."
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:96
+msgid "I sent your balance in a private chat."
+msgstr ""
+
+#: derp/handlers/credit_cmds.py:110
 msgid "Could not find your user info."
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:104
+#: derp/handlers/credit_cmds.py:127
 msgid "Could not find this chat."
 msgstr ""
 
@@ -380,60 +529,68 @@ msgstr "Reply to an image and use: /edit <prompt>"
 msgid "That image cannot be edited."
 msgstr ""
 
-#: derp/handlers/inline.py:42 derp/handlers/inline.py:69
+#: derp/handlers/inline.py:45 derp/handlers/inline.py:72
 msgid "🤖 Ask Derp"
 msgstr "🤖 Ask Derp"
 
-#: derp/handlers/inline.py:43
+#: derp/handlers/inline.py:46
 msgid "Start typing to get an AI-powered response."
 msgstr "Start typing to get an AI-powered response."
 
-#: derp/handlers/inline.py:45
+#: derp/handlers/inline.py:48
 msgid "🤖 Please enter a prompt for Derp AI."
 msgstr "🤖 Please enter a prompt for Derp AI."
 
-#: derp/handlers/inline.py:51 derp/handlers/inline.py:82
-#: derp/handlers/inline.py:141
+#: derp/handlers/inline.py:54 derp/handlers/inline.py:85
+#: derp/handlers/inline.py:191
 msgid "Add Derp to your chat"
 msgstr "Add Derp to your chat"
 
-#: derp/handlers/inline.py:70
+#: derp/handlers/inline.py:73
 #, python-brace-format
 msgid "Get an AI-powered response for: {user_input}"
 msgstr "Get an AI-powered response for: {user_input}"
 
-#: derp/handlers/inline.py:75
+#: derp/handlers/inline.py:78
 #, python-brace-format
 msgid "🧠 Thinking about: {user_input}"
 msgstr "🧠 Thinking about: {user_input}"
 
-#: derp/handlers/inline.py:92
+#: derp/handlers/inline.py:95 derp/handlers/inline.py:204
 msgid "Start personal chat"
 msgstr "Start personal chat"
 
-#: derp/handlers/inline.py:153
-msgid "🤯 My circuits are a bit tangled. I couldn't generate a response."
-msgstr "🤯 My circuits are a bit tangled. I couldn't generate a response."
-
-#: derp/handlers/inline.py:169
-msgid ""
-"⏳ The AI service is overloaded right now.\n"
-"\n"
-"Please wait 30-60 seconds and try again."
+#: derp/handlers/inline.py:117 derp/handlers/inline.py:176
+msgid "I couldn't verify your inline allowance. Open Derp and try again."
 msgstr ""
 
-#: derp/handlers/inline.py:177 derp/handlers/inline.py:192
-#, fuzzy
-msgid "😅 Something went wrong. I couldn't process that."
-msgstr "😅 Something went wrong with Gemini. I couldn't process that."
-
-#: derp/handlers/inline.py:184
-msgid ""
-"⏳ I'm getting too many requests right now. Please try again in about 30 "
-"seconds."
+#: derp/handlers/inline.py:134 derp/handlers/inline.py:183
+msgid "I couldn't answer this inline request right now. Try again later."
 msgstr ""
-"⏳ I'm getting too many requests right now. Please try again in about 30 "
-"seconds."
+
+#: derp/handlers/inline.py:149
+msgid "Daily inline limit reached. Try again after 00:00 UTC."
+msgstr ""
+
+#: derp/handlers/inline.py:156
+msgid "This inline request is empty or too long. Shorten it and try again."
+msgstr ""
+
+#: derp/handlers/inline.py:178
+msgid "The model took too long to answer. Try again later."
+msgstr ""
+
+#: derp/handlers/inline.py:180
+msgid "The model couldn't answer this request. Try a different question."
+msgstr ""
+
+#: derp/handlers/inline.py:182
+msgid "The model returned no usable answer. Try a different question."
+msgstr ""
+
+#: derp/handlers/inline.py:217
+msgid "Ask another question"
+msgstr ""
 
 #: derp/handlers/paid_media_controls.py:36
 #: derp/handlers/paid_media_controls.py:65
@@ -449,10 +606,6 @@ msgstr ""
 
 #: derp/handlers/paid_media_controls.py:90 derp/handlers/tool_approvals.py:609
 msgid "Use mine once"
-msgstr ""
-
-#: derp/handlers/paid_media_controls.py:98 derp/handlers/tool_approvals.py:616
-msgid "Always here"
 msgstr ""
 
 #: derp/handlers/paid_media_controls.py:113 derp/handlers/tool_approvals.py:625
@@ -477,35 +630,9 @@ msgstr ""
 msgid "Delivery is still in progress."
 msgstr ""
 
-#: derp/handlers/think.py:48
-msgid ""
-"🧠 **Deep Thinking Mode**\n"
-"\n"
-"Use advanced reasoning for complex math, logic puzzles, or problems that "
-"need careful analysis.\n"
-"\n"
-"Usage: /think <your problem or question>"
+#: derp/handlers/premium_suspension.py:22
+msgid "This premium feature is temporarily unavailable. Not charged."
 msgstr ""
-
-#: derp/handlers/think.py:66
-#, python-brace-format
-msgid ""
-"🧠 Deep thinking requires credits.\n"
-"\n"
-"✨ {reason}"
-msgstr ""
-
-#: derp/handlers/think.py:130
-msgid ""
-"⏳ The AI service is overloaded right now.\n"
-"\n"
-"This happens during peak usage. Please wait 30-60 seconds and try again."
-msgstr ""
-
-#: derp/handlers/think.py:141 derp/handlers/think.py:149
-#, fuzzy
-msgid "😅 Something went wrong during deep thinking. Please try again."
-msgstr "😅 Something went wrong while editing the image. Try again later."
 
 #: derp/handlers/tool_approvals.py:150
 msgid ""
@@ -744,24 +871,6 @@ msgstr ""
 #: derp/handlers/tts.py:463
 msgid "This voice approval is no longer active. Not charged."
 msgstr ""
-
-#: derp/handlers/video.py:61
-#, fuzzy
-msgid "Usage: /video [fast|standard] <prompt>"
-msgstr "Usage: /imagine <prompt>"
-
-#: derp/handlers/video.py:78
-#, python-brace-format
-msgid ""
-"🎬 Video generation requires credits.\n"
-"\n"
-"✨ {reason}"
-msgstr ""
-
-#: derp/handlers/video.py:133
-#, fuzzy
-msgid "😅 Something went wrong while generating the video. Try again later."
-msgstr "😅 Something went wrong while generating the image. Try again later."
 
 #: derp/llm/result.py:55
 msgid "Generated Code:"
