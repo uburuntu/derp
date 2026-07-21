@@ -49,10 +49,6 @@ _MODELS = RouteDependencyPlan(models=True)
 ROUTE_DEPENDENCY_PLANS: Final[Mapping[RouteDependencyKey, RouteDependencyPlan]] = (
     MappingProxyType(
         {
-            RouteDependencyKey(
-                RouteEvent.CALLBACK_QUERY, "operator_purchase_test"
-            ): _MODELS,
-            RouteDependencyKey(RouteEvent.MESSAGE, "debug"): _MODELS,
             RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "debug"): RouteDependencyPlan(
                 models=True,
                 commerce=frozenset({CommerceDependency.PURCHASE_INTENTS}),

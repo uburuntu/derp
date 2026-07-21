@@ -258,6 +258,20 @@ async def test_snapshot_reads_real_aggregate_columns_only(
     chat_factory,
 ) -> None:
     now = datetime(2026, 7, 21, 12, tzinfo=UTC)
+    service, _ = build_service(SessionDatabase(db_session, db_engine))
+    baseline = await service.snapshot()
+    assert not baseline.database.is_degraded
+    baseline_users = baseline.database.users
+    baseline_chats = baseline.database.chats
+    baseline_messages = baseline.database.retained_messages
+    baseline_wallet = baseline.database.wallet
+    baseline_subscriptions = baseline.database.subscriptions
+    assert baseline_users is not None
+    assert baseline_chats is not None
+    assert baseline_messages is not None
+    assert baseline_wallet is not None
+    assert baseline_subscriptions is not None
+
     recent_user = await user_factory(telegram_id=71)
     old_user = await user_factory(telegram_id=72)
     recent_chat = await chat_factory(telegram_id=-71, chat_type="group")
@@ -332,24 +346,34 @@ async def test_snapshot_reads_real_aggregate_columns_only(
         )
     )
     await db_session.flush()
-    service, _ = build_service(SessionDatabase(db_session, db_engine))
-
     snapshot = await service.snapshot()
 
     assert not snapshot.database.is_degraded
-    assert snapshot.database.users == OperatorActivityTotals(total=2, recent_24h=1)
-    assert snapshot.database.chats == OperatorActivityTotals(total=2, recent_24h=1)
+    assert snapshot.database.users == OperatorActivityTotals(
+        total=baseline_users.total + 2,
+        recent_24h=baseline_users.recent_24h + 1,
+    )
+    assert snapshot.database.chats == OperatorActivityTotals(
+        total=baseline_chats.total + 2,
+        recent_24h=baseline_chats.recent_24h + 1,
+    )
     assert snapshot.database.retained_messages == OperatorActivityTotals(
-        total=2,
-        recent_24h=1,
+        total=baseline_messages.total + 2,
+        recent_24h=baseline_messages.recent_24h + 1,
     )
     assert snapshot.database.wallet is not None
-    assert snapshot.database.wallet.available_credits == 4
-    assert snapshot.database.wallet.reserved_credits == 2
-    assert snapshot.database.wallet.consumed_credits == 4
-    assert snapshot.database.wallet.debt_credits == 7
+    assert snapshot.database.wallet.available_credits == (
+        baseline_wallet.available_credits + 4
+    )
+    assert snapshot.database.wallet.reserved_credits == (
+        baseline_wallet.reserved_credits + 2
+    )
+    assert snapshot.database.wallet.consumed_credits == (
+        baseline_wallet.consumed_credits + 4
+    )
+    assert snapshot.database.wallet.debt_credits == baseline_wallet.debt_credits + 7
     assert snapshot.database.subscriptions == OperatorSubscriptionTotals(
-        status_active=1,
-        entitled=2,
-        auto_renewing=1,
+        status_active=baseline_subscriptions.status_active + 1,
+        entitled=baseline_subscriptions.entitled + 2,
+        auto_renewing=baseline_subscriptions.auto_renewing + 1,
     )

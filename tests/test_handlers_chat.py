@@ -27,6 +27,7 @@ from derp.handlers.chat import (
     ChatAgentHandler,
     _current_user_turn,
     _estimate_chat_input_tokens,
+    show_context,
 )
 from derp.history.core import LogicalTurn, TokenEstimator
 from derp.history.facts import ApprovedFact, render_approved_facts
@@ -46,6 +47,20 @@ from derp.operations import (
 
 def empty_history() -> LoadedHistory:
     return LoadedHistory(messages=(), turns=(), estimated_tokens=0, source_messages=0)
+
+
+async def test_operator_context_redirects_group_use_without_loading_history(
+    make_message,
+) -> None:
+    message = make_message(text="/context", chat_type="supergroup")
+
+    with patch("derp.handlers.chat.get_db_manager") as get_db:
+        await show_context(message, None)
+
+    get_db.assert_not_called()
+    message.reply.assert_awaited_once_with(
+        "Operator diagnostics are private. Open /operator in your private chat."
+    )
 
 
 class TestExtractMediaForAgent:

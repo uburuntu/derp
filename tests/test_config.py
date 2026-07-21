@@ -1,5 +1,7 @@
 """Deployment settings keep operator access explicit and unambiguous."""
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -41,6 +43,18 @@ def test_admin_ids_remains_a_deprecated_input_alias() -> None:
 
 def test_development_may_run_without_an_operator() -> None:
     assert _settings().operator_ids == frozenset()
+
+
+def test_example_environment_does_not_authorize_a_real_operator() -> None:
+    configured = [
+        line.strip()
+        for line in Path("env.example").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+    assert [line for line in configured if line.startswith("OPERATOR_IDS=")] == [
+        "OPERATOR_IDS=[]"
+    ]
 
 
 def test_production_requires_an_explicit_operator() -> None:

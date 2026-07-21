@@ -16,6 +16,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
+from derp.common.tasks import task_is_running
 from derp.models import Artifact, DeliveryIntent, OperationQuote, PaidOperation
 from derp.observability import report_exception
 from derp.operations.ledger import OperationLedger
@@ -400,7 +401,7 @@ class OperationReconciliationWorker:
 
     @property
     def is_running(self) -> bool:
-        return self._task is not None
+        return task_is_running(self._task)
 
     async def __aenter__(self) -> Self:
         if self._task is not None:

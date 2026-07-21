@@ -10,6 +10,7 @@ from typing import Protocol, Self
 
 import logfire
 
+from derp.common.tasks import task_is_running
 from derp.observability import report_exception
 
 DEFAULT_SUBSCRIPTION_EXPIRY_INTERVAL = timedelta(minutes=5)
@@ -45,8 +46,8 @@ class SubscriptionExpiryWorker:
 
     @property
     def is_running(self) -> bool:
-        """Whether the periodic task is currently owned by this worker."""
-        return self._task is not None
+        """Whether the periodic task is alive rather than completed or failed."""
+        return task_is_running(self._task)
 
     async def __aenter__(self) -> Self:
         if self._task is not None:

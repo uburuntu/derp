@@ -221,9 +221,9 @@ when its replacement is covered and working or the public surface fails closed.
   aiogram context for every update. `RouteDependencyMiddleware` runs after a
   handler matches and loads SQLAlchemy models or commerce services only for
   routes listed in `ROUTE_DEPENDENCY_PLANS`; legacy credit injection is not a
-  global update cost. The operator message route needs no mutable route-scoped
-  data; operator callbacks load models only for the production-shaped 1-Star
-  test and otherwise use dispatcher-injected console services.
+  global update cost. Operator routes use dispatcher-injected console services
+  without model loading; only the subsequent durable debug-purchase callback
+  loads models and purchase-intent services.
 - **Event middlewares:**
   - `MessageSenderMiddleware`: injects `MessageSender` for messages and callback queries.
   - `ChatActionMiddleware`: shows typing/upload actions for long‑running handlers.

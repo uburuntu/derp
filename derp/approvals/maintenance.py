@@ -11,6 +11,7 @@ from typing import Final, Protocol, Self
 import logfire
 
 from derp.approvals.types import ExpirationSweep
+from derp.common.tasks import task_is_running
 from derp.observability import report_exception
 
 DEFAULT_APPROVAL_EXPIRY_INTERVAL: Final = timedelta(minutes=5)
@@ -53,8 +54,8 @@ class DeferredApprovalExpiryWorker:
 
     @property
     def is_running(self) -> bool:
-        """Whether this worker owns its periodic lifecycle task."""
-        return self._task is not None
+        """Whether the periodic task is alive rather than completed or failed."""
+        return task_is_running(self._task)
 
     async def __aenter__(self) -> Self:
         if self._task is not None:

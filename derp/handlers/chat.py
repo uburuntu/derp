@@ -480,6 +480,15 @@ async def _release_undelivered_paid_chat_turn(
 @router.message(Command("context"), OperatorOnlyFilter())
 async def show_context(message: Message, chat_model: ChatModel | None) -> None:
     """Operator command to show the context that would be sent to the agent."""
+    if (
+        message.chat.type != "private"
+        or message.from_user is None
+        or message.chat.id != message.from_user.id
+    ):
+        await message.reply(
+            _("Operator diagnostics are private. Open /operator in your private chat.")
+        )
+        return
     db = get_db_manager()
     ctx = await build_context_prompt(message, db)
     char_count = len(ctx)

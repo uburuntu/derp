@@ -24,7 +24,6 @@ from derp.billing import (
 )
 from derp.billing.telegram import PurchaseTargetCode, create_stars_invoice_link
 from derp.common.sender import MessageSender
-from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
 from derp.operator import OperatorOnlyFilter
@@ -66,9 +65,17 @@ class DebugPurchaseCallback(CallbackData, prefix="debug-buy"):
 async def debug_buy_command(
     message: Message,
     sender: MessageSender,
-    chat_model: ChatModel | None = None,
 ) -> Message:
     """Present the hidden one-Star product for safe live Stars validation."""
+    sender.protect_content = True
+    if (
+        message.chat.type != "private"
+        or message.from_user is None
+        or message.chat.id != message.from_user.id
+    ):
+        return await sender.reply(
+            _("Operator controls are private. Open /operator in your private chat.")
+        )
     product = DEFAULT_PRODUCT_CATALOG.debug_top_up
     rows = [
         [
@@ -81,22 +88,6 @@ async def debug_buy_command(
             )
         ]
     ]
-    if (
-        chat_model
-        and chat_model.type != "private"
-        and chat_model.telegram_id == message.chat.id
-    ):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=_("This chat · {stars} Star").format(stars=product.stars),
-                    callback_data=DebugPurchaseCallback(
-                        product_id=product.id,
-                        target=PurchaseTargetCode.CHAT,
-                    ).pack(),
-                )
-            ]
-        )
     return await sender.reply(
         _(
             "<b>Live Stars test</b>\n"
@@ -113,12 +104,19 @@ async def handle_debug_buy_callback(
     callback_data: DebugPurchaseCallback,
     purchase_intents: PurchaseIntentService,
     user_model: UserModel | None = None,
-    chat_model: ChatModel | None = None,
 ) -> None:
     """Create an opaque durable intent for the selected live wallet target."""
     product = DEFAULT_PRODUCT_CATALOG.debug_top_up
     if not isinstance(callback.message, Message) or not user_model:
         return await callback.answer(_("Stars test unavailable"), show_alert=True)
+    if (
+        callback.message.chat.type != "private"
+        or callback.message.chat.id != callback.from_user.id
+    ):
+        return await callback.answer(
+            _("Operator controls are private. Open /operator in your private chat."),
+            show_alert=True,
+        )
     if user_model.telegram_id != callback.from_user.id:
         return await callback.answer(
             _("Stars test identity changed"),
@@ -131,18 +129,11 @@ async def handle_debug_buy_callback(
         )
 
     if callback_data.target is PurchaseTargetCode.CHAT:
-        if (
-            not chat_model
-            or chat_model.type == "private"
-            or chat_model.telegram_id != callback.message.chat.id
-        ):
-            return await callback.answer(
-                _("This chat is unavailable"),
-                show_alert=True,
-            )
-        target = PurchaseTarget.chat(chat_model.id)
-    else:
-        target = PurchaseTarget.user(user_model.id)
+        return await callback.answer(
+            _("This chat is unavailable"),
+            show_alert=True,
+        )
+    target = PurchaseTarget.user(user_model.id)
 
     try:
         handle = await purchase_intents.create_operator_debug_top_up_intent(
@@ -192,6 +183,7 @@ async def handle_debug_buy_callback(
                 ]
             ]
         ),
+        protect_content=True,
     )
     await callback.answer(_("Invoice ready"))
     logfire.info(

@@ -20,6 +20,7 @@ from derp.handlers.operator import (
     show_operator_console,
 )
 from derp.operator import (
+    MAX_CONFIRMATION_TOKEN_LENGTH,
     OperatorActivityTotals,
     OperatorArtifactTotals,
     OperatorConfirmationStore,
@@ -233,6 +234,18 @@ def test_maintenance_result_is_conservative_and_compact() -> None:
     assert "Expired quotes" not in text
     assert "succeeded" not in text.lower()
     assert markup.inline_keyboard
+
+
+def test_longest_confirmation_capability_fits_telegram_callback_limit() -> None:
+    store = OperatorConfirmationStore(
+        token_factory=lambda: "x" * MAX_CONFIRMATION_TOKEN_LENGTH
+    )
+    action = OperatorMaintenanceAction.SUBSCRIPTIONS
+    token = store.issue(actor_id=42, action=action)
+
+    packed = OperatorMaintenanceConfirmCallback(action=action, token=token).pack()
+
+    assert len(packed.encode("ascii")) <= 64
 
 
 async def test_private_operator_command_opens_protected_overview(make_message) -> None:

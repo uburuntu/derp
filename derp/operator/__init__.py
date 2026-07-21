@@ -5,6 +5,7 @@ from derp.operator.config import OperatorControlConfig
 from derp.operator.confirmations import (
     DEFAULT_CONFIRMATION_TTL,
     DEFAULT_MAX_CONFIRMATIONS,
+    MAX_CONFIRMATION_TOKEN_LENGTH,
     MAX_CONFIRMATION_TTL,
     MAX_CONFIRMATIONS,
     OperatorConfirmationCapacityError,
@@ -34,6 +35,7 @@ __all__ = [
     "DEFAULT_CONFIRMATION_TTL",
     "DEFAULT_MAX_CONFIRMATIONS",
     "MAX_CONFIRMATIONS",
+    "MAX_CONFIRMATION_TOKEN_LENGTH",
     "MAX_CONFIRMATION_TTL",
     "OperatorAccessPolicy",
     "OperatorActivityTotals",

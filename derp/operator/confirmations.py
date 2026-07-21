@@ -17,8 +17,8 @@ DEFAULT_CONFIRMATION_TTL: Final = timedelta(minutes=2)
 DEFAULT_MAX_CONFIRMATIONS: Final = 1_024
 MAX_CONFIRMATION_TTL: Final = timedelta(minutes=10)
 MAX_CONFIRMATIONS: Final = 4_096
+MAX_CONFIRMATION_TOKEN_LENGTH: Final = 46
 _TOKEN_BYTES: Final = 16
-_MAX_TOKEN_LENGTH: Final = 64
 _TOKEN_ATTEMPTS: Final = 8
 _TOKEN_ALPHABET: Final = frozenset(string.ascii_letters + string.digits + "-_")
 
@@ -170,7 +170,7 @@ class OperatorConfirmationStore:
     def _valid_token(cls, token: object) -> bool:
         return (
             isinstance(token, str)
-            and 1 <= len(token) <= _MAX_TOKEN_LENGTH
+            and 1 <= len(token) <= MAX_CONFIRMATION_TOKEN_LENGTH
             and token.isascii()
             and all(character in _TOKEN_ALPHABET for character in token)
         )
@@ -185,6 +185,7 @@ __all__ = [
     "DEFAULT_CONFIRMATION_TTL",
     "DEFAULT_MAX_CONFIRMATIONS",
     "MAX_CONFIRMATIONS",
+    "MAX_CONFIRMATION_TOKEN_LENGTH",
     "MAX_CONFIRMATION_TTL",
     "OperatorConfirmationCapacityError",
     "OperatorConfirmationStore",

@@ -9,6 +9,7 @@ import pytest
 from aiogram.types import CallbackQuery, Chat, Message, User
 
 from derp.operator import (
+    MAX_CONFIRMATION_TOKEN_LENGTH,
     OperatorAccessPolicy,
     OperatorConfirmationCapacityError,
     OperatorConfirmationStore,
@@ -96,7 +97,7 @@ def test_confirmation_is_opaque_bound_and_single_use() -> None:
         action=OperatorMaintenanceAction.OPERATIONS,
     )
 
-    assert 20 <= len(token) <= 64
+    assert 20 <= len(token) <= MAX_CONFIRMATION_TOKEN_LENGTH
     assert re.fullmatch(r"[A-Za-z0-9_-]+", token)
     assert not store.consume(
         token,
@@ -137,6 +138,15 @@ def test_confirmation_expires_at_monotonic_deadline() -> None:
         action=OperatorMaintenanceAction.HISTORY,
     )
     assert store.pending_count == 0
+
+
+def test_confirmation_rejects_tokens_too_long_for_callback_envelope() -> None:
+    store = OperatorConfirmationStore(
+        token_factory=lambda: "x" * (MAX_CONFIRMATION_TOKEN_LENGTH + 1)
+    )
+
+    with pytest.raises(RuntimeError, match="invalid token"):
+        store.issue(actor_id=42, action=OperatorMaintenanceAction.SUBSCRIPTIONS)
 
 
 def test_confirmation_capacity_is_strict_and_expired_entries_are_pruned() -> None:

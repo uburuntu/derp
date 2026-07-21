@@ -26,7 +26,6 @@ from derp.command_menu import configure_bot_command_menu
 from derp.common.localization import format_local_integer
 from derp.common.sender import MessageSender
 from derp.handlers.debug import debug_buy_command
-from derp.models import Chat as ChatModel
 from derp.observability import report_exception
 from derp.operator import (
     OperatorConfirmationCapacityError,
@@ -306,7 +305,6 @@ async def run_operator_maintenance(
 async def open_operator_test_purchase(
     callback: CallbackQuery,
     sender: MessageSender,
-    chat_model: ChatModel | None = None,
 ) -> None:
     """Open the existing production-shaped one-Star validation path."""
     message = await _private_operator_callback(callback)
@@ -315,7 +313,7 @@ async def open_operator_test_purchase(
     await callback.answer(_("Opening test checkout"))
     try:
         sender.protect_content = True
-        await debug_buy_command(message, sender, chat_model)
+        await debug_buy_command(message, sender)
     except Exception as exc:
         report_exception(
             "operator.test_purchase_open_failed",
@@ -365,7 +363,7 @@ async def sync_operator_command_menu(
         )
         text = _(
             "<b>Command menu synced</b>\n"
-            "All locales and audience scopes now match the configured state."
+            "Current locales and configured scopes now match."
         )
     await _edit_operator_message(
         message,

@@ -674,6 +674,7 @@ class MessageSender:
                     parse_mode="HTML",
                     reply_markup=reply_markup if is_last else None,
                     disable_notification=self.disable_notification,
+                    protect_content=self.protect_content,
                 )
             else:
                 last_message = await self._send_single_message(

@@ -8,9 +8,9 @@ from aiogram.types import LabeledPrice, Message, PreCheckoutQuery
 from aiogram.utils.i18n import gettext as _
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..config import settings
 from ..filters.meta import MetaCommand, MetaInfo
 from ..observability import report_exception
+from ..operator import OperatorControlConfig
 
 router = Router(name="donations")
 
@@ -126,7 +126,11 @@ async def handle_pre_checkout(query: PreCheckoutQuery) -> None:
 @router.message(
     F.successful_payment, F.successful_payment.invoice_payload.contains('"k":"donate"')
 )
-async def handle_successful_payment(message: Message, bot: Bot) -> None:
+async def handle_successful_payment(
+    message: Message,
+    bot: Bot,
+    operator_config: OperatorControlConfig,
+) -> None:
     sp = message.successful_payment
     # For Star payments, total_amount is the Stars count
     stars = sp.total_amount
@@ -163,38 +167,17 @@ async def handle_successful_payment(message: Message, bot: Bot) -> None:
             level="warning",
         )
 
-    if not settings.operator_ids:
+    if not operator_config.operator_ids:
         return
 
-    chat = message.chat
-    user = message.from_user
-    payload = sp.invoice_payload
-    from_name = user and html.quote(user.full_name) or "—"
-    from_username = user and user.username and ("@" + user.username) or ""
-    from_id = user and user.id or None
-    chat_title = chat.title and html.quote(chat.title) or ""
-
-    lines: list[str] = [
-        html.bold("Donation received"),
-        f"{html.bold('Amount:')} {stars} XTR",
-        f"{html.bold('From:')} {from_name} {from_username} {('#u' + str(from_id)) if from_id else ''}",
-        f"{html.bold('Origin:')} {chat.type} id={chat.id}{(' ' + chat_title) if chat_title else ''}",
-        f"{html.bold('Target:')} {target_chat_id}{(' topic ' + str(target_thread_id)) if target_thread_id else ''}",
-        f"{html.bold('Message ID:')} {message.message_id}",
-        f"{html.bold('Payload:')} {html.code(payload)}",
-    ]
-    if sp.telegram_payment_charge_id:
-        lines.append(
-            f"{html.bold('Telegram charge:')} {html.code(sp.telegram_payment_charge_id)}"
-        )
-    if sp.provider_payment_charge_id:
-        lines.append(
-            f"{html.bold('Provider charge:')} {html.code(sp.provider_payment_charge_id)}"
-        )
-
-    for operator_id in sorted(settings.operator_ids):
+    notice = _("<b>Donation received</b>\nStars: {stars}").format(stars=stars)
+    for operator_id in sorted(operator_config.operator_ids):
         try:
-            await bot.send_message(operator_id, "\n".join(lines))
+            await bot.send_message(
+                chat_id=operator_id,
+                text=notice,
+                protect_content=True,
+            )
         except Exception as exc:
             report_exception(
                 "donation_operator_notify_failed",
@@ -202,12 +185,9 @@ async def handle_successful_payment(message: Message, bot: Bot) -> None:
                 level="warning",
                 operator_id=operator_id,
             )
-    if settings.operator_ids:
-        logfire.info(
-            "donation_operators_notified",
-            operator_count=len(settings.operator_ids),
-            stars=stars,
-            chat_id=chat.id,
-            thread_id=message.message_thread_id,
-            user_id=(user and user.id),
-        )
+    logfire.info(
+        "donation_operators_notified",
+        operator_count=len(operator_config.operator_ids),
+        stars=stars,
+        origin_chat_type=message.chat.type,
+    )

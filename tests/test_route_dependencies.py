@@ -154,12 +154,9 @@ def test_route_plans_cover_every_declared_dynamic_handler_dependency() -> None:
     assert chat_plan.models
     assert not chat_plan.legacy_credit
     assert CommerceDependency.PAYMENT_SETTLEMENT not in chat_plan.commerce
-    debug_message_plan = ROUTE_DEPENDENCY_PLANS[
-        RouteDependencyKey(RouteEvent.MESSAGE, "debug")
-    ]
-    assert debug_message_plan.models
-    assert not debug_message_plan.legacy_credit
-    assert not debug_message_plan.commerce
+    assert RouteDependencyKey(RouteEvent.MESSAGE, "debug") not in (
+        ROUTE_DEPENDENCY_PLANS
+    )
     debug_callback_plan = ROUTE_DEPENDENCY_PLANS[
         RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "debug")
     ]
@@ -167,12 +164,10 @@ def test_route_plans_cover_every_declared_dynamic_handler_dependency() -> None:
     assert debug_callback_plan.commerce == frozenset(
         {CommerceDependency.PURCHASE_INTENTS}
     )
-    operator_callback_plan = ROUTE_DEPENDENCY_PLANS[
+    assert (
         RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "operator_purchase_test")
-    ]
-    assert operator_callback_plan.models
-    assert not operator_callback_plan.legacy_credit
-    assert not operator_callback_plan.commerce
+        not in ROUTE_DEPENDENCY_PLANS
+    )
     for event in (RouteEvent.MESSAGE, RouteEvent.CALLBACK_QUERY):
         tts_plan = ROUTE_DEPENDENCY_PLANS[RouteDependencyKey(event, "tts")]
         assert tts_plan.models

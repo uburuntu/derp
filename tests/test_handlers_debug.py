@@ -49,7 +49,12 @@ def _purchase_intents(handle: PurchaseIntentHandle | None = None) -> MagicMock:
 
 def _callback(make_message, make_user) -> CallbackQuery:
     callback = MagicMock(spec=CallbackQuery)
-    callback.message = make_message(text="debug purchase")
+    callback.message = make_message(
+        text="debug purchase",
+        user_id=12345,
+        chat_id=12345,
+        chat_type="private",
+    )
     callback.message.business_connection_id = "business-1"
     callback.from_user = make_user(id=12345)
     callback.bot = MagicMock()
@@ -64,14 +69,18 @@ def _callback(make_message, make_user) -> CallbackQuery:
 async def test_debug_buy_command_shows_only_personal_target_in_private_chat(
     make_message,
     mock_sender,
-    mock_chat_model,
 ):
-    message = make_message(text="/debug_buy")
+    message = make_message(
+        text="/debug_buy",
+        user_id=12345,
+        chat_id=12345,
+        chat_type="private",
+    )
     sender = mock_sender(message=message)
-    chat = mock_chat_model(telegram_id=message.chat.id, chat_type="private")
 
-    await debug_buy_command(message, sender, chat)
+    await debug_buy_command(message, sender)
 
+    assert sender.protect_content is True
     text = sender.reply.await_args.args[0]
     assert "1 Star" in text
     buttons = sender.reply.await_args.kwargs["reply_markup"].inline_keyboard
@@ -82,23 +91,18 @@ async def test_debug_buy_command_shows_only_personal_target_in_private_chat(
 
 
 @pytest.mark.asyncio
-async def test_debug_buy_command_includes_only_the_current_shared_chat(
+async def test_debug_buy_command_redirects_group_use_to_private_chat(
     make_message,
     mock_sender,
-    mock_chat_model,
 ):
     message = make_message(text="/debug_buy")
     sender = mock_sender(message=message)
-    chat = mock_chat_model(telegram_id=message.chat.id, chat_type="supergroup")
 
-    await debug_buy_command(message, sender, chat)
+    await debug_buy_command(message, sender)
 
-    buttons = sender.reply.await_args.kwargs["reply_markup"].inline_keyboard
-    callbacks = [DebugPurchaseCallback.unpack(row[0].callback_data) for row in buttons]
-    assert [callback.target for callback in callbacks] == [
-        PurchaseTargetCode.USER,
-        PurchaseTargetCode.CHAT,
-    ]
+    sender.reply.assert_awaited_once_with(
+        "Operator controls are private. Open /operator in your private chat."
+    )
 
 
 @pytest.mark.asyncio
@@ -157,58 +161,18 @@ async def test_debug_personal_callback_creates_exact_durable_invoice(
     assert invoice["prices"][0].amount == 1
     markup = callback.message.answer.await_args.kwargs["reply_markup"]
     assert markup.inline_keyboard[0][0].url == "https://t.me/$debug-invoice"
+    assert callback.message.answer.await_args.kwargs["protect_content"] is True
     callback.answer.assert_awaited_once_with("Invoice ready")
 
 
 @pytest.mark.asyncio
-async def test_debug_chat_callback_binds_only_current_shared_chat(
+async def test_legacy_debug_chat_callback_is_no_longer_available(
     make_message,
     make_user,
     mock_user_model,
-    mock_chat_model,
 ):
     callback = _callback(make_message, make_user)
     user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
-    chat = mock_chat_model(
-        chat_id=UUID(int=2),
-        telegram_id=callback.message.chat.id,
-        chat_type="supergroup",
-    )
-    handle = _debug_handle(PurchaseTarget.chat(chat.id))
-    service = _purchase_intents(handle)
-
-    await handle_debug_buy_callback(
-        callback,
-        DebugPurchaseCallback(
-            product_id=DEFAULT_PRODUCT_CATALOG.debug_top_up.id,
-            target=PurchaseTargetCode.CHAT,
-        ),
-        service,
-        user,
-        chat,
-    )
-
-    service.create_operator_debug_top_up_intent.assert_awaited_once_with(
-        payer_user_id=user.id,
-        target=PurchaseTarget.chat(chat.id),
-    )
-    assert "this chat" in callback.message.answer.await_args.args[0]
-
-
-@pytest.mark.asyncio
-async def test_debug_chat_callback_rejects_private_or_changed_chat(
-    make_message,
-    make_user,
-    mock_user_model,
-    mock_chat_model,
-):
-    callback = _callback(make_message, make_user)
-    user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
-    chat = mock_chat_model(
-        chat_id=UUID(int=2),
-        telegram_id=callback.message.chat.id + 1,
-        chat_type="supergroup",
-    )
     service = _purchase_intents()
 
     await handle_debug_buy_callback(
@@ -219,13 +183,41 @@ async def test_debug_chat_callback_rejects_private_or_changed_chat(
         ),
         service,
         user,
-        chat,
+    )
+
+    service.create_operator_debug_top_up_intent.assert_not_awaited()
+    callback.answer.assert_awaited_once_with(
+        "This chat is unavailable",
+        show_alert=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_debug_callback_rejects_group_context_before_creating_intent(
+    make_message,
+    make_user,
+    mock_user_model,
+):
+    callback = _callback(make_message, make_user)
+    callback.message.chat.type = "supergroup"
+    callback.message.chat.id = -10042
+    user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+    service = _purchase_intents()
+
+    await handle_debug_buy_callback(
+        callback,
+        DebugPurchaseCallback(
+            product_id=DEFAULT_PRODUCT_CATALOG.debug_top_up.id,
+            target=PurchaseTargetCode.USER,
+        ),
+        service,
+        user,
     )
 
     service.create_operator_debug_top_up_intent.assert_not_awaited()
     callback.bot.create_invoice_link.assert_not_awaited()
     callback.answer.assert_awaited_once_with(
-        "This chat is unavailable",
+        "Operator controls are private. Open /operator in your private chat.",
         show_alert=True,
     )
 

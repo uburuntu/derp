@@ -12,6 +12,7 @@ from typing import Final, Protocol, Self
 
 import logfire
 
+from derp.common.tasks import task_is_running
 from derp.delivery.types import (
     ArtifactCleanup,
     Delivered,
@@ -223,7 +224,7 @@ class DeliveryMaintenanceWorker:
 
     @property
     def is_running(self) -> bool:
-        return self._task is not None
+        return task_is_running(self._task)
 
     async def __aenter__(self) -> Self:
         if self._task is not None:

@@ -85,12 +85,13 @@ worker is reported as an interrupted pass.
 `Open 1-Star checkout` uses the durable production purchase-intent, Telegram
 invoice, settlement, and wallet-credit path. It is not a mock or sandbox: an
 operator who confirms Telegram's final payment prompt spends one real Star.
-The hidden product remains available through `/debug_buy` for compatibility;
-retired legacy debug commands redirect to `/operator`.
+The hidden product remains available through private `/debug_buy` for
+compatibility; retired legacy debug commands redirect to `/operator`.
 
 `Sync command menu` reapplies the complete desired command state for every
-supported locale and audience, including every operator's private chat scope.
-It is idempotent and also removes the default scope, matching startup behavior.
+supported locale and current audience, including each configured operator's
+private chat scope. It is idempotent and also removes the default scope,
+matching startup behavior.
 
 ## Observability
 
@@ -130,6 +131,10 @@ secrets to these events.
   details.
 - Maintenance serialization is process-local. Production's single-poller
   invariant remains required.
+- Removing an ID revokes access immediately, but Telegram may retain that
+  user's old command menu because Bot API does not enumerate chat-specific
+  scopes. Delete that scope during offboarding; the stale command remains
+  authorization-gated if cleanup is missed.
 - Protected Telegram content reduces accidental forwarding; it is not a
   substitute for protecting the operator's Telegram account and device.
 
@@ -148,6 +153,8 @@ inside the Telegram handler.
 Keep `operator.router` and `operator.rejection_router` before debug and chat
 routes. Add route-scoped dependencies only when a control requires them; the
 current operator callback plan loads database models solely for the 1-Star test.
+The current operator routes need no mutable model injection; the checkout's
+subsequent purchase callback uses the separately scoped debug dependency plan.
 Keep callbacks actor-bound and private-chat-bound.
 
 When deleting or renaming a control, first remove it from the desired command

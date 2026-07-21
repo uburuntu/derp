@@ -15,6 +15,17 @@ from derp.handlers.donations import (
     handle_pre_checkout,
     handle_successful_payment,
 )
+from derp.operator import OperatorControlConfig
+
+
+def _operator_config(*operator_ids: int) -> OperatorControlConfig:
+    return OperatorControlConfig(
+        environment="dev",
+        service_version="test",
+        public_purchases_enabled=False,
+        ai_content_capture_enabled=False,
+        operator_ids=operator_ids,
+    )
 
 
 def test_donation_payload_compact_json_under_limit():
@@ -73,7 +84,7 @@ async def test_successful_payment_routes_ack_to_target_chat():
     )
 
     # Act
-    await handle_successful_payment(message, bot)
+    await handle_successful_payment(message, bot, _operator_config())
 
     # Assert
     bot.send_photo.assert_not_awaited()
@@ -91,9 +102,7 @@ async def test_successful_payment_routes_ack_to_target_chat():
 
 
 @pytest.mark.asyncio
-async def test_successful_payment_ack_failure_does_not_block_operator_notice(
-    monkeypatch,
-):
+async def test_successful_payment_ack_failure_does_not_block_private_notice():
     bot = MagicMock()
     bot.send_photo = AsyncMock()
     bot.send_message = AsyncMock(side_effect=[Exception("boom"), None])
@@ -107,13 +116,11 @@ async def test_successful_payment_ack_failure_does_not_block_operator_notice(
     message.successful_payment = SimpleNamespace(
         total_amount=10,
         invoice_payload=target.model_dump_json(by_alias=True, exclude_none=True),
-        telegram_payment_charge_id="",
-        provider_payment_charge_id="",
+        telegram_payment_charge_id="telegram-secret-charge",
+        provider_payment_charge_id="provider-secret-charge",
     )
 
-    monkeypatch.setattr(donations_module.settings, "operator_ids", frozenset({42}))
-
-    await handle_successful_payment(message, bot)
+    await handle_successful_payment(message, bot, _operator_config(42))
 
     assert bot.send_message.await_count == 2
     assert bot.send_message.await_args_list[0].kwargs["chat_id"] == -1001
@@ -122,7 +129,23 @@ async def test_successful_payment_ack_failure_does_not_block_operator_notice(
         for c in bot.send_message.await_args_list
         if (c.args and c.args[0] == 42) or c.kwargs.get("chat_id") == 42
     ]
-    assert operator_calls, "expected an operator notification call"
+    assert len(operator_calls) == 1
+    operator_notice = operator_calls[0].kwargs
+    assert operator_notice["text"] == "<b>Donation received</b>\nStars: 10"
+    assert operator_notice["protect_content"] is True
+    assert all(
+        secret not in operator_notice["text"]
+        for secret in (
+            "Bob",
+            "bob",
+            "12345",
+            "telegram-secret-charge",
+            "provider-secret-charge",
+            '"k":"donate"',
+            "-1001",
+            "-1002",
+        )
+    )
 
 
 def test_coerce_amount_various_cases():
@@ -205,7 +228,7 @@ async def test_successful_payment_decode_failure_falls_back_to_message_chat():
         provider_payment_charge_id="p",
     )
 
-    await handle_successful_payment(message, bot)
+    await handle_successful_payment(message, bot, _operator_config())
     bot.send_photo.assert_not_awaited()
     user_calls = [
         call
