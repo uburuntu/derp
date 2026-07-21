@@ -90,6 +90,7 @@ class PaidMediaInvocation:
     thread_id: int | None
     target: DeliveryTarget
     estimated_input_tokens: int
+    request_binding: str = field(repr=False)
 
     def __post_init__(self) -> None:
         _require_operation_id(self.operation_id)
@@ -119,6 +120,14 @@ class PaidMediaInvocation:
             raise TypeError("estimated_input_tokens must be an integer")
         if self.estimated_input_tokens < 0:
             raise ValueError("estimated_input_tokens must not be negative")
+        if not isinstance(self.request_binding, str):
+            raise TypeError("request_binding must be a string")
+        if len(self.request_binding) != 64 or any(
+            character not in "0123456789abcdef" for character in self.request_binding
+        ):
+            raise ValueError(
+                "request_binding must be a lowercase hexadecimal SHA-256 HMAC"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -772,6 +781,7 @@ class PaidMediaOperationCoordinator:
     ) -> Mapping[str, object]:
         pricing_input: dict[str, object] = {
             "input_tokens": quote_input.input_tokens,
+            "request_binding": invocation.request_binding,
             "delivery_fingerprint": cls._delivery_fingerprint(invocation.target),
         }
         if isinstance(quote_input, TtsQuoteInput):

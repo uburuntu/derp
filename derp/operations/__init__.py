@@ -1,5 +1,6 @@
 """Paid-operation domain values shared by billing, features, and delivery."""
 
+from derp.operations.bindings import OperationRequestBinder
 from derp.operations.ledger import (
     ImmutableQuoteConflictError,
     InvalidOperationTransitionError,
@@ -101,6 +102,7 @@ __all__ = [
     "OperationReconciliationReport",
     "OperationReconciliationRunner",
     "OperationReconciliationWorker",
+    "OperationRequestBinder",
     "OperationSnapshot",
     "OperationState",
     "Quote",

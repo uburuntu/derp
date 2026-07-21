@@ -141,6 +141,7 @@ def env() -> Environment:
         thread_id=7,
         target=DeliveryTarget(-100123, 7, 42),
         estimated_input_tokens=120,
+        request_binding="a" * 64,
     )
 
     async def ensure_quote(quote: Quote, **_: object) -> Quote:
@@ -270,6 +271,7 @@ def test_sensitive_provider_result_is_excluded_from_representations(
 
     assert "generated-audio" not in repr(AUDIO_RESULT)
     assert "Generated speech" not in repr(AUDIO_RESULT)
+    assert "a" * 64 not in repr(env.invocation)
     assert "private-resend-capability" not in repr(uncertain)
 
 
@@ -278,6 +280,7 @@ def test_sensitive_provider_result_is_excluded_from_representations(
     [
         ({"request_key": " "}, "request_key must not be blank"),
         ({"estimated_input_tokens": -1}, "must not be negative"),
+        ({"request_binding": "not-a-binding"}, "lowercase hexadecimal"),
         (
             {"target": DeliveryTarget(-100123, 8, 42)},
             "thread scopes must match",
@@ -378,6 +381,7 @@ async def test_quote_only_persists_content_free_commercial_identity(
     assert call.kwargs["pricing_input"] == {
         "input_tokens": 120,
         "output_seconds": 30,
+        "request_binding": "a" * 64,
         "delivery_fingerprint": call.kwargs["pricing_input"]["delivery_fingerprint"],
     }
     assert len(call.kwargs["pricing_input"]["delivery_fingerprint"]) == 64
@@ -409,6 +413,7 @@ async def test_video_uses_same_core_with_exact_plan_and_quote(env: Environment) 
         "input_tokens": 120,
         "duration_seconds": 6,
         "resolution": "720p",
+        "request_binding": "a" * 64,
         "delivery_fingerprint": env.ledger.ensure_quote.await_args.kwargs[
             "pricing_input"
         ]["delivery_fingerprint"],
