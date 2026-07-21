@@ -22,6 +22,8 @@
 - `migrations/`: Alembic migrations (generated via `make db-revision`).
 - `docs/architecture-roadmap.md`: Normative product contract plus a dated,
   evidence-based implementation-status ledger.
+- `docs/message-style.md`: Required English/Russian voice, terminology, message
+  order, and review checklist for every user-visible string.
 - `references/`: Gitignored upstream source checkouts matching the lockfile.
 
 ## Build, Test, and Development Commands
@@ -377,6 +379,9 @@ derp/billing/
 
 - **Settings:** `derp/config.py` uses `pydantic-settings` to load `.env` and `.env.prod`, with helpers for rotating Google API keys and deriving `bot_id`.
 - **i18n:** `aiogram.utils.i18n` with catalogs under `derp/locales`. Use `make i18n` to extract/update/compile; `SimpleI18nMiddleware` installs runtime translation. Never manually edit `.mo` files—always generate them via `make i18n-compile`.
+- **Message style:** Follow `docs/message-style.md` for all fixed copy. English
+  is concise and conversational; Russian is tighter, uses `Дерп`, and must not
+  retain fuzzy or untranslated production entries.
 - **Command menu:** `derp/command_menu.py` is the desired state for private,
   group, and group-admin command scopes. Startup reapplies every supported
   locale and deletes the default scope so stale BotFather commands cannot expose
