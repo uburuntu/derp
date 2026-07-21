@@ -73,6 +73,7 @@ def _invocation(
         chat_id=CHAT_ID,
         thread_id=17,
         estimated_input_tokens=input_tokens,
+        request_binding="b" * 64,
     )
 
 
@@ -125,6 +126,7 @@ def _snapshot(
         thread_id=invocation.thread_id,
         pricing_input={
             "input_tokens": invocation.estimated_input_tokens,
+            "request_binding": invocation.request_binding,
         },
         state=state,
         delivery_state=DeliveryState.NOT_READY,
@@ -205,6 +207,7 @@ def _environment() -> Environment:
         ({"thread_id": 0}, ValueError),
         ({"estimated_input_tokens": True}, TypeError),
         ({"estimated_input_tokens": -1}, ValueError),
+        ({"request_binding": "not-a-binding"}, ValueError),
     ],
 )
 def test_invocation_rejects_ambiguous_identity_or_pricing_inputs(
@@ -218,6 +221,7 @@ def test_invocation_rejects_ambiguous_identity_or_pricing_inputs(
         "chat_id": CHAT_ID,
         "thread_id": 17,
         "estimated_input_tokens": 1,
+        "request_binding": "b" * 64,
     }
     values.update(changes)
 
@@ -274,6 +278,7 @@ async def test_success_quotes_claims_and_returns_uncaptured_text() -> None:
         "thread_id": env.invocation.thread_id,
         "pricing_input": {
             "input_tokens": 8_001,
+            "request_binding": "b" * 64,
         },
     }
     assert "rigorous answer" not in repr(outcome)
@@ -655,6 +660,7 @@ async def test_telemetry_contains_economics_and_outcome_but_no_text() -> None:
         )
 
     assert isinstance(outcome, PaidTextReadyForDelivery)
+    assert "b" * 64 not in repr(env.invocation)
     quote_attributes = recorder.set_attributes.call_args_list[0].args[0]
     outcome_attributes = recorder.set_attributes.call_args_list[1].args[0]
     assert quote_attributes["derp.operation.capability"] == "deep_think"
@@ -670,6 +676,7 @@ async def test_telemetry_contains_economics_and_outcome_but_no_text() -> None:
     pricing_input = env.ledger.ensure_quote.await_args.kwargs["pricing_input"]
     assert pricing_input == {
         "input_tokens": env.invocation.estimated_input_tokens,
+        "request_binding": env.invocation.request_binding,
     }
 
 

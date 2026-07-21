@@ -68,6 +68,7 @@ class PaidTextInvocation:
     chat_id: uuid.UUID
     thread_id: int | None
     estimated_input_tokens: int
+    request_binding: str = field(repr=False)
 
     def __post_init__(self) -> None:
         _require_operation_id(self.operation_id)
@@ -88,6 +89,14 @@ class PaidTextInvocation:
             if self.thread_id <= 0:
                 raise ValueError("thread_id must be positive")
         DeepThinkQuoteInput(self.estimated_input_tokens)
+        if not isinstance(self.request_binding, str):
+            raise TypeError("request_binding must be a string")
+        if len(self.request_binding) != 64 or any(
+            character not in "0123456789abcdef" for character in self.request_binding
+        ):
+            raise ValueError(
+                "request_binding must be a lowercase hexadecimal SHA-256 HMAC"
+            )
 
 
 class PaidTextExecutor[RequestT](Protocol):
@@ -349,6 +358,7 @@ class PaidTextOperationCoordinator:
             thread_id=invocation.thread_id,
             pricing_input={
                 "input_tokens": invocation.estimated_input_tokens,
+                "request_binding": invocation.request_binding,
             },
         )
 
