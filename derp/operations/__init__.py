@@ -40,6 +40,10 @@ from derp.operations.reconciliation import (
     OperationReconciliationRunner,
     OperationReconciliationWorker,
 )
+from derp.operations.telemetry import (
+    record_operation_outcome,
+    record_operation_quote,
+)
 from derp.operations.types import (
     ContextBand,
     DeliveryState,
@@ -109,6 +113,8 @@ __all__ = [
     "ReservationRejection",
     "ReservationResult",
     "ReservedOperation",
+    "record_operation_outcome",
+    "record_operation_quote",
     "SettlementResult",
     "TtsQuoteInput",
     "VideoGenerateQuoteInput",

@@ -248,17 +248,18 @@ def test_operation_telemetry_contains_numeric_economics_without_content() -> Non
         ImageDelivered(OPERATION_ID, (501,)),
     )
 
-    attributes = span.set_attributes.call_args.args[0]
+    attributes = span.set_attributes.call_args_list[0].args[0]
     assert attributes["gen_ai.request.model"] == PLAN.model.provider_model_id
     assert attributes["derp.operation.model_key"] == PLAN.model.key.value
     assert attributes["derp.operation.context_band"] == quote.key.context_band.value
     assert attributes["derp.operation.quoted_credits"] == quote.credits
     assert isinstance(attributes["derp.operation.estimated_provider_cost_usd"], float)
     assert not {"prompt", "caption", "content", "message"} & attributes.keys()
-    span.set_attribute.assert_called_once_with(
-        "derp.operation.outcome",
-        "delivered",
-    )
+    assert span.set_attributes.call_args_list[1].args[0] == {
+        "derp.operation.authorization": "none",
+        "derp.operation.outcome": "delivered",
+        "derp.operation.terminal_outcome": "none",
+    }
 
 
 @pytest.mark.asyncio

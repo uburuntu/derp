@@ -51,6 +51,8 @@ from derp.operations import (
     QuoteId,
     ReservationRejected,
     ReservationRejection,
+    record_operation_outcome,
+    record_operation_quote,
 )
 
 if TYPE_CHECKING:
@@ -533,17 +535,10 @@ class ImageOperationCoordinator:
         plan: ExecutionPlan,
     ) -> None:
         """Attach queryable fixed-price facts without request content."""
-        span.set_attributes(
-            {
-                "gen_ai.request.model": plan.model.provider_model_id,
-                "derp.operation.model_key": quote.key.model_key.value,
-                "derp.operation.context_band": quote.key.context_band.value,
-                "derp.operation.quoted_credits": quote.credits,
-                "derp.operation.estimated_provider_cost_usd": float(
-                    quote.estimated_provider_cost_usd
-                ),
-                "derp.operation.pricing_version": quote.pricing_version,
-            }
+        record_operation_quote(
+            span,
+            quote,
+            provider_model_id=plan.model.provider_model_id,
         )
 
     @staticmethod
@@ -566,7 +561,7 @@ class ImageOperationCoordinator:
             category = f"in_progress:{outcome.stage.value}"
         else:  # pragma: no cover - guarded by the closed outcome union
             raise TypeError(f"unsupported image outcome: {type(outcome).__name__}")
-        span.set_attribute("derp.operation.outcome", category)
+        record_operation_outcome(span, category)
         return outcome
 
     @staticmethod
