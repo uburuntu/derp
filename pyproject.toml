@@ -15,7 +15,7 @@ dependencies = [
     "logfire[aiohttp,google-genai,httpx,system-metrics]>=4.38.0,<5",
     "opentelemetry-api>=1.43,<1.44",
     "pydantic>=2.13.4,<3",
-    "pydantic-ai>=2.13.0,<3",
+    "pydantic-ai>=2.14.1,<3",
     "pydantic-settings>=2.14.2",
     "sqlalchemy[asyncio]>=2.0.51",
 ]

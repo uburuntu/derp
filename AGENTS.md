@@ -454,7 +454,7 @@ pydantic-ai, inspect the lock-matched `references/` checkout as the primary
 source for repository-specific changes.
 
 - **aiogram 3.30.0:** Telegram runtime. Consult `references/aiogram` before changing routers, middleware, dependency injection, polling, flags, payments, or session middleware.
-- **pydantic-ai 2.13.0:** Agent runtime. Consult its upgrade guide and `references/pydantic-ai` before changing agents, capabilities, tools, history, retries, instrumentation, or durable execution.
+- **pydantic-ai 2.14.1:** Agent runtime. Consult its upgrade guide and `references/pydantic-ai` before changing agents, capabilities, tools, history, retries, instrumentation, or durable execution.
 - **SQLAlchemy 2.x + asyncpg:** Async PostgreSQL ORM with typed models.
 - **Alembic:** Database migrations.
 - **logfire 4.38.0:** Structured logging, metrics, instrumentation. Consult `references/logfire` before changing configuration, integrations, scrubbing, tracing, metrics, or exporter lifecycle.
