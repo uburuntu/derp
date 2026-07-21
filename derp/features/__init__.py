@@ -14,6 +14,16 @@ from derp.features.image import (
     ImageSourceLoader,
     PreparedImageEditRequest,
 )
+from derp.features.think import (
+    MAX_THINK_OUTPUT_CHARS,
+    MAX_THINK_OUTPUT_TOKENS,
+    MAX_THINK_PROBLEM_CHARS,
+    PreparedThinkRequest,
+    ThinkExecutionPolicy,
+    ThinkFeatureService,
+    ThinkProviderExecutor,
+    ThinkRequest,
+)
 from derp.features.tts import (
     MAX_TTS_OUTPUT_BYTES,
     MAX_TTS_OUTPUT_SECONDS,
@@ -59,6 +69,9 @@ _IMAGE_OPERATION_EXPORTS = frozenset(
 
 __all__ = [
     "MAX_IMAGE_OUTPUT_BYTES",
+    "MAX_THINK_OUTPUT_CHARS",
+    "MAX_THINK_OUTPUT_TOKENS",
+    "MAX_THINK_PROBLEM_CHARS",
     "MAX_TTS_OUTPUT_BYTES",
     "MAX_TTS_OUTPUT_SECONDS",
     "MAX_TTS_TEXT_CHARS",
@@ -83,7 +96,12 @@ __all__ = [
     "ImageSourceLoader",
     "MediaContent",
     "PreparedImageEditRequest",
+    "PreparedThinkRequest",
     "TextOutput",
+    "ThinkExecutionPolicy",
+    "ThinkFeatureService",
+    "ThinkProviderExecutor",
+    "ThinkRequest",
     "TtsExecutionPolicy",
     "TtsFeatureService",
     "TtsProviderExecutor",
