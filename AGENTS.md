@@ -13,6 +13,8 @@
   facts, validated plans/outcomes, and provider-neutral feature services.
 - `derp/operations/`, `derp/approvals/`, `derp/artifacts/`, `derp/delivery/`:
   Paid-operation accounting, deferred consent, and durable result delivery.
+- `derp/operator/`: Identifier-free aggregate diagnostics, fail-closed operator
+  access, short-lived confirmations, and adapters to live maintenance workers.
 - `derp/billing/`: Versioned Stars products, intents, settlement, subscriptions,
   refunds, and clawbacks.
 - `derp/db/`, `derp/models/`: Cohesive persistence stores and SQLAlchemy models;
@@ -24,6 +26,8 @@
   evidence-based implementation-status ledger.
 - `docs/message-style.md`: Required English/Russian voice, terminology, message
   order, and review checklist for every user-visible string.
+- `docs/operator-console.md`: Deployment-operator access, privacy boundaries,
+  maintenance semantics, test controls, and extension/removal guidance.
 - `references/`: Gitignored upstream source checkouts matching the lockfile.
 
 ## Build, Test, and Development Commands
@@ -190,6 +194,8 @@ when its replacement is covered and working or the public surface fails closed.
     private TTL-bound generated artifacts.
   - `derp/billing/*`: versioned Stars products, purchase intents,
     subscriptions, settlement, and clawbacks.
+  - `derp/operator/*`: private deployment-control policy, aggregate snapshots,
+    confirmation capabilities, and serialized live-worker maintenance.
   - `derp/credits/*`: transitional free-tool and legacy compatibility policy.
   - `derp/features/*`: provider-neutral chat, image, TTS, video, thinking, and
     inline application services.
@@ -203,9 +209,11 @@ when its replacement is covered and working or the public surface fails closed.
 
 ## Event Handling & Middlewares
 
-- **Routers:** `debug`, `context_settings`, `basic`, `donations`,
-  `credit_cmds`, `premium_suspension`, `payments`, `subscriptions`,
-  `paid_media_delivery`, `image`, `tts`, `inline`, then catch-all `chat`.
+- **Routers:** `operator`, `operator_rejection`, `debug`, `debug_rejection`,
+  `context_settings`, `basic`, `donations`, `credit_cmds`,
+  `premium_suspension`, `payments`, `subscriptions`, `paid_media_delivery`,
+  `image`, `tts`, `inline`, then catch-all `chat`. Privileged rejection routers
+  consume unauthorized or stale controls before conversation handling.
 - **Outer middlewares:**
   - `LogUpdatesMiddleware`: formats and logs each `Update` with elapsed ms.
   - `DatabaseLoggerMiddleware`: upserts user/chat and projects messages to the messages table.
@@ -213,7 +221,9 @@ when its replacement is covered and working or the public surface fails closed.
   aiogram context for every update. `RouteDependencyMiddleware` runs after a
   handler matches and loads SQLAlchemy models or commerce services only for
   routes listed in `ROUTE_DEPENDENCY_PLANS`; legacy credit injection is not a
-  global update cost.
+  global update cost. The operator message route needs no mutable route-scoped
+  data; operator callbacks load models only for the production-shaped 1-Star
+  test and otherwise use dispatcher-injected console services.
 - **Event middlewares:**
   - `MessageSenderMiddleware`: injects `MessageSender` for messages and callback queries.
   - `ChatActionMiddleware`: shows typing/upload actions for long‑running handlers.
@@ -378,6 +388,9 @@ derp/billing/
 ## Configuration & i18n
 
 - **Settings:** `derp/config.py` uses `pydantic-settings` to load `.env` and `.env.prod`, with helpers for rotating Google API keys and deriving `bot_id`.
+- **Operator:** A deployment operator is an explicit `OPERATOR_IDS` allowlist
+  member, distinct from Telegram chat administrators and owners. Production
+  requires at least one ID; `ADMIN_IDS` is a deprecated migration alias.
 - **i18n:** `aiogram.utils.i18n` with catalogs under `derp/locales`. Use `make i18n` to extract/update/compile; `SimpleI18nMiddleware` installs runtime translation. Never manually edit `.mo` files—always generate them via `make i18n-compile`.
 - **Message style:** Follow `docs/message-style.md` for all fixed copy. English
   is concise and conversational; Russian is tighter, uses `Дерп`, and must not
@@ -390,6 +403,8 @@ derp/billing/
 ## Observability & Resilience
 
 - **Logging/Tracing:** `derp/observability.py` owns Logfire configuration, scrubbing, integrations, stdlib logging, and shutdown. `derp/application.py` owns the bot/database runtime. Every update gets one content-free `telegram.update` consumer span.
+- **Operator console:** `docs/operator-console.md` defines its aggregate-only
+  data contract, conservative maintenance results, and `operator.*` events.
 - **Backpressure/Throttling:** Polling has a configurable global concurrency limit. `ThrottleUsersMiddleware` is available for per-user exclusion but is not enabled.
 - **Error Handling:** Boundaries report privacy-safe failures once and return a
   typed not-charged, refunded, retry, or reconciliation state. Paid media never
@@ -446,6 +461,8 @@ derp/billing/
   actor-only. In groups, use `deliver_sensitive_reply()` for a protected private
   message plus a content-free public acknowledgement; callbacks that mutate a
   personal plan must fail closed outside the private chat.
+- Operator controls are additionally allowlist-gated and private-chat-bound.
+  Never infer operator access from Telegram chat administrator/owner status.
 - Resilience: recover network sends only where the product contract permits.
   Paid artifact failure uses durable delivery/reversal state rather than a
   generic text substitute; auxiliary failures must not corrupt the core flow.
@@ -483,7 +500,13 @@ source for repository-specific changes.
 - **Add a credit pack:** Add an immutable versioned product to
   `DEFAULT_PRODUCT_CATALOG`; both intent creation and fulfillment consume the
   persisted version and amount.
-- **Add a debug command:** Add to `derp/handlers/debug.py` (admin-only filter is already applied).
+- **Add an operator control:** Extend identifier-free types and aggregates under
+  `derp/operator/`, then add bounded presentation in
+  `derp/handlers/operator.py`. Reuse a live bounded domain worker for mutations,
+  require an actor/action-bound confirmation, update router dependencies and
+  history exclusions, and preserve fail-closed stale-control handling. Do not
+  add generic debug mutation commands; `/debug_buy` is the compatibility path
+  for the durable 1-Star validation flow.
 
 ---
 
