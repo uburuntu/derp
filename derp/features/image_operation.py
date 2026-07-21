@@ -286,7 +286,7 @@ class ImageOperationCoordinator:
             "image.operation",
             operation_id=str(invocation.operation_id),
             feature=feature.value,
-        ):
+        ) as span:
             quote = await self.ensure_quote(
                 invocation,
                 plan,
@@ -294,24 +294,34 @@ class ImageOperationCoordinator:
                 finishing_plan=finishing_plan,
                 finishing_quote_input=finishing_quote_input,
             )
+            self._record_quote(span, quote, plan)
             reservation = await self._ledger.reserve(
                 invocation.operation_id,
                 allow_personal_once=allow_personal_once,
             )
             if isinstance(reservation, ReservationRejected):
-                return await self._reservation_rejected(reservation, quote)
+                return self._record_outcome(
+                    span,
+                    await self._reservation_rejected(reservation, quote),
+                )
 
             if reservation.idempotent:
                 snapshot = await self._ledger.get_snapshot(invocation.operation_id)
                 if not snapshot.can_claim_execution:
-                    return await self._resume(snapshot)
+                    return self._record_outcome(span, await self._resume(snapshot))
 
             try:
                 claim = await self._ledger.mark_executing(invocation.operation_id)
             except InvalidOperationTransitionError:
-                return await self._resume_operation(invocation.operation_id)
+                return self._record_outcome(
+                    span,
+                    await self._resume_operation(invocation.operation_id),
+                )
             if not claim.execution_claimed:
-                return await self._resume_operation(invocation.operation_id)
+                return self._record_outcome(
+                    span,
+                    await self._resume_operation(invocation.operation_id),
+                )
 
             provider_outcome = await self._execute(plan, request)
             if isinstance(provider_outcome, Rejected):
@@ -320,15 +330,21 @@ class ImageOperationCoordinator:
                     invocation.operation_id,
                     reason=f"image_{provider_outcome.reason.value}",
                 )
-                return ImageNotCharged(invocation.operation_id, reason)
+                return self._record_outcome(
+                    span,
+                    ImageNotCharged(invocation.operation_id, reason),
+                )
             if isinstance(provider_outcome, Failed):
                 await self._ledger.release(
                     invocation.operation_id,
                     reason=f"image_{provider_outcome.reason.value}",
                 )
-                return ImageNotCharged(
-                    invocation.operation_id,
-                    ImageNotChargedReason.PROVIDER_FAILURE,
+                return self._record_outcome(
+                    span,
+                    ImageNotCharged(
+                        invocation.operation_id,
+                        ImageNotChargedReason.PROVIDER_FAILURE,
+                    ),
                 )
             if not isinstance(provider_outcome, Succeeded):
                 raise RuntimeError("image service returned an unsupported outcome")
@@ -345,16 +361,22 @@ class ImageOperationCoordinator:
                     invocation.operation_id,
                     reason="image_result_storage_failed",
                 )
-                return ImageNotCharged(
-                    invocation.operation_id,
-                    ImageNotChargedReason.RESULT_STORAGE_FAILURE,
+                return self._record_outcome(
+                    span,
+                    ImageNotCharged(
+                        invocation.operation_id,
+                        ImageNotChargedReason.RESULT_STORAGE_FAILURE,
+                    ),
                 )
 
             await self._ledger.capture(invocation.operation_id)
             await self._delivery_service.mark_ready(invocation.operation_id)
-            return await self._deliver(
-                invocation.operation_id,
-                resend_token=prepared.resend_token,
+            return self._record_outcome(
+                span,
+                await self._deliver(
+                    invocation.operation_id,
+                    resend_token=prepared.resend_token,
+                ),
             )
 
     async def ensure_quote(
@@ -503,6 +525,49 @@ class ImageOperationCoordinator:
         if isinstance(request, ImageGenerateRequest):
             return await self._image_service.generate(plan, request)
         return await self._image_service.edit(plan, request)
+
+    @staticmethod
+    def _record_quote(
+        span: logfire.LogfireSpan,
+        quote: Quote,
+        plan: ExecutionPlan,
+    ) -> None:
+        """Attach queryable fixed-price facts without request content."""
+        span.set_attributes(
+            {
+                "gen_ai.request.model": plan.model.provider_model_id,
+                "derp.operation.model_key": quote.key.model_key.value,
+                "derp.operation.context_band": quote.key.context_band.value,
+                "derp.operation.quoted_credits": quote.credits,
+                "derp.operation.estimated_provider_cost_usd": float(
+                    quote.estimated_provider_cost_usd
+                ),
+                "derp.operation.pricing_version": quote.pricing_version,
+            }
+        )
+
+    @staticmethod
+    def _record_outcome(
+        span: logfire.LogfireSpan,
+        outcome: ImageOperationOutcome,
+    ) -> ImageOperationOutcome:
+        """Record one stable terminal or recovery category before returning."""
+        if isinstance(outcome, ImageDelivered):
+            category = "delivered"
+        elif isinstance(outcome, ImageAwaitingFunding):
+            category = f"awaiting_funding:{outcome.reason.value}"
+        elif isinstance(outcome, ImageNotCharged):
+            category = f"not_charged:{outcome.reason.value}"
+        elif isinstance(outcome, ImageRefunded):
+            category = "refunded"
+        elif isinstance(outcome, ImageDeliveryUncertain):
+            category = "delivery_uncertain"
+        elif isinstance(outcome, ImageInProgress):
+            category = f"in_progress:{outcome.stage.value}"
+        else:  # pragma: no cover - guarded by the closed outcome union
+            raise TypeError(f"unsupported image outcome: {type(outcome).__name__}")
+        span.set_attribute("derp.operation.outcome", category)
+        return outcome
 
     @staticmethod
     def _feature_for(request: ImageRequest) -> Feature:

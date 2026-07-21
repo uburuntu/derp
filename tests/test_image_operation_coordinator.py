@@ -238,6 +238,29 @@ def test_sensitive_delivery_values_are_excluded_from_representations(
     assert "private-resend-capability" not in repr(outcome)
 
 
+def test_operation_telemetry_contains_numeric_economics_without_content() -> None:
+    span = MagicMock()
+    quote = _quote()
+
+    ImageOperationCoordinator._record_quote(span, quote, PLAN)
+    ImageOperationCoordinator._record_outcome(
+        span,
+        ImageDelivered(OPERATION_ID, (501,)),
+    )
+
+    attributes = span.set_attributes.call_args.args[0]
+    assert attributes["gen_ai.request.model"] == PLAN.model.provider_model_id
+    assert attributes["derp.operation.model_key"] == PLAN.model.key.value
+    assert attributes["derp.operation.context_band"] == quote.key.context_band.value
+    assert attributes["derp.operation.quoted_credits"] == quote.credits
+    assert isinstance(attributes["derp.operation.estimated_provider_cost_usd"], float)
+    assert not {"prompt", "caption", "content", "message"} & attributes.keys()
+    span.set_attribute.assert_called_once_with(
+        "derp.operation.outcome",
+        "delivered",
+    )
+
+
 @pytest.mark.asyncio
 async def test_new_operation_persists_output_before_capture_and_delivery(
     env: Environment,
