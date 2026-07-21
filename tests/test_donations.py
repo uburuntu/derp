@@ -91,7 +91,9 @@ async def test_successful_payment_routes_ack_to_target_chat():
 
 
 @pytest.mark.asyncio
-async def test_successful_payment_ack_failure_does_not_block_admin_notice():
+async def test_successful_payment_ack_failure_does_not_block_operator_notice(
+    monkeypatch,
+):
     bot = MagicMock()
     bot.send_photo = AsyncMock()
     bot.send_message = AsyncMock(side_effect=[Exception("boom"), None])
@@ -109,17 +111,18 @@ async def test_successful_payment_ack_failure_does_not_block_admin_notice():
         provider_payment_charge_id="",
     )
 
+    monkeypatch.setattr(donations_module.settings, "operator_ids", frozenset({42}))
+
     await handle_successful_payment(message, bot)
 
     assert bot.send_message.await_count == 2
     assert bot.send_message.await_args_list[0].kwargs["chat_id"] == -1001
-    admin_id = donations_module.settings.rmbk_id
-    admin_calls = [
+    operator_calls = [
         c
         for c in bot.send_message.await_args_list
-        if (c.args and c.args[0] == admin_id) or c.kwargs.get("chat_id") == admin_id
+        if (c.args and c.args[0] == 42) or c.kwargs.get("chat_id") == 42
     ]
-    assert admin_calls, "expected an admin notification call"
+    assert operator_calls, "expected an operator notification call"
 
 
 def test_coerce_amount_various_cases():

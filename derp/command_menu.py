@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -13,6 +14,7 @@ from aiogram.types import (
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
     BotCommandScopeDefault,
     MenuButtonCommands,
 )
@@ -26,6 +28,7 @@ class CommandAudience(StrEnum):
     """Telegram audiences with independently selected command lists."""
 
     PRIVATE = "private"
+    OPERATOR = "operator"
     GROUP = "group"
     GROUP_ADMIN = "group_admin"
 
@@ -75,7 +78,7 @@ def command_specs_for(
         raise TypeError("public_purchases_enabled must be a bool")
 
     creation = creation_command_specs()
-    if audience is CommandAudience.PRIVATE:
+    if audience in {CommandAudience.PRIVATE, CommandAudience.OPERATOR}:
         commands = [
             CommandSpec("help", _("See what Derp can do")),
             CommandSpec("settings", _("Manage privacy and history")),
@@ -91,6 +94,8 @@ def command_specs_for(
                 CommandSpec("donate", _("Support Derp with Stars")),
             )
         )
+        if audience is CommandAudience.OPERATOR:
+            commands.insert(0, CommandSpec("operator", _("Open operator console")))
         return tuple(commands)
 
     settings_description = (
@@ -132,8 +137,17 @@ async def configure_bot_command_menu(
     *,
     i18n: I18n,
     public_purchases_enabled: bool,
+    operator_ids: Collection[int] = (),
 ) -> None:
     """Converge Telegram's server-side command and private-menu state."""
+    if any(
+        isinstance(operator_id, bool)
+        or not isinstance(operator_id, int)
+        or operator_id <= 0
+        for operator_id in operator_ids
+    ):
+        raise ValueError("operator_ids must contain only positive integers")
+    operators = tuple(sorted(set(operator_ids)))
     languages = command_menu_language_codes(i18n)
     audiences = (
         (CommandAudience.PRIVATE, BotCommandScopeAllPrivateChats()),
@@ -154,6 +168,13 @@ async def configure_bot_command_menu(
                 ]
                 for audience, _ in audiences
             }
+            desired[CommandAudience.OPERATOR] = [
+                spec.telegram()
+                for spec in command_specs_for(
+                    CommandAudience.OPERATOR,
+                    public_purchases_enabled=public_purchases_enabled,
+                )
+            ]
         for audience, scope in audiences:
             configured = await bot.set_my_commands(
                 commands=desired[audience],
@@ -161,6 +182,13 @@ async def configure_bot_command_menu(
                 language_code=language_code,
             )
             _require_configured(configured, f"set_{audience.value}_commands")
+        for operator_id in operators:
+            configured = await bot.set_my_commands(
+                commands=desired[CommandAudience.OPERATOR],
+                scope=BotCommandScopeChat(chat_id=operator_id),
+                language_code=language_code,
+            )
+            _require_configured(configured, "set_operator_commands")
 
     for language_code in languages:
         deleted = await bot.delete_my_commands(
@@ -173,7 +201,8 @@ async def configure_bot_command_menu(
     _require_configured(menu_configured, "set_private_command_button")
     logfire.info(
         "telegram.command_menu_configured",
-        scope_count=len(audiences),
+        scope_count=len(audiences) + len(operators),
+        operator_scope_count=len(operators),
         language_variant_count=len(languages),
         public_purchases_enabled=public_purchases_enabled,
     )

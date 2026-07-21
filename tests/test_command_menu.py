@@ -10,6 +10,7 @@ from aiogram.types import (
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
     BotCommandScopeDefault,
     MenuButtonCommands,
 )
@@ -36,6 +37,7 @@ _PRIVATE_COMMANDS = (
     "forget",
     "donate",
 )
+_OPERATOR_COMMANDS = ("operator", *_PRIVATE_COMMANDS)
 _GROUP_COMMANDS = (
     "derp",
     "help",
@@ -67,6 +69,7 @@ def _command_names(
     ("audience", "expected"),
     [
         (CommandAudience.PRIVATE, _PRIVATE_COMMANDS),
+        (CommandAudience.OPERATOR, _OPERATOR_COMMANDS),
         (CommandAudience.GROUP, _GROUP_COMMANDS),
         (CommandAudience.GROUP_ADMIN, _GROUP_COMMANDS),
     ],
@@ -110,12 +113,18 @@ def test_purchase_commands_follow_public_intake_and_chat_scope() -> None:
         CommandAudience.GROUP_ADMIN,
         public_purchases_enabled=True,
     )
+    operator = _command_names(
+        CommandAudience.OPERATOR,
+        public_purchases_enabled=True,
+    )
 
     assert private[private.index("credits") + 1] == "buy"
     assert "buy_chat" not in private
     assert group[group.index("credits") + 1] == "buy_chat"
     assert "buy" not in group
     assert admin == group
+    assert operator[0] == "operator"
+    assert operator[operator.index("credits") + 1] == "buy"
 
 
 def test_creation_catalog_has_only_durable_media_operations() -> None:
@@ -189,3 +198,53 @@ async def test_configuration_fails_fast_when_telegram_rejects_state(
 
     bot.delete_my_commands.assert_not_awaited()
     bot.set_chat_menu_button.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_configuration_sets_complete_operator_scopes_per_locale(
+    setup_i18n: I18n,
+) -> None:
+    bot = MagicMock(spec=Bot)
+    bot.set_my_commands = AsyncMock(return_value=True)
+    bot.delete_my_commands = AsyncMock(return_value=True)
+    bot.set_chat_menu_button = AsyncMock(return_value=True)
+
+    await configure_bot_command_menu(
+        bot,
+        i18n=setup_i18n,
+        public_purchases_enabled=False,
+        operator_ids={42, 7},
+    )
+
+    operator_calls = [
+        call
+        for call in bot.set_my_commands.await_args_list
+        if isinstance(call.kwargs["scope"], BotCommandScopeChat)
+    ]
+    assert [call.kwargs["scope"].chat_id for call in operator_calls] == [
+        operator_id
+        for _ in command_menu_language_codes(setup_i18n)
+        for operator_id in (7, 42)
+    ]
+    assert all(
+        tuple(command.command for command in call.kwargs["commands"])
+        == _OPERATOR_COMMANDS
+        for call in operator_calls
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operator_ids", [{0}, {-1}, {True}])
+async def test_configuration_rejects_invalid_operator_ids(
+    setup_i18n: I18n,
+    operator_ids: set[int],
+) -> None:
+    bot = MagicMock(spec=Bot)
+
+    with pytest.raises(ValueError, match="positive integers"):
+        await configure_bot_command_menu(
+            bot,
+            i18n=setup_i18n,
+            public_purchases_enabled=False,
+            operator_ids=operator_ids,
+        )

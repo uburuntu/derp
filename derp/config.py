@@ -1,12 +1,15 @@
 """Configuration settings using Pydantic."""
 
+from __future__ import annotations
+
 import hashlib
+import json
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from derp.health import DEFAULT_RUNTIME_HEALTH_PATH
 
@@ -41,19 +44,53 @@ class Settings(BaseSettings):
 
     # --- Non essentials ---
 
-    admin_ids: set[int] = Field(
-        default_factory=lambda: [
-            28006241,  # @rm_bk
-        ]
+    operator_ids: Annotated[frozenset[int], NoDecode] = Field(
+        default_factory=frozenset,
+        validation_alias=AliasChoices("OPERATOR_IDS", "ADMIN_IDS"),
     )
 
-    rmbk_id: int = 28006241
+    @field_validator("operator_ids", mode="before")
+    @classmethod
+    def parse_operator_ids(cls, value: object) -> frozenset[int]:
+        """Accept a JSON array or a comma-separated list of Telegram user IDs."""
+        if value is None or value == "":
+            return frozenset()
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return frozenset()
+            value = json.loads(raw) if raw.startswith("[") else raw.split(",")
+        if not isinstance(value, list | tuple | set | frozenset):
+            raise ValueError("OPERATOR_IDS must be a list of Telegram user IDs")
+        parsed: list[int] = []
+        for item in value:
+            if isinstance(item, int) and not isinstance(item, bool):
+                parsed.append(item)
+                continue
+            if not isinstance(item, str):
+                raise ValueError("OPERATOR_IDS must contain only integers")
+            try:
+                parsed.append(int(item.strip()))
+            except ValueError as exc:
+                raise ValueError("OPERATOR_IDS must contain only integers") from exc
+        operator_ids = frozenset(parsed)
+        if any(operator_id <= 0 for operator_id in operator_ids):
+            raise ValueError("OPERATOR_IDS must contain only positive integers")
+        return operator_ids
+
+    @model_validator(mode="after")
+    def require_production_operator(self) -> Settings:
+        """Production must have an explicit operator recovery path."""
+        if self.environment == "prod" and not self.operator_ids:
+            raise ValueError("OPERATOR_IDS must contain at least one ID in production")
+        return self
 
     model_config = SettingsConfigDict(
         # `.env.prod` takes priority over `.env`
         env_file=(".env", ".env.prod"),
         env_file_encoding="utf-8",
         extra="ignore",  # Ignore extra fields from .env
+        populate_by_name=True,
     )
 
     @property

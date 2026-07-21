@@ -274,6 +274,7 @@ def create_dispatcher(
             configure_bot_command_menu,
             i18n=i18n,
             public_purchases_enabled=settings.public_purchases_enabled,
+            operator_ids=settings.operator_ids,
         )
     )
 

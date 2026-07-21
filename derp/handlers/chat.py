@@ -476,7 +476,7 @@ async def _release_undelivered_paid_chat_turn(
         )
 
 
-@router.message(Command("context"), F.from_user.id.in_(settings.admin_ids))
+@router.message(Command("context"), F.from_user.id.in_(settings.operator_ids))
 async def show_context(message: Message, chat_model: ChatModel | None) -> None:
     """Admin command to show the context that would be sent to the agent."""
     db = get_db_manager()

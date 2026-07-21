@@ -37,9 +37,9 @@ router = Router(name="debug")
 
 # Only process messages from admins
 router.message.filter(
-    lambda msg: msg.from_user and msg.from_user.id in settings.admin_ids
+    lambda msg: msg.from_user and msg.from_user.id in settings.operator_ids
 )
-router.callback_query.filter(lambda cb: cb.from_user.id in settings.admin_ids)
+router.callback_query.filter(lambda cb: cb.from_user.id in settings.operator_ids)
 
 
 class DebugPurchaseCallback(CallbackData, prefix="debug-buy"):

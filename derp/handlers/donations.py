@@ -163,42 +163,51 @@ async def handle_successful_payment(message: Message, bot: Bot) -> None:
             level="warning",
         )
 
-    # Notify admin with full details using plain HTML helpers
-    try:
-        chat = message.chat
-        user = message.from_user
-        payload = sp.invoice_payload
-        from_name = user and html.quote(user.full_name) or "—"
-        from_username = user and user.username and ("@" + user.username) or ""
-        from_id = user and user.id or None
-        chat_title = chat.title and html.quote(chat.title) or ""
+    if not settings.operator_ids:
+        return
 
-        lines: list[str] = [
-            html.bold("Donation received"),
-            f"{html.bold('Amount:')} {stars} XTR",
-            f"{html.bold('From:')} {from_name} {from_username} {('#u' + str(from_id)) if from_id else ''}",
-            f"{html.bold('Origin:')} {chat.type} id={chat.id}{(' ' + chat_title) if chat_title else ''}",
-            f"{html.bold('Target:')} {target_chat_id}{(' topic ' + str(target_thread_id)) if target_thread_id else ''}",
-            f"{html.bold('Message ID:')} {message.message_id}",
-            f"{html.bold('Payload:')} {html.code(payload)}",
-        ]
-        if sp.telegram_payment_charge_id:
-            lines.append(
-                f"{html.bold('Telegram charge:')} {html.code(sp.telegram_payment_charge_id)}"
-            )
-        if sp.provider_payment_charge_id:
-            lines.append(
-                f"{html.bold('Provider charge:')} {html.code(sp.provider_payment_charge_id)}"
-            )
+    chat = message.chat
+    user = message.from_user
+    payload = sp.invoice_payload
+    from_name = user and html.quote(user.full_name) or "—"
+    from_username = user and user.username and ("@" + user.username) or ""
+    from_id = user and user.id or None
+    chat_title = chat.title and html.quote(chat.title) or ""
 
-        await bot.send_message(settings.rmbk_id, "\n".join(lines))
+    lines: list[str] = [
+        html.bold("Donation received"),
+        f"{html.bold('Amount:')} {stars} XTR",
+        f"{html.bold('From:')} {from_name} {from_username} {('#u' + str(from_id)) if from_id else ''}",
+        f"{html.bold('Origin:')} {chat.type} id={chat.id}{(' ' + chat_title) if chat_title else ''}",
+        f"{html.bold('Target:')} {target_chat_id}{(' topic ' + str(target_thread_id)) if target_thread_id else ''}",
+        f"{html.bold('Message ID:')} {message.message_id}",
+        f"{html.bold('Payload:')} {html.code(payload)}",
+    ]
+    if sp.telegram_payment_charge_id:
+        lines.append(
+            f"{html.bold('Telegram charge:')} {html.code(sp.telegram_payment_charge_id)}"
+        )
+    if sp.provider_payment_charge_id:
+        lines.append(
+            f"{html.bold('Provider charge:')} {html.code(sp.provider_payment_charge_id)}"
+        )
+
+    for operator_id in sorted(settings.operator_ids):
+        try:
+            await bot.send_message(operator_id, "\n".join(lines))
+        except Exception as exc:
+            report_exception(
+                "donation_operator_notify_failed",
+                exception=exc,
+                level="warning",
+                operator_id=operator_id,
+            )
+    if settings.operator_ids:
         logfire.info(
-            "donation_admin_notified",
+            "donation_operators_notified",
+            operator_count=len(settings.operator_ids),
             stars=stars,
             chat_id=chat.id,
             thread_id=message.message_thread_id,
             user_id=(user and user.id),
         )
-    except Exception:
-        # Silent: admin notification failures should not affect user flow
-        report_exception("donation_admin_notify_failed")
