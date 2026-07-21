@@ -403,6 +403,42 @@ Milestones are vertical outcomes, not layers to perfect indefinitely. Each
 milestone must leave the bot releasable and remove the obsolete path it
 replaces.
 
+### Implementation status (2026-07-21)
+
+The product contract above remains normative. This ledger records what is
+shipped and keeps code completion distinct from external release activation.
+The conservative weighted implementation score is **92/100**. Milestone weights
+reflect product risk and shipped acceptance behavior; external gates below are
+reported separately rather than counted as code:
+
+| Milestone | Weight earned | Evidence and remaining implementation work |
+| --- | ---: | --- |
+| M0: contain and characterize | 10/10 | Canonical catalog/plans, typed outcomes, Alembic-only test schemas, drift and characterization coverage, and fail-closed purchase intake are shipped. |
+| M1: continuous conversation | 27/30 | Scoped native history, complete-turn trimming, ambient onboarding, privacy controls, shared facts, media references, and bounded on-demand hydration are shipped. Chat-user preferences and real-client journey evidence remain. |
+| M2: trustworthy paid operations | 28/30 | Immutable quotes, atomic wallets and settlement, consent, subscriptions, purchase intents, image approval/delivery, clawbacks, and reconciliation are shipped. Standard chat captures only acknowledged model content but does not yet persist text for post-crash resend. Public Stars intake remains closed pending the real-payment gate. |
+| M3: polished premium work | 18/20 | Image/editing and command TTS use bounded providers plus durable approval, artifact, delivery, resend, and spend reversal. Thinking and video fail closed until their typed cores have equally complete adapters. |
+| M4: pragmatic hardening | 9/10 | Matched-route DI, bounded concurrency, privacy-safe Logfire/OTel, reconciliation workers, migration/concurrency/privacy tests, immutable images, readiness, and recovery docs are shipped. Empirical cache/cost tuning remains ongoing. |
+
+This score is implementation coverage, not a production-acceptance claim.
+Release activation still requires evidence that cannot be manufactured by the
+automated suite:
+
+1. Run one real admin `/debug_buy` Stars payment plus replay/refund checks and
+   verify exactly-once fulfillment to the intended wallet before enabling
+   `PUBLIC_PURCHASES_ENABLED`.
+2. Smoke private, group, and forum journeys on real Telegram clients, including
+   ambient disclosure, scoped command menus, private financial views, deferred
+   image approval, TTS/FFmpeg delivery, uncertain resend, and inline editing.
+3. Verify live Google model/quota behavior and observe real latency, cached and
+   uncached tokens, and cost bands before tuning windows or adding caches.
+4. Inspect production Logfire ingestion for zero prompt, message, binary, tool
+   argument, callback, and payment-payload content.
+5. Rehearse the documented backup, restore, readiness, and compatibility-bound
+   rollback path on the production host.
+
+The milestone lists below remain the acceptance history and extension backlog;
+future-tense wording does not override this dated ledger.
+
 ### Milestone 0: Contain and characterize
 
 Goal: stop known unsafe behavior from expanding and establish trustworthy
@@ -546,112 +582,114 @@ Exit criteria:
 The register preserves why the milestones exist. Resolved product semantics
 above take precedence over older code or copy.
 
-### AR-001: Pricing and credit behavior diverge
+### AR-001: Pricing and credit behavior diverge (resolved)
 
-Current code unlocks a model from a positive balance without consistently
-charging turns, and displayed tool costs can differ from registry-derived
-costs. Milestones 0 and 2 replace this with one model catalog, immutable quotes,
-and the resolved wallet contract.
+`derp/catalog/`, `QuoteEngine`, and immutable `ExecutionPlan` values now drive
+both execution and quoted economics. Exposed paid paths no longer infer price
+from a positive balance or a separate display registry.
 
-### AR-002: Charging is not a transaction protocol
+### AR-002: Charging is not a transaction protocol (resolved)
 
-Checks happen before provider work and deductions happen afterward, so
-concurrent requests can overspend and retries can double-charge. Milestone 2
-implements reserve/capture/release/spend-reversal with unique operation IDs.
+`OperationLedger` atomically reserves one wallet, claims provider execution,
+captures, releases, reverses spend, and makes duplicate transitions harmless.
+Real PostgreSQL concurrency tests cover overspend and idempotency.
 
-### AR-003: Tool strings cannot express settlement policy
+### AR-003: Tool strings cannot express settlement policy (contained)
 
-Success, refusal, missing input, and infrastructure failure currently share a
-string return channel. `derp/execution.py` now defines the minimal frozen
-success, rejection, and failure vocabulary. Milestone 3 adopts those outcomes
-inside feature services and translates them only at Telegram and model
-boundaries.
+Provider executors and migrated coordinators use closed typed outcomes; human
+copy is translated only at model and Telegram boundaries. The legacy web-search
+wrapper is retained only for a free-limited, zero-provider-cost tool and is not
+an extension point.
 
-### AR-004: Feature execution is duplicated
+### AR-004: Feature execution is duplicated (contained)
 
-Command and agent-tool paths choose models, charge, execute, send, and recover
-differently. Milestones 2 and 3 move each capability behind one feature service
-and delete the replaced paths incrementally.
+Command and natural image paths share one feature/operation flow, and command
+TTS uses the same durable paid-media contract. Old thinking, video, and TTS
+direct-send implementations were deleted; thinking/video stay suspended until
+their typed cores receive complete adapters.
 
 ### AR-005: Model selection had two sources of truth (resolved)
 
-`derp/catalog/google.py` now owns immutable model IDs, lifecycle, capabilities,
-limits, source links, and current provider pricing. Billing checks and runtime
-execution carry the same exact model spec; feature policy stores only semantic
-keys. Milestone 2 will consume this catalog when immutable quotes replace the
-temporary fixed credit estimates.
+`derp/catalog/google.py` owns model IDs, lifecycle, capabilities, limits,
+sources, and pricing. Runtime plans and immutable quotes carry the same exact
+catalog spec; policy stores semantic keys only.
 
-### AR-006: Payment fulfillment lacks a durable intent
+### AR-006: Payment fulfillment lacks a durable intent (resolved, gated)
 
-Pre-checkout does not fully bind payer, target, amount, currency, and immutable
-credits. Fulfilled purchases do have a `CreditTransaction` keyed by Telegram
-charge ID, but there is no durable intent or charged-but-unfulfilled recovery
-path. Milestone 2 preserves that idempotency record while adding opaque
-expiring intents and reconciliation.
+Billing persists opaque expiring intents and validates payer, target, product
+version, amount, currency, expiry, and charge identity. Receipts, renewal
+cycles, refunds, debt, and restart-safe reconciliation are idempotent. New
+public invoice intake defaults closed until the real-Stars activation gate.
 
-### AR-007: Database sessions cross external effects
+### AR-007: Database sessions cross external effects (contained)
 
-Handler and tool sessions can stay open through provider calls and Telegram
-sends. Milestones 2 and 4 replace them with short query/command units that
-return plain domain values across effect boundaries.
+Operation, billing, approval, delivery, and migrated feature services use short
+state transactions around external effects. Route-scoped dependencies removed
+handler-wide sessions from the critical paid paths; legacy/debug compatibility
+code remains explicitly outside the new extension contract.
 
-### AR-008: Conversation history has no canonical role model
+### AR-008: Conversation history has no canonical role model (resolved)
 
-Current context can duplicate the inbound message, lose assistant identity,
-flatten history into text, and leak across forum topics. Milestone 1 implements
-the resolved source/native/canonical model and complete-turn processing.
+Versioned normalized source events, application history DTOs, and canonical
+projections preserve role, direction, chronology, topic, reply, media, and tool
+pairs. The current event is appended once and complete-turn trimming prevents
+cross-topic leakage or broken tool transcripts.
 
-### AR-009: Shared memory is a privileged prompt channel
+### AR-009: Shared memory is a privileged prompt channel (resolved)
 
-Any member can currently write memory that is injected with instruction-level
-authority. Milestone 1 separates admin policy from untrusted facts, derives
-tools from role plus typed policy and feature state, and gives fact proposals
-an explicit approval path.
+Admin policy is separate from untrusted facts and history. Role, typed policy,
+and enabled features derive the toolset; shared-fact proposals use explicit
+authorization and approval rather than prompt authority.
 
-### AR-010: Dependency injection is redundant and broad
+### AR-010: Dependency injection is redundant and broad (resolved)
 
-Every update can pay for model and credit context it does not use, including
-latency-sensitive payments. Milestone 4 injects static services through aiogram
-workflow data and loads domain context at the narrowest route.
+Static services live in aiogram workflow data. `RouteDependencyMiddleware`
+loads SQLAlchemy models and commerce services only after the deepest router
+match, including a payment-reconciliation path with no unrelated credit work.
 
-### AR-011: Runtime and long-operation behavior are unclear
+### AR-011: Runtime and long-operation behavior are unclear (contained)
 
-Concurrency is globally bounded but not tuned, and long operations lack clear
-timeouts and crash outcomes. Milestones 3 and 4 add timeouts, cancellation,
-idempotency, and crash spend reversals without a durable workflow engine in v1.
+Polling, provider, transport, artifact, approval, and worker lifetimes are
+bounded. Durable identities, leases, cancellation, reconciliation, and spend
+reversal define crash outcomes without a workflow engine. Standard paid chat
+fails safe and releases when model content is not acknowledged, but its text is
+not persisted for post-crash resend. Suspended features must meet the complete
+contract before exposure.
 
-### AR-012: Media transport and delivery are coupled
+### AR-012: Media transport and delivery are coupled (resolved for exposed paths)
 
-Downloads buffer files with ad hoc clients, sensitive URLs can reach tracing,
-and tools mix generation with Telegram sending. Milestones 1 and 3 establish
-media-reference hydration, bounded transport, and a delivery boundary.
+`MediaGateway` hydrates stable references through one bounded transport and
+redacts sensitive URLs. Provider executors return typed media; private artifacts
+and `DeliveryService` own intent, ambiguity, resend, expiry, and reversal.
 
-### AR-013: Schema, models, and tests can disagree
+### AR-013: Schema, models, and tests can disagree (resolved)
 
-ORM metadata creation can hide migration drift, and credit concurrency lacks
-real PostgreSQL coverage. Milestones 0, 2, and 4 make Alembic authoritative and
-add parity, idempotency, and concurrency tests.
+Tests build exclusively from Alembic, assert a single head and zero model drift,
+reflect database constraints, and exercise wallet, allowance, approval,
+operation, billing, and delivery concurrency against PostgreSQL.
 
-### AR-014: Deployment hardening exceeds present needs
+### AR-014: Deployment hardening exceeds present needs (resolved to scope)
 
-The current release path can stop the old bot before migration success, but a
-full transactional release platform is disproportionate. Milestone 4 adopts
-backups, migration checks, readiness, immutable images, and explicit rollback
-limits only.
+The release uses immutable image digests, migration/status gates, heartbeat
+readiness, persistent private artifacts, verified-backup requirements, and an
+explicit compatibility-bound rollback procedure without adding blue/green
+orchestration.
 
-### AR-015: Observability can violate privacy
+### AR-015: Observability can violate privacy (resolved in code)
 
-HTTP traces, tool arguments, update payloads, and duplicated exception logging
-can expose content or sensitive Telegram URLs. Every milestone keeps content
-out of production telemetry and limits deletion promises to controlled stores;
-Milestone 4 adds regression tests and verifies Pydantic AI v5 usage attributes.
+`derp/observability.py` owns Logfire 4.38 and OpenTelemetry lifecycle, redacting
+providers and exceptions, content-free Pydantic AI/Google spans, and explicit
+flush/shutdown. Global HTTPX instrumentation is forbidden, and privacy
+regressions are tested. Production ingestion inspection remains an activation
+gate.
 
-### AR-016: Prompt assembly defeats caching
+### AR-016: Prompt assembly defeats caching (partial)
 
-Current code rebuilds chat metadata, sliding history, memory, and the current
-message as one changing string. Milestones 1 and 4 build deterministic native
-history and stable prefixes, measure real cache hits, and deliberately avoid
-persisted epochs until the data justifies them.
+Native scoped history and stable typed prompt components replace the flattened
+diagnostic string, while operation telemetry records model, context band,
+capability, outcome, and estimated provider cost. Version-tied renderer goldens
+and empirical cached/uncached cost tuning remain before explicit caches are
+justified.
 
 ## Deferred by design
 
@@ -754,9 +792,10 @@ agents, capabilities, tools, native history, retries, or instrumentation.
 
 ## Decision policy
 
-There are no remaining owner questions blocking implementation. The agent
-should choose reversible numeric defaults, derive prices from current provider
-costs, validate them with telemetry, and record material changes here. Escalate
-only a genuinely irreversible product choice, legal or provider-terms change,
-new external spend commitment, or privacy behavior that contradicts this
-contract.
+There are no remaining owner questions blocking implementation. The external
+activation gates in the dated status ledger require evidence, not another
+architecture decision. The agent should choose reversible numeric defaults,
+derive prices from current provider costs, validate them with telemetry, and
+record material changes here. Escalate only a genuinely irreversible product
+choice, legal or provider-terms change, new external spend commitment, or
+privacy behavior that contradicts this contract.
