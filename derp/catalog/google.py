@@ -16,16 +16,73 @@ CATALOG_VERIFIED_ON: Final = date(2026, 7, 20)
 GOOGLE_PRICING_URL: Final = "https://ai.google.dev/gemini-api/docs/pricing"
 
 
-class GoogleModelKey(StrEnum):
-    """Stable product roles whose concrete Google models can evolve."""
+class ModelRole(StrEnum):
+    """Stable product roles whose concrete provider models can evolve."""
 
     CHAT_ECONOMY = "chat_economy"
     CHAT_STANDARD = "chat_standard"
+    CHAT_MULTIMODAL = "chat_multimodal"
     CHAT_REASONING = "chat_reasoning"
     IMAGE = "image"
     TTS = "tts"
+    STT = "stt"
     VIDEO_FAST = "video_fast"
     VIDEO_STANDARD = "video_standard"
+    FREE_TEXT = "free_text"
+    FREE_VISUAL = "free_visual"
+    FREE_AUDIO = "free_audio"
+
+
+# Compatibility name for downstream code while provider-neutral roles roll out.
+GoogleModelKey = ModelRole
+
+
+class InferenceProvider(StrEnum):
+    """Inference platforms supported by the runtime."""
+
+    OPENROUTER = "openrouter"
+    GOOGLE = "google"
+
+
+class DataCollectionPolicy(StrEnum):
+    """Whether downstream providers may retain inputs for training."""
+
+    ALLOW = "allow"
+    DENY = "deny"
+
+
+@dataclass(frozen=True, slots=True)
+class PriceCeiling:
+    """OpenRouter routing ceilings, expressed in USD per million units."""
+
+    prompt: Decimal | None = None
+    completion: Decimal | None = None
+    image: Decimal | None = None
+    audio: Decimal | None = None
+    request: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        if any(value is not None and value < 0 for value in self.values()):
+            raise ValueError("Price ceilings cannot be negative")
+
+    def values(self) -> tuple[Decimal | None, ...]:
+        return self.prompt, self.completion, self.image, self.audio, self.request
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingPolicy:
+    """Provider routing rules attached to an immutable model selection."""
+
+    provider_order: tuple[str, ...] = ()
+    allow_fallbacks: bool = True
+    require_parameters: bool = True
+    data_collection: DataCollectionPolicy = DataCollectionPolicy.DENY
+    zero_data_retention: bool = True
+    max_price: PriceCeiling | None = None
+
+    def __post_init__(self) -> None:
+        if len(set(self.provider_order)) != len(self.provider_order):
+            raise ValueError("Routing provider order must not contain duplicates")
 
 
 class ModelLifecycle(StrEnum):
@@ -167,6 +224,22 @@ class AudioPricing:
         ) / 1_000_000
 
 
+@dataclass(frozen=True, slots=True)
+class TranscriptionPricing:
+    """Speech-to-text pricing based on bounded source duration."""
+
+    input_per_minute: Decimal
+
+    def __post_init__(self) -> None:
+        if self.input_per_minute <= 0:
+            raise ValueError("Transcription price must be positive")
+
+    def estimate_usd(self, *, input_seconds: int) -> Decimal:
+        if input_seconds <= 0:
+            raise ValueError("Audio duration must be positive")
+        return self.input_per_minute * Decimal(input_seconds) / Decimal(60)
+
+
 class VideoResolution(StrEnum):
     """Billable Veo output resolutions."""
 
@@ -219,24 +292,30 @@ class VideoPricing:
         return rate * duration
 
 
-type GoogleModelPricing = TokenPricing | ImagePricing | AudioPricing | VideoPricing
+type ModelPricing = (
+    TokenPricing | ImagePricing | AudioPricing | TranscriptionPricing | VideoPricing
+)
 
 
 @dataclass(frozen=True, slots=True)
-class GoogleModelSpec:
-    """One executable Google model and the facts needed to price it."""
+class ModelSpec:
+    """One executable provider model and the facts needed to price it."""
 
-    key: GoogleModelKey
+    key: ModelRole
     provider_model_id: str
     display_name: str
     lifecycle: ModelLifecycle
     input_token_limit: int | None
     output_token_limit: int | None
     capabilities: frozenset[ModelCapability]
-    pricing: GoogleModelPricing
+    pricing: ModelPricing
     documentation_url: str
     pricing_url: str = GOOGLE_PRICING_URL
     pricing_verified_on: date = CATALOG_VERIFIED_ON
+    provider: InferenceProvider = InferenceProvider.GOOGLE
+    routing: RoutingPolicy | None = None
+    retention_exception: str | None = None
+    available: bool = True
 
     def __post_init__(self) -> None:
         if not self.provider_model_id:
@@ -250,6 +329,7 @@ class GoogleModelSpec:
         required_capability = {
             ImagePricing: ModelCapability.IMAGE_OUTPUT,
             AudioPricing: ModelCapability.AUDIO_OUTPUT,
+            TranscriptionPricing: ModelCapability.AUDIO_INPUT,
             VideoPricing: ModelCapability.VIDEO_OUTPUT,
             TokenPricing: ModelCapability.TEXT_OUTPUT,
         }[type(self.pricing)]
@@ -261,6 +341,9 @@ class GoogleModelSpec:
     @property
     def supports_tools(self) -> bool:
         return ModelCapability.TOOLS in self.capabilities
+
+
+GoogleModelSpec = ModelSpec
 
 
 _TEXT_CAPABILITIES = frozenset(
@@ -278,8 +361,8 @@ _TEXT_CAPABILITIES = frozenset(
 )
 
 _MODELS = (
-    GoogleModelSpec(
-        key=GoogleModelKey.CHAT_ECONOMY,
+    ModelSpec(
+        key=ModelRole.CHAT_ECONOMY,
         provider_model_id="gemini-3.1-flash-lite",
         display_name="Gemini 3.1 Flash-Lite",
         lifecycle=ModelLifecycle.STABLE,
@@ -289,8 +372,8 @@ _MODELS = (
         pricing=TokenPricing(bands=(TokenPriceBand(Decimal("0.25"), Decimal("1.50")),)),
         documentation_url="https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite",
     ),
-    GoogleModelSpec(
-        key=GoogleModelKey.CHAT_STANDARD,
+    ModelSpec(
+        key=ModelRole.CHAT_STANDARD,
         provider_model_id="gemini-3.5-flash",
         display_name="Gemini 3.5 Flash",
         lifecycle=ModelLifecycle.STABLE,
@@ -300,8 +383,8 @@ _MODELS = (
         pricing=TokenPricing(bands=(TokenPriceBand(Decimal("1.50"), Decimal("9.00")),)),
         documentation_url="https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash",
     ),
-    GoogleModelSpec(
-        key=GoogleModelKey.CHAT_REASONING,
+    ModelSpec(
+        key=ModelRole.CHAT_REASONING,
         provider_model_id="gemini-3.1-pro-preview",
         display_name="Gemini 3.1 Pro Preview",
         lifecycle=ModelLifecycle.PREVIEW,
@@ -320,8 +403,8 @@ _MODELS = (
         ),
         documentation_url="https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview",
     ),
-    GoogleModelSpec(
-        key=GoogleModelKey.IMAGE,
+    ModelSpec(
+        key=ModelRole.IMAGE,
         provider_model_id="gemini-3.1-flash-image",
         display_name="Gemini 3.1 Flash Image",
         lifecycle=ModelLifecycle.STABLE,
@@ -350,8 +433,8 @@ _MODELS = (
         ),
         documentation_url="https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-image",
     ),
-    GoogleModelSpec(
-        key=GoogleModelKey.TTS,
+    ModelSpec(
+        key=ModelRole.TTS,
         provider_model_id="gemini-3.1-flash-tts-preview",
         display_name="Gemini 3.1 Flash TTS Preview",
         lifecycle=ModelLifecycle.PREVIEW,
@@ -367,8 +450,8 @@ _MODELS = (
         ),
         documentation_url="https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-tts-preview",
     ),
-    GoogleModelSpec(
-        key=GoogleModelKey.VIDEO_FAST,
+    ModelSpec(
+        key=ModelRole.VIDEO_FAST,
         provider_model_id="veo-3.1-fast-generate-preview",
         display_name="Veo 3.1 Fast",
         lifecycle=ModelLifecycle.PREVIEW,
@@ -393,8 +476,8 @@ _MODELS = (
         ),
         documentation_url="https://ai.google.dev/gemini-api/docs/models/veo-3.1-generate-preview",
     ),
-    GoogleModelSpec(
-        key=GoogleModelKey.VIDEO_STANDARD,
+    ModelSpec(
+        key=ModelRole.VIDEO_STANDARD,
         provider_model_id="veo-3.1-generate-preview",
         display_name="Veo 3.1 Standard",
         lifecycle=ModelLifecycle.PREVIEW,
@@ -422,9 +505,7 @@ _MODELS = (
 )
 
 
-def _build_catalog() -> tuple[
-    Mapping[GoogleModelKey, GoogleModelSpec], Mapping[str, GoogleModelSpec]
-]:
+def _build_catalog() -> tuple[Mapping[ModelRole, ModelSpec], Mapping[str, ModelSpec]]:
     by_key = {model.key: model for model in _MODELS}
     by_id = {model.provider_model_id: model for model in _MODELS}
     if len(by_key) != len(_MODELS) or len(by_id) != len(_MODELS):
@@ -435,18 +516,18 @@ def _build_catalog() -> tuple[
 GOOGLE_MODEL_CATALOG, _GOOGLE_MODELS_BY_ID = _build_catalog()
 
 
-def get_google_model(key: GoogleModelKey) -> GoogleModelSpec:
+def get_google_model(key: ModelRole) -> ModelSpec:
     """Resolve a semantic product model key to one immutable specification."""
     return GOOGLE_MODEL_CATALOG[key]
 
 
-def get_google_model_by_id(provider_model_id: str) -> GoogleModelSpec:
+def get_google_model_by_id(provider_model_id: str) -> ModelSpec:
     """Resolve a provider model ID without creating a second registry."""
     return _GOOGLE_MODELS_BY_ID[provider_model_id]
 
 
 def estimate_model_cost_usd(
-    model: GoogleModelSpec,
+    model: ModelSpec,
     *,
     average_tokens: int = 2_000,
     audio_input_tokens: int | None = None,
@@ -481,7 +562,7 @@ def estimate_model_cost_usd(
 
 
 def calculate_credit_cost(
-    model: GoogleModelSpec,
+    model: ModelSpec,
     margin: Decimal = DEFAULT_MARGIN,
     avg_tokens: int = 2_000,
     *,

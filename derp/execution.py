@@ -10,10 +10,12 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from derp.catalog import (
-    GoogleModelKey,
-    GoogleModelSpec,
+    InferenceProvider,
     ModelCapability,
+    ModelRole,
+    ModelSpec,
     get_google_model,
+    get_openrouter_model,
 )
 
 
@@ -26,6 +28,7 @@ class Feature(StrEnum):
     IMAGE_GENERATE = "image_generate"
     IMAGE_EDIT = "image_edit"
     TTS = "tts"
+    TRANSCRIBE = "transcribe"
     VIDEO_GENERATE = "video_generate"
 
 
@@ -35,10 +38,6 @@ _REQUIRED_CAPABILITIES: Mapping[Feature, frozenset[ModelCapability]] = MappingPr
             {
                 ModelCapability.TEXT_INPUT,
                 ModelCapability.TEXT_OUTPUT,
-                ModelCapability.IMAGE_INPUT,
-                ModelCapability.AUDIO_INPUT,
-                ModelCapability.VIDEO_INPUT,
-                ModelCapability.PDF_INPUT,
                 ModelCapability.TOOLS,
             }
         ),
@@ -65,6 +64,9 @@ _REQUIRED_CAPABILITIES: Mapping[Feature, frozenset[ModelCapability]] = MappingPr
         Feature.TTS: frozenset(
             {ModelCapability.TEXT_INPUT, ModelCapability.AUDIO_OUTPUT}
         ),
+        Feature.TRANSCRIBE: frozenset(
+            {ModelCapability.AUDIO_INPUT, ModelCapability.TEXT_OUTPUT}
+        ),
         Feature.VIDEO_GENERATE: frozenset(
             {
                 ModelCapability.TEXT_INPUT,
@@ -81,10 +83,15 @@ class ExecutionPlan:
     """One feature bound to the exact catalog model used for execution."""
 
     feature: Feature
-    model: GoogleModelSpec
+    model: ModelSpec
 
     def __post_init__(self) -> None:
-        if get_google_model(self.model.key) is not self.model:
+        resolver = (
+            get_openrouter_model
+            if self.model.provider is InferenceProvider.OPENROUTER
+            else get_google_model
+        )
+        if resolver(self.model.key) is not self.model:
             raise ValueError("Execution plans require the canonical catalog model")
         missing = _REQUIRED_CAPABILITIES[self.feature] - self.model.capabilities
         if missing:
@@ -97,10 +104,20 @@ class ExecutionPlan:
 
 def plan_execution(
     feature: Feature,
-    model: GoogleModelSpec | GoogleModelKey,
+    model: ModelSpec | ModelRole,
+    *,
+    provider: InferenceProvider = InferenceProvider.OPENROUTER,
 ) -> ExecutionPlan:
     """Construct a validated plan without performing external effects."""
-    spec = get_google_model(model) if isinstance(model, GoogleModelKey) else model
+    if isinstance(model, ModelRole):
+        resolver = (
+            get_openrouter_model
+            if provider is InferenceProvider.OPENROUTER
+            else get_google_model
+        )
+        spec = resolver(model)
+    else:
+        spec = model
     return ExecutionPlan(feature=feature, model=spec)
 
 

@@ -12,7 +12,7 @@ import logfire
 from pydantic_ai import Agent, BinaryImage, DeferredToolRequests, RunContext
 from pydantic_ai.capabilities import ProcessHistory
 
-from derp.catalog import GoogleModelKey, GoogleModelSpec
+from derp.catalog import ModelRole, ModelSpec
 from derp.execution import ExecutionPlan, Feature, plan_execution
 from derp.history.service import process_native_history
 from derp.llm.deps import AgentDeps
@@ -25,7 +25,7 @@ from derp.llm.providers import create_image_model, create_model
 
 
 def _resolve_plan(
-    model: ExecutionPlan | GoogleModelSpec | GoogleModelKey,
+    model: ExecutionPlan | ModelSpec | ModelRole,
     *,
     default_feature: Feature,
     allowed_features: frozenset[Feature],
@@ -42,9 +42,7 @@ def _resolve_plan(
 
 
 def create_chat_agent(
-    model: ExecutionPlan
-    | GoogleModelSpec
-    | GoogleModelKey = GoogleModelKey.CHAT_STANDARD,
+    model: ExecutionPlan | ModelSpec | ModelRole = ModelRole.CHAT_STANDARD,
 ) -> Agent[AgentDeps, str | DeferredToolRequests]:
     """Create the main chat agent with tools and context.
 
@@ -88,7 +86,7 @@ def create_chat_agent(
 
 
 def create_image_agent(
-    model: ExecutionPlan | GoogleModelSpec | GoogleModelKey = GoogleModelKey.IMAGE,
+    model: ExecutionPlan | ModelSpec | ModelRole = ModelRole.IMAGE,
 ) -> Agent[object, BinaryImage | str]:
     """Create an agent for image generation and editing.
 
@@ -125,9 +123,7 @@ def create_image_agent(
 
 
 def create_inline_agent(
-    model: ExecutionPlan
-    | GoogleModelSpec
-    | GoogleModelKey = GoogleModelKey.CHAT_ECONOMY,
+    model: ExecutionPlan | ModelSpec | ModelRole = ModelRole.CHAT_ECONOMY,
 ) -> Agent[object, str]:
     """Create a lightweight agent for inline queries.
 

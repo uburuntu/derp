@@ -29,7 +29,7 @@ from pydantic_ai.exceptions import (
 
 from derp.approvals import DeferredToolApprovalService
 from derp.approvals.image_tools import ImageToolRunContext
-from derp.catalog import GoogleModelKey
+from derp.catalog import ModelRole
 from derp.common.extractor import Extractor
 from derp.config import settings
 from derp.db import (
@@ -89,12 +89,12 @@ from derp.history.snapshot import (
 )
 from derp.history.transcript import extract_tool_rounds, serialize_tool_rounds
 from derp.llm import (
-    RELAXED_SAFETY_SETTINGS,
     AgentContentDelivered,
     AgentContentUnavailable,
     AgentDeps,
     AgentResult,
     create_chat_agent,
+    model_run_settings,
 )
 from derp.llm.prompts import BASE_SYSTEM_PROMPT
 from derp.media import MediaGateway
@@ -570,7 +570,7 @@ class ChatAgentHandler(MessageHandler):
             standard_probe = await _load_history(
                 self.event,
                 db,
-                HISTORY_WINDOWS[GoogleModelKey.CHAT_STANDARD],
+                HISTORY_WINDOWS[ModelRole.CHAT_STANDARD],
             )
             current_turn = _current_user_turn(self.event)
             estimated_input_tokens = _estimate_chat_input_tokens(
@@ -721,7 +721,10 @@ class ChatAgentHandler(MessageHandler):
                                 input_tokens_limit=plan.model.input_token_limit,
                                 output_tokens_limit=plan.model.output_token_limit,
                             ),
-                            model_settings=RELAXED_SAFETY_SETTINGS,
+                            model_settings=model_run_settings(
+                                plan.model,
+                                user_id=user_model.id,
+                            ),
                         )
 
                 tool_rounds = extract_tool_rounds(result.new_messages())

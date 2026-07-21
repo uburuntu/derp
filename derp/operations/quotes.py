@@ -8,14 +8,14 @@ from decimal import ROUND_CEILING, Decimal
 from typing import Final
 
 from derp.catalog import (
-    CATALOG_VERIFIED_ON,
     CREDIT_BASE_USD,
     DEFAULT_MARGIN,
+    OPENROUTER_CATALOG_VERIFIED_ON,
     AudioPricing,
-    GoogleModelKey,
     ImagePricing,
     ImageResolution,
     ModelCapability,
+    ModelRole,
     TokenPricing,
     VideoPricing,
     VideoResolution,
@@ -23,7 +23,7 @@ from derp.catalog import (
 from derp.execution import ExecutionPlan, Feature
 from derp.operations.types import ContextBand, OperationId, Quote, QuoteId, QuoteKey
 
-PRICING_VERSION: Final = f"google-{CATALOG_VERIFIED_ON.isoformat()}-v1"
+PRICING_VERSION: Final = f"openrouter-{OPENROUTER_CATALOG_VERIFIED_ON.isoformat()}-v1"
 IMAGE_FINISHING_ALLOWANCE_VERSION: Final = "v1"
 IMAGE_FINISHING_OUTPUT_TOKENS: Final = 2_048
 
@@ -104,12 +104,12 @@ type ImageQuoteInput = ImageGenerateQuoteInput | ImageEditQuoteInput
 class FinishingChatQuoteInput:
     """Validated post-tool chat usage bound to one explicit catalog model."""
 
-    model_key: GoogleModelKey
+    model_key: ModelRole
     input_tokens: int
 
     def __post_init__(self) -> None:
-        if not isinstance(self.model_key, GoogleModelKey):
-            raise TypeError("model_key must be a GoogleModelKey")
+        if not isinstance(self.model_key, ModelRole):
+            raise TypeError("model_key must be a ModelRole")
         _validate_token_count(self.input_tokens, "finishing_input_tokens")
 
 
@@ -413,7 +413,7 @@ def _estimate_finishing_cost(
 def _composite_image_variant(
     *,
     resolution: ImageResolution,
-    finishing_model_key: GoogleModelKey,
+    finishing_model_key: ModelRole,
     finishing_band: ContextBand,
     allowance: ImageFinishingAllowance,
 ) -> str:

@@ -71,7 +71,7 @@ from derp.features import (
 from derp.history.capture import capture_outbound_history, suppress_outbound_history
 from derp.history.service import HISTORY_WINDOWS
 from derp.history.transcript import extract_tool_rounds, serialize_tool_rounds
-from derp.llm import RELAXED_SAFETY_SETTINGS, AgentDeps, create_chat_agent
+from derp.llm import AgentDeps, create_chat_agent, model_run_settings
 from derp.media import MediaReference, image_reference_from_telegram
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
@@ -470,7 +470,7 @@ async def _resume_approved_image(
                 input_tokens_limit=plan.model.input_token_limit,
                 output_tokens_limit=plan.model.output_token_limit,
             ),
-            model_settings=RELAXED_SAFETY_SETTINGS,
+            model_settings=model_run_settings(plan.model, user_id=user_model.id),
         )
     if isinstance(result.output, DeferredToolRequests):
         raise RuntimeError("approved resume attempted another deferred tool call")

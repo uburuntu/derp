@@ -98,7 +98,7 @@ def test_image_tools_are_always_registered_as_approval_gated() -> None:
 async def test_initial_agent_run_returns_validated_request_without_execution() -> None:
     coordinator = MagicMock(spec=ImageOperationCoordinator)
     coordinator.run = AsyncMock()
-    agent = create_chat_agent(GoogleModelKey.CHAT_ECONOMY)
+    agent = create_chat_agent(get_google_model(GoogleModelKey.CHAT_ECONOMY))
     model = TestModel(
         call_tools=["generate_image"],
         model_name=get_google_model(GoogleModelKey.CHAT_ECONOMY).provider_model_id,
@@ -197,7 +197,7 @@ async def test_quote_is_persisted_before_the_approval_request() -> None:
 @pytest.mark.asyncio
 async def test_authenticated_resume_executes_the_persisted_call_once() -> None:
     context = _context()
-    first_agent = create_chat_agent(GoogleModelKey.CHAT_ECONOMY)
+    first_agent = create_chat_agent(get_google_model(GoogleModelKey.CHAT_ECONOMY))
     first_model = TestModel(
         call_tools=["generate_image"],
         model_name=get_google_model(GoogleModelKey.CHAT_ECONOMY).provider_model_id,
@@ -220,7 +220,7 @@ async def test_authenticated_resume_executes_the_persisted_call_once() -> None:
     )
     coordinator = MagicMock(spec=ImageOperationCoordinator)
     coordinator.run = AsyncMock(return_value=ImageDelivered(operation_id, (901,)))
-    resumed_agent = create_chat_agent(GoogleModelKey.CHAT_ECONOMY)
+    resumed_agent = create_chat_agent(get_google_model(GoogleModelKey.CHAT_ECONOMY))
     resumed_model = TestModel(
         call_tools=["generate_image"],
         model_name=get_google_model(GoogleModelKey.CHAT_ECONOMY).provider_model_id,

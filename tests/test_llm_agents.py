@@ -1,10 +1,12 @@
 """Contract tests for Pydantic AI composition."""
 
 import pytest
+from pydantic import SecretStr
 from pydantic_ai import models
 
 from derp.catalog import GoogleModelKey
 from derp.execution import Feature, plan_execution
+from derp.llm import providers as provider_module
 from derp.llm.agents import (
     create_chat_agent,
     create_image_agent,
@@ -18,7 +20,14 @@ from derp.tools.policy import (
 from derp.tools.toolsets import create_chat_toolset
 
 
-def test_agent_factories_support_pydantic_ai_v2() -> None:
+def test_agent_factories_support_pydantic_ai_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        provider_module.app_settings,
+        "openrouter_api_key",
+        SecretStr("test-openrouter-key"),
+    )
     assert create_chat_agent(GoogleModelKey.CHAT_ECONOMY).name == "chat"
     assert create_image_agent().name == "image"
     assert create_inline_agent().name == "inline"

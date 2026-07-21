@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from derp.execution import Feature
 from derp.health import DEFAULT_RUNTIME_HEALTH_PATH
 
 # Docs: https://docs.pydantic.dev/2.8/concepts/pydantic_settings/
@@ -37,6 +38,16 @@ class Settings(BaseSettings):
 
     # Google API key used by all configured models
     google_api_paid_key: SecretStr
+
+    # OpenRouter is the default inference plane. Google remains an explicit rollback.
+    openrouter_api_key: SecretStr | None = None
+    openrouter_app_title: str = "Derp"
+    openrouter_app_url: str | None = None
+    openrouter_enabled_features: Annotated[frozenset[Feature], NoDecode] = Field(
+        default_factory=lambda: frozenset(Feature),
+    )
+    openrouter_free_user_daily_limit: int = Field(default=20, ge=0)
+    openrouter_free_global_daily_limit: int = Field(default=800, ge=0)
 
     # Logfire token
     logfire_token: SecretStr
@@ -78,11 +89,43 @@ class Settings(BaseSettings):
             raise ValueError("OPERATOR_IDS must contain only positive integers")
         return operator_ids
 
+    @field_validator("openrouter_enabled_features", mode="before")
+    @classmethod
+    def parse_openrouter_features(cls, value: object) -> frozenset[Feature]:
+        """Accept JSON arrays or comma-separated feature names."""
+        if value is None or value == "":
+            return frozenset()
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return frozenset()
+            value = json.loads(raw) if raw.startswith("[") else raw.split(",")
+        if not isinstance(value, list | tuple | set | frozenset):
+            raise ValueError("OPENROUTER_ENABLED_FEATURES must be a feature list")
+        try:
+            return frozenset(
+                item if isinstance(item, Feature) else Feature(str(item).strip())
+                for item in value
+            )
+        except ValueError as exc:
+            names = ", ".join(feature.value for feature in Feature)
+            raise ValueError(
+                f"OPENROUTER_ENABLED_FEATURES must contain only: {names}"
+            ) from exc
+
     @model_validator(mode="after")
     def require_production_operator(self) -> Settings:
         """Production must have an explicit operator recovery path."""
         if self.environment == "prod" and not self.operator_ids:
             raise ValueError("OPERATOR_IDS must contain at least one ID in production")
+        if (
+            self.environment == "prod"
+            and self.openrouter_enabled_features
+            and self.openrouter_api_key is None
+        ):
+            raise ValueError(
+                "OPENROUTER_API_KEY is required when OpenRouter features are enabled"
+            )
         return self
 
     model_config = SettingsConfigDict(
@@ -105,6 +148,14 @@ class Settings(BaseSettings):
             b"derp:callback-signing:v1\0"
             + configured.get_secret_value().encode("utf-8")
         ).digest()
+
+    def uses_openrouter(self, feature: Feature) -> bool:
+        """Return whether a feature should use the default OpenRouter plane."""
+        return feature in self.openrouter_enabled_features
+
+    @property
+    def resolved_openrouter_app_url(self) -> str:
+        return self.openrouter_app_url or f"https://t.me/{self.bot_username}"
 
 
 settings = Settings()

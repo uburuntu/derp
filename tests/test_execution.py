@@ -4,7 +4,12 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
-from derp.catalog import GoogleModelKey, get_google_model
+from derp.catalog import (
+    GoogleModelKey,
+    InferenceProvider,
+    get_google_model,
+    get_openrouter_model,
+)
 from derp.execution import (
     ExecutionPlan,
     Failed,
@@ -51,12 +56,7 @@ def test_plan_rejects_models_without_required_capabilities() -> None:
 
     with pytest.raises(ValueError) as chat_error:
         plan_execution(Feature.CHAT, GoogleModelKey.TTS)
-    for capability in (
-        "audio_input",
-        "image_input",
-        "pdf_input",
-        "video_input",
-    ):
+    for capability in ("text_output", "tools"):
         assert capability in str(chat_error.value)
 
     with pytest.raises(ValueError) as video_error:
@@ -71,6 +71,20 @@ def test_plan_rejects_noncanonical_catalog_clones() -> None:
 
     with pytest.raises(ValueError, match="canonical catalog model"):
         plan_execution(Feature.CHAT, clone)
+
+
+def test_semantic_roles_default_to_openrouter_with_google_as_explicit_rollback() -> (
+    None
+):
+    default = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_STANDARD)
+    rollback = plan_execution(
+        Feature.CHAT,
+        GoogleModelKey.CHAT_STANDARD,
+        provider=InferenceProvider.GOOGLE,
+    )
+
+    assert default.model is get_openrouter_model(GoogleModelKey.CHAT_STANDARD)
+    assert rollback.model is get_google_model(GoogleModelKey.CHAT_STANDARD)
 
 
 def test_plan_is_frozen_and_retains_exact_catalog_spec() -> None:

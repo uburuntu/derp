@@ -11,7 +11,7 @@ from aiogram import Bot
 from pydantic_ai import ModelMessage, ModelRequest, RunContext, UserPromptPart
 from pydantic_core import ValidationError
 
-from derp.catalog import GoogleModelKey
+from derp.catalog import ModelRole
 from derp.db import DatabaseManager, get_recent_messages
 from derp.history.core import (
     AssistantTextTurn,
@@ -63,24 +63,48 @@ class HistoryWindow:
             raise ValueError("History query limit cannot be smaller than max turns")
 
 
-HISTORY_WINDOWS: dict[GoogleModelKey, HistoryWindow] = {
-    GoogleModelKey.CHAT_ECONOMY: HistoryWindow(
+HISTORY_WINDOWS: dict[ModelRole, HistoryWindow] = {
+    ModelRole.CHAT_ECONOMY: HistoryWindow(
         max_turns=10,
         max_tokens=24_000,
         query_limit=40,
         max_media=4,
     ),
-    GoogleModelKey.CHAT_STANDARD: HistoryWindow(
+    ModelRole.CHAT_STANDARD: HistoryWindow(
         max_turns=100,
         max_tokens=128_000,
         query_limit=300,
         max_media=12,
     ),
-    GoogleModelKey.CHAT_REASONING: HistoryWindow(
+    ModelRole.CHAT_MULTIMODAL: HistoryWindow(
         max_turns=100,
         max_tokens=128_000,
         query_limit=300,
         max_media=12,
+    ),
+    ModelRole.CHAT_REASONING: HistoryWindow(
+        max_turns=100,
+        max_tokens=128_000,
+        query_limit=300,
+        max_media=12,
+    ),
+    ModelRole.FREE_TEXT: HistoryWindow(
+        max_turns=10,
+        max_tokens=24_000,
+        query_limit=40,
+        max_media=4,
+    ),
+    ModelRole.FREE_VISUAL: HistoryWindow(
+        max_turns=10,
+        max_tokens=24_000,
+        query_limit=40,
+        max_media=4,
+    ),
+    ModelRole.FREE_AUDIO: HistoryWindow(
+        max_turns=10,
+        max_tokens=24_000,
+        query_limit=40,
+        max_media=4,
     ),
 }
 

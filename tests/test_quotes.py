@@ -15,7 +15,7 @@ from derp.catalog import (
     ImageResolution,
     TokenPricing,
     VideoResolution,
-    get_google_model,
+    get_openrouter_model,
 )
 from derp.execution import Feature, plan_execution
 from derp.operations import (
@@ -70,24 +70,24 @@ def _quote(
             Feature.CHAT,
             GoogleModelKey.CHAT_STANDARD,
             ChatQuoteInput(input_tokens=1),
-            Decimal("0.030432"),
-            44,
+            Decimal("0.03648"),
+            53,
             "default",
         ),
         (
             Feature.INLINE_CHAT,
             GoogleModelKey.CHAT_STANDARD,
             InlineChatQuoteInput(input_tokens=1),
-            Decimal("0.021216"),
-            31,
+            Decimal("0.02624"),
+            38,
             "default",
         ),
         (
             Feature.DEEP_THINK,
             GoogleModelKey.CHAT_REASONING,
             DeepThinkQuoteInput(input_tokens=1),
-            Decimal("0.114304"),
-            164,
+            Decimal("0.28576"),
+            409,
             "default",
         ),
         (
@@ -227,8 +227,8 @@ def test_maximum_context_envelope_is_capped_at_the_model_input_limit() -> None:
             128_000,
             ContextBand.MEDIUM,
             ContextBand.LARGE,
-            Decimal("0.327432"),
-            468,
+            Decimal("0.39348"),
+            563,
         ),
     ],
 )
@@ -245,8 +245,8 @@ def test_composite_image_quote_is_exact_image_plus_finishing_cost(
     credits: int,
 ) -> None:
     policy = QuotePolicy()
-    image_model = get_google_model(GoogleModelKey.IMAGE)
-    finishing_model = get_google_model(finishing_model_key)
+    image_model = get_openrouter_model(GoogleModelKey.IMAGE)
+    finishing_model = get_openrouter_model(finishing_model_key)
     assert isinstance(image_model.pricing, ImagePricing)
     assert isinstance(finishing_model.pricing, TokenPricing)
     expected_image_cost = image_model.pricing.estimate_usd(
@@ -446,7 +446,7 @@ def test_policy_controls_margin_credit_value_version_and_expiry() -> None:
     )
 
     assert policy.credits_for(Decimal("0.0101")) == 3
-    assert quote.credits == 7
+    assert quote.credits == 8
     assert quote.pricing_version == "launch-v2"
     assert quote.expires_at == NOW + timedelta(minutes=3)
 

@@ -23,6 +23,7 @@ from derp.catalog import (
     calculate_credit_cost,
     get_google_model,
     get_google_model_by_id,
+    get_openrouter_model,
 )
 from derp.credits import service as service_module
 from derp.credits.service import CreditService
@@ -63,7 +64,7 @@ class TestGoogleModelCatalog:
     def test_provider_factory_executes_catalog_model(
         self, key: GoogleModelKey, provider_id: str
     ) -> None:
-        assert create_model(key).model_name == provider_id
+        assert create_model(get_google_model(key)).model_name == provider_id
 
     def test_reverse_lookup_returns_same_spec_object(self) -> None:
         for model in GOOGLE_MODEL_CATALOG.values():
@@ -245,7 +246,7 @@ class TestToolCatalogParity:
                 assert tool.feature is None
                 continue
             assert plan.feature is tool.feature
-            assert plan.model is get_google_model(tool.model_key)
+            assert plan.model is get_openrouter_model(tool.model_key)
 
     def test_provider_free_tools_never_carry_model_cost(self) -> None:
         for tool_name in ("web_search",):
@@ -278,7 +279,7 @@ class TestCreditCheckResult:
         )
         assert result.is_free_use
         assert not result.is_paid
-        assert result.model_id == "gemini-3.1-flash-image"
+        assert result.model_id == "google/gemini-3.1-flash-image"
         assert result.require_plan().model is result.model
 
     def test_rejected_has_reason(self) -> None:

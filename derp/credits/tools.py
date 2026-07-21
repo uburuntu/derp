@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from derp.catalog import GoogleModelKey, calculate_credit_cost
+from derp.catalog import ModelRole, calculate_credit_cost
 from derp.execution import ExecutionPlan, Feature, plan_execution
 
 
@@ -25,7 +25,7 @@ class ToolConfig:
 
     name: str
     description: str
-    model_key: GoogleModelKey | None
+    model_key: ModelRole | None
     feature: Feature | None
     base_credit_cost: int  # Base cost (model cost added on top)
     free_daily_limit: int  # 0 = paid only
@@ -90,7 +90,7 @@ TOOL_REGISTRY: dict[str, ToolConfig] = {
     "image_generate": ToolConfig(
         name="image_generate",
         description="Generate an image from a text prompt",
-        model_key=GoogleModelKey.IMAGE,
+        model_key=ModelRole.IMAGE,
         feature=Feature.IMAGE_GENERATE,
         base_credit_cost=5,  # Base cost on top of model
         free_daily_limit=1,  # One free per day
@@ -100,7 +100,7 @@ TOOL_REGISTRY: dict[str, ToolConfig] = {
     "image_edit": ToolConfig(
         name="image_edit",
         description="Edit an existing image based on instructions",
-        model_key=GoogleModelKey.IMAGE,
+        model_key=ModelRole.IMAGE,
         feature=Feature.IMAGE_EDIT,
         base_credit_cost=5,  # Same as generation
         free_daily_limit=1,  # One free per day
