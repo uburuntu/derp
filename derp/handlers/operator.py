@@ -23,6 +23,7 @@ from aiogram.utils.i18n import gettext as _
 
 from derp.catalog import CATALOG_VERIFIED_ON, GOOGLE_MODEL_CATALOG
 from derp.command_menu import configure_bot_command_menu
+from derp.common.localization import format_local_integer
 from derp.common.sender import MessageSender
 from derp.handlers.debug import debug_buy_command
 from derp.models import Chat as ChatModel
@@ -44,6 +45,7 @@ router = Router(name="operator")
 rejection_router = Router(name="operator_rejection")
 router.message.filter(OperatorOnlyFilter())
 router.callback_query.filter(OperatorOnlyFilter())
+_OPERATOR_CALLBACK_PREFIXES = ("op:", "opm:", "opx:", "opu:")
 
 
 class OperatorView(StrEnum):
@@ -372,7 +374,7 @@ async def sync_operator_command_menu(
     )
 
 
-@router.callback_query(F.data.startswith("op"))
+@router.callback_query(F.data.startswith(_OPERATOR_CALLBACK_PREFIXES))
 async def reject_stale_operator_callback(callback: CallbackQuery) -> None:
     """Clear malformed or obsolete operator buttons for authorized actors."""
     await callback.answer(
@@ -387,7 +389,7 @@ async def reject_unauthorized_operator_command(message: Message) -> None:
     await message.reply(_("This command isn't available."))
 
 
-@rejection_router.callback_query(F.data.startswith("op"))
+@rejection_router.callback_query(F.data.startswith(_OPERATOR_CALLBACK_PREFIXES))
 async def reject_unauthorized_operator_callback(callback: CallbackQuery) -> None:
     """Always clear spinners for inaccessible or forwarded operator controls."""
     await callback.answer(_("This control is no longer available."), show_alert=True)
@@ -481,7 +483,11 @@ def _overview_panel(
     attention_state = (
         _("none")
         if attention == 0
-        else _("{count} signals").format(count=_number(attention))
+        else _(
+            "{count} signal",
+            "{count} signals",
+            attention,
+        ).format(count=_number(attention))
     )
     text = _(
         "<b>Operator console</b>\n"
@@ -879,7 +885,7 @@ def _maintenance_count_label(name: str) -> str:
 
 
 def _number(value: int) -> str:
-    return f"{value:,}"
+    return format_local_integer(value)
 
 
 def _duration(seconds: float) -> str:

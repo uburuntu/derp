@@ -7,6 +7,7 @@ from aiogram.utils.i18n import I18n
 
 from derp.common.localization import (
     format_local_date,
+    format_local_integer,
     format_local_month_day,
     format_local_utc_datetime,
 )
@@ -51,3 +52,22 @@ def test_utc_datetime_keeps_utc_values() -> None:
     assert format_local_utc_datetime(datetime(2026, 8, 19, tzinfo=UTC)).endswith(
         "00:00 UTC"
     )
+
+
+@pytest.mark.parametrize(
+    ("locale", "expected"),
+    [("en", "1,234,567"), ("ru", "1\xa0234\xa0567")],
+)
+def test_integer_uses_locale_grouping(
+    setup_i18n: I18n,
+    locale: str,
+    expected: str,
+) -> None:
+    with setup_i18n.use_locale(locale):
+        assert format_local_integer(1_234_567) == expected
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "1"])
+def test_integer_rejects_non_integer_values(value: object) -> None:
+    with pytest.raises(TypeError, match="integer"):
+        format_local_integer(value)  # type: ignore[arg-type]

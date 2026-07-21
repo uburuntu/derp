@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime
 from aiogram.utils.i18n import get_i18n
 from babel.dates import format_date as babel_format_date
 from babel.dates import format_datetime as babel_format_datetime
+from babel.numbers import format_decimal as babel_format_decimal
 
 _DATE_FORMAT = "d MMM y"
 _MONTH_DAY_FORMAT = "d MMM"
@@ -43,8 +44,21 @@ def format_local_utc_datetime(value: datetime) -> str:
     )
 
 
+def format_local_integer(value: int) -> str:
+    """Format an integer with the active locale's grouping separator."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("value must be an integer")
+    return babel_format_decimal(
+        value,
+        format="#,##0",
+        decimal_quantization=False,
+        locale=get_i18n().current_locale,
+    )
+
+
 __all__ = [
     "format_local_date",
+    "format_local_integer",
     "format_local_month_day",
     "format_local_utc_datetime",
 ]

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiogram.types import CallbackQuery, Message
+from aiogram.utils.i18n import I18n
 
 from derp.handlers.operator import (
     OperatorMaintenanceCallback,
@@ -190,6 +191,22 @@ def test_overview_surfaces_aggregate_attention_without_identifiers() -> None:
     assert "prod · up 1d 1h" in text
     assert "Attention: 5 signals" in text
     assert "12345" not in text
+
+
+def test_russian_operator_views_are_concise_and_use_derp_persona(
+    setup_i18n: I18n,
+) -> None:
+    with setup_i18n.use_locale("ru"):
+        rendered = {
+            view: build_operator_panel(view, _snapshot(), _config())[0]
+            for view in OperatorView
+        }
+
+    assert "Дерп 0.1.0" in rendered[OperatorView.RUNTIME]
+    assert "1\xa0234" in rendered[OperatorView.USAGE]
+    assert all(
+        "Operator" not in text and len(text) <= 4_096 for text in rendered.values()
+    )
 
 
 def test_maintenance_result_is_conservative_and_compact() -> None:

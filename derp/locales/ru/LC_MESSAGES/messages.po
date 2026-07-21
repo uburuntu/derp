@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-21 12:30+0100\n"
+"POT-Creation-Date: 2026-07-21 13:25+0100\n"
 "PO-Revision-Date: 2026-07-21 12:09+0100\n"
 "Last-Translator: Команда Дерпа <https://github.com/uburuntu/derp>\n"
 "Language: ru\n"
@@ -19,64 +19,68 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: derp/command_menu.py:60
+#: derp/command_menu.py:63
 msgid "Create an image"
 msgstr "Создать изображение"
 
-#: derp/command_menu.py:61
+#: derp/command_menu.py:64
 msgid "Edit an image you reply to"
 msgstr "Изменить изображение, ответив на него"
 
-#: derp/command_menu.py:62
+#: derp/command_menu.py:65
 msgid "Turn text into speech"
 msgstr "Озвучить текст"
 
-#: derp/command_menu.py:80 derp/command_menu.py:103
+#: derp/command_menu.py:83 derp/command_menu.py:108
 msgid "See what Derp can do"
 msgstr "Узнать, что умеет Дерп"
 
-#: derp/command_menu.py:81
+#: derp/command_menu.py:84
 msgid "Manage privacy and history"
 msgstr "Настроить приватность и историю"
 
-#: derp/command_menu.py:83
+#: derp/command_menu.py:86
 msgid "See credits and recent charges"
 msgstr "Посмотреть кредиты и недавние списания"
 
-#: derp/command_menu.py:86
+#: derp/command_menu.py:89
 msgid "Buy credits for yourself"
 msgstr "Купить личные кредиты"
 
-#: derp/command_menu.py:89
+#: derp/command_menu.py:92
 msgid "Manage your monthly plan"
 msgstr "Управлять месячным планом"
 
-#: derp/command_menu.py:90 derp/command_menu.py:112
+#: derp/command_menu.py:93 derp/command_menu.py:117
 msgid "Forget a message you reply to"
 msgstr "Удалить из истории сообщение, на которое отвечаете"
 
-#: derp/command_menu.py:91 derp/command_menu.py:113
+#: derp/command_menu.py:94 derp/command_menu.py:118
 msgid "Support Derp with Stars"
 msgstr "Поддержать Дерпа Звёздами"
 
-#: derp/command_menu.py:97
+#: derp/command_menu.py:98
+msgid "Open operator console"
+msgstr "Открыть консоль оператора"
+
+#: derp/command_menu.py:102
 msgid "Manage chat settings"
 msgstr "Управлять настройками чата"
 
-#: derp/command_menu.py:99
+#: derp/command_menu.py:104
 msgid "View chat settings"
 msgstr "Посмотреть настройки чата"
 
-#: derp/command_menu.py:102 derp/handlers/context_settings.py:204
+#: derp/command_menu.py:107 derp/handlers/context_settings.py:204
 #: derp/handlers/inline.py:45 derp/handlers/inline.py:72
 msgid "Ask Derp"
 msgstr "Спросить Дерпа"
 
-#: derp/command_menu.py:106
+#: derp/command_menu.py:111
 msgid "See personal and chat credits"
 msgstr "Посмотреть личные кредиты и кредиты чата"
 
-#: derp/command_menu.py:109
+#: derp/command_menu.py:114
 msgid "Buy credits for this chat"
 msgstr "Купить кредиты для этого чата"
 
@@ -182,7 +186,7 @@ msgstr ""
 "Привет, {name}. Здесь можно спросить о чём угодно. Для настроек и "
 "возможностей отправьте /help."
 
-#: derp/handlers/chat.py:486
+#: derp/handlers/chat.py:487
 #, python-brace-format
 msgid "{count} character"
 msgid_plural "{count} characters"
@@ -190,7 +194,7 @@ msgstr[0] "{count} символ"
 msgstr[1] "{count} символа"
 msgstr[2] "{count} символов"
 
-#: derp/handlers/chat.py:489
+#: derp/handlers/chat.py:490
 #, python-brace-format
 msgid "{count} message"
 msgid_plural "{count} messages"
@@ -198,28 +202,28 @@ msgstr[0] "{count} сообщение"
 msgstr[1] "{count} сообщения"
 msgstr[2] "{count} сообщений"
 
-#: derp/handlers/chat.py:492
+#: derp/handlers/chat.py:493
 #, python-brace-format
 msgid "Context: {chars}, {messages}"
 msgstr "Контекст: {chars}, {messages}"
 
-#: derp/handlers/chat.py:534 derp/handlers/image.py:348
+#: derp/handlers/chat.py:540 derp/handlers/image.py:348
 #: derp/handlers/image.py:388 derp/handlers/tts.py:76
 msgid "I couldn't verify your account. You weren't charged. Try again."
 msgstr "Не удалось проверить аккаунт. Кредиты не списаны. Попробуйте ещё раз."
 
-#: derp/handlers/chat.py:829
+#: derp/handlers/chat.py:835
 msgid "I'm busy right now. You weren't charged. Try again in about a minute."
 msgstr ""
 "Сейчас не могу ответить. Кредиты не списаны. Попробуйте примерно через "
 "минуту."
 
-#: derp/handlers/chat.py:839 derp/handlers/chat.py:870
-#: derp/handlers/chat.py:880
+#: derp/handlers/chat.py:845 derp/handlers/chat.py:876
+#: derp/handlers/chat.py:886
 msgid "I couldn't answer that. You weren't charged. Try again."
 msgstr "Не получилось ответить. Кредиты не списаны. Попробуйте ещё раз."
 
-#: derp/handlers/chat.py:854
+#: derp/handlers/chat.py:860
 msgid ""
 "That request became too complex. You weren't charged. Try a simpler "
 "version."
@@ -378,7 +382,8 @@ msgid "Change how my credits are used"
 msgstr "Настроить использование личных кредитов"
 
 #: derp/handlers/context_settings.py:342 derp/handlers/context_settings.py:455
-#: derp/handlers/context_settings.py:552
+#: derp/handlers/context_settings.py:552 derp/handlers/operator.py:687
+#: derp/handlers/operator.py:720 derp/handlers/operator.py:741
 msgid "Back"
 msgstr "Назад"
 
@@ -620,7 +625,7 @@ msgstr ""
 msgid "Delete"
 msgstr "Удалить"
 
-#: derp/handlers/context_settings.py:591
+#: derp/handlers/context_settings.py:591 derp/handlers/operator.py:235
 #: derp/handlers/paid_media_controls.py:48
 #: derp/handlers/paid_media_controls.py:136 derp/handlers/tool_approvals.py:582
 msgid "Cancel"
@@ -874,33 +879,84 @@ msgstr ""
 msgid "I couldn't find this chat. Try again."
 msgstr "Не удалось найти этот чат. Попробуйте ещё раз."
 
-#: derp/handlers/debug.py:514
+#: derp/handlers/debug.py:76
+#, python-brace-format
+msgid "Personal wallet · {stars} Star"
+msgstr "Личный баланс · {stars} звезда"
+
+#: derp/handlers/debug.py:92
+#, python-brace-format
+msgid "This chat · {stars} Star"
+msgstr "Этот чат · {stars} звезда"
+
+#: derp/handlers/debug.py:102
+#, python-brace-format
 msgid ""
-"🛠 **Debug Commands** (admin only)\n"
-"\n"
-"**Credit Testing:**\n"
-"• /debug_buy - Run a real 1-Star durable purchase\n"
-"• /debug_credits <n> [chat] - Add credits directly\n"
-"• /debug_reset [chat] - Reset credits to 0\n"
-"• /debug_refund <charge_id> - Test refund flow\n"
-"\n"
-"**Diagnostics:**\n"
-"• /debug_status - Show model role, balances, and config\n"
-"• /debug_tools - List tools with pricing\n"
-"• /debug_help - This help message"
+"<b>Live Stars test</b>\n"
+"{credits} test credits for {stars} Star. Uses the production purchase and"
+" settlement flow."
 msgstr ""
-"🛠 **Команды отладки** (только для администраторов)\n"
-"\n"
-"**Проверка кредитов:**\n"
-"• /debug_buy - провести реальную покупку за 1 Star\n"
-"• /debug_credits <n> [chat] - добавить кредиты напрямую\n"
-"• /debug_reset [chat] - обнулить кредиты\n"
-"• /debug_refund <charge_id> - проверить возврат\n"
-"\n"
-"**Диагностика:**\n"
-"• /debug_status - показать роль модели, балансы и настройки\n"
-"• /debug_tools - показать инструменты и цены\n"
-"• /debug_help - показать эту справку"
+"<b>Тест Stars</b>\n"
+"{credits} тестовых кредитов за {stars} звезду. Боевой путь покупки и "
+"зачисления."
+
+#: derp/handlers/debug.py:121
+msgid "Stars test unavailable"
+msgstr "Тест Stars недоступен"
+
+#: derp/handlers/debug.py:124
+msgid "Stars test identity changed"
+msgstr "Сессия теста устарела"
+
+#: derp/handlers/debug.py:129 derp/handlers/debug.py:211
+msgid "This option expired. Run /debug_buy again."
+msgstr "Вариант устарел. Запустите /debug_buy снова."
+
+#: derp/handlers/debug.py:140
+msgid "This chat is unavailable"
+msgstr "Этот чат недоступен"
+
+#: derp/handlers/debug.py:159
+msgid "This Stars test is no longer available"
+msgstr "Тест Stars больше недоступен"
+
+#: derp/handlers/debug.py:171
+msgid "Telegram could not prepare the invoice. Try again."
+msgstr "Telegram не подготовил счёт. Попробуйте снова."
+
+#: derp/handlers/debug.py:175 derp/handlers/payments.py:155
+msgid "this chat"
+msgstr "этого чата"
+
+#: derp/handlers/debug.py:175
+msgid "your wallet"
+msgstr "ваш баланс"
+
+#: derp/handlers/debug.py:178
+#, python-brace-format
+msgid ""
+"<b>{credits} test credits for {owner}</b>\n"
+"Telegram shows the final {stars}-Star confirmation before charging."
+msgstr ""
+"<b>{credits} тестовых кредитов: {owner}</b>\n"
+"Telegram попросит подтвердить списание {stars} звезды."
+
+#: derp/handlers/debug.py:189
+#, python-brace-format
+msgid "Pay {stars} Star"
+msgstr "Заплатить {stars} звезду"
+
+#: derp/handlers/debug.py:196 derp/handlers/payments.py:170
+msgid "Invoice ready"
+msgstr "Счёт готов"
+
+#: derp/handlers/debug.py:222
+msgid "Use /operator for diagnostics and controls."
+msgstr "/operator — диагностика и управление."
+
+#: derp/handlers/debug.py:234
+msgid "This action is unavailable"
+msgstr "Действие недоступно"
 
 #: derp/handlers/donations.py:23
 msgid "Support Derp"
@@ -1146,6 +1202,609 @@ msgstr "Не получилось дать полезный ответ. Сфор
 msgid "Ask another question"
 msgstr "Задать ещё вопрос"
 
+#: derp/handlers/operator.py:114
+msgid "<b>Maintenance pass completed</b>"
+msgstr "<b>Цикл обслуживания завершён</b>"
+
+#: derp/handlers/operator.py:117
+#, python-brace-format
+msgid "{label}: {count}"
+msgstr "{label}: {count}"
+
+#: derp/handlers/operator.py:128
+msgid "No changes reported"
+msgstr "Изменений нет"
+
+#: derp/handlers/operator.py:133
+#, python-brace-format
+msgid "Duration: {duration} ms"
+msgstr "Время: {duration} мс"
+
+#: derp/handlers/operator.py:153
+msgid "Operator console is private. Open Derp directly and use /operator."
+msgstr ""
+"Консоль оператора доступна только в личном чате. Откройте Дерпа и "
+"отправьте /operator."
+
+#: derp/handlers/operator.py:171
+msgid "Operator console is unavailable. Try again."
+msgstr "Консоль оператора недоступна. Попробуйте снова."
+
+#: derp/handlers/operator.py:214
+msgid "Too many pending confirmations. Try again shortly."
+msgstr "Слишком много подтверждений. Повторите чуть позже."
+
+#: derp/handlers/operator.py:220
+#, python-brace-format
+msgid ""
+"<b>Confirm maintenance</b>\n"
+"{action}\n"
+"\n"
+"This runs the live worker now."
+msgstr ""
+"<b>Подтвердите обслуживание</b>\n"
+"{action}\n"
+"\n"
+"Дерп запустит рабочий процесс сейчас."
+
+#: derp/handlers/operator.py:226
+msgid "Run now"
+msgstr "Запустить"
+
+#: derp/handlers/operator.py:269
+msgid "This confirmation expired. Choose the action again."
+msgstr "Подтверждение истекло. Выберите действие снова."
+
+#: derp/handlers/operator.py:273
+msgid "Maintenance started"
+msgstr "Обслуживание запущено"
+
+#: derp/handlers/operator.py:288
+msgid ""
+"<b>Maintenance interrupted</b>\n"
+"The pass did not complete. Check telemetry before retrying."
+msgstr ""
+"<b>Обслуживание прервано</b>\n"
+"Цикл не завершён. Перед повтором проверьте телеметрию."
+
+#: derp/handlers/operator.py:313
+msgid "Opening test checkout"
+msgstr "Открывается тест оплаты"
+
+#: derp/handlers/operator.py:324
+msgid "Test checkout is unavailable. Try again."
+msgstr "Тест оплаты недоступен. Попробуйте снова."
+
+#: derp/handlers/operator.py:341
+msgid "Command sync started"
+msgstr "Синхронизация команд запущена"
+
+#: derp/handlers/operator.py:356
+msgid ""
+"<b>Command sync failed</b>\n"
+"Telegram did not accept the complete command state."
+msgstr ""
+"<b>Команды не синхронизированы</b>\n"
+"Telegram не принял полный набор команд."
+
+#: derp/handlers/operator.py:365
+msgid ""
+"<b>Command menu synced</b>\n"
+"All locales and audience scopes now match the configured state."
+msgstr ""
+"<b>Команды синхронизированы</b>\n"
+"Все языки и области соответствуют настройкам."
+
+#: derp/handlers/operator.py:381
+msgid "This operator button expired. Open /operator again."
+msgstr "Кнопка устарела. Откройте /operator снова."
+
+#: derp/handlers/operator.py:389
+msgid "This command isn't available."
+msgstr "Команда недоступна."
+
+#: derp/handlers/operator.py:395
+msgid "This control is no longer available."
+msgstr "Элемент управления больше недоступен."
+
+#: derp/handlers/operator.py:406
+msgid "Open the operator console in your private chat."
+msgstr "Откройте консоль оператора в личном чате."
+
+#: derp/handlers/operator.py:431
+msgid ""
+"<b>Operator console unavailable</b>\n"
+"Try again."
+msgstr ""
+"<b>Консоль оператора недоступна</b>\n"
+"Попробуйте снова."
+
+#: derp/handlers/operator.py:476 derp/handlers/operator.py:695
+msgid "degraded"
+msgstr "сбой"
+
+#: derp/handlers/operator.py:478
+#, python-brace-format
+msgid "ready · {latency} ms"
+msgstr "норма · {latency} мс"
+
+#: derp/handlers/operator.py:484 derp/handlers/operator.py:810
+msgid "none"
+msgstr "нет"
+
+#: derp/handlers/operator.py:487
+#, python-brace-format
+msgid "{count} signal"
+msgid_plural "{count} signals"
+msgstr[0] "{count} сигнал"
+msgstr[1] "{count} сигнала"
+msgstr[2] "{count} сигналов"
+
+#: derp/handlers/operator.py:493
+#, python-brace-format
+msgid ""
+"<b>Operator console</b>\n"
+"{environment} · up {uptime}\n"
+"\n"
+"Database: {database}\n"
+"Workers: {running}/{total}\n"
+"Attention: {attention}"
+msgstr ""
+"<b>Консоль оператора</b>\n"
+"{environment} · работает {uptime}\n"
+"\n"
+"База: {database}\n"
+"Процессы: {running}/{total}\n"
+"Требуют внимания: {attention}"
+
+#: derp/handlers/operator.py:509 derp/handlers/operator.py:530
+msgid "Usage"
+msgstr "Активность"
+
+#: derp/handlers/operator.py:510 derp/handlers/operator.py:562
+msgid "Commerce"
+msgstr "Финансы"
+
+#: derp/handlers/operator.py:513 derp/handlers/operator.py:596
+#: derp/handlers/operator.py:680 derp/handlers/operator.py:851
+msgid "Operations"
+msgstr "Операции"
+
+#: derp/handlers/operator.py:514
+msgid "Runtime"
+msgstr "Система"
+
+#: derp/handlers/operator.py:517
+msgid "Maintenance"
+msgstr "Обслуживание"
+
+#: derp/handlers/operator.py:518
+msgid "Tests"
+msgstr "Тесты"
+
+#: derp/handlers/operator.py:520 derp/handlers/operator.py:742
+msgid "Refresh"
+msgstr "Обновить"
+
+#: derp/handlers/operator.py:537
+#, python-brace-format
+msgid ""
+"<b>Usage</b>\n"
+"Users: {users} · {users_recent} changed / 24h\n"
+"Chats: {chats} · {chats_recent} changed / 24h\n"
+"Messages: {messages} retained · {messages_recent} / 24h\n"
+"\n"
+"Chat types: {chat_types}\n"
+"Artifacts: {artifacts} · {artifact_size}"
+msgstr ""
+"<b>Активность</b>\n"
+"Пользователи: {users} · за 24 ч: {users_recent}\n"
+"Чаты: {chats} · за 24 ч: {chats_recent}\n"
+"Сообщения: {messages} · за 24 ч: {messages_recent}\n"
+"\n"
+"Типы чатов: {chat_types}\n"
+"Артефакты: {artifacts} · {artifact_size}"
+
+#: derp/handlers/operator.py:569
+#, python-brace-format
+msgid ""
+"<b>Commerce</b>\n"
+"Credits: {available} available · {reserved} reserved\n"
+"Consumed: {consumed} · debt: {debt}\n"
+"Stars: {fulfilled} fulfilled · {clawed_back} clawed back\n"
+"\n"
+"Subscriptions: {entitled} entitled · {renewing} renewing\n"
+"Purchase intents: {intents}\n"
+"Receipts: {receipts}"
+msgstr ""
+"<b>Финансы</b>\n"
+"Кредиты: доступно {available} · резерв {reserved}\n"
+"Списано: {consumed} · долг {debt}\n"
+"Stars: получено {fulfilled} · отозвано {clawed_back}\n"
+"\n"
+"Подписки: доступ {entitled} · продление {renewing}\n"
+"Заявки: {intents}\n"
+"Платежи: {receipts}"
+
+#: derp/handlers/operator.py:601
+#, python-brace-format
+msgid ""
+"<b>Operations</b>\n"
+"Ledger: {operations}\n"
+"\n"
+"Delivery: {deliveries}\n"
+"\n"
+"Approvals: {approvals}"
+msgstr ""
+"<b>Операции</b>\n"
+"Реестр: {operations}\n"
+"\n"
+"Доставка: {deliveries}\n"
+"\n"
+"Подтверждения: {approvals}"
+
+#: derp/handlers/operator.py:618
+msgid "unavailable"
+msgstr "недоступно"
+
+#: derp/handlers/operator.py:620
+#, python-brace-format
+msgid "{open}/{size} open · {overflow} overflow"
+msgstr "открыто {open}/{size} · сверх лимита {overflow}"
+
+#: derp/handlers/operator.py:626
+#, python-brace-format
+msgid "{worker} {state}"
+msgstr "{worker} {state}"
+
+#: derp/handlers/operator.py:628 derp/handlers/operator.py:654
+#: derp/handlers/operator.py:655
+msgid "on"
+msgstr "вкл."
+
+#: derp/handlers/operator.py:628 derp/handlers/operator.py:654
+#: derp/handlers/operator.py:655
+msgid "off"
+msgstr "выкл."
+
+#: derp/handlers/operator.py:642
+#, python-brace-format
+msgid ""
+"<b>Runtime</b>\n"
+"Derp {version} · Python {python}\n"
+"{environment} · purchases {purchases} · AI content export {capture}\n"
+"DB pool: {pool}\n"
+"Workers: {workers}\n"
+"\n"
+"Libraries: {packages}\n"
+"Model catalog: {catalog_date}\n"
+"{models}"
+msgstr ""
+"<b>Система</b>\n"
+"Дерп {version} · Python {python}\n"
+"{environment} · покупки {purchases} · экспорт ИИ-контента {capture}\n"
+"Пул БД: {pool}\n"
+"Процессы: {workers}\n"
+"\n"
+"Библиотеки: {packages}\n"
+"Каталог моделей: {catalog_date}\n"
+"{models}"
+
+#: derp/handlers/operator.py:667
+msgid ""
+"<b>Maintenance</b>\n"
+"Run an immediate pass through the live runtime workers."
+msgstr ""
+"<b>Обслуживание</b>\n"
+"Запустить рабочие процессы вне расписания."
+
+#: derp/handlers/operator.py:671 derp/handlers/operator.py:848
+msgid "All passes"
+msgstr "Все процессы"
+
+#: derp/handlers/operator.py:673 derp/handlers/operator.py:849
+msgid "History"
+msgstr "История"
+
+#: derp/handlers/operator.py:675 derp/handlers/operator.py:850
+msgid "Subscriptions"
+msgstr "Подписки"
+
+#: derp/handlers/operator.py:683 derp/handlers/operator.py:852
+msgid "Deliveries"
+msgstr "Доставка"
+
+#: derp/handlers/operator.py:686 derp/handlers/operator.py:853
+msgid "Approvals"
+msgstr "Подтверждения"
+
+#: derp/handlers/operator.py:695
+msgid "ready"
+msgstr "норма"
+
+#: derp/handlers/operator.py:697
+#, python-brace-format
+msgid ""
+"<b>Tests</b>\n"
+"Database read: {database}\n"
+"Stars checkout: production intent and settlement path\n"
+"Command menu: all locales and audience scopes"
+msgstr ""
+"<b>Тесты</b>\n"
+"Чтение БД: {database}\n"
+"Оплата Stars: боевой путь заявки и зачисления\n"
+"Команды: все языки и области"
+
+#: derp/handlers/operator.py:706
+msgid "Open 1-Star checkout"
+msgstr "Тест оплаты за 1 звезду"
+
+#: derp/handlers/operator.py:714
+msgid "Sync command menu"
+msgstr "Синхронизировать команды"
+
+#: derp/handlers/operator.py:730
+#, python-brace-format
+msgid ""
+"<b>{title}</b>\n"
+"Database diagnostics are unavailable."
+msgstr ""
+"<b>{title}</b>\n"
+"Диагностика базы недоступна."
+
+#: derp/handlers/operator.py:803
+#, python-brace-format
+msgid "{state} {count}"
+msgstr "{state} {count}"
+
+#: derp/handlers/operator.py:815
+msgid "private"
+msgstr "личные"
+
+#: derp/handlers/operator.py:816
+msgid "group"
+msgstr "группы"
+
+#: derp/handlers/operator.py:817
+msgid "supergroup"
+msgstr "супергруппы"
+
+#: derp/handlers/operator.py:818
+msgid "channel"
+msgstr "каналы"
+
+#: derp/handlers/operator.py:819
+msgid "quoted"
+msgstr "рассчитано"
+
+#: derp/handlers/operator.py:820
+msgid "reserved"
+msgstr "зарезервировано"
+
+#: derp/handlers/operator.py:821
+msgid "executing"
+msgstr "выполняется"
+
+#: derp/handlers/operator.py:822
+msgid "captured"
+msgstr "списано"
+
+#: derp/handlers/operator.py:823
+msgid "released"
+msgstr "освобождено"
+
+#: derp/handlers/operator.py:824
+msgid "reversed"
+msgstr "возвращено"
+
+#: derp/handlers/operator.py:825
+msgid "canceled"
+msgstr "отменено"
+
+#: derp/handlers/operator.py:826
+msgid "failed"
+msgstr "сбой"
+
+#: derp/handlers/operator.py:827
+msgid "not ready"
+msgstr "не готово"
+
+#: derp/handlers/operator.py:828
+msgid "pending"
+msgstr "ожидает"
+
+#: derp/handlers/operator.py:829
+msgid "delivering"
+msgstr "доставляется"
+
+#: derp/handlers/operator.py:830
+msgid "delivered"
+msgstr "доставлено"
+
+#: derp/handlers/operator.py:831
+msgid "uncertain"
+msgstr "неопределённо"
+
+#: derp/handlers/operator.py:832
+msgid "expired"
+msgstr "истекло"
+
+#: derp/handlers/operator.py:833
+msgid "approved"
+msgstr "разрешено"
+
+#: derp/handlers/operator.py:834
+msgid "denied"
+msgstr "отклонено"
+
+#: derp/handlers/operator.py:835
+msgid "resumed"
+msgstr "возобновлено"
+
+#: derp/handlers/operator.py:836
+msgid "pre-checked"
+msgstr "проверено"
+
+#: derp/handlers/operator.py:837
+msgid "fulfilled"
+msgstr "исполнено"
+
+#: derp/handlers/operator.py:838
+msgid "needs review"
+msgstr "требует проверки"
+
+#: derp/handlers/operator.py:839
+msgid "received"
+msgstr "получено"
+
+#: derp/handlers/operator.py:840
+msgid "clawed back"
+msgstr "отозвано"
+
+#: derp/handlers/operator.py:841
+msgid "active"
+msgstr "активно"
+
+#: derp/handlers/operator.py:859
+msgid "Purged messages"
+msgstr "Удалено сообщений"
+
+#: derp/handlers/operator.py:860
+msgid "Expired cycles"
+msgstr "Завершено циклов"
+
+#: derp/handlers/operator.py:861
+msgid "Examined operations"
+msgstr "Проверено операций"
+
+#: derp/handlers/operator.py:862
+msgid "Expired quotes"
+msgstr "Истекло расчётов"
+
+#: derp/handlers/operator.py:863
+msgid "Released reservations"
+msgstr "Снято резервов"
+
+#: derp/handlers/operator.py:864
+msgid "Released executions"
+msgstr "Освобождено запусков"
+
+#: derp/handlers/operator.py:865
+msgid "Recovered deliveries"
+msgstr "Восстановлено доставок"
+
+#: derp/handlers/operator.py:866
+msgid "Incomplete results"
+msgstr "Неполных результатов"
+
+#: derp/handlers/operator.py:867
+msgid "Race skips"
+msgstr "Пропусков из-за гонок"
+
+#: derp/handlers/operator.py:868
+msgid "Interrupted deliveries"
+msgstr "Прервано доставок"
+
+#: derp/handlers/operator.py:869
+msgid "Retry candidates"
+msgstr "К повтору"
+
+#: derp/handlers/operator.py:870
+msgid "Delivered"
+msgstr "Доставлено"
+
+#: derp/handlers/operator.py:871
+msgid "Retryable failures"
+msgstr "Временных сбоев"
+
+#: derp/handlers/operator.py:872
+msgid "Terminal failures"
+msgstr "Неисправимых сбоев"
+
+#: derp/handlers/operator.py:873
+msgid "Uncertain deliveries"
+msgstr "Неясных доставок"
+
+#: derp/handlers/operator.py:874
+msgid "Retry exceptions"
+msgstr "Ошибок повтора"
+
+#: derp/handlers/operator.py:875
+msgid "Expired deliveries"
+msgstr "Истекло доставок"
+
+#: derp/handlers/operator.py:876
+msgid "Interruption failures"
+msgstr "Ошибок прерывания"
+
+#: derp/handlers/operator.py:877
+msgid "Expiration failures"
+msgstr "Ошибок истечения"
+
+#: derp/handlers/operator.py:878
+msgid "Examined artifacts"
+msgstr "Проверено артефактов"
+
+#: derp/handlers/operator.py:879
+msgid "Purged artifacts"
+msgstr "Удалено артефактов"
+
+#: derp/handlers/operator.py:880
+msgid "Artifact failures"
+msgstr "Ошибок артефактов"
+
+#: derp/handlers/operator.py:881
+msgid "Phase failures"
+msgstr "Ошибок этапов"
+
+#: derp/handlers/operator.py:882
+msgid "Expired approvals"
+msgstr "Истекло подтверждений"
+
+#: derp/handlers/operator.py:897
+#, python-brace-format
+msgid "{days}d {hours}h"
+msgstr "{days}д {hours}ч"
+
+#: derp/handlers/operator.py:899
+#, python-brace-format
+msgid "{hours}h {minutes}m"
+msgstr "{hours}ч {minutes}м"
+
+#: derp/handlers/operator.py:901
+#, python-brace-format
+msgid "{minutes}m {seconds}s"
+msgstr "{minutes}м {seconds}с"
+
+#: derp/handlers/operator.py:905
+#, python-brace-format
+msgid "{seconds}s"
+msgstr "{seconds}с"
+
+#: derp/handlers/operator.py:910
+msgid "B"
+msgstr "Б"
+
+#: derp/handlers/operator.py:910
+msgid "KiB"
+msgstr "КиБ"
+
+#: derp/handlers/operator.py:910
+msgid "MiB"
+msgstr "МиБ"
+
+#: derp/handlers/operator.py:910
+msgid "GiB"
+msgstr "ГиБ"
+
+#: derp/handlers/operator.py:910
+msgid "TiB"
+msgstr "ТиБ"
+
+#: derp/handlers/operator.py:930
+msgid "unknown"
+msgstr "неизвестно"
+
 #: derp/handlers/paid_media_controls.py:37
 msgid "Create voice"
 msgstr "Создать голосовое сообщение"
@@ -1240,10 +1899,6 @@ msgid "Pay {price}"
 msgstr "Перейти к оплате · {price}"
 
 #: derp/handlers/payments.py:155
-msgid "this chat"
-msgstr "этого чата"
-
-#: derp/handlers/payments.py:155
 msgid "you"
 msgstr "личного аккаунта"
 
@@ -1264,10 +1919,6 @@ msgstr[1] ""
 msgstr[2] ""
 "<b>{credits} кредитов для {owner}</b>\n"
 "Telegram попросит подтвердить платёж: {price}."
-
-#: derp/handlers/payments.py:170
-msgid "Invoice ready"
-msgstr "Счёт готов"
 
 #: derp/handlers/payments.py:185
 msgid "This purchase option expired. You weren't charged. Open /buy again."
