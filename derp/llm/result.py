@@ -69,11 +69,11 @@ class AgentResult:
 
         for code in self.code_blocks:
             # Use markdown code block syntax - MessageSender will convert to HTML
-            parts.append(f"**{_('Generated Code:')}**\n```\n{code}\n```")
+            parts.append(f"**{_('Code:')}**\n```\n{code}\n```")
 
         for result in self.execution_results:
             # Use markdown quote syntax - MessageSender will convert to HTML
-            parts.append(f"**{_('Execution Result:')}**\n```\n{result}\n```")
+            parts.append(f"**{_('Result:')}**\n```\n{result}\n```")
 
         return "\n\n".join(parts)
 
@@ -142,8 +142,8 @@ class AgentResult:
 
             notice = await message.reply(
                 _(
-                    "😅 Something went wrong. I couldn't process that message. "
-                    "Not charged."
+                    "I couldn't deliver that response. Please try again. "
+                    "You weren't charged."
                 )
             )
             return AgentContentUnavailable(notice)

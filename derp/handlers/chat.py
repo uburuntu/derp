@@ -523,7 +523,10 @@ class ChatAgentHandler(MessageHandler):
             )
             if user_model is None or chat_model is None or chat_turn_accounting is None:
                 return await self.event.reply(
-                    _("😅 Could not verify your access. Please try again.")
+                    _(
+                        "I couldn't verify your account. Please try again. "
+                        "You weren't charged."
+                    )
                 )
 
             if role_resolver is not None and self.event.from_user is not None:
@@ -818,9 +821,8 @@ class ChatAgentHandler(MessageHandler):
                 )
                 return await self.event.reply(
                     _(
-                        "⏳ The AI service is overloaded right now.\n\n"
-                        "This happens during peak usage. Please wait 30-60 seconds "
-                        "and try again.\n\nNot charged."
+                        "I'm busy right now. Try again in about a minute. "
+                        "You weren't charged."
                     )
                 )
             report_exception(
@@ -829,10 +831,7 @@ class ChatAgentHandler(MessageHandler):
                 status_code=exc.status_code,
             )
             return await self.event.reply(
-                _(
-                    "😅 Something went wrong. I couldn't process that message. "
-                    "Not charged."
-                )
+                _("I couldn't answer that. Please try again. You weren't charged.")
             )
         except UsageLimitExceeded as exc:
             await _release_paid_chat_turn(
@@ -846,7 +845,10 @@ class ChatAgentHandler(MessageHandler):
                 level="warning",
             )
             return await self.event.reply(
-                _("⚠️ Too many tool calls. Please try a simpler request. Not charged.")
+                _(
+                    "That request became too complex. Try a simpler version. "
+                    "You weren't charged."
+                )
             )
         except UnexpectedModelBehavior as exc:
             await _release_paid_chat_turn(
@@ -860,10 +862,7 @@ class ChatAgentHandler(MessageHandler):
                 level="warning",
             )
             return await self.event.reply(
-                _(
-                    "😅 Something went wrong. I couldn't process that message. "
-                    "Not charged."
-                )
+                _("I couldn't answer that. Please try again. You weren't charged.")
             )
         except Exception as exc:
             await _release_paid_chat_turn(
@@ -873,8 +872,5 @@ class ChatAgentHandler(MessageHandler):
             )
             report_exception("chat_agent_failed", exception=exc)
             return await self.event.reply(
-                _(
-                    "😅 Something went wrong. I couldn't process that message. "
-                    "Not charged."
-                )
+                _("I couldn't answer that. Please try again. You weren't charged.")
             )

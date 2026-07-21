@@ -11,6 +11,15 @@ from derp.llm.result import (
 )
 
 
+def test_formatted_text_uses_conversational_section_labels() -> None:
+    result = AgentResult(code_blocks=["print('hi')"], execution_results=["hi"])
+
+    assert "**Code:**" in result.formatted_text
+    assert "**Result:**" in result.formatted_text
+    assert "Generated Code" not in result.formatted_text
+    assert "Execution Result" not in result.formatted_text
+
+
 async def test_rich_send_failure_with_text_fallback_delivers_model_content(
     make_message,
 ) -> None:
@@ -51,4 +60,6 @@ async def test_plain_content_send_failure_returns_unavailable_notice(
     assert isinstance(outcome, AgentContentUnavailable)
     assert outcome.notice is message
     sender.reply.assert_not_awaited()
-    assert "Not charged" in message.reply.await_args.args[0]
+    assert message.reply.await_args.args[0] == (
+        "I couldn't deliver that response. Please try again. You weren't charged."
+    )

@@ -43,7 +43,12 @@ async def test_inline_query_empty():
     query.answer.assert_awaited_once()
     results = query.answer.call_args[0][0]
     assert len(results) == 1
-    assert "Ask Derp" in results[0].title
+    assert results[0].title == "Ask Derp"
+    assert results[0].description == "Ask a question in this chat."
+    assert (
+        results[0].input_message_content.message_text
+        == "<i>Type a question for Derp.</i>"
+    )
 
 
 @pytest.mark.asyncio
@@ -58,7 +63,12 @@ async def test_inline_query_with_text():
     query.answer.assert_awaited_once()
     results = query.answer.call_args[0][0]
     assert len(results) == 1
-    assert "Ask Derp" in results[0].title
+    assert results[0].title == "Ask Derp"
+    assert results[0].description == "Ask Derp: What is Python?"
+    assert (
+        results[0].input_message_content.message_text
+        == "<i>Derp is thinking about: What is Python?</i>"
+    )
 
 
 @pytest.mark.asyncio
@@ -143,7 +153,7 @@ async def test_chosen_inline_result_missing_user_model_is_clear():
 
     service.answer.assert_not_awaited()
     text = _get_text_from_call_args(bot.edit_message_text.call_args)
-    assert "verify your inline allowance" in text
+    assert text == "I couldn't verify this request. Open Derp and try again."
 
 
 @pytest.mark.asyncio
@@ -152,31 +162,34 @@ async def test_chosen_inline_result_missing_user_model_is_clear():
     [
         (
             InlineChatExhausted(datetime(2026, 7, 22, tzinfo=UTC), 10),
-            "Daily inline limit reached",
+            "You've used today's inline answers. Try again after 00:00 UTC.",
         ),
-        (InlineChatInvalid(), "empty or too long"),
+        (
+            InlineChatInvalid(),
+            "That question is empty or too long. Shorten it and try again.",
+        ),
         (
             InlineChatFailed(
                 InlineChatFailureReason.ALLOWANCE_UNAVAILABLE,
                 None,
             ),
-            "verify your inline allowance",
+            "I couldn't verify this request. Open Derp and try again.",
         ),
         (
             InlineChatFailed(InlineChatFailureReason.PROVIDER_TIMEOUT, 8),
-            "took too long",
+            "That took too long. Try again.",
         ),
         (
             InlineChatFailed(InlineChatFailureReason.PROVIDER_REJECTED, 8),
-            "different question",
+            "I couldn't answer that question. Try wording it differently.",
         ),
         (
             InlineChatFailed(InlineChatFailureReason.UNUSABLE_OUTPUT, 8),
-            "no usable answer",
+            "I couldn't produce a useful answer. Try wording it differently.",
         ),
         (
             InlineChatFailed(InlineChatFailureReason.PROVIDER_ERROR, 8),
-            "right now",
+            "I couldn't answer that here. Try again.",
         ),
     ],
 )
@@ -202,7 +215,7 @@ async def test_chosen_inline_result_renders_every_non_success_state(
     )
 
     bot.edit_message_text.assert_awaited_once()
-    assert expected in _get_text_from_call_args(bot.edit_message_text.call_args)
+    assert expected == _get_text_from_call_args(bot.edit_message_text.call_args)
 
 
 @pytest.mark.asyncio
@@ -227,5 +240,5 @@ async def test_chosen_inline_result_exception():
 
     bot.edit_message_text.assert_awaited_once()
     text = _get_text_from_call_args(bot.edit_message_text.call_args)
-    assert "right now" in text
+    assert text == "I couldn't answer that here. Try again."
     assert "private failure detail" not in text

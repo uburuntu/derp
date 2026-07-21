@@ -42,10 +42,10 @@ async def inline_query_empty(query: InlineQuery) -> Any:
     result_id = str(uuid.uuid4())
     result = InlineQueryResultArticle(
         id=result_id,
-        title=_("🤖 Ask Derp"),
-        description=_("Start typing to get an AI-powered response."),
+        title=_("Ask Derp"),
+        description=_("Ask a question in this chat."),
         input_message_content=InputTextMessageContent(
-            message_text=html.italic(_("🤖 Please enter a prompt for Derp AI."))
+            message_text=html.italic(_("Type a question for Derp."))
         ),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -69,13 +69,11 @@ async def inline_query_with_text(query: InlineQuery) -> Any:
 
     result = InlineQueryResultArticle(
         id=result_id,
-        title=_("🤖 Ask Derp"),
-        description=_("Get an AI-powered response for: {user_input}").format(
-            user_input=user_input
-        ),
+        title=_("Ask Derp"),
+        description=_("Ask Derp: {user_input}").format(user_input=user_input),
         input_message_content=InputTextMessageContent(
             message_text=html.italic(
-                _("🧠 Thinking about: {user_input}").format(user_input=user_input)
+                _("Derp is thinking about: {user_input}").format(user_input=user_input)
             )
         ),
         reply_markup=InlineKeyboardMarkup(
@@ -114,7 +112,7 @@ async def chosen_inline_result(
     if user_model is None:
         await sender.edit_inline(
             chosen_result.inline_message_id,
-            _("I couldn't verify your inline allowance. Open Derp and try again."),
+            _("I couldn't verify this request. Open Derp and try again."),
             reply_markup=_start_personal_chat_markup(),
         )
         return
@@ -131,7 +129,7 @@ async def chosen_inline_result(
         )
         await sender.edit_inline(
             chosen_result.inline_message_id,
-            _("I couldn't answer this inline request right now. Try again later."),
+            _("I couldn't answer that here. Try again."),
             reply_markup=_retry_inline_markup(),
         )
         return
@@ -146,14 +144,14 @@ async def chosen_inline_result(
     if isinstance(outcome, InlineChatExhausted):
         await sender.edit_inline(
             chosen_result.inline_message_id,
-            _("Daily inline limit reached. Try again after 00:00 UTC."),
+            _("You've used today's inline answers. Try again after 00:00 UTC."),
             reply_markup=_start_personal_chat_markup(),
         )
         return
     if isinstance(outcome, InlineChatInvalid):
         await sender.edit_inline(
             chosen_result.inline_message_id,
-            _("This inline request is empty or too long. Shorten it and try again."),
+            _("That question is empty or too long. Shorten it and try again."),
             reply_markup=_retry_inline_markup(),
         )
         return
@@ -173,14 +171,14 @@ async def chosen_inline_result(
 
 def _inline_failure_text(reason: InlineChatFailureReason) -> str:
     if reason is InlineChatFailureReason.ALLOWANCE_UNAVAILABLE:
-        return _("I couldn't verify your inline allowance. Open Derp and try again.")
+        return _("I couldn't verify this request. Open Derp and try again.")
     if reason is InlineChatFailureReason.PROVIDER_TIMEOUT:
-        return _("The model took too long to answer. Try again later.")
+        return _("That took too long. Try again.")
     if reason is InlineChatFailureReason.PROVIDER_REJECTED:
-        return _("The model couldn't answer this request. Try a different question.")
+        return _("I couldn't answer that question. Try wording it differently.")
     if reason is InlineChatFailureReason.UNUSABLE_OUTPUT:
-        return _("The model returned no usable answer. Try a different question.")
-    return _("I couldn't answer this inline request right now. Try again later.")
+        return _("I couldn't produce a useful answer. Try wording it differently.")
+    return _("I couldn't answer that here. Try again.")
 
 
 def _add_to_chat_markup() -> InlineKeyboardMarkup:
