@@ -11,7 +11,7 @@ from derp.billing import (
     SubscriptionManagementService,
 )
 from derp.credits.gateway import CreditServiceGateway
-from derp.middlewares.commerce import CommerceMiddleware
+from derp.middlewares.commerce import CommerceDependency, CommerceMiddleware
 from derp.middlewares.credit_service import CreditServiceMiddleware
 from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
@@ -53,6 +53,17 @@ async def test_commerce_middleware_injects_without_opening_transaction(
     assert isinstance(data["subscription_management"], SubscriptionManagementService)
     mock_db_client.session.assert_not_called()
     handler.assert_awaited_once_with(event, data)
+
+
+def test_commerce_middleware_can_inject_one_boundary(mock_db_client) -> None:
+    middleware = CommerceMiddleware(mock_db_client)
+    data = {}
+
+    middleware.inject(data, frozenset({CommerceDependency.PAYMENT_SETTLEMENT}))
+
+    assert set(data) == {"payment_settlement"}
+    assert isinstance(data["payment_settlement"], PaymentSettlementService)
+    mock_db_client.session.assert_not_called()
 
 
 @pytest.mark.asyncio

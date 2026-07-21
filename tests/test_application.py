@@ -150,6 +150,7 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
             assert runtime.bot is bot
             assert runtime.db is database
             assert runtime.delivery_service._spend_reversal is runtime.operation_ledger
+            assert runtime.chat_turn_accounting._ledger is runtime.operation_ledger
             assert (
                 runtime.image_operation_coordinator._ledger is runtime.operation_ledger
             )

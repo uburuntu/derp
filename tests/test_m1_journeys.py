@@ -43,9 +43,11 @@ from derp.db import (
     list_approved_shared_facts,
     propose_shared_fact,
 )
+from derp.features.chat_accounting import ChatTurnAccounting
 from derp.handlers.context_settings import ContextAction, ContextCallback
 from derp.media import MediaReference
 from derp.models import Message as MessageModel
+from derp.operations import OperationLedger
 from derp.tools.policy import ActorRole
 
 pytestmark = pytest.mark.database
@@ -441,13 +443,15 @@ async def test_m1_dispatch_journey_matrix(
     media_gateway = _RecordingMediaGateway(
         payloads={"topic-11-photo": b"topic-11-image-bytes"}
     )
+    operation_ledger = OperationLedger(database.session)
     runtime = Runtime(
         bot=bot,
         db=database,
         media_gateway=media_gateway,
         actor_role_resolver=_RoleResolver(),
         artifact_store=MagicMock(),
-        operation_ledger=MagicMock(),
+        operation_ledger=operation_ledger,
+        chat_turn_accounting=ChatTurnAccounting(operation_ledger),
         delivery_service=MagicMock(),
         image_operation_coordinator=MagicMock(),
         deferred_tool_approval_service=MagicMock(),

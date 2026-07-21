@@ -16,11 +16,15 @@ class CreditServiceMiddleware(BaseMiddleware):
     def __init__(self, db: DatabaseManager) -> None:
         self._gateway = CreditServiceGateway(db.session)
 
+    def inject(self, data: dict[str, Any]) -> None:
+        """Inject the compatibility gateway without opening a transaction."""
+        data["credit_service"] = self._gateway
+
     async def __call__(
         self,
         handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        data["credit_service"] = self._gateway
+        self.inject(data)
         return await handler(event, data)

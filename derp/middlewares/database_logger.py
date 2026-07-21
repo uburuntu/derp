@@ -5,6 +5,7 @@ from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update
+from aiogram.types.update import UpdateTypeLookupError
 
 from derp.common.message_log import upsert_message_from_update
 from derp.common.tg import decompose_update
@@ -45,7 +46,10 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
         if not isinstance(event, Update):
             raise RuntimeError("Got an unexpected event type")
 
-        update_type = event.event_type
+        try:
+            update_type = event.event_type
+        except UpdateTypeLookupError:
+            return await handler(event, data)
 
         # Skip inline queries (no message context)
         if update_type == "inline_query":

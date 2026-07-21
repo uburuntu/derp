@@ -38,12 +38,8 @@ class DatabaseModelMiddleware(BaseMiddleware):
     def __init__(self, db: DatabaseManager):
         self.db = db
 
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
+    async def inject(self, data: dict[str, Any]) -> None:
+        """Load the models represented by aiogram's resolved event context."""
         user: User | None = data.get(EVENT_FROM_USER_KEY)
         chat: Chat | None = data.get(EVENT_CHAT_KEY)
 
@@ -67,5 +63,13 @@ class DatabaseModelMiddleware(BaseMiddleware):
                 user_id=user.id if user else None,
                 chat_id=chat.id if chat else None,
             )
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        await self.inject(data)
 
         return await handler(event, data)

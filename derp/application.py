@@ -28,12 +28,13 @@ from derp.billing import (
 from derp.config import Settings
 from derp.db import DatabaseManager, init_db_manager
 from derp.delivery import (
-    MAX_TELEGRAM_PHOTO_BYTES,
+    MAX_TELEGRAM_FILE_BYTES,
     DeliveryMaintenanceWorker,
     DeliveryService,
     ResendTokenCodec,
 )
 from derp.features import ImageFeatureService, ImageOperationCoordinator
+from derp.features.chat_accounting import ChatTurnAccounting
 from derp.handlers import (
     basic,
     chat,
@@ -55,12 +56,10 @@ from derp.llm.image_executor import PydanticAIImageExecutor
 from derp.media import MediaGateway, TelegramImageSourceLoader
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
 from derp.middlewares.api_resilient import ResilientRequestMiddleware
-from derp.middlewares.commerce import CommerceMiddleware
-from derp.middlewares.credit_service import CreditServiceMiddleware
 from derp.middlewares.database_logger import DatabaseLoggerMiddleware
-from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
+from derp.middlewares.route_dependencies import setup_route_dependencies
 from derp.middlewares.sender import MessageSenderMiddleware
 from derp.operations import (
     OperationLedger,
@@ -99,6 +98,7 @@ class Runtime:
     actor_role_resolver: ActorRoleResolver
     artifact_store: FilesystemArtifactStore
     operation_ledger: OperationLedger
+    chat_turn_accounting: ChatTurnAccounting
     delivery_service: DeliveryService
     image_operation_coordinator: ImageOperationCoordinator
     deferred_tool_approval_service: DeferredToolApprovalService
@@ -138,9 +138,10 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
         media_gateway = MediaGateway(media_client)
         artifact_store = FilesystemArtifactStore(
             settings.artifact_store_path,
-            max_item_bytes=MAX_TELEGRAM_PHOTO_BYTES,
+            max_item_bytes=MAX_TELEGRAM_FILE_BYTES,
         )
         operation_ledger = OperationLedger(db.session)
+        chat_turn_accounting = ChatTurnAccounting(operation_ledger)
         delivery_service = DeliveryService(
             db.session,
             artifact_store,
@@ -182,6 +183,7 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             actor_role_resolver=ActorRoleResolver(bot),
             artifact_store=artifact_store,
             operation_ledger=operation_ledger,
+            chat_turn_accounting=chat_turn_accounting,
             delivery_service=delivery_service,
             image_operation_coordinator=image_operation_coordinator,
             deferred_tool_approval_service=deferred_tool_approval_service,
@@ -201,6 +203,7 @@ def create_dispatcher(
         media_gateway=runtime.media_gateway,
         actor_role_resolver=runtime.actor_role_resolver,
         operation_ledger=runtime.operation_ledger,
+        chat_turn_accounting=runtime.chat_turn_accounting,
         delivery_service=runtime.delivery_service,
         image_operation_coordinator=runtime.image_operation_coordinator,
         deferred_tool_approval_service=runtime.deferred_tool_approval_service,
@@ -225,9 +228,7 @@ def create_dispatcher(
     )
 
     dispatcher.update.middleware(EventContextMiddleware(db=db))
-    dispatcher.update.middleware(DatabaseModelMiddleware(db=db))
-    dispatcher.update.middleware(CommerceMiddleware(db=db))
-    dispatcher.update.middleware(CreditServiceMiddleware(db=db))
+    setup_route_dependencies(dispatcher, db)
     dispatcher.message.middleware(MessageSenderMiddleware())
     dispatcher.callback_query.middleware(MessageSenderMiddleware())
     dispatcher.message.middleware(ChatActionMiddleware())
