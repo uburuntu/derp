@@ -16,8 +16,9 @@ async def test_runtime_heartbeat_refreshes_and_cleans_up(tmp_path) -> None:
 
     async with RuntimeHeartbeat(path, interval_seconds=0.01):
         first = float(path.read_text())
-        await asyncio.sleep(0.03)
-        second = float(path.read_text())
+        async with asyncio.timeout(1):
+            while (second := float(path.read_text())) <= first:
+                await asyncio.sleep(0.01)
 
         assert second > first
         assert heartbeat_is_fresh(path, now=second + 1)
