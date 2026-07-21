@@ -32,7 +32,8 @@ class Artifact(Base):
     __table_args__ = (
         CheckConstraint(
             "kind::text = ANY (ARRAY["
-            "'image'::text, 'video'::text, 'audio'::text, 'document'::text])",
+            "'image'::text, 'video'::text, 'audio'::text, 'voice'::text, "
+            "'document'::text])",
             name="artifact_kind_allowed",
         ),
         CheckConstraint(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import uuid
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
@@ -13,25 +14,38 @@ from typing import Protocol
 
 import logfire
 from aiogram import Bot
-from aiogram.types import BufferedInputFile, InputMediaPhoto, Message
+from aiogram.types import (
+    BufferedInputFile,
+    InputMediaAudio,
+    InputMediaDocument,
+    InputMediaPhoto,
+    InputMediaVideo,
+    Message,
+)
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.artifacts import (
+    ArtifactIntegrityError,
     ArtifactKey,
     ArtifactKind,
     ArtifactMetadata,
     ArtifactStore,
     ArtifactStoreError,
-    ArtifactTooLargeError,
+    StoredArtifact,
 )
 from derp.common.sanitize import sanitize_for_telegram
 from derp.delivery.tokens import ResendTokenCodec
 from derp.delivery.types import (
+    MAX_TELEGRAM_PHOTO_BYTES as MAX_TELEGRAM_PHOTO_BYTES,
+)
+from derp.delivery.types import (
     ArtifactCleanup,
     Delivered,
+    DeliveryBatchKind,
     DeliveryFailed,
     DeliveryInspection,
+    DeliveryMedia,
     DeliveryOutcome,
     DeliveryReconciliation,
     DeliveryState,
@@ -40,6 +54,8 @@ from derp.delivery.types import (
     ResendAuthorization,
     ResendCallbackAuthorization,
     ResendResult,
+    TelegramMediaKind,
+    classify_delivery_batch,
     classify_delivery_exception,
 )
 from derp.features import MediaContent
@@ -56,7 +72,9 @@ from derp.operations import OperationId, OperationState
 
 type TransactionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
-MAX_TELEGRAM_PHOTO_BYTES = 10 * 1024 * 1024
+_SAFE_FILENAME_PATTERN = re.compile(
+    r"^(?:image|video|audio|voice|document)_[1-9][0-9]*\.[a-z0-9]{1,8}$"
+)
 
 
 class SpendReversal(Protocol):
@@ -89,7 +107,7 @@ class ArtifactDescriptor:
     """Database metadata required to load and render one artifact."""
 
     key: ArtifactKey
-    kind: ArtifactKind
+    kind: TelegramMediaKind
     mime_type: str
     filename: str
     size_bytes: int
@@ -147,39 +165,32 @@ class DeliveryService:
         self,
         operation_id: OperationId,
         *,
-        media: tuple[MediaContent, ...],
+        media: tuple[MediaContent | DeliveryMedia, ...],
         target: DeliveryTarget,
         caption: str | None = None,
     ) -> PreparedDelivery:
         """Store provider output before capture without opening delivery yet."""
-        if not media:
-            raise ValueError("delivery result must contain media")
-        if any(item.family is not MediaFamily.IMAGE for item in media):
-            raise ValueError("the first delivery slice accepts image output only")
-        if oversized := next(
-            (item for item in media if len(item.data) > MAX_TELEGRAM_PHOTO_BYTES),
-            None,
-        ):
-            raise ArtifactTooLargeError(
-                size_bytes=len(oversized.data),
-                limit_bytes=MAX_TELEGRAM_PHOTO_BYTES,
-            )
+        delivery_media = tuple(self._coerce_media(item) for item in media)
+        classify_delivery_batch(tuple(item.kind for item in delivery_media))
         normalized_caption = caption.strip() if caption else None
         if caption is not None and not normalized_caption:
             raise ValueError("caption must not be blank")
 
         existing = await self._existing_preparation(
-            operation_id, target, normalized_caption
+            operation_id,
+            target,
+            normalized_caption,
+            delivery_media,
         )
         if existing is not None:
             return existing
 
         stored: list[ArtifactMetadata] = []
         try:
-            for item in media:
+            for item in delivery_media:
                 stored.append(
                     await self._artifact_store.put(
-                        kind=ArtifactKind.IMAGE,
+                        kind=item.artifact_kind,
                         mime_type=item.mime_type,
                         data=item.data,
                     )
@@ -204,20 +215,33 @@ class DeliveryService:
                     raise DeliveryStateError(
                         f"Cannot persist output for operation in {operation.state}"
                     )
-                for ordinal, metadata in enumerate(stored):
+                durable_metadata: list[dict[str, int | str]] = []
+                for ordinal, (item, metadata) in enumerate(
+                    zip(delivery_media, stored, strict=True)
+                ):
+                    filename = self._filename(item.kind, metadata.mime_type, ordinal)
                     session.add(
                         Artifact(
                             operation_id=operation.id,
                             ordinal=ordinal,
                             kind=metadata.kind.value,
                             mime_type=metadata.mime_type,
-                            filename=self._filename(metadata.mime_type, ordinal),
+                            filename=filename,
                             storage_key=metadata.key.value.hex,
                             size_bytes=metadata.size_bytes,
                             sha256=metadata.sha256,
                             expires_at=expires_at,
                             created_at=now,
                         )
+                    )
+                    durable_metadata.append(
+                        {
+                            "kind": item.kind.value,
+                            "mime_type": metadata.mime_type,
+                            "filename": filename,
+                            "size_bytes": metadata.size_bytes,
+                            "sha256": metadata.sha256,
+                        }
                     )
                 session.add(
                     DeliveryIntent(
@@ -238,6 +262,7 @@ class DeliveryService:
                 operation.result_metadata = {
                     **operation.result_metadata,
                     "artifact_count": len(stored),
+                    "delivery_artifacts": durable_metadata,
                 }
             return PreparedDelivery(
                 operation_id,
@@ -585,15 +610,15 @@ class DeliveryService:
             try:
                 loaded_artifacts = []
                 for descriptor in started.artifacts:
-                    loaded_artifacts.append(
-                        await self._artifact_store.read(descriptor.key)
-                    )
+                    artifact = await self._artifact_store.read(descriptor.key)
+                    self._verify_artifact(descriptor, artifact)
+                    loaded_artifacts.append(artifact)
                 artifacts = tuple(loaded_artifacts)
             except ArtifactStoreError as exc:
                 outcome: DeliveryOutcome = DeliveryFailed(type(exc).__name__, False)
             else:
                 try:
-                    messages = await self._send_images(started, artifacts)
+                    messages = await self._send_media(started, artifacts)
                     outcome = Delivered(
                         tuple(message.message_id for message in messages)
                     )
@@ -878,6 +903,7 @@ class DeliveryService:
         operation_id: OperationId,
         target: DeliveryTarget,
         caption: str | None,
+        media: tuple[DeliveryMedia, ...],
     ) -> PreparedDelivery | None:
         async with self._transactions() as session:
             intent = await session.scalar(
@@ -890,22 +916,43 @@ class DeliveryService:
             stored_target = self._target(intent)
             if stored_target != target or intent.caption != caption:
                 raise DeliveryStateError("Conflicting delivery target for operation")
-            count = int(
-                await session.scalar(
-                    select(func.count(Artifact.id)).where(
-                        Artifact.operation_id == operation_id.value
-                    )
+            rows = tuple(
+                await session.scalars(
+                    select(Artifact)
+                    .where(Artifact.operation_id == operation_id.value)
+                    .order_by(Artifact.ordinal)
                 )
-                or 0
             )
-            if count == 0:
+            if not rows:
                 raise DeliveryStateError("Delivery intent has no artifacts")
+            expected = tuple(
+                (
+                    item.artifact_kind.value,
+                    item.mime_type,
+                    self._filename(item.kind, item.mime_type, ordinal),
+                    len(item.data),
+                    hashlib.sha256(item.data).hexdigest(),
+                )
+                for ordinal, item in enumerate(media)
+            )
+            actual = tuple(
+                (
+                    row.kind,
+                    row.mime_type,
+                    row.filename,
+                    row.size_bytes,
+                    row.sha256,
+                )
+                for row in rows
+            )
+            if actual != expected:
+                raise DeliveryStateError("Conflicting delivery result for operation")
             resend_token = self._token_codec.issue(intent.id)
             return PreparedDelivery(
                 operation_id,
                 intent.id,
                 resend_token,
-                count,
+                len(rows),
                 idempotent=True,
             )
 
@@ -928,7 +975,14 @@ class DeliveryService:
             raise DeliveryStateError(f"Unknown delivery for {operation_id}")
         return operation, intent
 
-    async def _send_images(self, attempt, artifacts) -> tuple[Message, ...]:
+    async def _send_media(
+        self,
+        attempt: DeliveryAttempt,
+        artifacts: tuple[StoredArtifact, ...],
+    ) -> tuple[Message, ...]:
+        batch_kind = classify_delivery_batch(
+            tuple(descriptor.kind for descriptor in attempt.artifacts)
+        )
         caption = sanitize_for_telegram(attempt.caption) if attempt.caption else None
         common = {
             "chat_id": attempt.target.chat_id,
@@ -936,32 +990,70 @@ class DeliveryService:
             "business_connection_id": attempt.target.business_connection_id,
             "reply_to_message_id": attempt.target.reply_to_message_id,
         }
-        if len(artifacts) == 1:
-            artifact = artifacts[0]
-            message = await self._bot.send_photo(
-                **common,
-                photo=BufferedInputFile(
-                    artifact.data,
-                    filename=attempt.artifacts[0].filename,
-                ),
-                caption=caption,
-                parse_mode="HTML" if caption else None,
+        if batch_kind is DeliveryBatchKind.SINGLE:
+            descriptor = attempt.artifacts[0]
+            media_file = BufferedInputFile(
+                artifacts[0].data,
+                filename=descriptor.filename,
             )
+            presentation = descriptor.kind
+            send_arguments = {
+                **common,
+                "caption": caption,
+                "parse_mode": "HTML" if caption else None,
+            }
+            if presentation is TelegramMediaKind.PHOTO:
+                message = await self._bot.send_photo(
+                    **send_arguments,
+                    photo=media_file,
+                )
+            elif presentation is TelegramMediaKind.VIDEO:
+                message = await self._bot.send_video(
+                    **send_arguments,
+                    video=media_file,
+                )
+            elif presentation is TelegramMediaKind.AUDIO:
+                message = await self._bot.send_audio(
+                    **send_arguments,
+                    audio=media_file,
+                )
+            elif presentation is TelegramMediaKind.VOICE:
+                message = await self._bot.send_voice(
+                    **send_arguments,
+                    voice=media_file,
+                )
+            else:
+                message = await self._bot.send_document(
+                    **send_arguments,
+                    document=media_file,
+                    disable_content_type_detection=True,
+                )
             return (message,)
 
-        media = [
-            InputMediaPhoto(
-                media=BufferedInputFile(
+        media = []
+        for index, (descriptor, artifact) in enumerate(
+            zip(attempt.artifacts, artifacts, strict=True)
+        ):
+            item_arguments = {
+                "media": BufferedInputFile(
                     artifact.data,
                     filename=descriptor.filename,
                 ),
-                caption=caption if index == 0 else None,
-                parse_mode="HTML" if index == 0 and caption else None,
-            )
-            for index, (descriptor, artifact) in enumerate(
-                zip(attempt.artifacts, artifacts, strict=True)
-            )
-        ]
+                "caption": caption if index == 0 else None,
+                "parse_mode": "HTML" if index == 0 and caption else None,
+            }
+            if descriptor.kind is TelegramMediaKind.PHOTO:
+                item = InputMediaPhoto(**item_arguments)
+            elif descriptor.kind is TelegramMediaKind.VIDEO:
+                item = InputMediaVideo(**item_arguments)
+            elif descriptor.kind is TelegramMediaKind.AUDIO:
+                item = InputMediaAudio(**item_arguments)
+            else:
+                item = InputMediaDocument(
+                    **item_arguments,
+                    disable_content_type_detection=True,
+                )
+            media.append(item)
         messages = await self._bot.send_media_group(**common, media=media)
         return tuple(messages)
 
@@ -1006,9 +1098,10 @@ class DeliveryService:
 
     @staticmethod
     def _artifact_descriptor(row: Artifact) -> ArtifactDescriptor:
+        artifact_kind = ArtifactKind(row.kind)
         return ArtifactDescriptor(
             key=ArtifactKey(uuid.UUID(row.storage_key)),
-            kind=ArtifactKind(row.kind),
+            kind=TelegramMediaKind.from_artifact_kind(artifact_kind),
             mime_type=row.mime_type,
             filename=row.filename,
             size_bytes=row.size_bytes,
@@ -1033,10 +1126,58 @@ class DeliveryService:
             raise ValueError("limit must be between 1 and 1000")
 
     @staticmethod
-    def _filename(mime_type: str, ordinal: int) -> str:
+    def _filename(
+        kind: TelegramMediaKind,
+        mime_type: str,
+        ordinal: int,
+    ) -> str:
         extension = {
             "image/jpeg": "jpg",
             "image/png": "png",
             "image/webp": "webp",
+            "video/mp4": "mp4",
+            "audio/mpeg": "mp3",
+            "audio/mp3": "mp3",
+            "audio/mp4": "m4a",
+            "audio/m4a": "m4a",
+            "audio/x-m4a": "m4a",
+            "audio/ogg": "ogg",
+            "application/json": "json",
+            "application/pdf": "pdf",
+            "application/zip": "zip",
         }.get(mime_type, "bin")
-        return f"image_{ordinal + 1}.{extension}"
+        return f"{kind.artifact_kind.value}_{ordinal + 1}.{extension}"
+
+    @staticmethod
+    def _coerce_media(item: MediaContent | DeliveryMedia) -> DeliveryMedia:
+        if isinstance(item, DeliveryMedia):
+            return item
+        if not isinstance(item, MediaContent):
+            raise TypeError("delivery media must be MediaContent or DeliveryMedia")
+        kind = {
+            MediaFamily.IMAGE: TelegramMediaKind.PHOTO,
+            MediaFamily.VIDEO: TelegramMediaKind.VIDEO,
+            MediaFamily.AUDIO: TelegramMediaKind.AUDIO,
+            MediaFamily.DOCUMENT: TelegramMediaKind.DOCUMENT,
+        }[item.family]
+        return DeliveryMedia(kind, item.mime_type, item.data)
+
+    @staticmethod
+    def _verify_artifact(
+        descriptor: ArtifactDescriptor,
+        artifact: StoredArtifact,
+    ) -> None:
+        metadata = artifact.metadata
+        if (
+            metadata.key != descriptor.key
+            or metadata.kind is not descriptor.kind.artifact_kind
+            or metadata.mime_type != descriptor.mime_type
+            or metadata.size_bytes != descriptor.size_bytes
+            or metadata.sha256 != descriptor.sha256
+            or not descriptor.kind.accepts_mime_type(descriptor.mime_type)
+            or descriptor.size_bytes > descriptor.kind.max_size_bytes
+            or not _SAFE_FILENAME_PATTERN.fullmatch(descriptor.filename)
+        ):
+            raise ArtifactIntegrityError(
+                "Stored artifact metadata does not match durable delivery metadata"
+            )

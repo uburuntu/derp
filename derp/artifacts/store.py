@@ -29,6 +29,7 @@ _MAGIC: Final = b"DERP-ARTIFACT\x00\x01"
 _HEADER_LENGTH: Final = struct.Struct(">I")
 _MAX_HEADER_BYTES: Final = 4096
 _FILE_SUFFIX: Final = ".artifact"
+DEFAULT_MAX_ITEM_BYTES: Final = 50 * 1024 * 1024
 
 
 class ArtifactStore(Protocol):
@@ -60,7 +61,7 @@ class FilesystemArtifactStore:
         self,
         root: str | Path,
         *,
-        max_item_bytes: int = 50_000_000,
+        max_item_bytes: int = DEFAULT_MAX_ITEM_BYTES,
     ) -> None:
         if max_item_bytes <= 0:
             raise ValueError("max_item_bytes must be positive")
@@ -285,4 +286,8 @@ class FilesystemArtifactStore:
             os.close(descriptor)
 
 
-__all__ = ["ArtifactStore", "FilesystemArtifactStore"]
+__all__ = [
+    "DEFAULT_MAX_ITEM_BYTES",
+    "ArtifactStore",
+    "FilesystemArtifactStore",
+]

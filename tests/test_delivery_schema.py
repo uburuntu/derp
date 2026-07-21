@@ -157,6 +157,28 @@ async def test_artifact_metadata_is_database_immutable(
         await db_session.flush()
 
 
+async def test_voice_is_a_first_class_durable_artifact_kind(
+    db_session, user_factory, chat_factory
+) -> None:
+    operation = await _operation(db_session, user_factory, chat_factory)
+    artifact = Artifact(
+        operation_id=operation.id,
+        ordinal=0,
+        kind="voice",
+        mime_type="audio/ogg",
+        filename="voice_1.ogg",
+        storage_key=uuid4().hex,
+        size_bytes=5,
+        sha256="0" * 64,
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    db_session.add(artifact)
+
+    await db_session.flush()
+
+    assert artifact.kind == "voice"
+
+
 async def test_terminal_delivery_allows_one_way_caption_scrub(
     db_session, user_factory, chat_factory
 ) -> None:

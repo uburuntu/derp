@@ -1,6 +1,10 @@
 """Private short-lived artifact storage."""
 
-from derp.artifacts.store import ArtifactStore, FilesystemArtifactStore
+from derp.artifacts.store import (
+    DEFAULT_MAX_ITEM_BYTES,
+    ArtifactStore,
+    FilesystemArtifactStore,
+)
 from derp.artifacts.types import (
     ArtifactIntegrityError,
     ArtifactKey,
@@ -22,6 +26,7 @@ __all__ = [
     "ArtifactStoreError",
     "ArtifactStore",
     "ArtifactTooLargeError",
+    "DEFAULT_MAX_ITEM_BYTES",
     "FilesystemArtifactStore",
     "InvalidArtifactKeyError",
     "StoredArtifact",

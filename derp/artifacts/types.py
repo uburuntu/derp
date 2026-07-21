@@ -20,14 +20,13 @@ class ArtifactKind(StrEnum):
     VOICE = "voice"
     DOCUMENT = "document"
 
-    @property
-    def mime_prefix(self) -> str:
-        """Return the MIME top-level type allowed for this artifact kind."""
-        if self in {ArtifactKind.AUDIO, ArtifactKind.VOICE}:
-            return "audio/"
+    def accepts_mime_type(self, mime_type: str) -> bool:
+        """Return whether a MIME type can be stored under this kind."""
         if self is ArtifactKind.DOCUMENT:
-            return "application/"
-        return f"{self.value}/"
+            return True
+        if self in {ArtifactKind.AUDIO, ArtifactKind.VOICE}:
+            return mime_type.startswith("audio/")
+        return mime_type.startswith(f"{self.value}/")
 
 
 class ArtifactStoreError(RuntimeError):
@@ -105,7 +104,7 @@ class ArtifactMetadata:
         if not isinstance(self.kind, ArtifactKind):
             raise TypeError("artifact metadata kind must be an ArtifactKind")
         mime_type = normalize_mime_type(self.mime_type)
-        if not mime_type.startswith(self.kind.mime_prefix):
+        if not self.kind.accepts_mime_type(mime_type):
             raise ValueError("artifact MIME type must match its kind")
         if isinstance(self.size_bytes, bool) or not isinstance(self.size_bytes, int):
             raise TypeError("artifact size must be an integer")

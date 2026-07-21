@@ -14,7 +14,125 @@ from aiogram.exceptions import (
     TelegramServerError,
 )
 
+from derp.artifacts import ArtifactKind, ArtifactTooLargeError
+from derp.media.types import normalize_mime_type
 from derp.operations.types import DeliveryState, OperationId
+
+MAX_TELEGRAM_PHOTO_BYTES = 10 * 1024 * 1024
+MAX_TELEGRAM_FILE_BYTES = 50 * 1024 * 1024
+MAX_TELEGRAM_ALBUM_ITEMS = 10
+
+_PHOTO_MIME_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
+_VIDEO_MIME_TYPES = frozenset({"video/mp4"})
+_AUDIO_MIME_TYPES = frozenset(
+    {"audio/m4a", "audio/mp3", "audio/mp4", "audio/mpeg", "audio/x-m4a"}
+)
+_VOICE_MIME_TYPES = _AUDIO_MIME_TYPES | {"audio/ogg"}
+
+
+class TelegramMediaKind(StrEnum):
+    """How Telegram must present one persisted artifact."""
+
+    PHOTO = "photo"
+    VIDEO = "video"
+    AUDIO = "audio"
+    VOICE = "voice"
+    DOCUMENT = "document"
+
+    @property
+    def artifact_kind(self) -> ArtifactKind:
+        """Return the storage kind persisted with this presentation."""
+        if self is TelegramMediaKind.PHOTO:
+            return ArtifactKind.IMAGE
+        return ArtifactKind(self.value)
+
+    @property
+    def max_size_bytes(self) -> int:
+        """Return Telegram's upload limit for this presentation."""
+        if self is TelegramMediaKind.PHOTO:
+            return MAX_TELEGRAM_PHOTO_BYTES
+        return MAX_TELEGRAM_FILE_BYTES
+
+    def accepts_mime_type(self, mime_type: str) -> bool:
+        """Return whether Telegram documents this MIME for this presentation."""
+        if self is TelegramMediaKind.PHOTO:
+            return mime_type in _PHOTO_MIME_TYPES
+        if self is TelegramMediaKind.VIDEO:
+            return mime_type in _VIDEO_MIME_TYPES
+        if self is TelegramMediaKind.AUDIO:
+            return mime_type in _AUDIO_MIME_TYPES
+        if self is TelegramMediaKind.VOICE:
+            return mime_type in _VOICE_MIME_TYPES
+        return True
+
+    @classmethod
+    def from_artifact_kind(cls, kind: ArtifactKind) -> TelegramMediaKind:
+        """Recover Telegram presentation from durable artifact metadata."""
+        if kind is ArtifactKind.IMAGE:
+            return cls.PHOTO
+        return cls(kind.value)
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryMedia:
+    """Provider-neutral bytes plus their intended Telegram presentation."""
+
+    kind: TelegramMediaKind
+    mime_type: str
+    data: bytes
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, TelegramMediaKind):
+            raise TypeError("delivery media kind must be a TelegramMediaKind")
+        if not isinstance(self.data, bytes):
+            raise TypeError("delivery media data must be immutable bytes")
+        if not self.data:
+            raise ValueError("delivery media data must not be empty")
+        mime_type = normalize_mime_type(self.mime_type)
+        if not self.kind.accepts_mime_type(mime_type):
+            raise ValueError("delivery media MIME type does not match its presentation")
+        if len(self.data) > self.kind.max_size_bytes:
+            raise ArtifactTooLargeError(
+                size_bytes=len(self.data),
+                limit_bytes=self.kind.max_size_bytes,
+            )
+        object.__setattr__(self, "mime_type", mime_type)
+
+    @property
+    def artifact_kind(self) -> ArtifactKind:
+        """Return the durable storage kind for this item."""
+        return self.kind.artifact_kind
+
+
+class DeliveryBatchKind(StrEnum):
+    """The single Bot API request shape for one delivery attempt."""
+
+    SINGLE = "single"
+    VISUAL_ALBUM = "visual_album"
+    AUDIO_ALBUM = "audio_album"
+    DOCUMENT_ALBUM = "document_album"
+
+
+def classify_delivery_batch(
+    kinds: tuple[TelegramMediaKind, ...],
+) -> DeliveryBatchKind:
+    """Validate a delivery and select its one-call Telegram request shape."""
+    if not kinds:
+        raise ValueError("delivery result must contain media")
+    if len(kinds) == 1:
+        return DeliveryBatchKind.SINGLE
+    if len(kinds) > MAX_TELEGRAM_ALBUM_ITEMS:
+        raise ValueError(
+            f"Telegram albums support at most {MAX_TELEGRAM_ALBUM_ITEMS} items"
+        )
+    unique_kinds = frozenset(kinds)
+    if unique_kinds <= {TelegramMediaKind.PHOTO, TelegramMediaKind.VIDEO}:
+        return DeliveryBatchKind.VISUAL_ALBUM
+    if unique_kinds == {TelegramMediaKind.AUDIO}:
+        return DeliveryBatchKind.AUDIO_ALBUM
+    if unique_kinds == {TelegramMediaKind.DOCUMENT}:
+        return DeliveryBatchKind.DOCUMENT_ALBUM
+    raise ValueError("delivery media cannot be sent in one Telegram album")
 
 
 @dataclass(frozen=True, slots=True)

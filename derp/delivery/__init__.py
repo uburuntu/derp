@@ -24,10 +24,14 @@ from derp.delivery.service import (
 from derp.delivery.telegram import DeliveryResendCallback
 from derp.delivery.tokens import ResendTokenCodec
 from derp.delivery.types import (
+    MAX_TELEGRAM_ALBUM_ITEMS,
+    MAX_TELEGRAM_FILE_BYTES,
     ArtifactCleanup,
     Delivered,
+    DeliveryBatchKind,
     DeliveryFailed,
     DeliveryInspection,
+    DeliveryMedia,
     DeliveryOutcome,
     DeliveryReconciliation,
     DeliveryState,
@@ -37,6 +41,8 @@ from derp.delivery.types import (
     ResendAuthorization,
     ResendCallbackAuthorization,
     ResendResult,
+    TelegramMediaKind,
+    classify_delivery_batch,
     classify_delivery_exception,
 )
 
@@ -44,10 +50,12 @@ __all__ = [
     "Delivered",
     "ArtifactCleanup",
     "DeliveryFailed",
+    "DeliveryBatchKind",
     "DeliveryMaintenanceBackend",
     "DeliveryMaintenanceReport",
     "DeliveryMaintenanceWorker",
     "DeliveryInspection",
+    "DeliveryMedia",
     "DeliveryOutcome",
     "DeliveryReconciliation",
     "DeliveryResendCallback",
@@ -60,6 +68,8 @@ __all__ = [
     "DeliveryService",
     "DeliveryStateError",
     "MAX_TELEGRAM_PHOTO_BYTES",
+    "MAX_TELEGRAM_ALBUM_ITEMS",
+    "MAX_TELEGRAM_FILE_BYTES",
     "DEFAULT_DELIVERY_MAINTENANCE_INTERVAL",
     "DEFAULT_DELIVERY_STALE_AFTER",
     "MAX_DELIVERY_MAINTENANCE_BATCH_SIZE",
@@ -73,5 +83,7 @@ __all__ = [
     "ResendCallbackAuthorization",
     "ResendResult",
     "ResendTokenCodec",
+    "TelegramMediaKind",
+    "classify_delivery_batch",
     "classify_delivery_exception",
 ]

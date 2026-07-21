@@ -15,7 +15,13 @@ import pytest
 import pytest_asyncio
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import Message
+from aiogram.types import (
+    InputMediaAudio,
+    InputMediaDocument,
+    InputMediaPhoto,
+    InputMediaVideo,
+    Message,
+)
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -26,6 +32,7 @@ from derp.delivery import (
     DeliveryAuthorizationError,
     DeliveryFailed,
     DeliveryMaintenanceWorker,
+    DeliveryMedia,
     DeliveryService,
     DeliveryState,
     DeliveryStateError,
@@ -36,10 +43,18 @@ from derp.delivery import (
     ResendCallbackAuthorization,
     ResendResult,
     ResendTokenCodec,
+    TelegramMediaKind,
 )
 from derp.features import MediaContent
 from derp.media import MediaFamily
-from derp.models import Chat, DeliveryIntent, OperationQuote, PaidOperation, User
+from derp.models import (
+    Artifact,
+    Chat,
+    DeliveryIntent,
+    OperationQuote,
+    PaidOperation,
+    User,
+)
 from derp.operations import OperationId
 
 pytestmark = pytest.mark.database
@@ -74,8 +89,12 @@ async def delivery_env(
             yield session
 
     bot = MagicMock(spec=Bot)
+    bot.send_audio = AsyncMock()
+    bot.send_document = AsyncMock()
     bot.send_photo = AsyncMock()
     bot.send_media_group = AsyncMock()
+    bot.send_video = AsyncMock()
+    bot.send_voice = AsyncMock()
     reversal = MagicMock()
     reversal.reverse = AsyncMock()
     clock = MutableClock(datetime.now(UTC))
@@ -170,6 +189,30 @@ async def _prepare_and_capture(
     return prepared
 
 
+async def _prepare_custom_and_capture(
+    env: DeliveryEnvironment,
+    operation_id: OperationId,
+    *,
+    media: tuple[MediaContent | DeliveryMedia, ...],
+    target: DeliveryTarget | None = None,
+    caption: str | None = "Result",
+) -> PreparedDelivery:
+    target = target or DeliveryTarget(-1001, 77, 42, "business-1")
+    prepared = await env.service.persist_result(
+        operation_id,
+        media=media,
+        target=target,
+        caption=caption,
+    )
+    async with env.transactions() as session:
+        operation = await session.get(PaidOperation, operation_id.value)
+        assert operation is not None
+        operation.state = "captured"
+        operation.captured_at = env.clock()
+    await env.service.mark_ready(operation_id)
+    return prepared
+
+
 async def _requester_telegram_id(
     env: DeliveryEnvironment,
     operation_id: OperationId,
@@ -194,8 +237,18 @@ def _message(message_id: int) -> MagicMock:
 async def _clear_delivery_operations(env: DeliveryEnvironment) -> None:
     """Remove committed rows left by this module's independent service sessions."""
     async with env.transactions() as session:
-        await session.execute(delete(DeliveryIntent))
-        await session.execute(delete(PaidOperation))
+        operation_ids = select(OperationQuote.operation_id).where(
+            OperationQuote.request_key.like("delivery-service:%")
+        )
+        await session.execute(
+            delete(Artifact).where(Artifact.operation_id.in_(operation_ids))
+        )
+        await session.execute(
+            delete(DeliveryIntent).where(DeliveryIntent.operation_id.in_(operation_ids))
+        )
+        await session.execute(
+            delete(PaidOperation).where(PaidOperation.id.in_(operation_ids))
+        )
 
 
 async def test_delivery_acknowledgement_is_persisted_and_retry_is_idempotent(
@@ -230,6 +283,243 @@ async def test_delivery_acknowledgement_is_persisted_and_retry_is_idempotent(
             )
         )
         assert intent is not None and intent.caption is None
+
+
+@pytest.mark.parametrize(
+    (
+        "kind",
+        "mime_type",
+        "method_name",
+        "method_argument",
+        "stored_kind",
+        "filename",
+    ),
+    [
+        (
+            TelegramMediaKind.PHOTO,
+            "image/png",
+            "send_photo",
+            "photo",
+            "image",
+            "image_1.png",
+        ),
+        (
+            TelegramMediaKind.VIDEO,
+            "video/mp4",
+            "send_video",
+            "video",
+            "video",
+            "video_1.mp4",
+        ),
+        (
+            TelegramMediaKind.AUDIO,
+            "audio/mpeg",
+            "send_audio",
+            "audio",
+            "audio",
+            "audio_1.mp3",
+        ),
+        (
+            TelegramMediaKind.VOICE,
+            "audio/ogg",
+            "send_voice",
+            "voice",
+            "voice",
+            "voice_1.ogg",
+        ),
+        (
+            TelegramMediaKind.DOCUMENT,
+            "application/pdf",
+            "send_document",
+            "document",
+            "document",
+            "document_1.pdf",
+        ),
+    ],
+)
+async def test_each_persisted_media_kind_uses_its_telegram_presentation(
+    delivery_env: DeliveryEnvironment,
+    kind: TelegramMediaKind,
+    mime_type: str,
+    method_name: str,
+    method_argument: str,
+    stored_kind: str,
+    filename: str,
+) -> None:
+    operation_id = await _operation(delivery_env)
+    media = DeliveryMedia(kind, mime_type, b"generated-media")
+    await _prepare_custom_and_capture(
+        delivery_env,
+        operation_id,
+        media=(media,),
+    )
+    async with delivery_env.transactions() as session:
+        artifact = await session.scalar(
+            select(Artifact).where(Artifact.operation_id == operation_id.value)
+        )
+        operation = await session.get(PaidOperation, operation_id.value)
+        assert artifact is not None and operation is not None
+        assert artifact.kind == stored_kind
+        assert artifact.mime_type == mime_type
+        assert artifact.filename == filename
+        assert operation.result_metadata["delivery_artifacts"] == [
+            {
+                "kind": kind.value,
+                "mime_type": mime_type,
+                "filename": filename,
+                "size_bytes": len(media.data),
+                "sha256": artifact.sha256,
+            }
+        ]
+    send = getattr(delivery_env.bot, method_name)
+    send.return_value = _message(120)
+
+    assert await delivery_env.service.deliver(operation_id) == Delivered((120,))
+
+    send.assert_awaited_once()
+    call = send.await_args.kwargs
+    assert call["chat_id"] == -1001
+    assert call["message_thread_id"] == 77
+    assert call["reply_to_message_id"] == 42
+    assert call["business_connection_id"] == "business-1"
+    assert call[method_argument].filename == filename
+    assert call["caption"] == "Result"
+    assert call["parse_mode"] == "HTML"
+    if kind is TelegramMediaKind.DOCUMENT:
+        assert call["disable_content_type_detection"] is True
+
+
+@pytest.mark.parametrize(
+    ("media", "expected_types"),
+    [
+        (
+            (
+                DeliveryMedia(TelegramMediaKind.PHOTO, "image/png", b"photo"),
+                DeliveryMedia(TelegramMediaKind.VIDEO, "video/mp4", b"video"),
+            ),
+            (InputMediaPhoto, InputMediaVideo),
+        ),
+        (
+            (
+                DeliveryMedia(TelegramMediaKind.AUDIO, "audio/mpeg", b"one"),
+                DeliveryMedia(TelegramMediaKind.AUDIO, "audio/mp4", b"two"),
+            ),
+            (InputMediaAudio, InputMediaAudio),
+        ),
+        (
+            (
+                DeliveryMedia(
+                    TelegramMediaKind.DOCUMENT,
+                    "application/pdf",
+                    b"one",
+                ),
+                DeliveryMedia(
+                    TelegramMediaKind.DOCUMENT,
+                    "text/plain",
+                    b"two",
+                ),
+            ),
+            (InputMediaDocument, InputMediaDocument),
+        ),
+    ],
+)
+async def test_supported_albums_use_one_atomic_media_group_request(
+    delivery_env: DeliveryEnvironment,
+    media: tuple[DeliveryMedia, ...],
+    expected_types: tuple[type, ...],
+) -> None:
+    operation_id = await _operation(delivery_env)
+    await _prepare_custom_and_capture(delivery_env, operation_id, media=media)
+    delivery_env.bot.send_media_group.return_value = [_message(130), _message(131)]
+
+    outcome = await delivery_env.service.deliver(operation_id)
+
+    assert outcome == Delivered((130, 131))
+    delivery_env.bot.send_media_group.assert_awaited_once()
+    call = delivery_env.bot.send_media_group.await_args.kwargs
+    assert tuple(type(item) for item in call["media"]) == expected_types
+    assert call["media"][0].caption == "Result"
+    assert call["media"][0].parse_mode == "HTML"
+    assert call["media"][1].caption is None
+    assert call["chat_id"] == -1001
+    assert call["message_thread_id"] == 77
+    assert call["reply_to_message_id"] == 42
+    assert call["business_connection_id"] == "business-1"
+    delivery_env.bot.send_photo.assert_not_awaited()
+    delivery_env.bot.send_video.assert_not_awaited()
+    delivery_env.bot.send_audio.assert_not_awaited()
+    delivery_env.bot.send_document.assert_not_awaited()
+
+
+async def test_unsupported_multi_voice_is_rejected_before_persistence(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    operation_id = await _operation(delivery_env)
+    voice = DeliveryMedia(TelegramMediaKind.VOICE, "audio/ogg", b"voice")
+
+    with pytest.raises(ValueError, match="one Telegram album"):
+        await delivery_env.service.persist_result(
+            operation_id,
+            media=(voice, voice),
+            target=DeliveryTarget(-1001, 77, 42),
+        )
+
+    with pytest.raises(DeliveryStateError, match="Unknown delivery"):
+        await delivery_env.service.inspect(operation_id)
+
+
+async def test_idempotent_preparation_rejects_conflicting_durable_media(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    operation_id = await _operation(delivery_env)
+    target = DeliveryTarget(-1001, 77, 42)
+    await delivery_env.service.persist_result(
+        operation_id,
+        media=(DeliveryMedia(TelegramMediaKind.PHOTO, "image/png", b"first"),),
+        target=target,
+    )
+
+    with pytest.raises(DeliveryStateError, match="Conflicting delivery result"):
+        await delivery_env.service.persist_result(
+            operation_id,
+            media=(DeliveryMedia(TelegramMediaKind.VIDEO, "video/mp4", b"second"),),
+            target=target,
+        )
+
+
+async def test_video_timeout_requires_authenticated_resend_without_blind_retry(
+    delivery_env: DeliveryEnvironment,
+) -> None:
+    operation_id = await _operation(delivery_env)
+    target = DeliveryTarget(-1001, 77, 42, "business-1")
+    prepared = await _prepare_custom_and_capture(
+        delivery_env,
+        operation_id,
+        media=(DeliveryMedia(TelegramMediaKind.VIDEO, "video/mp4", b"video"),),
+        target=target,
+    )
+    delivery_env.bot.send_video.side_effect = [TimeoutError(), _message(140)]
+    actor_user_id = await _requester_telegram_id(delivery_env, operation_id)
+
+    assert isinstance(
+        await delivery_env.service.deliver(operation_id),
+        DeliveryUncertain,
+    )
+    assert await delivery_env.service.deliver(operation_id) == DeliveryUncertain(
+        "authenticated_resend_required"
+    )
+    result = await delivery_env.service.resend_from_callback(
+        ResendCallbackAuthorization(
+            prepared.resend_token,
+            actor_user_id,
+            chat_id=-1001,
+            thread_id=77,
+        )
+    )
+
+    assert result == ResendResult(operation_id, target, Delivered((140,)))
+    assert delivery_env.bot.send_video.await_count == 2
+    delivery_env.reversal.reverse.assert_not_awaited()
 
 
 async def test_timeout_requires_authenticated_resend_and_never_charges_again(
