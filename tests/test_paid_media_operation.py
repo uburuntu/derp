@@ -685,6 +685,38 @@ async def test_unusable_provider_media_is_released_before_persistence(
 
 
 @pytest.mark.asyncio
+async def test_single_output_quote_rejects_a_multi_video_result(
+    env: Environment,
+) -> None:
+    env.executor.return_value = Succeeded(
+        PaidMediaResult(
+            (
+                DeliveryMedia(TelegramMediaKind.VIDEO, "video/mp4", b"one"),
+                DeliveryMedia(TelegramMediaKind.VIDEO, "video/mp4", b"two"),
+            )
+        )
+    )
+
+    outcome = await env.coordinator.run(
+        env.invocation,
+        VIDEO_PLAN,
+        VIDEO_QUOTE_INPUT,
+        object(),
+        env.executor,
+    )
+
+    assert outcome == PaidMediaNotCharged(
+        OPERATION_ID,
+        PaidMediaNotChargedReason.UNUSABLE_OUTPUT,
+    )
+    env.ledger.release.assert_awaited_once_with(
+        OPERATION_ID,
+        reason="video_generate_unusable_output",
+    )
+    env.delivery.persist_result.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_artifact_storage_failure_releases_without_capture(
     env: Environment,
 ) -> None:

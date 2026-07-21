@@ -669,6 +669,8 @@ class PaidMediaOperationCoordinator:
 
     @staticmethod
     def _usable_result(feature: Feature, result: PaidMediaResult) -> bool:
+        if len(result.media) != 1:
+            return False
         expected_kinds = (
             {TelegramMediaKind.AUDIO, TelegramMediaKind.VOICE}
             if feature is Feature.TTS
