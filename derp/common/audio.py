@@ -6,6 +6,7 @@ Provides async audio format conversion for TTS voice messages.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 
 import logfire
 
@@ -35,33 +36,38 @@ async def convert_to_ogg_opus(
     Raises:
         AudioConversionError: If ffmpeg fails or is not available.
     """
-    # Build ffmpeg command
-    # -i pipe:0  = read from stdin
-    # -f ogg     = output format
-    # -c:a libopus = Opus codec
-    # pipe:1     = write to stdout
+    if not isinstance(audio_bytes, bytes):
+        raise TypeError("audio_bytes must be immutable bytes")
+    if not audio_bytes:
+        raise AudioConversionError("audio input must not be empty")
+    if input_format not in {"s16le", "wav"}:
+        raise ValueError("input_format must be s16le or wav")
+    if isinstance(channels, bool) or not isinstance(channels, int) or channels <= 0:
+        raise ValueError("channels must be a positive integer")
+
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
 
-    # Input format options
     if input_format == "s16le":
-        # Raw PCM needs explicit format specification
-        if sample_rate is None:
+        if (
+            isinstance(sample_rate, bool)
+            or not isinstance(sample_rate, int)
+            or sample_rate <= 0
+        ):
             raise AudioConversionError("sample_rate required for raw PCM input")
         cmd.extend(["-f", "s16le", "-ar", str(sample_rate), "-ac", str(channels)])
 
     cmd.extend(["-i", "pipe:0"])
 
-    # Output format options
     cmd.extend(
         [
             "-c:a",
             "libopus",
             "-b:a",
-            "48k",  # Good quality for voice
+            "48k",
             "-vbr",
             "on",
             "-application",
-            "voip",  # Optimized for speech
+            "voip",
             "-f",
             "ogg",
             "pipe:1",
@@ -76,17 +82,14 @@ async def convert_to_ogg_opus(
             stderr=asyncio.subprocess.PIPE,
         )
 
-        stdout, stderr = await process.communicate(input=audio_bytes)
+        try:
+            stdout, _ = await process.communicate(input=audio_bytes)
+        except BaseException:
+            await _terminate_process(process)
+            raise
 
         if process.returncode != 0:
-            error_msg = stderr.decode(errors="replace").strip()
-            logfire.warning(
-                "ffmpeg_conversion_failed",
-                returncode=process.returncode,
-                stderr=error_msg[:500],
-                input_size=len(audio_bytes),
-            )
-            raise AudioConversionError(f"ffmpeg failed: {error_msg}")
+            raise AudioConversionError("ffmpeg conversion failed")
 
         logfire.debug(
             "audio_converted",
@@ -101,3 +104,13 @@ async def convert_to_ogg_opus(
         raise AudioConversionError("ffmpeg not found - is it installed?") from e
     except TimeoutError as e:
         raise AudioConversionError("ffmpeg conversion timed out") from e
+
+
+async def _terminate_process(process: asyncio.subprocess.Process) -> None:
+    """Best-effort reap a child when its caller is cancelled."""
+    if process.returncode is not None:
+        return
+    with suppress(ProcessLookupError):
+        process.kill()
+    with suppress(Exception):
+        await process.wait()

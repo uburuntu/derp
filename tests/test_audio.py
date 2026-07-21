@@ -8,14 +8,12 @@ from __future__ import annotations
 import asyncio
 import shutil
 import struct
-from typing import TYPE_CHECKING
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from derp.common.audio import AudioConversionError, convert_to_ogg_opus
-
-if TYPE_CHECKING:
-    pass
 
 # Check if ffmpeg is available
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
@@ -151,3 +149,62 @@ class TestAudioConversionErrorHandling:
 
         with pytest.raises(AudioConversionError, match="ffmpeg not found"):
             await convert_to_ogg_opus(wav_audio, input_format="wav")
+
+    @pytest.mark.asyncio
+    async def test_ffmpeg_stderr_is_not_logged_or_exposed(
+        self,
+        wav_audio: bytes,
+        monkeypatch,
+        caplog,
+    ) -> None:
+        process = SimpleNamespace(
+            returncode=1,
+            communicate=AsyncMock(
+                return_value=(b"", b"private provider audio and filesystem path")
+            ),
+        )
+        monkeypatch.setattr(
+            asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=process),
+        )
+
+        with pytest.raises(AudioConversionError) as raised:
+            await convert_to_ogg_opus(wav_audio, input_format="wav")
+
+        assert "private" not in str(raised.value)
+        assert "private" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_cancellation_kills_and_reaps_ffmpeg(
+        self,
+        wav_audio: bytes,
+        monkeypatch,
+    ) -> None:
+        started = asyncio.Event()
+
+        async def communicate(*, input: bytes) -> tuple[bytes, bytes]:
+            started.set()
+            await asyncio.sleep(60)
+            return b"", b""
+
+        process = SimpleNamespace(
+            returncode=None,
+            communicate=communicate,
+            kill=MagicMock(),
+            wait=AsyncMock(return_value=0),
+        )
+        monkeypatch.setattr(
+            asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=process),
+        )
+
+        task = asyncio.create_task(convert_to_ogg_opus(wav_audio, input_format="wav"))
+        await started.wait()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        process.kill.assert_called_once_with()
+        process.wait.assert_awaited_once_with()
