@@ -22,6 +22,27 @@ class ChatPolicyFlag(StrEnum):
 
 
 _DERP_NAME = re.compile(r"\b(?:derp|дерп)\b", re.IGNORECASE)
+_OPERATOR_CONTROL_COMMANDS: Final = frozenset(
+    {
+        "context",
+        "dbuy",
+        "dcredits",
+        "debug_buy",
+        "debug_credits",
+        "debug_help",
+        "debug_refund",
+        "debug_reset",
+        "debug_status",
+        "debug_tools",
+        "dhelp",
+        "drefund",
+        "dreset",
+        "dstatus",
+        "dtools",
+        "operator",
+        "ops",
+    }
+)
 _SENSITIVE_CONTENT_TYPES: Final = frozenset(
     {
         "connected_website",
@@ -62,6 +83,8 @@ def capture_kind_for_message(
         return None
     if message.content_type not in _CONVERSATIONAL_CONTENT_TYPES:
         return None
+    if _is_operator_control_message(message):
+        return None
     if message.chat.type == "private" or is_explicit_invocation(
         message,
         bot_id=bot_id,
@@ -71,6 +94,18 @@ def capture_kind_for_message(
     if ambient_enabled:
         return CaptureKind.AMBIENT
     return None
+
+
+def _is_operator_control_message(message: Message) -> bool:
+    text = message.text or message.caption or ""
+    tokens = text.split(maxsplit=1)
+    if not tokens:
+        return False
+    first_token = tokens[0]
+    if not first_token.startswith("/"):
+        return False
+    command = first_token[1:].partition("@")[0].casefold()
+    return command in _OPERATOR_CONTROL_COMMANDS
 
 
 def is_explicit_invocation(

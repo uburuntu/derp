@@ -211,7 +211,7 @@ async def test_hidden_debug_product_requires_explicit_intake_and_normal_settleme
             product_id=product.id,
         )
 
-    handle = await commerce_env.intents.create_admin_debug_top_up_intent(
+    handle = await commerce_env.intents.create_operator_debug_top_up_intent(
         payer_user_id=user_id,
         target=PurchaseTarget.user(user_id),
     )

@@ -45,12 +45,12 @@ class RouteDependencyPlan:
 
 
 _MODELS = RouteDependencyPlan(models=True)
-_MODELS_AND_CREDIT = RouteDependencyPlan(models=True, legacy_credit=True)
 
 ROUTE_DEPENDENCY_PLANS: Final[Mapping[RouteDependencyKey, RouteDependencyPlan]] = (
     MappingProxyType(
         {
-            RouteDependencyKey(RouteEvent.MESSAGE, "debug"): _MODELS_AND_CREDIT,
+            RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "operator"): _MODELS,
+            RouteDependencyKey(RouteEvent.MESSAGE, "debug"): _MODELS,
             RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "debug"): RouteDependencyPlan(
                 models=True,
                 commerce=frozenset({CommerceDependency.PURCHASE_INTENTS}),

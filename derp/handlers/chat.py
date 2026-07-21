@@ -102,6 +102,7 @@ from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
 from derp.operations import OperationId
+from derp.operator import OperatorOnlyFilter
 from derp.tools import create_chat_toolset
 from derp.tools.authorization import ActorRoleResolver
 from derp.tools.policy import (
@@ -269,7 +270,7 @@ async def build_context_prompt(
     db: DatabaseManager,
     context_limit: int = 100,
 ) -> str:
-    """Render the scoped native history for the admin `/context` diagnostic."""
+    """Render the scoped native history for the operator `/context` diagnostic."""
     window = HistoryWindow(
         max_turns=context_limit,
         max_tokens=max(4_096, context_limit * 2_048),
@@ -476,9 +477,9 @@ async def _release_undelivered_paid_chat_turn(
         )
 
 
-@router.message(Command("context"), F.from_user.id.in_(settings.operator_ids))
+@router.message(Command("context"), OperatorOnlyFilter())
 async def show_context(message: Message, chat_model: ChatModel | None) -> None:
-    """Admin command to show the context that would be sent to the agent."""
+    """Operator command to show the context that would be sent to the agent."""
     db = get_db_manager()
     ctx = await build_context_prompt(message, db)
     char_count = len(ctx)
@@ -494,6 +495,11 @@ async def show_context(message: Message, chat_model: ChatModel | None) -> None:
         messages=messages,
     )
     await message.reply(stats)
+
+
+@router.message(Command("context"))
+async def reject_unauthorized_context(_message: Message) -> None:
+    """Consume unauthorized context diagnostics before conversational routing."""
 
 
 @router.message(DerpMentionFilter())

@@ -1,5 +1,6 @@
 """Capture policy keeps ambient history gated and sensitive events out."""
 
+import pytest
 from aiogram.types import Contact, MessageEntity, SuccessfulPayment
 
 from derp.history.policy import capture_kind_for_message
@@ -22,6 +23,49 @@ def test_private_and_explicit_group_messages_are_captured(make_message) -> None:
             )
             is CaptureKind.EXPLICIT
         )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "/operator",
+        "/ops@DerpRobot",
+        "/context",
+        "/debug_buy",
+        "/debug_refund sensitive-charge-id",
+        "/debug_refund\nsensitive-charge-id",
+        "/dcredits 100",
+    ],
+)
+def test_operator_control_messages_are_never_conversation_history(
+    make_message,
+    text: str,
+) -> None:
+    for chat_type in ("private", "supergroup"):
+        message = make_message(text=text, chat_type=chat_type)
+        assert (
+            capture_kind_for_message(
+                message,
+                ambient_enabled=True,
+                bot_id=99,
+                bot_username="DerpRobot",
+            )
+            is None
+        )
+
+
+def test_operator_command_prefixes_do_not_hide_conversation(make_message) -> None:
+    message = make_message(text="/operatorial", chat_type="private")
+
+    assert (
+        capture_kind_for_message(
+            message,
+            ambient_enabled=False,
+            bot_id=99,
+            bot_username="DerpRobot",
+        )
+        is CaptureKind.EXPLICIT
+    )
 
 
 def test_ambient_group_capture_is_fail_closed(make_message) -> None:

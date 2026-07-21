@@ -66,7 +66,7 @@ type StarsProduct = TopUpProduct | SubscriptionPlan
 
 @dataclass(frozen=True, slots=True)
 class ProductCatalog:
-    """Version-addressable public products plus one admin-only debug top-up."""
+    """Version-addressable products plus one operator-only debug top-up."""
 
     top_ups: tuple[TopUpProduct, ...]
     subscription_plan: SubscriptionPlan
@@ -129,7 +129,7 @@ DEFAULT_PRODUCT_CATALOG: Final = ProductCatalog(
     debug_top_up=TopUpProduct(
         id="admin_debug",
         version=PRODUCT_VERSION,
-        name="Admin Debug",
+        name="Operator Debug",
         stars=1,
         credits=10,
     ),
