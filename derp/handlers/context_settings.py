@@ -24,6 +24,7 @@ from aiogram.types import (
 from aiogram.utils.i18n import gettext as _
 
 from derp.command_menu import creation_command_specs
+from derp.common.localization import format_local_date, format_local_month_day
 from derp.db import (
     DatabaseManager,
     SharedFactDecisionConflictError,
@@ -106,6 +107,22 @@ _POLICY_FLAGS = {
     ContextAction.SHARED_SPEND: ChatPolicyFlag.SHARED_CREDIT_SPENDING,
     ContextAction.EXPENSIVE_TOOLS: ChatPolicyFlag.EXPENSIVE_TOOLS,
 }
+
+
+def _policy_flag_notice(flag: ChatPolicyFlag, *, enabled: bool) -> str:
+    if flag is ChatPolicyFlag.SHARED_FACTS_MEMBER_EDIT:
+        return (
+            _("Members can now edit shared facts")
+            if enabled
+            else _("Shared facts now need admin review")
+        )
+    if flag is ChatPolicyFlag.SHARED_CREDIT_SPENDING:
+        return (
+            _("Chat credits are available") if enabled else _("Chat credits are paused")
+        )
+    return (
+        _("Paid features are enabled") if enabled else _("Paid features are disabled")
+    )
 
 
 async def ambient_delivery_available(bot: Bot, chat_id: int) -> bool:
@@ -191,6 +208,10 @@ def build_context_panel(
                 text=(
                     _("History: {days}d").format(days=retention_days)
                     if is_private
+                    else _("Turn context off")
+                    if can_manage and enabled
+                    else _("Turn context on")
+                    if can_manage
                     else _("Context: {state}").format(state=state)
                 ),
                 callback_data=ContextCallback(
@@ -228,9 +249,9 @@ def build_context_panel(
                 [
                     InlineKeyboardButton(
                         text=(
-                            _("Facts: Members can edit")
+                            _("Require admin fact review")
                             if chat.shared_facts_member_edit
-                            else _("Facts: Admin review")
+                            else _("Let members edit facts")
                         ),
                         callback_data=ContextCallback(
                             action=ContextAction.FACT_MEMBER_EDIT,
@@ -239,9 +260,9 @@ def build_context_panel(
                     ),
                     InlineKeyboardButton(
                         text=(
-                            _("Use chat credits: On")
+                            _("Pause chat credits")
                             if chat.shared_credit_spending_enabled
-                            else _("Use chat credits: Off")
+                            else _("Enable chat credits")
                         ),
                         callback_data=ContextCallback(
                             action=ContextAction.SHARED_SPEND,
@@ -254,9 +275,9 @@ def build_context_panel(
             [
                 InlineKeyboardButton(
                     text=(
-                        _("Paid tools: On")
+                        _("Disable paid features")
                         if chat.expensive_tools_enabled
-                        else _("Paid tools: Off")
+                        else _("Enable paid features")
                     ),
                     callback_data=ContextCallback(
                         action=ContextAction.EXPENSIVE_TOOLS,
@@ -292,7 +313,7 @@ def build_context_panel(
     if not is_private:
         personal_rows.append(
             InlineKeyboardButton(
-                text=_("Use my credits here"),
+                text=_("Change how my credits are used"),
                 callback_data=ContextCallback(
                     action=ContextAction.PERSONAL_SPEND,
                     value=-1,
@@ -346,7 +367,7 @@ def build_credit_panel(
         allowance_line = _("{allowance} · {renewal} {date}").format(
             allowance=allowance_line,
             renewal=renewal,
-            date=personal.allowance_period_end.strftime("%d %b %Y"),
+            date=format_local_date(personal.allowance_period_end),
         )
     elif personal_balance.allowance_available == 0:
         allowance_line = _("{allowance} · no active plan").format(
@@ -366,8 +387,8 @@ def build_credit_panel(
     if personal_balance.reserved:
         lines.append(
             _(
-                "Pending charge: {credits} credit",
-                "Pending charges: {credits} credits",
+                "Reserved: {credits} credit",
+                "Reserved: {credits} credits",
                 personal_balance.reserved,
             ).format(credits=personal_balance.reserved)
         )
@@ -404,8 +425,8 @@ def build_credit_panel(
         if shared_balance.reserved:
             lines.append(
                 _(
-                    "Pending charge: {credits} credit",
-                    "Pending charges: {credits} credits",
+                    "Reserved: {credits} credit",
+                    "Reserved: {credits} credits",
                     shared_balance.reserved,
                 ).format(credits=shared_balance.reserved)
             )
@@ -416,9 +437,9 @@ def build_credit_panel(
             [
                 InlineKeyboardButton(
                     text=(
-                        _("Use my credits here: Always")
+                        _("Ask before using my credits")
                         if personal_fallback_enabled
-                        else _("Use my credits here: Ask first")
+                        else _("Use my credits without asking")
                     ),
                     callback_data=ContextCallback(
                         action=ContextAction.PERSONAL_SPEND,
@@ -449,7 +470,7 @@ def _wallet_activity_line(activity: WalletActivity) -> str:
         "tts": _("Voice"),
         "video_generate": _("Video generation"),
     }.get(activity.feature and activity.feature.value, _("Paid feature"))
-    date = activity.occurred_at.strftime("%d %b")
+    date = format_local_month_day(activity.occurred_at)
     if activity.kind is WalletActivityKind.CHARGE:
         return _(
             "{feature}: -{credits} credit · {date}",
@@ -856,9 +877,9 @@ async def toggle_personal_spend(
         await operation_ledger.revoke_personal_consent(user_model.id, chat_model.id)
     await query.answer(
         (
-            _("Use my credits here: Always")
+            _("Your credits can be used here without asking")
             if enabled
-            else _("Use my credits here: Ask first")
+            else _("I'll ask before using your credits here")
         ),
         show_alert=True,
     )
@@ -1235,7 +1256,7 @@ async def change_policy_flag(
         can_manage=True,
     )
     await query.message.edit_text(text, reply_markup=markup)
-    await query.answer(_("Setting saved"))
+    await query.answer(_policy_flag_notice(flag, enabled=enabled))
 
 
 @router.callback_query(ContextCallback.filter(F.action == ContextAction.ADMIN_POLICY))

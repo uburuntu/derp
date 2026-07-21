@@ -54,7 +54,7 @@ def test_panel_never_claims_ambient_context_when_telegram_cannot_deliver(
     )
 
     assert "Context: Mentions only" in text
-    assert markup.inline_keyboard[0][1].text == "Context: Mentions only"
+    assert markup.inline_keyboard[0][1].text == "Turn context on"
 
 
 def test_private_panel_reports_always_on_history_without_ambient_toggle(
@@ -73,6 +73,52 @@ def test_private_panel_reports_always_on_history_without_ambient_toggle(
     assert callback.action is ContextAction.PRIVACY
 
 
+@pytest.mark.parametrize(
+    ("enabled", "expected_actions"),
+    [
+        (
+            True,
+            {
+                "Turn context off",
+                "Require admin fact review",
+                "Pause chat credits",
+                "Disable paid features",
+            },
+        ),
+        (
+            False,
+            {
+                "Turn context on",
+                "Let members edit facts",
+                "Enable chat credits",
+                "Enable paid features",
+            },
+        ),
+    ],
+)
+def test_admin_settings_buttons_describe_the_next_action(
+    mock_chat_model,
+    enabled: bool,
+    expected_actions: set[str],
+) -> None:
+    chat = mock_chat_model(
+        ambient_history_enabled=enabled,
+        shared_facts_member_edit=enabled,
+        shared_credit_spending_enabled=enabled,
+        expensive_tools_enabled=enabled,
+    )
+
+    _, markup = build_context_panel(
+        chat,
+        ambient_available=True,
+        can_manage=True,
+    )
+
+    labels = {button.text for row in markup.inline_keyboard for button in row}
+    assert expected_actions <= labels
+    assert all("tools" not in label.casefold() for label in labels)
+
+
 def test_context_panel_has_a_first_class_creation_entry(mock_chat_model) -> None:
     _, markup = build_context_panel(
         mock_chat_model(),
@@ -86,7 +132,7 @@ def test_context_panel_has_a_first_class_creation_entry(mock_chat_model) -> None
     callback = ContextCallback.unpack(creation.callback_data)
     assert callback.action is ContextAction.CREATION
     personal_spending = next(
-        button for button in buttons if button.text == "Use my credits here"
+        button for button in buttons if button.text == "Change how my credits are used"
     )
     assert personal_spending.callback_data is not None
     spending_callback = ContextCallback.unpack(personal_spending.callback_data)
@@ -177,9 +223,72 @@ def test_credit_panel_shows_inventories_debt_and_personal_preference() -> None:
     assert "renews 19 Aug 2026" in text
     assert "Purchased: 34 credits" in text
     assert "Payment debt: 7 credits" in text
+    assert text.count("Reserved:") == 2
     assert "Image generation refund: +5 credits" in text
     assert "Purchased: 56 credits · paused by admins" in text
-    assert markup.inline_keyboard[0][0].text == "Use my credits here: Always"
+    assert markup.inline_keyboard[0][0].text == "Ask before using my credits"
+
+
+def test_credit_panel_localizes_dates_in_russian(setup_i18n) -> None:
+    personal = WalletStatement(
+        WalletBalance(
+            WalletOwner(WalletOwnerKind.USER, UUID(int=1)),
+            allowance_available=12,
+            purchased_available=0,
+            reserved=0,
+            consumed=0,
+            debt=0,
+        ),
+        allowance_period_end=datetime(2026, 8, 19, tzinfo=UTC),
+        renewal_enabled=True,
+        recent_activity=(
+            WalletActivity(
+                WalletActivityKind.CHARGE,
+                1,
+                datetime(2026, 7, 20, tzinfo=UTC),
+                Feature.CHAT,
+            ),
+        ),
+    )
+
+    with setup_i18n.use_locale("ru"):
+        text, _ = build_credit_panel(
+            personal,
+            shared=None,
+            shared_spending_enabled=False,
+            personal_fallback_enabled=False,
+        )
+
+    assert "19 авг. 2026" in text
+    assert "20 июл." in text
+
+
+@pytest.mark.parametrize(
+    ("enabled", "expected"),
+    [
+        (True, "Ask before using my credits"),
+        (False, "Use my credits without asking"),
+    ],
+)
+def test_credit_permission_button_describes_the_next_action(
+    enabled: bool,
+    expected: str,
+) -> None:
+    personal = WalletStatement(
+        WalletBalance(WalletOwner(WalletOwnerKind.USER, UUID(int=1)), 0, 0, 0, 0, 0)
+    )
+    shared = WalletStatement(
+        WalletBalance(WalletOwner(WalletOwnerKind.CHAT, UUID(int=2)), 0, 0, 0, 0, 0)
+    )
+
+    _, markup = build_credit_panel(
+        personal,
+        shared=shared,
+        shared_spending_enabled=True,
+        personal_fallback_enabled=enabled,
+    )
+
+    assert markup.inline_keyboard[0][0].text == expected
 
 
 @pytest.mark.parametrize(
@@ -271,11 +380,44 @@ async def test_personal_fallback_toggle_is_scoped_to_callback_actor(
     ledger.revoke_personal_consent.assert_not_awaited()
     ledger.personal_consent_enabled.assert_awaited_once_with(user.id, chat.id)
     query.answer.assert_awaited_once_with(
-        "Use my credits here: Always",
+        "Your credits can be used here without asking",
         show_alert=True,
     )
     message.edit_text.assert_not_awaited()
     ledger.statement.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_personal_credit_toggle_confirms_ask_first_state(
+    make_message,
+    make_user,
+    mock_chat_model,
+    mock_user_model,
+) -> None:
+    query = MagicMock(spec=CallbackQuery)
+    query.message = make_message(text="panel", chat_type="supergroup")
+    query.from_user = make_user(id=42)
+    query.answer = AsyncMock()
+    user = mock_user_model(user_id=UUID(int=1), telegram_id=42)
+    chat = mock_chat_model(chat_id=UUID(int=2))
+    ledger = MagicMock()
+    ledger.grant_personal_consent = AsyncMock()
+    ledger.revoke_personal_consent = AsyncMock()
+
+    await toggle_personal_spend(
+        query,
+        ContextCallback(action=ContextAction.PERSONAL_SPEND, value=0),
+        ledger,
+        user,
+        chat,
+    )
+
+    ledger.revoke_personal_consent.assert_awaited_once_with(user.id, chat.id)
+    ledger.grant_personal_consent.assert_not_awaited()
+    query.answer.assert_awaited_once_with(
+        "I'll ask before using your credits here",
+        show_alert=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -554,11 +696,63 @@ async def test_admin_policy_reply_filter_matches_current_locale_prompt(
     assert await AdminPolicyReplyFilter()(message)
 
 
+@pytest.mark.parametrize(
+    ("action", "flag", "field", "enabled", "notice"),
+    [
+        (
+            ContextAction.FACT_MEMBER_EDIT,
+            ChatPolicyFlag.SHARED_FACTS_MEMBER_EDIT,
+            "shared_facts_member_edit",
+            True,
+            "Members can now edit shared facts",
+        ),
+        (
+            ContextAction.FACT_MEMBER_EDIT,
+            ChatPolicyFlag.SHARED_FACTS_MEMBER_EDIT,
+            "shared_facts_member_edit",
+            False,
+            "Shared facts now need admin review",
+        ),
+        (
+            ContextAction.SHARED_SPEND,
+            ChatPolicyFlag.SHARED_CREDIT_SPENDING,
+            "shared_credit_spending_enabled",
+            True,
+            "Chat credits are available",
+        ),
+        (
+            ContextAction.SHARED_SPEND,
+            ChatPolicyFlag.SHARED_CREDIT_SPENDING,
+            "shared_credit_spending_enabled",
+            False,
+            "Chat credits are paused",
+        ),
+        (
+            ContextAction.EXPENSIVE_TOOLS,
+            ChatPolicyFlag.EXPENSIVE_TOOLS,
+            "expensive_tools_enabled",
+            True,
+            "Paid features are enabled",
+        ),
+        (
+            ContextAction.EXPENSIVE_TOOLS,
+            ChatPolicyFlag.EXPENSIVE_TOOLS,
+            "expensive_tools_enabled",
+            False,
+            "Paid features are disabled",
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_policy_flag_requires_live_admin_and_updates_exact_field(
     make_message,
     make_user,
     mock_chat_model,
+    action: ContextAction,
+    flag: ChatPolicyFlag,
+    field: str,
+    enabled: bool,
+    notice: str,
 ) -> None:
     message = make_message(text="panel")
     message.edit_text = AsyncMock()
@@ -566,7 +760,7 @@ async def test_policy_flag_requires_live_admin_and_updates_exact_field(
     query.message = message
     query.from_user = make_user(id=42)
     query.answer = AsyncMock()
-    chat = mock_chat_model(expensive_tools_enabled=True)
+    chat = mock_chat_model(**{field: not enabled})
     session = MagicMock()
     db = MagicMock()
     db.session.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -588,7 +782,7 @@ async def test_policy_flag_requires_live_admin_and_updates_exact_field(
     ):
         await change_policy_flag(
             query,
-            ContextCallback(action=ContextAction.EXPENSIVE_TOOLS, value=0),
+            ContextCallback(action=action, value=int(enabled)),
             db,
             MagicMock(spec=Bot),
             chat,
@@ -597,10 +791,11 @@ async def test_policy_flag_requires_live_admin_and_updates_exact_field(
     set_flag.assert_awaited_once_with(
         session,
         chat_telegram_id=message.chat.id,
-        flag=ChatPolicyFlag.EXPENSIVE_TOOLS,
-        enabled=False,
+        flag=flag,
+        enabled=enabled,
     )
-    assert chat.expensive_tools_enabled is False
+    assert getattr(chat, field) is enabled
+    query.answer.assert_awaited_once_with(notice)
 
 
 @pytest.mark.asyncio

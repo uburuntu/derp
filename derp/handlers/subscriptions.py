@@ -24,6 +24,7 @@ from derp.billing import (
     SubscriptionStatus,
 )
 from derp.billing.telegram import TelegramSubscriptionRenewalProvider
+from derp.common.localization import format_local_utc_datetime
 from derp.common.private_delivery import deliver_sensitive_reply
 from derp.common.sender import MessageSender
 from derp.models import User as UserModel
@@ -52,9 +53,7 @@ def build_subscription_panel(
     observed_at = now or datetime.now(UTC)
     if observed_at.tzinfo is None or observed_at.utcoffset() is None:
         raise ValueError("now must be timezone-aware")
-    period_end = snapshot.current_period_end.astimezone(UTC).strftime(
-        "%d %b %Y, %H:%M UTC"
-    )
+    period_end = format_local_utc_datetime(snapshot.current_period_end)
     expired = (
         snapshot.status is SubscriptionStatus.EXPIRED
         or snapshot.current_period_end <= observed_at
@@ -145,11 +144,11 @@ async def set_subscription_renewal(
     """Apply Telegram renewal state first, then render confirmed local state."""
     if not isinstance(callback.message, Message) or not user_model:
         return await callback.answer(
-            _("Plan controls are unavailable"), show_alert=True
+            _("I can't manage this plan right now"), show_alert=True
         )
     if user_model.telegram_id != callback.from_user.id:
         return await callback.answer(
-            _("These plan controls are no longer valid. Open /plan again."),
+            _("This plan link is no longer valid. Open /plan again."),
             show_alert=True,
         )
     if callback.message.chat.type != "private":
@@ -212,7 +211,7 @@ async def set_subscription_renewal(
 async def reject_stale_subscription_callback(callback: CallbackQuery) -> None:
     """Fail closed when an old plan button cannot be parsed."""
     await callback.answer(
-        _("This plan control expired. Open /plan again."), show_alert=True
+        _("This plan button expired. Open /plan again."), show_alert=True
     )
 
 
