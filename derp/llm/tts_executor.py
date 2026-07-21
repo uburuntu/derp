@@ -22,6 +22,7 @@ from derp.execution import (
     Succeeded,
 )
 from derp.features.tts import (
+    MAX_TTS_OUTPUT_BYTES,
     TtsProviderOutput,
     TtsRequest,
     require_tts_pricing,
@@ -119,6 +120,8 @@ class GoogleTtsExecutor:
             return Rejected(RejectionReason.UNUSABLE_OUTPUT)
         blob = inline_parts[0]
         if not isinstance(blob.data, bytes) or not blob.data or not blob.mime_type:
+            return Rejected(RejectionReason.UNUSABLE_OUTPUT)
+        if len(blob.data) > MAX_TTS_OUTPUT_BYTES:
             return Rejected(RejectionReason.UNUSABLE_OUTPUT)
 
         try:

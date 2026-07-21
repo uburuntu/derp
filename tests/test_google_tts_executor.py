@@ -23,6 +23,7 @@ from derp.execution import (
     plan_execution,
 )
 from derp.features import TtsProviderOutput, TtsRequest
+from derp.features.tts import MAX_TTS_OUTPUT_BYTES
 from derp.llm.tts_executor import GEMINI_TTS_SAMPLE_RATE, GoogleTtsExecutor
 
 
@@ -204,6 +205,26 @@ async def test_source_duration_over_declared_limit_is_not_converted() -> None:
     outcome = await executor.synthesize(
         plan_execution(Feature.TTS, GoogleModelKey.TTS),
         TtsRequest(text="Read this", max_output_seconds=3),
+    )
+
+    assert outcome == Rejected(RejectionReason.UNUSABLE_OUTPUT)
+    converter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_oversized_source_audio_is_not_parsed_or_converted() -> None:
+    executor, _, _, converter = _executor(
+        _response(
+            _inline(
+                bytes(MAX_TTS_OUTPUT_BYTES + 2),
+                "audio/L16;rate=24000",
+            )
+        )
+    )
+
+    outcome = await executor.synthesize(
+        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TtsRequest(text="Read this", max_output_seconds=30),
     )
 
     assert outcome == Rejected(RejectionReason.UNUSABLE_OUTPUT)
