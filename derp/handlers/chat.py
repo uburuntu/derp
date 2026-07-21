@@ -32,15 +32,21 @@ from derp.approvals.image_tools import ImageToolRunContext
 from derp.catalog import GoogleModelKey
 from derp.common.extractor import Extractor
 from derp.config import settings
-from derp.credits import CreditService
 from derp.db import (
     DatabaseManager,
     get_db_manager,
     list_approved_shared_facts,
     store_tool_transcript,
 )
-from derp.execution import Feature, plan_execution
 from derp.features import ImageOperationCoordinator
+from derp.features.chat_accounting import (
+    ChatExecutionAlreadyHandled,
+    ChatExecutionInProgress,
+    ChatTurnAccounting,
+    ChatTurnInvocation,
+    EconomyChatExecutionGrant,
+    PaidChatExecutionGrant,
+)
 from derp.filters import DerpMentionFilter
 from derp.handlers.context_settings import ensure_group_context_notice
 from derp.handlers.tool_approvals import (
@@ -54,7 +60,9 @@ from derp.handlers.tool_approvals import (
 from derp.history.capture import capture_outbound_history
 from derp.history.core import (
     AttachmentReference,
+    LogicalTurn,
     Speaker,
+    TokenEstimator,
     UserTextTurn,
     render_user_content,
 )
@@ -86,10 +94,12 @@ from derp.llm import (
     AgentResult,
     create_chat_agent,
 )
+from derp.llm.prompts import BASE_SYSTEM_PROMPT
 from derp.media import MediaGateway
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
+from derp.operations import OperationId
 from derp.tools import create_chat_toolset
 from derp.tools.authorization import ActorRoleResolver
 from derp.tools.policy import (
@@ -101,6 +111,9 @@ from derp.tools.shared_facts import SharedFactTools
 
 router = Router(name="chat")
 router.include_router(tool_approvals_router)
+
+# Provider serialization and registered tool schemas are outside history estimation.
+_CHAT_RUNTIME_OVERHEAD_TOKENS = 2_048
 
 
 @logfire.instrument("extract_media", extract_args=False)
@@ -371,6 +384,77 @@ def _history_media_bytes(history: LoadedHistory) -> int:
     return total
 
 
+def _estimate_chat_input_tokens(
+    *,
+    history: LoadedHistory,
+    current_turn: UserTextTurn,
+    approved_facts: tuple[ApprovedFact, ...],
+    chat_model: ChatModel,
+) -> int:
+    """Estimate the stable text envelope used to quote one ordinary turn."""
+    estimator = TokenEstimator()
+    system_prompt = BASE_SYSTEM_PROMPT
+    if chat_model.admin_policy:
+        system_prompt += "\n\n## Admin Chat Policy\n" + chat_model.admin_policy
+
+    system_tokens = (
+        estimator.message_overhead
+        + estimator.part_overhead
+        + estimator.estimate_text(system_prompt)
+    )
+    current_tokens = estimator.estimate_turn(LogicalTurn(request=current_turn))
+    shared_fact_tokens = 0
+    if approved_facts:
+        shared_fact_tokens = estimator.part_overhead + estimator.estimate_text(
+            render_approved_facts(approved_facts)
+        )
+    return (
+        history.estimated_tokens
+        + system_tokens
+        + current_tokens
+        + shared_fact_tokens
+        + _CHAT_RUNTIME_OVERHEAD_TOKENS
+    )
+
+
+async def _release_paid_chat_turn(
+    accounting: ChatTurnAccounting | None,
+    operation_id: OperationId | None,
+    message: Message,
+) -> None:
+    if accounting is None or operation_id is None:
+        return
+    try:
+        await accounting.release_provider_failure(operation_id)
+    except Exception as exc:
+        report_exception(
+            "chat_turn_release_failed",
+            exception=exc,
+            operation_id=str(operation_id),
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+        )
+
+
+async def _capture_delivered_paid_chat_turn(
+    accounting: ChatTurnAccounting | None,
+    operation_id: OperationId | None,
+    message: Message,
+) -> None:
+    if accounting is None or operation_id is None:
+        return
+    try:
+        await accounting.capture_success(operation_id)
+    except Exception as exc:
+        report_exception(
+            "chat_turn_capture_failed_after_delivery",
+            exception=exc,
+            operation_id=str(operation_id),
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+        )
+
+
 @router.message(Command("context"), F.from_user.id.in_(settings.admin_ids))
 async def show_context(message: Message, chat_model: ChatModel | None) -> None:
     """Admin command to show the context that would be sent to the agent."""
@@ -389,22 +473,17 @@ async def show_context(message: Message, chat_model: ChatModel | None) -> None:
 @router.message(F.reply_to_message.from_user.id == settings.bot_id)
 @flags.chat_action
 class ChatAgentHandler(MessageHandler):
-    """Message handler for AI responses using Pydantic-AI agents.
-
-    Credit-aware handler that selects a catalog model and context limit
-    based on user/chat credit balance:
-    - No credits: economy chat role, 10-message context
-    - Has credits: standard chat role, 100-message context
-    """
+    """Run one atomically quoted chat turn with its selected context window."""
 
     async def handle(self) -> Any:
         """Handle messages using the Pydantic-AI chat agent."""
-        # Extract dependencies from middleware data
         db: DatabaseManager = self.data.get("db") or get_db_manager()
         bot: Bot = self.data.get("bot") or self.event.bot
         user_model: UserModel | None = self.data.get("user_model")
         chat_model: ChatModel | None = self.data.get("chat_model")
-        credit_service: CreditService | None = self.data.get("credit_service")
+        chat_turn_accounting: ChatTurnAccounting | None = self.data.get(
+            "chat_turn_accounting"
+        )
         media_gateway: MediaGateway | None = self.data.get("media_gateway")
         role_resolver: ActorRoleResolver | None = self.data.get("actor_role_resolver")
         image_operation_coordinator: ImageOperationCoordinator | None = self.data.get(
@@ -413,48 +492,82 @@ class ChatAgentHandler(MessageHandler):
         deferred_tool_approval_service: DeferredToolApprovalService | None = (
             self.data.get("deferred_tool_approval_service")
         )
-
-        await ensure_group_context_notice(
-            self.event,
-            chat_model=chat_model,
-            db=db,
-            bot=bot,
-        )
-
-        plan = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_ECONOMY)
-        history_window = HISTORY_WINDOWS[plan.model.key]
-
-        if user_model and chat_model and credit_service:
-            plan, history_window = await credit_service.get_orchestrator_config(
-                user_model, chat_model
+        paid_operation_id: OperationId | None = None
+        try:
+            await ensure_group_context_notice(
+                self.event,
+                chat_model=chat_model,
+                db=db,
+                bot=bot,
             )
+            if user_model is None or chat_model is None or chat_turn_accounting is None:
+                return await self.event.reply(
+                    _("😅 Could not verify your access. Please try again.")
+                )
 
-        if role_resolver is not None and self.event.from_user is not None:
-            actor_role = await role_resolver.resolve(
-                chat_id=self.event.chat.id,
-                chat_type=self.event.chat.type,
-                user_id=self.event.from_user.id,
-            )
-        elif self.event.chat.type == "private":
-            actor_role = ActorRole.PRIVATE_OWNER
-        else:
-            actor_role = ActorRole.MEMBER
-        tool_policy = (
-            ChatToolPolicy.from_chat(chat_model)
-            if chat_model is not None
-            else ChatToolPolicy(
-                expensive_tools_enabled=True,
-                shared_credit_spending_enabled=True,
-                shared_facts_member_edit=False,
-            )
-        )
-        tool_access = derive_chat_tool_access(actor_role, tool_policy)
+            if role_resolver is not None and self.event.from_user is not None:
+                actor_role = await role_resolver.resolve(
+                    chat_id=self.event.chat.id,
+                    chat_type=self.event.chat.type,
+                    user_id=self.event.from_user.id,
+                )
+            elif self.event.chat.type == "private":
+                actor_role = ActorRole.PRIVATE_OWNER
+            else:
+                actor_role = ActorRole.MEMBER
+            tool_policy = ChatToolPolicy.from_chat(chat_model)
+            tool_access = derive_chat_tool_access(actor_role, tool_policy)
 
-        image_tool_context: ImageToolRunContext | None = None
-        if user_model is not None and chat_model is not None and self.event.from_user:
+            approved_facts = await _load_approved_facts(
+                db,
+                chat_model,
+                self.event.message_thread_id,
+            )
+            standard_probe = await _load_history(
+                self.event,
+                db,
+                HISTORY_WINDOWS[GoogleModelKey.CHAT_STANDARD],
+            )
+            current_turn = _current_user_turn(self.event)
+            estimated_input_tokens = _estimate_chat_input_tokens(
+                history=standard_probe,
+                current_turn=current_turn,
+                approved_facts=approved_facts,
+                chat_model=chat_model,
+            )
+            invocation = ChatTurnInvocation(
+                telegram_chat_id=self.event.chat.id,
+                telegram_message_id=self.event.message_id,
+                requester_id=user_model.id,
+                chat_id=chat_model.id,
+                thread_id=self.event.message_thread_id,
+                estimated_input_tokens=estimated_input_tokens,
+            )
+            decision = await chat_turn_accounting.authorize(invocation)
+            if isinstance(
+                decision,
+                (ChatExecutionInProgress, ChatExecutionAlreadyHandled),
+            ):
+                logfire.info(
+                    "chat_turn_duplicate_suppressed",
+                    operation_id=str(decision.operation_id),
+                    outcome=type(decision).__name__,
+                )
+                return None
+            if isinstance(decision, PaidChatExecutionGrant):
+                paid_operation_id = decision.operation_id
+            elif not isinstance(decision, EconomyChatExecutionGrant):
+                raise RuntimeError("chat accounting returned an unsupported decision")
+            plan = decision.plan
+            history_window = HISTORY_WINDOWS[plan.model.key]
+
             image_tool_context = ImageToolRunContext(
                 requester_id=user_model.id,
-                requester_telegram_id=self.event.from_user.id,
+                requester_telegram_id=(
+                    self.event.from_user.id
+                    if self.event.from_user is not None
+                    else user_model.telegram_id
+                ),
                 chat_id=chat_model.id,
                 chat_telegram_id=self.event.chat.id,
                 message_id=self.event.message_id,
@@ -463,21 +576,19 @@ class ChatAgentHandler(MessageHandler):
                 source=await live_image_source(self.event),
             )
 
-        # Carry the exact selected model into the agent and its tools.
-        deps = AgentDeps(
-            message=self.event,
-            db=db,
-            bot=bot,
-            user_model=user_model,
-            chat_model=chat_model,
-            model=plan.model,
-            history_window=history_window,
-            tool_access=tool_access,
-            image_operation_coordinator=image_operation_coordinator,
-            image_tool_context=image_tool_context,
-        )
+            deps = AgentDeps(
+                message=self.event,
+                db=db,
+                bot=bot,
+                user_model=user_model,
+                chat_model=chat_model,
+                model=plan.model,
+                history_window=history_window,
+                tool_access=tool_access,
+                image_operation_coordinator=image_operation_coordinator,
+                image_tool_context=image_tool_context,
+            )
 
-        try:
             with logfire.span(
                 "chat_agent_run",
                 _tags=["agent", "chat"],
@@ -504,11 +615,6 @@ class ChatAgentHandler(MessageHandler):
                 span.set_attribute(
                     "derp.history_media_failures", history.media_failures
                 )
-                approved_facts = await _load_approved_facts(
-                    db,
-                    chat_model,
-                    self.event.message_thread_id,
-                )
                 span.set_attribute("derp.approved_shared_facts", len(approved_facts))
 
                 history_media_bytes = _history_media_bytes(history)
@@ -516,7 +622,6 @@ class ChatAgentHandler(MessageHandler):
                     0,
                     DEFAULT_AGGREGATE_MEDIA_BYTES - history_media_bytes,
                 )
-                current_turn = _current_user_turn(self.event)
                 if media_gateway is not None:
                     hydrated_current = await _hydrate_current_media(
                         self.event,
@@ -543,7 +648,6 @@ class ChatAgentHandler(MessageHandler):
                     approved_facts,
                 )
 
-                # Create and run the agent with tools
                 agent = create_chat_agent(plan)
                 toolset = create_chat_toolset(
                     tool_access,
@@ -604,7 +708,7 @@ class ChatAgentHandler(MessageHandler):
                         raise RuntimeError(
                             "deferred image tools require durable operation context"
                         )
-                    return await present_image_approvals(
+                    delivered = await present_image_approvals(
                         message=self.event,
                         requests=result.output,
                         original_history=result.all_messages(),
@@ -613,26 +717,60 @@ class ChatAgentHandler(MessageHandler):
                         approvals=deferred_tool_approval_service
                         or approval_service(db),
                     )
+                    if delivered is None:
+                        await _release_paid_chat_turn(
+                            chat_turn_accounting,
+                            paid_operation_id,
+                            self.event,
+                        )
+                        return None
+                    await _capture_delivered_paid_chat_turn(
+                        chat_turn_accounting,
+                        paid_operation_id,
+                        self.event,
+                    )
+                    return delivered
 
-                # Convert to AgentResult and send response
                 agent_result = AgentResult.from_run_result(result)
 
                 span.set_attribute("derp.response_has_text", bool(agent_result.text))
                 span.set_attribute("derp.response_images", len(agent_result.images))
 
-                # Handle empty response
                 if not agent_result.has_content:
                     try:
                         await self.event.react(reaction=[ReactionTypeEmoji(emoji="👌")])
                         logfire.debug("empty_response_reacted")
                     except Exception:
                         logfire.debug("empty_response_react_failed")
+                    await _release_paid_chat_turn(
+                        chat_turn_accounting,
+                        paid_operation_id,
+                        self.event,
+                    )
                     return None
 
                 with capture_outbound_history():
-                    return await agent_result.reply_to(self.event)
+                    delivered = await agent_result.reply_to(self.event)
+                if delivered is None:
+                    await _release_paid_chat_turn(
+                        chat_turn_accounting,
+                        paid_operation_id,
+                        self.event,
+                    )
+                    return None
+                await _capture_delivered_paid_chat_turn(
+                    chat_turn_accounting,
+                    paid_operation_id,
+                    self.event,
+                )
+                return delivered
 
         except ModelHTTPError as exc:
+            await _release_paid_chat_turn(
+                chat_turn_accounting,
+                paid_operation_id,
+                self.event,
+            )
             if exc.status_code == 429:
                 logfire.warning(
                     "chat_rate_limited",
@@ -643,25 +781,61 @@ class ChatAgentHandler(MessageHandler):
                     _(
                         "⏳ The AI service is overloaded right now.\n\n"
                         "This happens during peak usage. Please wait 30-60 seconds "
-                        "and try again."
+                        "and try again.\n\nNot charged."
                     )
                 )
-            report_exception("chat_model_http_error", status_code=exc.status_code)
-            return await self.event.reply(
-                _("😅 Something went wrong. I couldn't process that message.")
+            report_exception(
+                "chat_model_http_error",
+                exception=exc,
+                status_code=exc.status_code,
             )
-        except UsageLimitExceeded:
-            report_exception("agent_usage_limit_exceeded", level="warning")
             return await self.event.reply(
-                _("⚠️ Too many tool calls. Please try a simpler request.")
+                _(
+                    "😅 Something went wrong. I couldn't process that message. "
+                    "Not charged."
+                )
             )
-        except UnexpectedModelBehavior:
-            report_exception("agent_unexpected_behavior", level="warning")
-            return await self.event.reply(
-                _("😅 Something went wrong. I couldn't process that message.")
+        except UsageLimitExceeded as exc:
+            await _release_paid_chat_turn(
+                chat_turn_accounting,
+                paid_operation_id,
+                self.event,
             )
-        except Exception:
-            report_exception("chat_agent_failed")
+            report_exception(
+                "agent_usage_limit_exceeded",
+                exception=exc,
+                level="warning",
+            )
             return await self.event.reply(
-                _("😅 Something went wrong. I couldn't process that message.")
+                _("⚠️ Too many tool calls. Please try a simpler request. Not charged.")
+            )
+        except UnexpectedModelBehavior as exc:
+            await _release_paid_chat_turn(
+                chat_turn_accounting,
+                paid_operation_id,
+                self.event,
+            )
+            report_exception(
+                "agent_unexpected_behavior",
+                exception=exc,
+                level="warning",
+            )
+            return await self.event.reply(
+                _(
+                    "😅 Something went wrong. I couldn't process that message. "
+                    "Not charged."
+                )
+            )
+        except Exception as exc:
+            await _release_paid_chat_turn(
+                chat_turn_accounting,
+                paid_operation_id,
+                self.event,
+            )
+            report_exception("chat_agent_failed", exception=exc)
+            return await self.event.reply(
+                _(
+                    "😅 Something went wrong. I couldn't process that message. "
+                    "Not charged."
+                )
             )
