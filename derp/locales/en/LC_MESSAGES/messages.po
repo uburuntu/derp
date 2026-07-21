@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-20 21:53+0100\n"
+"POT-Creation-Date: 2026-07-21 10:15+0100\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -31,73 +31,53 @@ msgid ""
 " creation, and credit controls."
 msgstr ""
 
-#: derp/handlers/chat.py:367
+#: derp/handlers/chat.py:463
 #, python-brace-format
 msgid "Context: {chars} chars, {msgs} messages"
 msgstr ""
 
-#: derp/handlers/chat.py:593 derp/handlers/image.py:133
-#: derp/handlers/image.py:269 derp/handlers/think.py:130
+#: derp/handlers/chat.py:505 derp/handlers/think.py:57
+#: derp/handlers/video.py:66
+msgid "😅 Could not verify your access. Please try again."
+msgstr ""
+
+#: derp/handlers/chat.py:782
 msgid ""
 "⏳ The AI service is overloaded right now.\n"
 "\n"
-"This happens during peak usage. Please wait 30-60 seconds and try again."
+"This happens during peak usage. Please wait 30-60 seconds and try again.\n"
+"\n"
+"Not charged."
 msgstr ""
 
-#: derp/handlers/chat.py:600 derp/handlers/chat.py:610
-#: derp/handlers/chat.py:615
+#: derp/handlers/chat.py:794 derp/handlers/chat.py:825
+#: derp/handlers/chat.py:838
 #, fuzzy
-msgid "😅 Something went wrong. I couldn't process that message."
+msgid "😅 Something went wrong. I couldn't process that message. Not charged."
 msgstr "😅 Something went wrong with Gemini. I couldn't process that message."
 
-#: derp/handlers/chat.py:605
-msgid "⚠️ Too many tool calls. Please try a simpler request."
+#: derp/handlers/chat.py:810
+msgid "⚠️ Too many tool calls. Please try a simpler request. Not charged."
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:39
+#: derp/handlers/credit_cmds.py:42
 msgid "😅 Could not find your user info."
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:60
-msgid "💰 **Your Credits**\n"
+#: derp/handlers/credit_cmds.py:87
+msgid "Could not find your user info."
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:64
-#, python-brace-format
-msgid "🏠 Chat pool: **{credits}** credits"
+#: derp/handlers/credit_cmds.py:104
+msgid "Could not find this chat."
 msgstr ""
 
-#: derp/handlers/credit_cmds.py:67
-#, python-brace-format
-msgid "👤 Personal: **{credits}** credits\n"
-msgstr ""
-
-#: derp/handlers/credit_cmds.py:70
-msgid "✅ Chat credits will be used first."
-msgstr ""
-
-#: derp/handlers/credit_cmds.py:72
-msgid "✅ Your personal credits will be used."
-msgstr ""
-
-#: derp/handlers/credit_cmds.py:74 derp/handlers/credit_cmds.py:82
-msgid "No credits available. Free features still work."
-msgstr ""
-
-#: derp/handlers/credit_cmds.py:77
-#, python-brace-format
-msgid "👤 Balance: **{credits}** credits\n"
-msgstr ""
-
-#: derp/handlers/credit_cmds.py:80
-msgid "✅ You have credits for premium features!"
-msgstr ""
-
-#: derp/handlers/debug.py:504
+#: derp/handlers/debug.py:514
 msgid ""
 "🛠 **Debug Commands** (admin only)\n"
 "\n"
 "**Credit Testing:**\n"
+"• /debug_buy - Run a real 1-Star durable purchase\n"
 "• /debug_credits <n> [chat] - Add credits directly\n"
 "• /debug_reset [chat] - Reset credits to 0\n"
 "• /debug_refund <charge_id> - Test refund flow\n"
@@ -289,49 +269,116 @@ msgstr "{name}, your {stars}⭐️ keeps the servers toasty. {kind} incoming!"
 msgid "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
 msgstr "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
 
-#: derp/handlers/image.py:49
+#: derp/handlers/image.py:65
+msgid ""
+"Funding approval is required. Not charged. Enable personal credit "
+"spending for this chat, then retry."
+msgstr ""
+
+#: derp/handlers/image.py:69 derp/handlers/tool_approvals.py:677
+#: derp/handlers/tts.py:375
+msgid "Funding is unavailable while this balance is in debt. Not charged."
+msgstr ""
+
+#: derp/handlers/image.py:70 derp/handlers/tool_approvals.py:678
+#: derp/handlers/tts.py:376
+#, python-brace-format
+msgid "Funding needed: {credits} credits. Not charged."
+msgstr ""
+
+#: derp/handlers/image.py:77
+msgid "Not charged. The image request is invalid."
+msgstr ""
+
+#: derp/handlers/image.py:79
+msgid "Not charged. The image request was declined."
+msgstr ""
+
+#: derp/handlers/image.py:81
+msgid "Not charged. The model did not return a usable image."
+msgstr ""
+
+#: derp/handlers/image.py:83
+msgid "Not charged. The price expired; send the request again."
+msgstr ""
+
+#: derp/handlers/image.py:85
+msgid "Not charged. The image request was canceled."
+msgstr ""
+
+#: derp/handlers/image.py:86
+msgid "Not charged. Image generation did not complete. Please try again."
+msgstr ""
+
+#: derp/handlers/image.py:91
+#, fuzzy
+msgid "Image delivered."
+msgstr "🤷 No image generated."
+
+#: derp/handlers/image.py:97 derp/handlers/paid_media_delivery.py:150
+#: derp/handlers/tool_approvals.py:715 derp/handlers/tts.py:418
+msgid "Refunded. Delivery failed, so the charged credits were returned."
+msgstr ""
+
+#: derp/handlers/image.py:100
+msgid ""
+"Delivery uncertain. The image may already have arrived. Check the chat "
+"first, then use Send again only if it is missing. Sending again does not "
+"charge credits again."
+msgstr ""
+
+#: derp/handlers/image.py:107
+msgid "In progress. This image request is still being prepared."
+msgstr ""
+
+#: derp/handlers/image.py:110
+msgid "In progress. This image is still being generated."
+msgstr ""
+
+#: derp/handlers/image.py:113
+msgid "In progress. This image is still being delivered."
+msgstr ""
+
+#: derp/handlers/image.py:128 derp/handlers/paid_media_delivery.py:80
+msgid "Send again"
+msgstr ""
+
+#: derp/handlers/image.py:282 derp/handlers/paid_media_delivery.py:98
+msgid "This delivery control is unavailable."
+msgstr ""
+
+#: derp/handlers/image.py:301
+msgid "In progress. Delivery status is still being reconciled."
+msgstr ""
+
+#: derp/handlers/image.py:320 derp/handlers/paid_media_delivery.py:161
+msgid "This delivery control is invalid or expired."
+msgstr ""
+
+#: derp/handlers/image.py:338
 msgid "Usage: /imagine <prompt>"
 msgstr "Usage: /imagine <prompt>"
 
-#: derp/handlers/image.py:53 derp/handlers/image.py:183
-#: derp/handlers/think.py:57 derp/handlers/tts.py:46 derp/handlers/video.py:66
-msgid "😅 Could not verify your access. Please try again."
+#: derp/handlers/image.py:341 derp/handlers/image.py:374
+msgid "Could not verify your account. Please try again."
 msgstr ""
 
-#: derp/handlers/image.py:62 derp/handlers/image.py:192
-#, python-brace-format
-msgid "✨ {reason}"
+#: derp/handlers/image.py:347
+msgid "The image prompt is too long or invalid."
 msgstr ""
 
-#: derp/handlers/image.py:121 derp/handlers/image.py:257
-msgid "🤷 No image generated."
-msgstr "🤷 No image generated."
-
-#: derp/handlers/image.py:140 derp/handlers/image.py:153
-msgid "😅 Something went wrong while generating the image. Try again later."
-msgstr "😅 Something went wrong while generating the image. Try again later."
-
-#: derp/handlers/image.py:146 derp/handlers/image.py:282
-#: derp/handlers/inline.py:184
-msgid ""
-"⏳ I'm getting too many requests right now. Please try again in about 30 "
-"seconds."
-msgstr ""
-"⏳ I'm getting too many requests right now. Please try again in about 30 "
-"seconds."
-
-#: derp/handlers/image.py:173
+#: derp/handlers/image.py:371
 msgid "Reply to an image and use: /edit <prompt>"
 msgstr "Reply to an image and use: /edit <prompt>"
 
-#: derp/handlers/image.py:178
+#: derp/handlers/image.py:380
 #, fuzzy
-msgid "Please reply to an image (photo/document/sticker) to edit it."
-msgstr "Please reply to an image (photo/document sticker) to edit it."
+msgid "Reply to or attach an image, then use: /edit <prompt>"
+msgstr "Reply to an image and use: /edit <prompt>"
 
-#: derp/handlers/image.py:276 derp/handlers/image.py:289
-msgid "😅 Something went wrong while editing the image. Try again later."
-msgstr "😅 Something went wrong while editing the image. Try again later."
+#: derp/handlers/image.py:388
+msgid "That image cannot be edited."
+msgstr ""
 
 #: derp/handlers/inline.py:42 derp/handlers/inline.py:69
 msgid "🤖 Ask Derp"
@@ -380,37 +427,54 @@ msgstr ""
 msgid "😅 Something went wrong. I couldn't process that."
 msgstr "😅 Something went wrong with Gemini. I couldn't process that."
 
-#: derp/handlers/payments.py:64 derp/handlers/payments.py:75
-msgid "Payment received but credits could not be added. Contact support."
-msgstr ""
-
-#: derp/handlers/payments.py:82
-msgid "Payment received but your account was not found. Contact support."
-msgstr ""
-
-#: derp/handlers/payments.py:97
-#, python-brace-format
+#: derp/handlers/inline.py:184
 msgid ""
-"✅ **Payment successful!**\n"
-"\n"
-"Added **{credits}** credits to this chat.\n"
-"New balance: **{balance}** credits"
+"⏳ I'm getting too many requests right now. Please try again in about 30 "
+"seconds."
+msgstr ""
+"⏳ I'm getting too many requests right now. Please try again in about 30 "
+"seconds."
+
+#: derp/handlers/paid_media_controls.py:36
+#: derp/handlers/paid_media_controls.py:65
+#: derp/handlers/paid_media_controls.py:124 derp/handlers/tool_approvals.py:570
+#: derp/handlers/tool_approvals.py:587 derp/handlers/tool_approvals.py:602
+msgid "Run"
 msgstr ""
 
-#: derp/handlers/payments.py:112
-#, python-brace-format
-msgid ""
-"✅ **Payment successful!**\n"
-"\n"
-"Added **{credits}** credits to your account.\n"
-"New balance: **{balance}** credits"
+#: derp/handlers/paid_media_controls.py:44
+#: derp/handlers/paid_media_controls.py:132 derp/handlers/tool_approvals.py:574
+msgid "Cancel"
 msgstr ""
 
-#: derp/handlers/payments.py:139
-#, python-brace-format
+#: derp/handlers/paid_media_controls.py:90 derp/handlers/tool_approvals.py:609
+msgid "Use mine once"
+msgstr ""
+
+#: derp/handlers/paid_media_controls.py:98 derp/handlers/tool_approvals.py:616
+msgid "Always here"
+msgstr ""
+
+#: derp/handlers/paid_media_controls.py:113 derp/handlers/tool_approvals.py:625
+msgid "Buy for chat"
+msgstr ""
+
+#: derp/handlers/paid_media_controls.py:115
+msgid "Buy credits"
+msgstr ""
+
+#: derp/handlers/paid_media_delivery.py:118
+msgid "Delivery status is still being reconciled."
+msgstr ""
+
+#: derp/handlers/paid_media_delivery.py:141
 msgid ""
-"Payment received but an error occurred. Contact support with charge ID: "
-"{charge_id}"
+"Delivery is still uncertain. The media may already have arrived. Check "
+"the chat before sending again. No additional charge."
+msgstr ""
+
+#: derp/handlers/paid_media_delivery.py:153
+msgid "Delivery is still in progress."
 msgstr ""
 
 #: derp/handlers/think.py:48
@@ -431,29 +495,255 @@ msgid ""
 "✨ {reason}"
 msgstr ""
 
+#: derp/handlers/think.py:130
+msgid ""
+"⏳ The AI service is overloaded right now.\n"
+"\n"
+"This happens during peak usage. Please wait 30-60 seconds and try again."
+msgstr ""
+
 #: derp/handlers/think.py:141 derp/handlers/think.py:149
 #, fuzzy
 msgid "😅 Something went wrong during deep thinking. Please try again."
 msgstr "😅 Something went wrong while editing the image. Try again later."
 
-#: derp/handlers/tts.py:42
+#: derp/handlers/tool_approvals.py:150
+msgid ""
+"I can prepare one paid image request at a time. Please ask for one image "
+"and try again. Not charged."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:168
+msgid "Attach or reply to an image before asking me to edit it. Not charged."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:177
+msgid ""
+"I could not prepare a valid image request. Please try again with one "
+"image instruction. Not charged."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:184
+msgid "Image edit"
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:186
+#, fuzzy
+msgid "Image generation"
+msgstr "🤷 No image generated."
+
+#: derp/handlers/tool_approvals.py:188
+#, python-brace-format
+msgid "{action} costs {credits} credits. Run it?"
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:216 derp/handlers/tool_approvals.py:283
+#: derp/handlers/tts.py:146 derp/handlers/tts.py:210
+msgid "This approval is not valid in this chat."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:222 derp/handlers/tool_approvals.py:750
+msgid "This image request is already running."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:228 derp/handlers/tool_approvals.py:264
+msgid "This image approval expired. Not charged."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:230 derp/handlers/tts.py:170
+#: derp/handlers/tts.py:391
+msgid "Canceled. Not charged."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:263
+msgid "This image approval expired."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:288
+msgid "This image request was canceled."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:295 derp/handlers/tts.py:259
+msgid "Started"
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:296
+msgid "Generating image..."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:346
+msgid "Could not finish this image request. Tap Run to retry."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:673
+msgid ""
+"Shared credits cannot cover this image. Use your credits once, or add "
+"chat credits. Not charged."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:697
+msgid ""
+"Delivery is uncertain. The image may already have arrived. Check the chat"
+" before resending."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:704
+#, fuzzy
+msgid "Resend"
+msgstr "friend"
+
+#: derp/handlers/tool_approvals.py:720
+msgid "Image generation did not complete. Not charged."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:724
+msgid "The image operation is still in progress."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:755
+msgid "This image request is already complete."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:757
+msgid "Image request complete."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:760
+msgid "This image approval is no longer active."
+msgstr ""
+
+#: derp/handlers/tool_approvals.py:763
+msgid "This image approval is no longer active. Not charged."
+msgstr ""
+
+#: derp/handlers/tts.py:73
 msgid "Usage: /tts <text>"
 msgstr ""
 
-#: derp/handlers/tts.py:57
-#, python-brace-format
-msgid ""
-"🔊 Voice generation requires credits.\n"
-"\n"
-"✨ {reason}"
+#: derp/handlers/tts.py:76
+msgid "Could not verify your account. Please try again. Not charged."
 msgstr ""
 
-#: derp/handlers/tts.py:97
-#, fuzzy
+#: derp/handlers/tts.py:82
+msgid "The voice text is too long or invalid. Not charged."
+msgstr ""
+
+#: derp/handlers/tts.py:111
+msgid "Could not prepare this voice request. Please try again. Not charged."
+msgstr ""
+
+#: derp/handlers/tts.py:116
+#, python-brace-format
+msgid "Voice generation costs {credits} credits. Run it?"
+msgstr ""
+
+#: derp/handlers/tts.py:152 derp/handlers/tts.py:447
+msgid "This voice request is already running."
+msgstr ""
+
+#: derp/handlers/tts.py:162
+msgid "Could not cancel this request."
+msgstr ""
+
+#: derp/handlers/tts.py:168
+msgid "This voice approval expired. Not charged."
+msgstr ""
+
+#: derp/handlers/tts.py:216
+msgid "This voice request was canceled."
+msgstr ""
+
+#: derp/handlers/tts.py:227
+msgid "Could not start this voice request."
+msgstr ""
+
+#: derp/handlers/tts.py:233
+msgid "This voice approval expired."
+msgstr ""
+
+#: derp/handlers/tts.py:247
+msgid "This voice approval expired. Delivery status is being checked."
+msgstr ""
+
+#: derp/handlers/tts.py:285
+msgid "Preparing voice..."
+msgstr ""
+
+#: derp/handlers/tts.py:286
+msgid "Generating voice..."
+msgstr ""
+
+#: derp/handlers/tts.py:287
+msgid "Delivering voice..."
+msgstr ""
+
+#: derp/handlers/tts.py:348
+msgid "Could not finish this voice request. Tap Run to retry."
+msgstr ""
+
+#: derp/handlers/tts.py:363
+msgid "This voice approval is invalid or expired."
+msgstr ""
+
+#: derp/handlers/tts.py:371
 msgid ""
-"😅 Something went wrong while generating the voice message. Try again "
-"later."
-msgstr "😅 Something went wrong while generating the image. Try again later."
+"Shared credits cannot cover this voice. Use your credits once, or add "
+"chat credits. Not charged."
+msgstr ""
+
+#: derp/handlers/tts.py:383
+msgid "The voice request is invalid. Not charged."
+msgstr ""
+
+#: derp/handlers/tts.py:385
+msgid "The voice request was declined. Not charged."
+msgstr ""
+
+#: derp/handlers/tts.py:387
+msgid "The model returned no usable voice. Not charged."
+msgstr ""
+
+#: derp/handlers/tts.py:389
+msgid "The price expired. Send the request again. Not charged."
+msgstr ""
+
+#: derp/handlers/tts.py:392
+msgid "Voice generation did not complete. Not charged."
+msgstr ""
+
+#: derp/handlers/tts.py:403
+msgid "Voice delivered."
+msgstr ""
+
+#: derp/handlers/tts.py:409
+msgid ""
+"Delivery is uncertain. The voice may already have arrived. Check the chat"
+" before sending again. No additional charge."
+msgstr ""
+
+#: derp/handlers/tts.py:428
+msgid "The voice request is still being prepared."
+msgstr ""
+
+#: derp/handlers/tts.py:429
+msgid "The voice is still being generated."
+msgstr ""
+
+#: derp/handlers/tts.py:430
+msgid "The voice is still being delivered."
+msgstr ""
+
+#: derp/handlers/tts.py:453
+msgid "This voice request is already complete."
+msgstr ""
+
+#: derp/handlers/tts.py:458
+msgid "This voice approval is no longer active."
+msgstr ""
+
+#: derp/handlers/tts.py:463
+msgid "This voice approval is no longer active. Not charged."
+msgstr ""
 
 #: derp/handlers/video.py:61
 #, fuzzy

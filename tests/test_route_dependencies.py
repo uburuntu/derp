@@ -141,6 +141,10 @@ def test_route_plans_cover_every_declared_dynamic_handler_dependency() -> None:
     assert chat_plan.models
     assert not chat_plan.legacy_credit
     assert CommerceDependency.PAYMENT_SETTLEMENT not in chat_plan.commerce
+    for event in (RouteEvent.MESSAGE, RouteEvent.CALLBACK_QUERY):
+        tts_plan = ROUTE_DEPENDENCY_PLANS[RouteDependencyKey(event, "tts")]
+        assert tts_plan.models
+        assert not tts_plan.legacy_credit
 
 
 @pytest.mark.asyncio

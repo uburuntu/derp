@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -44,6 +42,7 @@ from derp.operations import (
     InvalidOperationTransitionError,
     OperationId,
     OperationLedger,
+    OperationRequestBinder,
     OperationSnapshot,
     OperationState,
     Quote,
@@ -260,6 +259,7 @@ class ImageOperationCoordinator:
         quote_engine: QuoteEngine,
         image_service: ImageFeatureService,
         delivery_service: DeliveryService,
+        request_binder: OperationRequestBinder,
         *,
         clock: Callable[[], datetime] = _utc_now,
         quote_id_factory: Callable[[], QuoteId] = QuoteId.new,
@@ -268,6 +268,9 @@ class ImageOperationCoordinator:
         self._quote_engine = quote_engine
         self._image_service = image_service
         self._delivery_service = delivery_service
+        if not isinstance(request_binder, OperationRequestBinder):
+            raise TypeError("request_binder must be an OperationRequestBinder")
+        self._request_binder = request_binder
         self._clock = clock
         self._quote_id_factory = quote_id_factory
 
@@ -595,9 +598,8 @@ class ImageOperationCoordinator:
             )
         return ImageEditQuoteInput(invocation.input_tokens, request.resolution)
 
-    @classmethod
     def _pricing_input(
-        cls,
+        self,
         invocation: ImageInvocation,
         request: ImageRequest,
         *,
@@ -606,8 +608,8 @@ class ImageOperationCoordinator:
         pricing_input: dict[str, object] = {
             "input_tokens": invocation.input_tokens,
             "resolution": request.resolution.value,
-            "request_fingerprint": cls._request_fingerprint(request),
-            "delivery_fingerprint": cls._delivery_fingerprint(invocation),
+            "request_binding": self._request_binding(request),
+            "delivery_binding": self._delivery_binding(invocation),
         }
         if finishing_quote_input is not None:
             pricing_input.update(
@@ -618,8 +620,7 @@ class ImageOperationCoordinator:
             )
         return pricing_input
 
-    @staticmethod
-    def _request_fingerprint(request: ImageRequest) -> str:
+    def _request_binding(self, request: ImageRequest) -> str:
         if isinstance(request, ImageGenerateRequest):
             value = {
                 "feature": Feature.IMAGE_GENERATE.value,
@@ -635,17 +636,9 @@ class ImageOperationCoordinator:
                 "source_mime_type": request.source.metadata.mime_type,
                 "resolution": request.resolution.value,
             }
-        return hashlib.sha256(
-            json.dumps(
-                value,
-                ensure_ascii=True,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("ascii")
-        ).hexdigest()
+        return self._request_binder.bind(self._feature_for(request), value)
 
-    @staticmethod
-    def _delivery_fingerprint(invocation: ImageInvocation) -> str:
+    def _delivery_binding(self, invocation: ImageInvocation) -> str:
         value = {
             "chat_id": invocation.target.chat_id,
             "thread_id": invocation.target.thread_id,
@@ -653,14 +646,7 @@ class ImageOperationCoordinator:
             "business_connection_id": invocation.target.business_connection_id,
             "caption": invocation.caption,
         }
-        return hashlib.sha256(
-            json.dumps(
-                value,
-                ensure_ascii=True,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("ascii")
-        ).hexdigest()
+        return self._request_binder.bind(Feature.IMAGE_GENERATE, value)
 
     @staticmethod
     def _rejection_reason(reason: RejectionReason) -> ImageNotChargedReason:

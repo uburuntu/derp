@@ -110,6 +110,14 @@ class FakeDeferredApprovalExpiryWorker:
         self.events.append("approval_expiry_stop")
 
 
+class FakeTtsExecutor:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def aclose(self) -> None:
+        self.events.append("tts_close")
+
+
 @pytest.mark.asyncio
 async def test_runtime_closes_bot_before_database(tmp_path) -> None:
     events: list[str] = []
@@ -120,7 +128,9 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
         environment="dev",
         artifact_store_path=tmp_path / "artifacts",
         callback_signing_key=b"runtime-test-key".ljust(32, b"!"),
+        google_api_paid_key=SimpleNamespace(get_secret_value=lambda: "test-google-key"),
     )
+    tts_executor = FakeTtsExecutor(events)
 
     with (
         patch("derp.application.create_bot", return_value=bot),
@@ -145,6 +155,10 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
             "derp.application.DeferredApprovalExpiryWorker",
             return_value=FakeDeferredApprovalExpiryWorker(events),
         ) as approval_expiry_worker,
+        patch(
+            "derp.application.GoogleTtsExecutor",
+            return_value=tts_executor,
+        ) as executor_factory,
     ):
         async with open_runtime(settings) as runtime:
             assert runtime.bot is bot
@@ -158,6 +172,23 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
                 runtime.image_operation_coordinator._delivery_service
                 is runtime.delivery_service
             )
+            assert (
+                runtime.paid_media_operation_coordinator._ledger
+                is runtime.operation_ledger
+            )
+            assert (
+                runtime.paid_media_operation_coordinator._delivery_service
+                is runtime.delivery_service
+            )
+            assert (
+                runtime.paid_media_approval_coordinator._operations
+                is runtime.paid_media_operation_coordinator
+            )
+            assert (
+                runtime.paid_media_approval_coordinator._request_binder
+                is runtime.image_operation_coordinator._request_binder
+            )
+            assert runtime.tts_paid_media_adapter.service._executor is tts_executor
             reconciler = reconciliation_worker.call_args.args[0]
             assert reconciler._delivery is runtime.delivery_service
             assert (
@@ -169,6 +200,8 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
                 is runtime.deferred_tool_approval_service
             )
             events.append("running")
+
+    executor_factory.assert_called_once()
 
     assert events == [
         "bot_enter",
@@ -184,6 +217,7 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
         "operation_reconciliation_stop",
         "subscription_expiry_stop",
         "retention_stop",
+        "tts_close",
         "bot_close",
         "db_disconnect",
     ]

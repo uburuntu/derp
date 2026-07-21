@@ -22,7 +22,6 @@ class ChatTool(StrEnum):
     GENERATE_IMAGE = "generate_image"
     EDIT_IMAGE = "edit_image"
     VIDEO_GENERATE = "video_generate"
-    VOICE_TTS = "voice_tts"
     THINK_DEEP = "think_deep"
     PROPOSE_SHARED_FACT = "propose_shared_fact"
     REVIEW_SHARED_FACT = "review_shared_fact"
@@ -88,7 +87,6 @@ _EXPENSIVE_TOOLS = frozenset(
         ChatTool.GENERATE_IMAGE,
         ChatTool.EDIT_IMAGE,
         ChatTool.VIDEO_GENERATE,
-        ChatTool.VOICE_TTS,
         ChatTool.THINK_DEEP,
     }
 )

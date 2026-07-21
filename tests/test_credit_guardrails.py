@@ -268,12 +268,6 @@ class TestToolCatalogParity:
         with pytest.raises(ValueError, match="Unsupported video duration"):
             tool.model_credit_cost(plan, {"duration_seconds": 7})
 
-    def test_tts_pricing_uses_text_size_and_the_bounded_output(self) -> None:
-        tool = get_tool("voice_tts")
-        plan = plan_execution(Feature.TTS, GoogleModelKey.TTS)
-        assert tool.model_credit_cost(plan, {"text": "hello"}) == 22
-        assert tool.model_credit_cost(plan, {"text": "x" * 2_000}) == 25
-
     def test_tool_total_cost_includes_current_catalog_estimate(self) -> None:
         tool = get_tool("image_generate")
         plan = tool.resolve_plan({})
@@ -322,7 +316,7 @@ class TestCreditCheckResult:
         chat = MagicMock()
         rejected = CreditCheckResult(
             allowed=False,
-            plan=plan_execution(Feature.TTS, GoogleModelKey.TTS),
+            plan=plan_execution(Feature.DEEP_THINK, GoogleModelKey.CHAT_REASONING),
             source="rejected",
             credits_to_deduct=0,
             credits_remaining=0,
@@ -330,7 +324,7 @@ class TestCreditCheckResult:
             reject_reason="No access",
         )
         with pytest.raises(ValueError, match="rejected"):
-            await service.deduct(rejected, user, chat, "voice_tts")
+            await service.deduct(rejected, user, chat, "think_deep")
 
         image_generation = CreditCheckResult(
             allowed=True,

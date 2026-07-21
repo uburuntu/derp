@@ -89,7 +89,8 @@ ROUTE_DEPENDENCY_PLANS: Final[Mapping[RouteDependencyKey, RouteDependencyPlan]] 
             ),
             RouteDependencyKey(RouteEvent.MESSAGE, "image"): _MODELS,
             RouteDependencyKey(RouteEvent.MESSAGE, "video"): _MODELS_AND_CREDIT,
-            RouteDependencyKey(RouteEvent.MESSAGE, "tts"): _MODELS_AND_CREDIT,
+            RouteDependencyKey(RouteEvent.MESSAGE, "tts"): _MODELS,
+            RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "tts"): _MODELS,
             RouteDependencyKey(RouteEvent.MESSAGE, "chat"): _MODELS,
             RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "tool_approvals"): _MODELS,
         }

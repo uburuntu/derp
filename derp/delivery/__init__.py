@@ -21,7 +21,7 @@ from derp.delivery.service import (
     DeliveryStateError,
     PreparedDelivery,
 )
-from derp.delivery.telegram import DeliveryResendCallback
+from derp.delivery.telegram import DeliveryResendCallback, PaidMediaResendCallback
 from derp.delivery.tokens import ResendTokenCodec
 from derp.delivery.types import (
     MAX_TELEGRAM_ALBUM_ITEMS,
@@ -59,6 +59,7 @@ __all__ = [
     "DeliveryOutcome",
     "DeliveryReconciliation",
     "DeliveryResendCallback",
+    "PaidMediaResendCallback",
     "DeliveryState",
     "DeliveryTarget",
     "DeliveryUncertain",

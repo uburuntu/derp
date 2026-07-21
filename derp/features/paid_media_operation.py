@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -41,6 +39,7 @@ from derp.operations import (
     InvalidOperationTransitionError,
     OperationId,
     OperationLedger,
+    OperationRequestBinder,
     OperationSnapshot,
     OperationState,
     Quote,
@@ -294,6 +293,7 @@ class PaidMediaOperationCoordinator:
         ledger: OperationLedger,
         quote_engine: QuoteEngine,
         delivery_service: DeliveryService,
+        request_binder: OperationRequestBinder,
         *,
         clock: Callable[[], datetime] = _utc_now,
         quote_id_factory: Callable[[], QuoteId] = QuoteId.new,
@@ -306,6 +306,9 @@ class PaidMediaOperationCoordinator:
         self._ledger = ledger
         self._quote_engine = quote_engine
         self._delivery_service = delivery_service
+        if not isinstance(request_binder, OperationRequestBinder):
+            raise TypeError("request_binder must be an OperationRequestBinder")
+        self._request_binder = request_binder
         self._clock = clock
         self._quote_id_factory = quote_id_factory
         self._provider_timeout_seconds = provider_timeout.total_seconds()
@@ -483,6 +486,15 @@ class PaidMediaOperationCoordinator:
             thread_id=invocation.thread_id,
             pricing_input=self._pricing_input(invocation, quote_input),
         )
+
+    async def resume_existing(
+        self,
+        operation_id: OperationId,
+    ) -> PaidMediaOperationOutcome:
+        """Recover durable settlement and delivery without provider execution."""
+        if not isinstance(operation_id, OperationId):
+            raise TypeError("operation_id must be an OperationId")
+        return await self._resume_operation(operation_id)
 
     async def _execute[RequestT](
         self,
@@ -773,16 +785,30 @@ class PaidMediaOperationCoordinator:
             raise ValueError("invocation and quote input token estimates must match")
         return feature
 
-    @classmethod
     def _pricing_input(
-        cls,
+        self,
         invocation: PaidMediaInvocation,
         quote_input: PaidMediaQuoteInput,
     ) -> Mapping[str, object]:
+        feature = (
+            Feature.TTS
+            if isinstance(quote_input, TtsQuoteInput)
+            else Feature.VIDEO_GENERATE
+        )
         pricing_input: dict[str, object] = {
             "input_tokens": quote_input.input_tokens,
             "request_binding": invocation.request_binding,
-            "delivery_fingerprint": cls._delivery_fingerprint(invocation.target),
+            "delivery_binding": self._request_binder.bind(
+                feature,
+                {
+                    "business_connection_id": (
+                        invocation.target.business_connection_id
+                    ),
+                    "chat_id": invocation.target.chat_id,
+                    "reply_to_message_id": invocation.target.reply_to_message_id,
+                    "thread_id": invocation.target.thread_id,
+                },
+            ),
         }
         if isinstance(quote_input, TtsQuoteInput):
             pricing_input["output_seconds"] = quote_input.output_seconds
@@ -794,21 +820,6 @@ class PaidMediaOperationCoordinator:
                 }
             )
         return pricing_input
-
-    @staticmethod
-    def _delivery_fingerprint(target: DeliveryTarget) -> str:
-        encoded = json.dumps(
-            {
-                "business_connection_id": target.business_connection_id,
-                "chat_id": target.chat_id,
-                "reply_to_message_id": target.reply_to_message_id,
-                "thread_id": target.thread_id,
-            },
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("ascii")
-        return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
     def _rejection_reason(reason: RejectionReason) -> PaidMediaNotChargedReason:

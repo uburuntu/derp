@@ -10,14 +10,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from derp.catalog import (
-    AudioPricing,
     GoogleModelKey,
     VideoPricing,
     calculate_credit_cost,
 )
 from derp.execution import ExecutionPlan, Feature, plan_execution
-
-TTS_MAX_OUTPUT_SECONDS = 30
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +35,6 @@ class ToolConfig:
     base_credit_cost: int  # Base cost (model cost added on top)
     free_daily_limit: int  # 0 = paid only
     is_premium: bool = False  # Agent sees but gets placeholder if no credits
-    audio_output_seconds: int | None = None
     model_parameter: str | None = None
     model_choices: tuple[tuple[str, GoogleModelKey], ...] = ()
 
@@ -50,25 +46,13 @@ class ToolConfig:
         if len(dict(self.model_choices)) != len(self.model_choices):
             raise ValueError("Tool model choices must be unique")
         if self.model_key is None:
-            if (
-                self.model_choices
-                or self.feature is not None
-                or self.audio_output_seconds is not None
-            ):
+            if self.model_choices or self.feature is not None:
                 raise ValueError("Provider-free tools cannot define model requirements")
             return
         if self.feature is None:
             raise ValueError("Provider-backed tools must define an execution feature")
         for key in {self.model_key, *(key for _, key in self.model_choices)}:
-            plan = plan_execution(self.feature, key)
-            if isinstance(plan.model.pricing, AudioPricing) != (
-                self.audio_output_seconds is not None
-            ):
-                raise ValueError(
-                    "Audio-backed tools require an explicit output-duration policy"
-                )
-        if self.audio_output_seconds is not None and self.audio_output_seconds <= 0:
-            raise ValueError("Audio output duration must be positive")
+            plan_execution(self.feature, key)
 
     def _resolve_model_key(
         self, arguments: Mapping[str, object]
@@ -101,14 +85,6 @@ class ToolConfig:
         model = plan.model
 
         duration_seconds: int | None = None
-        audio_input_tokens: int | None = None
-        audio_output_seconds: int | None = None
-        if isinstance(model.pricing, AudioPricing):
-            text = arguments.get("text")
-            if not isinstance(text, str):
-                raise ValueError("Audio text is required for pricing")
-            audio_input_tokens = len(text.encode("utf-8"))
-            audio_output_seconds = self.audio_output_seconds
         if isinstance(model.pricing, VideoPricing):
             duration = arguments.get("duration_seconds")
             if duration is not None:
@@ -117,8 +93,6 @@ class ToolConfig:
                 duration_seconds = duration
         return calculate_credit_cost(
             model,
-            audio_input_tokens=audio_input_tokens,
-            audio_output_seconds=audio_output_seconds,
             video_duration_seconds=duration_seconds,
         )
 
@@ -176,17 +150,6 @@ TOOL_REGISTRY: dict[str, ToolConfig] = {
         base_credit_cost=10,  # Premium reasoning is expensive
         free_daily_limit=0,  # Paid only
         is_premium=True,
-    ),
-    # Voice / TTS
-    "voice_tts": ToolConfig(
-        name="voice_tts",
-        description="Generate speech audio from text",
-        model_key=GoogleModelKey.TTS,
-        feature=Feature.TTS,
-        base_credit_cost=3,
-        free_daily_limit=0,
-        is_premium=True,
-        audio_output_seconds=TTS_MAX_OUTPUT_SECONDS,
     ),
     # Video generation (Veo 3.1)
     "video_generate": ToolConfig(

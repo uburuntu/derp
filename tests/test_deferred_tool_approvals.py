@@ -390,6 +390,29 @@ async def test_released_or_renewed_lease_preserves_single_owner(
     assert isinstance(replacement, ResumeLease)
 
 
+async def test_owned_resume_lease_can_cancel_and_scrub_approved_payload(
+    approval_env: ApprovalEnvironment,
+) -> None:
+    stored = await _store_request(approval_env)
+    await approval_env.service.approve(stored.capability)
+    lease = await approval_env.service.claim_resume(stored.capability)
+    assert isinstance(lease, ResumeLease)
+
+    canceled = await approval_env.service.cancel_resume(lease)
+
+    assert canceled.status is DeferredToolStatus.DENIED
+    assert canceled.resumed_at is None
+    assert await _stored_payload(
+        approval_env,
+        stored.handle.snapshot.request_id,
+    ) == ({}, [])
+    unavailable = await approval_env.service.claim_resume(stored.capability)
+    assert isinstance(unavailable, ResumeUnavailable)
+    assert unavailable.reason is ResumeUnavailableReason.DENIED
+    with pytest.raises(ResumeLeaseLostError):
+        await approval_env.service.mark_resumed(lease)
+
+
 async def test_expiry_fails_closed_but_does_not_interrupt_a_live_lease(
     approval_env: ApprovalEnvironment,
 ) -> None:

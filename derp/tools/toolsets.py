@@ -11,7 +11,6 @@ from derp.approvals.image_tools import EDIT_IMAGE_TOOL, GENERATE_IMAGE_TOOL
 from derp.llm.deps import AgentDeps
 from derp.tools.gemini_image import edit_image, generate_image
 from derp.tools.gemini_think import think_deep
-from derp.tools.gemini_tts import voice_tts
 from derp.tools.policy import ChatTool, ChatToolAccess
 from derp.tools.veo_video import video_generate
 from derp.tools.web_search import web_search
@@ -40,8 +39,10 @@ def create_chat_toolset(
     """Create exactly the tools authorized for one actor and chat policy.
 
     Image calls pause after framework argument validation and execute only from
-    a server-authorized deferred resume. ``access.shared_credit_spending_enabled``
-    is settlement metadata and never changes which tools the model can see.
+    a server-authorized deferred resume. TTS stays command-only until natural
+    calls can resume with the same quote and finishing-cost guarantees.
+    ``access.shared_credit_spending_enabled`` is settlement metadata and never
+    changes which tools the model can see.
     """
     toolset: FunctionToolset[AgentDeps] = FunctionToolset()
 
@@ -55,8 +56,6 @@ def create_chat_toolset(
         toolset.tool(edit_image, requires_approval=True)
     if access.allows(ChatTool.VIDEO_GENERATE):
         toolset.tool(video_generate)
-    if access.allows(ChatTool.VOICE_TTS):
-        toolset.tool(voice_tts)
     if access.allows(ChatTool.THINK_DEEP):
         toolset.tool(think_deep)
 

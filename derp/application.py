@@ -17,6 +17,7 @@ from aiogram.utils.i18n import I18n
 from aiogram.utils.i18n.middleware import SimpleI18nMiddleware
 
 from derp.approvals.maintenance import DeferredApprovalExpiryWorker
+from derp.approvals.paid_media import PaidMediaApprovalCoordinator
 from derp.approvals.service import DeferredToolApprovalService
 from derp.approvals.tokens import ApprovalTokenCodec
 from derp.artifacts import FilesystemArtifactStore
@@ -25,6 +26,7 @@ from derp.billing import (
     PaymentSettlementService,
     SubscriptionExpiryWorker,
 )
+from derp.common.audio import convert_to_ogg_opus
 from derp.config import Settings
 from derp.db import DatabaseManager, init_db_manager
 from derp.delivery import (
@@ -33,8 +35,14 @@ from derp.delivery import (
     DeliveryService,
     ResendTokenCodec,
 )
-from derp.features import ImageFeatureService, ImageOperationCoordinator
+from derp.features import (
+    ImageFeatureService,
+    ImageOperationCoordinator,
+    TtsFeatureService,
+)
 from derp.features.chat_accounting import ChatTurnAccounting
+from derp.features.paid_media_operation import PaidMediaOperationCoordinator
+from derp.features.tts_operation import TtsPaidMediaAdapter
 from derp.handlers import (
     basic,
     chat,
@@ -44,6 +52,7 @@ from derp.handlers import (
     donations,
     image,
     inline,
+    paid_media_delivery,
     payments,
     subscriptions,
     think,
@@ -53,6 +62,7 @@ from derp.handlers import (
 from derp.health import RuntimeHeartbeat
 from derp.history.retention import HistoryRetentionWorker
 from derp.llm.image_executor import PydanticAIImageExecutor
+from derp.llm.tts_executor import GoogleTtsExecutor
 from derp.media import MediaGateway, TelegramImageSourceLoader
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
 from derp.middlewares.api_resilient import ResilientRequestMiddleware
@@ -65,6 +75,7 @@ from derp.operations import (
     OperationLedger,
     OperationReconciler,
     OperationReconciliationWorker,
+    OperationRequestBinder,
     QuoteEngine,
 )
 from derp.tools.authorization import ActorRoleResolver
@@ -80,6 +91,7 @@ APPLICATION_ROUTERS = (
     think.router,
     payments.router,
     subscriptions.router,
+    paid_media_delivery.router,
     image.router,
     video.router,
     tts.router,
@@ -101,6 +113,9 @@ class Runtime:
     chat_turn_accounting: ChatTurnAccounting
     delivery_service: DeliveryService
     image_operation_coordinator: ImageOperationCoordinator
+    paid_media_operation_coordinator: PaidMediaOperationCoordinator
+    paid_media_approval_coordinator: PaidMediaApprovalCoordinator
+    tts_paid_media_adapter: TtsPaidMediaAdapter
     deferred_tool_approval_service: DeferredToolApprovalService
 
 
@@ -149,19 +164,40 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             operation_ledger,
             ResendTokenCodec(settings.callback_signing_key),
         )
+        quote_engine = QuoteEngine()
+        request_binder = OperationRequestBinder(settings.callback_signing_key)
         image_service = ImageFeatureService(
             PydanticAIImageExecutor(),
             source_loader=TelegramImageSourceLoader(media_gateway, bot=bot),
         )
         image_operation_coordinator = ImageOperationCoordinator(
             operation_ledger,
-            QuoteEngine(),
+            quote_engine,
             image_service,
             delivery_service,
+            request_binder,
+        )
+        paid_media_operation_coordinator = PaidMediaOperationCoordinator(
+            operation_ledger,
+            quote_engine,
+            delivery_service,
+            request_binder,
         )
         deferred_tool_approval_service = DeferredToolApprovalService(
             db.session,
             ApprovalTokenCodec(settings.callback_signing_key),
+        )
+        tts_executor = GoogleTtsExecutor(
+            settings.google_api_paid_key.get_secret_value(),
+            converter=convert_to_ogg_opus,
+        )
+        stack.push_async_callback(tts_executor.aclose)
+        tts_paid_media_adapter = TtsPaidMediaAdapter(TtsFeatureService(tts_executor))
+        paid_media_approval_coordinator = PaidMediaApprovalCoordinator(
+            paid_media_operation_coordinator,
+            deferred_tool_approval_service,
+            operation_ledger,
+            request_binder,
         )
         await stack.enter_async_context(HistoryRetentionWorker(db))
         await stack.enter_async_context(
@@ -186,6 +222,9 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             chat_turn_accounting=chat_turn_accounting,
             delivery_service=delivery_service,
             image_operation_coordinator=image_operation_coordinator,
+            paid_media_operation_coordinator=paid_media_operation_coordinator,
+            paid_media_approval_coordinator=paid_media_approval_coordinator,
+            tts_paid_media_adapter=tts_paid_media_adapter,
             deferred_tool_approval_service=deferred_tool_approval_service,
         )
 
@@ -206,6 +245,9 @@ def create_dispatcher(
         chat_turn_accounting=runtime.chat_turn_accounting,
         delivery_service=runtime.delivery_service,
         image_operation_coordinator=runtime.image_operation_coordinator,
+        paid_media_operation_coordinator=runtime.paid_media_operation_coordinator,
+        paid_media_approval_coordinator=runtime.paid_media_approval_coordinator,
+        tts_paid_media_adapter=runtime.tts_paid_media_adapter,
         deferred_tool_approval_service=runtime.deferred_tool_approval_service,
         commerce_policy=CommercePolicy(
             public_intake_enabled=settings.public_purchases_enabled

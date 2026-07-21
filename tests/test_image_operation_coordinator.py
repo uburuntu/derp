@@ -54,6 +54,7 @@ from derp.operations import (
     InventoryAllocation,
     OperationId,
     OperationLedger,
+    OperationRequestBinder,
     OperationSnapshot,
     OperationState,
     Quote,
@@ -151,6 +152,7 @@ def env() -> Environment:
             QuoteEngine(),
             image_service,
             delivery_service,
+            OperationRequestBinder(b"image-operation-test-key".ljust(32, b"!")),
             clock=lambda: NOW,
             quote_id_factory=lambda: QuoteId(
                 UUID("ee238d9a-b370-4c3e-80b8-5b8dcf8b2943")
@@ -352,8 +354,8 @@ async def test_authoritative_original_quote_is_returned_for_funding_action(
     pricing_input = env.ledger.ensure_quote.await_args.kwargs["pricing_input"]
     assert pricing_input["input_tokens"] == 120
     assert pricing_input["resolution"] == "1K"
-    assert len(pricing_input["request_fingerprint"]) == 64
-    assert len(pricing_input["delivery_fingerprint"]) == 64
+    assert len(pricing_input["request_binding"]) == 64
+    assert len(pricing_input["delivery_binding"]) == 64
     assert REQUEST.prompt not in repr(pricing_input)
     assert env.invocation.caption not in repr(pricing_input)
     env.image_service.generate.assert_not_awaited()

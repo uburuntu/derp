@@ -17,4 +17,13 @@ class DeliveryResendCallback(CallbackData, prefix="ir"):
     ]
 
 
-__all__ = ["DeliveryResendCallback"]
+class PaidMediaResendCallback(CallbackData, prefix="pmr"):
+    """Capability-neutral recovery for durable audio and video delivery."""
+
+    token: Annotated[
+        str,
+        Field(min_length=1, max_length=59, pattern=r"^[A-Za-z0-9_-]+$"),
+    ]
+
+
+__all__ = ["DeliveryResendCallback", "PaidMediaResendCallback"]

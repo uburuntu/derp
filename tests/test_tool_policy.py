@@ -133,7 +133,6 @@ def test_expensive_policy_adds_every_generation_and_reasoning_tool() -> None:
         "generate_image",
         "think_deep",
         "video_generate",
-        "voice_tts",
         "web_search",
     }
 

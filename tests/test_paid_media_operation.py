@@ -52,6 +52,7 @@ from derp.operations import (
     InventoryAllocation,
     OperationId,
     OperationLedger,
+    OperationRequestBinder,
     OperationSnapshot,
     OperationState,
     Quote,
@@ -71,6 +72,7 @@ NOW = datetime(2026, 7, 21, 12, tzinfo=UTC)
 OPERATION_ID = OperationId(UUID("a19be8fc-1009-43cf-8229-66ae89a35115"))
 REQUESTER_ID = UUID("af2caa28-ac45-4cc0-8b8d-f0d6ffdfa876")
 CHAT_ID = UUID("7843f0ca-9f25-45eb-b3f2-c3953024d655")
+BINDING_KEY = b"paid-media-operation-test-key".ljust(32, b"!")
 TTS_PLAN = plan_execution(Feature.TTS, GoogleModelKey.TTS)
 VIDEO_PLAN = plan_execution(Feature.VIDEO_GENERATE, GoogleModelKey.VIDEO_FAST)
 TTS_QUOTE_INPUT = TtsQuoteInput(input_tokens=120, output_seconds=30)
@@ -188,6 +190,7 @@ def env() -> Environment:
             ledger,
             QuoteEngine(),
             delivery,
+            OperationRequestBinder(BINDING_KEY),
             clock=lambda: NOW,
             quote_id_factory=lambda: QuoteId(
                 UUID("ce5e0673-b476-4aa5-96df-997d956b5bc5")
@@ -382,9 +385,10 @@ async def test_quote_only_persists_content_free_commercial_identity(
         "input_tokens": 120,
         "output_seconds": 30,
         "request_binding": "a" * 64,
-        "delivery_fingerprint": call.kwargs["pricing_input"]["delivery_fingerprint"],
+        "delivery_binding": call.kwargs["pricing_input"]["delivery_binding"],
     }
-    assert len(call.kwargs["pricing_input"]["delivery_fingerprint"]) == 64
+    assert len(call.kwargs["pricing_input"]["delivery_binding"]) == 64
+    assert str(env.invocation.target.chat_id) not in repr(call.kwargs["pricing_input"])
     env.ledger.reserve.assert_not_awaited()
     env.executor.assert_not_awaited()
 
@@ -414,9 +418,9 @@ async def test_video_uses_same_core_with_exact_plan_and_quote(env: Environment) 
         "duration_seconds": 6,
         "resolution": "720p",
         "request_binding": "a" * 64,
-        "delivery_fingerprint": env.ledger.ensure_quote.await_args.kwargs[
-            "pricing_input"
-        ]["delivery_fingerprint"],
+        "delivery_binding": env.ledger.ensure_quote.await_args.kwargs["pricing_input"][
+            "delivery_binding"
+        ],
     }
     env.delivery.persist_result.assert_awaited_once_with(
         OPERATION_ID,
@@ -627,6 +631,7 @@ async def test_provider_timeout_is_enforced_and_released(env: Environment) -> No
         env.ledger,
         QuoteEngine(),
         env.delivery,
+        OperationRequestBinder(BINDING_KEY),
         clock=lambda: NOW,
         provider_timeout=timedelta(microseconds=1),
     )

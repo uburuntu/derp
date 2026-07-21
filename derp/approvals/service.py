@@ -371,6 +371,30 @@ class DeferredToolApprovalService:
             self._scrub_terminal_payload(request, now)
             return self._snapshot(loaded)
 
+    async def cancel_resume(self, lease: ResumeLease) -> DeferredToolSnapshot:
+        """Cancel an exclusively claimed approval before provider execution."""
+        if not isinstance(lease, ResumeLease):
+            raise TypeError("lease must be a ResumeLease")
+        now = self._aware_now()
+        async with self._transactions() as session:
+            loaded = await self._load_by_request_id(
+                session,
+                lease.snapshot.request_id,
+            )
+            if loaded is None:
+                raise ResumeLeaseLostError("resume lease no longer exists")
+            request = loaded[0]
+            if (
+                request.status != DeferredToolStatus.APPROVED.value
+                or request.resumed_at != lease.claimed_at
+            ):
+                raise ResumeLeaseLostError("resume lease is no longer owned")
+            request.status = DeferredToolStatus.DENIED.value
+            request.resumed_at = None
+            request.updated_at = now
+            self._scrub_terminal_payload(request, now)
+            return self._snapshot(loaded)
+
     async def release_resume(self, lease: ResumeLease) -> bool:
         """Release an owned claim after a retryable pre-completion failure."""
         if not isinstance(lease, ResumeLease):
