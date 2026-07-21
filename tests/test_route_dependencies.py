@@ -168,7 +168,7 @@ def test_route_plans_cover_every_declared_dynamic_handler_dependency() -> None:
         {CommerceDependency.PURCHASE_INTENTS}
     )
     operator_callback_plan = ROUTE_DEPENDENCY_PLANS[
-        RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "operator")
+        RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "operator_purchase_test")
     ]
     assert operator_callback_plan.models
     assert not operator_callback_plan.legacy_credit

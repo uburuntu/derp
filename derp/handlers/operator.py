@@ -42,6 +42,8 @@ from derp.operator import (
 )
 
 router = Router(name="operator")
+purchase_test_router = Router(name="operator_purchase_test")
+stale_callback_router = Router(name="operator_stale_callback")
 rejection_router = Router(name="operator_rejection")
 router.message.filter(OperatorOnlyFilter())
 router.callback_query.filter(OperatorOnlyFilter())
@@ -298,7 +300,7 @@ async def run_operator_maintenance(
     )
 
 
-@router.callback_query(
+@purchase_test_router.callback_query(
     OperatorUtilityCallback.filter(F.action == OperatorUtility.TEST_PURCHASE)
 )
 async def open_operator_test_purchase(
@@ -374,7 +376,7 @@ async def sync_operator_command_menu(
     )
 
 
-@router.callback_query(F.data.startswith(_OPERATOR_CALLBACK_PREFIXES))
+@stale_callback_router.callback_query(F.data.startswith(_OPERATOR_CALLBACK_PREFIXES))
 async def reject_stale_operator_callback(callback: CallbackQuery) -> None:
     """Clear malformed or obsolete operator buttons for authorized actors."""
     await callback.answer(
@@ -932,6 +934,9 @@ def _package_versions() -> tuple[tuple[str, str], ...]:
     return tuple(resolved)
 
 
+router.include_routers(purchase_test_router, stale_callback_router)
+
+
 __all__ = [
     "OperatorMaintenanceCallback",
     "OperatorMaintenanceConfirmCallback",
@@ -941,6 +946,8 @@ __all__ = [
     "OperatorView",
     "build_maintenance_result_panel",
     "build_operator_panel",
+    "purchase_test_router",
     "rejection_router",
     "router",
+    "stale_callback_router",
 ]

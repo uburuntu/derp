@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-21 13:25+0100\n"
+"POT-Creation-Date: 2026-07-21 13:26+0100\n"
 "PO-Revision-Date: 2025-04-28 20:23+0100\n"
 "Last-Translator: Derp contributors <https://github.com/uburuntu/derp>\n"
 "Language: en\n"
@@ -350,8 +350,8 @@ msgid "Change how my credits are used"
 msgstr ""
 
 #: derp/handlers/context_settings.py:342 derp/handlers/context_settings.py:455
-#: derp/handlers/context_settings.py:552 derp/handlers/operator.py:687
-#: derp/handlers/operator.py:720 derp/handlers/operator.py:741
+#: derp/handlers/context_settings.py:552 derp/handlers/operator.py:689
+#: derp/handlers/operator.py:722 derp/handlers/operator.py:743
 msgid "Back"
 msgstr ""
 
@@ -561,7 +561,7 @@ msgstr ""
 msgid "Delete"
 msgstr ""
 
-#: derp/handlers/context_settings.py:591 derp/handlers/operator.py:235
+#: derp/handlers/context_settings.py:591 derp/handlers/operator.py:237
 #: derp/handlers/paid_media_controls.py:48
 #: derp/handlers/paid_media_controls.py:136 derp/handlers/tool_approvals.py:582
 msgid "Cancel"
@@ -1084,37 +1084,37 @@ msgstr ""
 msgid "Ask another question"
 msgstr ""
 
-#: derp/handlers/operator.py:114
+#: derp/handlers/operator.py:116
 msgid "<b>Maintenance pass completed</b>"
 msgstr ""
 
-#: derp/handlers/operator.py:117
+#: derp/handlers/operator.py:119
 #, python-brace-format
 msgid "{label}: {count}"
 msgstr ""
 
-#: derp/handlers/operator.py:128
+#: derp/handlers/operator.py:130
 msgid "No changes reported"
 msgstr ""
 
-#: derp/handlers/operator.py:133
+#: derp/handlers/operator.py:135
 #, python-brace-format
 msgid "Duration: {duration} ms"
 msgstr ""
 
-#: derp/handlers/operator.py:153
+#: derp/handlers/operator.py:155
 msgid "Operator console is private. Open Derp directly and use /operator."
 msgstr ""
 
-#: derp/handlers/operator.py:171
+#: derp/handlers/operator.py:173
 msgid "Operator console is unavailable. Try again."
 msgstr ""
 
-#: derp/handlers/operator.py:214
+#: derp/handlers/operator.py:216
 msgid "Too many pending confirmations. Try again shortly."
 msgstr ""
 
-#: derp/handlers/operator.py:220
+#: derp/handlers/operator.py:222
 #, python-brace-format
 msgid ""
 "<b>Confirm maintenance</b>\n"
@@ -1123,91 +1123,91 @@ msgid ""
 "This runs the live worker now."
 msgstr ""
 
-#: derp/handlers/operator.py:226
+#: derp/handlers/operator.py:228
 msgid "Run now"
 msgstr ""
 
-#: derp/handlers/operator.py:269
+#: derp/handlers/operator.py:271
 msgid "This confirmation expired. Choose the action again."
 msgstr ""
 
-#: derp/handlers/operator.py:273
+#: derp/handlers/operator.py:275
 msgid "Maintenance started"
 msgstr ""
 
-#: derp/handlers/operator.py:288
+#: derp/handlers/operator.py:290
 msgid ""
 "<b>Maintenance interrupted</b>\n"
 "The pass did not complete. Check telemetry before retrying."
 msgstr ""
 
-#: derp/handlers/operator.py:313
+#: derp/handlers/operator.py:315
 msgid "Opening test checkout"
 msgstr ""
 
-#: derp/handlers/operator.py:324
+#: derp/handlers/operator.py:326
 msgid "Test checkout is unavailable. Try again."
 msgstr ""
 
-#: derp/handlers/operator.py:341
+#: derp/handlers/operator.py:343
 msgid "Command sync started"
 msgstr ""
 
-#: derp/handlers/operator.py:356
+#: derp/handlers/operator.py:358
 msgid ""
 "<b>Command sync failed</b>\n"
 "Telegram did not accept the complete command state."
 msgstr ""
 
-#: derp/handlers/operator.py:365
+#: derp/handlers/operator.py:367
 msgid ""
 "<b>Command menu synced</b>\n"
 "All locales and audience scopes now match the configured state."
 msgstr ""
 
-#: derp/handlers/operator.py:381
+#: derp/handlers/operator.py:383
 msgid "This operator button expired. Open /operator again."
 msgstr ""
 
-#: derp/handlers/operator.py:389
+#: derp/handlers/operator.py:391
 msgid "This command isn't available."
 msgstr ""
 
-#: derp/handlers/operator.py:395
+#: derp/handlers/operator.py:397
 msgid "This control is no longer available."
 msgstr ""
 
-#: derp/handlers/operator.py:406
+#: derp/handlers/operator.py:408
 msgid "Open the operator console in your private chat."
 msgstr ""
 
-#: derp/handlers/operator.py:431
+#: derp/handlers/operator.py:433
 msgid ""
 "<b>Operator console unavailable</b>\n"
 "Try again."
 msgstr ""
 
-#: derp/handlers/operator.py:476 derp/handlers/operator.py:695
+#: derp/handlers/operator.py:478 derp/handlers/operator.py:697
 msgid "degraded"
 msgstr ""
 
-#: derp/handlers/operator.py:478
+#: derp/handlers/operator.py:480
 #, python-brace-format
 msgid "ready · {latency} ms"
 msgstr ""
 
-#: derp/handlers/operator.py:484 derp/handlers/operator.py:810
+#: derp/handlers/operator.py:486 derp/handlers/operator.py:812
 msgid "none"
 msgstr ""
 
-#: derp/handlers/operator.py:487
+#: derp/handlers/operator.py:489
 #, python-brace-format
 msgid "{count} signal"
 msgid_plural "{count} signals"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/operator.py:493
+#: derp/handlers/operator.py:495
 #, python-brace-format
 msgid ""
 "<b>Operator console</b>\n"
@@ -1218,36 +1218,36 @@ msgid ""
 "Attention: {attention}"
 msgstr ""
 
-#: derp/handlers/operator.py:509 derp/handlers/operator.py:530
+#: derp/handlers/operator.py:511 derp/handlers/operator.py:532
 msgid "Usage"
 msgstr ""
 
-#: derp/handlers/operator.py:510 derp/handlers/operator.py:562
+#: derp/handlers/operator.py:512 derp/handlers/operator.py:564
 msgid "Commerce"
 msgstr ""
 
-#: derp/handlers/operator.py:513 derp/handlers/operator.py:596
-#: derp/handlers/operator.py:680 derp/handlers/operator.py:851
+#: derp/handlers/operator.py:515 derp/handlers/operator.py:598
+#: derp/handlers/operator.py:682 derp/handlers/operator.py:853
 msgid "Operations"
 msgstr ""
 
-#: derp/handlers/operator.py:514
+#: derp/handlers/operator.py:516
 msgid "Runtime"
 msgstr ""
 
-#: derp/handlers/operator.py:517
+#: derp/handlers/operator.py:519
 msgid "Maintenance"
 msgstr ""
 
-#: derp/handlers/operator.py:518
+#: derp/handlers/operator.py:520
 msgid "Tests"
 msgstr ""
 
-#: derp/handlers/operator.py:520 derp/handlers/operator.py:742
+#: derp/handlers/operator.py:522 derp/handlers/operator.py:744
 msgid "Refresh"
 msgstr ""
 
-#: derp/handlers/operator.py:537
+#: derp/handlers/operator.py:539
 #, python-brace-format
 msgid ""
 "<b>Usage</b>\n"
@@ -1259,7 +1259,7 @@ msgid ""
 "Artifacts: {artifacts} · {artifact_size}"
 msgstr ""
 
-#: derp/handlers/operator.py:569
+#: derp/handlers/operator.py:571
 #, python-brace-format
 msgid ""
 "<b>Commerce</b>\n"
@@ -1272,7 +1272,7 @@ msgid ""
 "Receipts: {receipts}"
 msgstr ""
 
-#: derp/handlers/operator.py:601
+#: derp/handlers/operator.py:603
 #, python-brace-format
 msgid ""
 "<b>Operations</b>\n"
@@ -1283,31 +1283,31 @@ msgid ""
 "Approvals: {approvals}"
 msgstr ""
 
-#: derp/handlers/operator.py:618
+#: derp/handlers/operator.py:620
 msgid "unavailable"
 msgstr ""
 
-#: derp/handlers/operator.py:620
+#: derp/handlers/operator.py:622
 #, python-brace-format
 msgid "{open}/{size} open · {overflow} overflow"
 msgstr ""
 
-#: derp/handlers/operator.py:626
+#: derp/handlers/operator.py:628
 #, python-brace-format
 msgid "{worker} {state}"
 msgstr ""
 
-#: derp/handlers/operator.py:628 derp/handlers/operator.py:654
-#: derp/handlers/operator.py:655
+#: derp/handlers/operator.py:630 derp/handlers/operator.py:656
+#: derp/handlers/operator.py:657
 msgid "on"
 msgstr ""
 
-#: derp/handlers/operator.py:628 derp/handlers/operator.py:654
-#: derp/handlers/operator.py:655
+#: derp/handlers/operator.py:630 derp/handlers/operator.py:656
+#: derp/handlers/operator.py:657
 msgid "off"
 msgstr ""
 
-#: derp/handlers/operator.py:642
+#: derp/handlers/operator.py:644
 #, python-brace-format
 msgid ""
 "<b>Runtime</b>\n"
@@ -1321,37 +1321,37 @@ msgid ""
 "{models}"
 msgstr ""
 
-#: derp/handlers/operator.py:667
+#: derp/handlers/operator.py:669
 msgid ""
 "<b>Maintenance</b>\n"
 "Run an immediate pass through the live runtime workers."
 msgstr ""
 
-#: derp/handlers/operator.py:671 derp/handlers/operator.py:848
+#: derp/handlers/operator.py:673 derp/handlers/operator.py:850
 msgid "All passes"
 msgstr ""
 
-#: derp/handlers/operator.py:673 derp/handlers/operator.py:849
+#: derp/handlers/operator.py:675 derp/handlers/operator.py:851
 msgid "History"
 msgstr ""
 
-#: derp/handlers/operator.py:675 derp/handlers/operator.py:850
+#: derp/handlers/operator.py:677 derp/handlers/operator.py:852
 msgid "Subscriptions"
 msgstr ""
 
-#: derp/handlers/operator.py:683 derp/handlers/operator.py:852
+#: derp/handlers/operator.py:685 derp/handlers/operator.py:854
 msgid "Deliveries"
 msgstr ""
 
-#: derp/handlers/operator.py:686 derp/handlers/operator.py:853
+#: derp/handlers/operator.py:688 derp/handlers/operator.py:855
 msgid "Approvals"
 msgstr ""
 
-#: derp/handlers/operator.py:695
+#: derp/handlers/operator.py:697
 msgid "ready"
 msgstr ""
 
-#: derp/handlers/operator.py:697
+#: derp/handlers/operator.py:699
 #, python-brace-format
 msgid ""
 "<b>Tests</b>\n"
@@ -1360,271 +1360,271 @@ msgid ""
 "Command menu: all locales and audience scopes"
 msgstr ""
 
-#: derp/handlers/operator.py:706
+#: derp/handlers/operator.py:708
 msgid "Open 1-Star checkout"
 msgstr ""
 
-#: derp/handlers/operator.py:714
+#: derp/handlers/operator.py:716
 msgid "Sync command menu"
 msgstr ""
 
-#: derp/handlers/operator.py:730
+#: derp/handlers/operator.py:732
 #, python-brace-format
 msgid ""
 "<b>{title}</b>\n"
 "Database diagnostics are unavailable."
 msgstr ""
 
-#: derp/handlers/operator.py:803
+#: derp/handlers/operator.py:805
 #, python-brace-format
 msgid "{state} {count}"
 msgstr ""
 
-#: derp/handlers/operator.py:815
+#: derp/handlers/operator.py:817
 msgid "private"
 msgstr ""
 
-#: derp/handlers/operator.py:816
+#: derp/handlers/operator.py:818
 msgid "group"
 msgstr ""
 
-#: derp/handlers/operator.py:817
+#: derp/handlers/operator.py:819
 msgid "supergroup"
 msgstr ""
 
-#: derp/handlers/operator.py:818
+#: derp/handlers/operator.py:820
 msgid "channel"
 msgstr ""
 
-#: derp/handlers/operator.py:819
+#: derp/handlers/operator.py:821
 msgid "quoted"
 msgstr ""
 
-#: derp/handlers/operator.py:820
+#: derp/handlers/operator.py:822
 msgid "reserved"
 msgstr ""
 
-#: derp/handlers/operator.py:821
+#: derp/handlers/operator.py:823
 msgid "executing"
 msgstr ""
 
-#: derp/handlers/operator.py:822
+#: derp/handlers/operator.py:824
 msgid "captured"
 msgstr ""
 
-#: derp/handlers/operator.py:823
+#: derp/handlers/operator.py:825
 msgid "released"
 msgstr ""
 
-#: derp/handlers/operator.py:824
+#: derp/handlers/operator.py:826
 msgid "reversed"
 msgstr ""
 
-#: derp/handlers/operator.py:825
+#: derp/handlers/operator.py:827
 msgid "canceled"
 msgstr ""
 
-#: derp/handlers/operator.py:826
+#: derp/handlers/operator.py:828
 msgid "failed"
 msgstr ""
 
-#: derp/handlers/operator.py:827
+#: derp/handlers/operator.py:829
 msgid "not ready"
 msgstr ""
 
-#: derp/handlers/operator.py:828
+#: derp/handlers/operator.py:830
 msgid "pending"
 msgstr ""
 
-#: derp/handlers/operator.py:829
+#: derp/handlers/operator.py:831
 msgid "delivering"
 msgstr ""
 
-#: derp/handlers/operator.py:830
+#: derp/handlers/operator.py:832
 msgid "delivered"
 msgstr ""
 
-#: derp/handlers/operator.py:831
+#: derp/handlers/operator.py:833
 msgid "uncertain"
 msgstr ""
 
-#: derp/handlers/operator.py:832
+#: derp/handlers/operator.py:834
 msgid "expired"
 msgstr ""
 
-#: derp/handlers/operator.py:833
+#: derp/handlers/operator.py:835
 msgid "approved"
 msgstr ""
 
-#: derp/handlers/operator.py:834
+#: derp/handlers/operator.py:836
 msgid "denied"
 msgstr ""
 
-#: derp/handlers/operator.py:835
+#: derp/handlers/operator.py:837
 msgid "resumed"
 msgstr ""
 
-#: derp/handlers/operator.py:836
+#: derp/handlers/operator.py:838
 msgid "pre-checked"
 msgstr ""
 
-#: derp/handlers/operator.py:837
+#: derp/handlers/operator.py:839
 msgid "fulfilled"
 msgstr ""
 
-#: derp/handlers/operator.py:838
+#: derp/handlers/operator.py:840
 msgid "needs review"
 msgstr ""
 
-#: derp/handlers/operator.py:839
+#: derp/handlers/operator.py:841
 msgid "received"
 msgstr ""
 
-#: derp/handlers/operator.py:840
+#: derp/handlers/operator.py:842
 msgid "clawed back"
 msgstr ""
 
-#: derp/handlers/operator.py:841
+#: derp/handlers/operator.py:843
 msgid "active"
 msgstr ""
 
-#: derp/handlers/operator.py:859
+#: derp/handlers/operator.py:861
 msgid "Purged messages"
 msgstr ""
 
-#: derp/handlers/operator.py:860
+#: derp/handlers/operator.py:862
 msgid "Expired cycles"
 msgstr ""
 
-#: derp/handlers/operator.py:861
+#: derp/handlers/operator.py:863
 msgid "Examined operations"
 msgstr ""
 
-#: derp/handlers/operator.py:862
+#: derp/handlers/operator.py:864
 msgid "Expired quotes"
 msgstr ""
 
-#: derp/handlers/operator.py:863
+#: derp/handlers/operator.py:865
 msgid "Released reservations"
 msgstr ""
 
-#: derp/handlers/operator.py:864
+#: derp/handlers/operator.py:866
 msgid "Released executions"
 msgstr ""
 
-#: derp/handlers/operator.py:865
+#: derp/handlers/operator.py:867
 msgid "Recovered deliveries"
 msgstr ""
 
-#: derp/handlers/operator.py:866
+#: derp/handlers/operator.py:868
 msgid "Incomplete results"
 msgstr ""
 
-#: derp/handlers/operator.py:867
+#: derp/handlers/operator.py:869
 msgid "Race skips"
 msgstr ""
 
-#: derp/handlers/operator.py:868
+#: derp/handlers/operator.py:870
 msgid "Interrupted deliveries"
 msgstr ""
 
-#: derp/handlers/operator.py:869
+#: derp/handlers/operator.py:871
 msgid "Retry candidates"
 msgstr ""
 
-#: derp/handlers/operator.py:870
+#: derp/handlers/operator.py:872
 msgid "Delivered"
 msgstr ""
 
-#: derp/handlers/operator.py:871
+#: derp/handlers/operator.py:873
 msgid "Retryable failures"
 msgstr ""
 
-#: derp/handlers/operator.py:872
+#: derp/handlers/operator.py:874
 msgid "Terminal failures"
 msgstr ""
 
-#: derp/handlers/operator.py:873
+#: derp/handlers/operator.py:875
 msgid "Uncertain deliveries"
 msgstr ""
 
-#: derp/handlers/operator.py:874
+#: derp/handlers/operator.py:876
 msgid "Retry exceptions"
 msgstr ""
 
-#: derp/handlers/operator.py:875
+#: derp/handlers/operator.py:877
 msgid "Expired deliveries"
 msgstr ""
 
-#: derp/handlers/operator.py:876
+#: derp/handlers/operator.py:878
 msgid "Interruption failures"
 msgstr ""
 
-#: derp/handlers/operator.py:877
+#: derp/handlers/operator.py:879
 msgid "Expiration failures"
 msgstr ""
 
-#: derp/handlers/operator.py:878
+#: derp/handlers/operator.py:880
 msgid "Examined artifacts"
 msgstr ""
 
-#: derp/handlers/operator.py:879
+#: derp/handlers/operator.py:881
 msgid "Purged artifacts"
 msgstr ""
 
-#: derp/handlers/operator.py:880
+#: derp/handlers/operator.py:882
 msgid "Artifact failures"
 msgstr ""
 
-#: derp/handlers/operator.py:881
+#: derp/handlers/operator.py:883
 msgid "Phase failures"
 msgstr ""
 
-#: derp/handlers/operator.py:882
+#: derp/handlers/operator.py:884
 msgid "Expired approvals"
-msgstr ""
-
-#: derp/handlers/operator.py:897
-#, python-brace-format
-msgid "{days}d {hours}h"
 msgstr ""
 
 #: derp/handlers/operator.py:899
 #, python-brace-format
-msgid "{hours}h {minutes}m"
+msgid "{days}d {hours}h"
 msgstr ""
 
 #: derp/handlers/operator.py:901
 #, python-brace-format
+msgid "{hours}h {minutes}m"
+msgstr ""
+
+#: derp/handlers/operator.py:903
+#, python-brace-format
 msgid "{minutes}m {seconds}s"
 msgstr ""
 
-#: derp/handlers/operator.py:905
+#: derp/handlers/operator.py:907
 #, python-brace-format
 msgid "{seconds}s"
 msgstr ""
 
-#: derp/handlers/operator.py:910
+#: derp/handlers/operator.py:912
 msgid "B"
 msgstr ""
 
-#: derp/handlers/operator.py:910
+#: derp/handlers/operator.py:912
 msgid "KiB"
 msgstr ""
 
-#: derp/handlers/operator.py:910
+#: derp/handlers/operator.py:912
 msgid "MiB"
 msgstr ""
 
-#: derp/handlers/operator.py:910
+#: derp/handlers/operator.py:912
 msgid "GiB"
 msgstr ""
 
-#: derp/handlers/operator.py:910
+#: derp/handlers/operator.py:912
 msgid "TiB"
 msgstr ""
 
-#: derp/handlers/operator.py:930
+#: derp/handlers/operator.py:932
 msgid "unknown"
 msgstr ""
 
