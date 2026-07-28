@@ -1,206 +1,132 @@
-# Deployment Guide
+# Production deployment guide
 
-This guide covers deploying the Derp bot to production.
+Derp deploys immutable GHCR image digests through a manually approved GitHub
+Actions transaction. A push to `main` runs CI, builds, pushes, and attests the
+image, but never changes production.
 
-## Architecture
+The full transaction, failure inspection, fix-forward procedure, and
+compatibility-bound rollback are documented in
+[`docs/deployment.md`](../docs/deployment.md). This file covers host setup and
+the release entry point.
 
-```
-GitHub (push to main)
-    ↓
-CI (lint, test)
-    ↓
-Build Docker image → GitHub Container Registry (ghcr.io)
-    ↓
-SSH to server → Pull & deploy
-    ↓
-Health check (30s)
-    ↓
-✓ Success: Remove old container
-✗ Failure: Rollback to previous
-```
+## Host prerequisites
 
-## Initial Server Setup
+- Linux/AMD64 with Docker and GNU `timeout`
+- PostgreSQL 14 or newer on a private network
+- encrypted database backups with a tested restore path
+- `/opt/derp/.env.prod`, readable by Docker and not stored in the image
+- `/opt/derp/artifacts`, owned by UID/GID `1000:1000` with mode `0700`
+- enough disk space to retain the active, previous, and failed-candidate images
 
-### 1. Set up PostgreSQL
+Use the scripts under `deploy/postgres/` only for a self-managed PostgreSQL
+installation. Do not combine a PostgreSQL major upgrade with an application
+release.
 
-```bash
-# Transfer and run postgres setup
+```sh
 scp -r deploy/postgres user@server:/tmp/postgres-setup
 ssh user@server
 cd /tmp/postgres-setup
 chmod +x *.sh
 sudo ./install.sh
-
-# Create database
 sudo -u postgres pg_create_db derp
-# Save the DATABASE_URL!
 ```
 
-### 2. Set up deployment infrastructure
+The generic host bootstrap is available as `deploy/setup-server.sh`. Review it
+for the target distribution before running it.
 
-```bash
-# Transfer and run server setup
-scp deploy/setup-server.sh user@server:/tmp/
-ssh user@server
-sudo /tmp/setup-server.sh
+## Production environment
 
-# Edit environment file
-sudo nano /opt/derp/.env.prod
+Start from `env.example`. At minimum, production requires:
 
-# Login to GitHub Container Registry
-docker login ghcr.io -u YOUR_GITHUB_USERNAME
-# Use a PAT with read:packages scope
-```
-
-### 3. Configure GitHub Secrets
-
-Go to: Repository → Settings → Secrets and variables → Actions
-
-Add these secrets:
-
-| Secret | Value |
-|--------|-------|
-| `SSH_HOST` | Your server IP (e.g., `192.145.37.23`) |
-| `SSH_USER` | SSH username (e.g., `rmbk`) |
-| `SSH_PRIVATE_KEY` | Your SSH private key (full content) |
-| `DEPLOY_GHCR_TOKEN` | GitHub PAT with `read:packages` scope |
-
-**Create the PAT:**
-1. Go to: https://github.com/settings/tokens?type=beta
-2. Generate new token (Fine-grained)
-3. Select your repository
-4. Permissions: Read access to packages
-5. Copy token → add as `DEPLOY_GHCR_TOKEN` secret
-
-### 4. Create GitHub Environment
-
-Go to: Repository → Settings → Environments → New environment
-
-- Name: `production`
-- (Optional) Add required reviewers for manual approval
-
-### 5. Generate SSH Key (if needed)
-
-```bash
-# On your local machine
-ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/.ssh/github_deploy
-
-# Add public key to server
-ssh-copy-id -i ~/.ssh/github_deploy.pub user@server
-
-# Copy private key content for GitHub secret
-cat ~/.ssh/github_deploy
-```
-
-## Deployment Flow
-
-### Automatic Deployment
-
-1. Create a PR with your changes
-2. CI runs (lint, test)
-3. Merge PR to `main`
-4. CD automatically:
-   - Builds Docker image
-   - Pushes to ghcr.io
-   - SSHs to server
-   - Deploys with health check
-   - Rolls back if unhealthy
-
-### Manual Deployment
-
-Trigger manually from: Actions → CD → Run workflow
-
-### Rollback
-
-If deployment fails:
-- Automatic rollback to previous container
-- Check logs: `docker logs derp-bot`
-- Manual rollback: `docker start derp-bot-previous`
-
-## Server Commands
-
-```bash
-# View running container
-docker ps
-
-# View logs
-docker logs derp-bot -f
-
-# Restart bot
-docker restart derp-bot
-
-# Check resource usage
-docker stats derp-bot
-
-# Manual deploy (pull latest)
-docker pull ghcr.io/uburuntu/derp:latest
-docker stop derp-bot && docker rm derp-bot
-docker run -d --name derp-bot --restart unless-stopped \
-  --env-file /opt/derp/.env.prod \
-  ghcr.io/uburuntu/derp:latest
-```
-
-## Troubleshooting
-
-### Deployment fails with permission denied
-
-```bash
-# On server - check docker socket permissions
-sudo chmod 666 /var/run/docker.sock
-# Or ensure user is in docker group
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
-### Container keeps restarting
-
-```bash
-# Check logs for errors
-docker logs derp-bot --tail 100
-
-# Common issues:
-# - Invalid DATABASE_URL in .env.prod
-# - Missing environment variables
-# - Database not accessible
-```
-
-### Can't pull from ghcr.io
-
-```bash
-# Re-authenticate
-docker logout ghcr.io
-docker login ghcr.io -u YOUR_GITHUB_USERNAME
-# Use PAT with read:packages scope
-```
-
-### Health check fails
-
-The health check waits 30 seconds for the container to stabilize. If it keeps failing:
-
-```bash
-# Check container logs
-docker logs derp-bot
-
-# Test manually
-docker run --rm --env-file /opt/derp/.env.prod ghcr.io/uburuntu/derp:latest
-```
-
-## Environment Variables
-
-Required in `/opt/derp/.env.prod`:
-
-```bash
-# Telegram
+```dotenv
+ENVIRONMENT=prod
 TELEGRAM_BOT_TOKEN=
+BOT_USERNAME=DerpRobot
+DATABASE_URL=postgresql+asyncpg://user:password@database:5432/derp
 
-# Database
-DATABASE_URL=postgresql+asyncpg://user:pass@host.docker.internal:5432/db?sslmode=require
-
-# LLM
+OPENROUTER_API_KEY=
+OPENROUTER_APP_TITLE=Derp
+OPENROUTER_APP_URL=https://t.me/DerpRobot
+OPENROUTER_ENABLED_FEATURES=["chat","inline_chat","image_generate","image_edit"]
 GOOGLE_API_PAID_KEY=
 
-# Observability
 LOGFIRE_TOKEN=
-ENVIRONMENT=prod
+LOGFIRE_CAPTURE_AI_CONTENT=false
+OPERATOR_IDS=[123456789]
+PUBLIC_PURCHASES_ENABLED=false
+ARTIFACT_STORE_PATH=/var/lib/derp/artifacts
 ```
 
+Keep purchases disabled for the initial candidate deployment. Production must
+never enable AI-content export. Free-model consent is handled in Telegram;
+there is no deployment switch that bypasses it.
+
+## GitHub configuration
+
+Create these Actions secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `SSH_HOST` | Production host |
+| `SSH_USER` | Restricted deployment user |
+| `SSH_PRIVATE_KEY` | Deployment SSH private key |
+| `DEPLOY_GHCR_TOKEN` | Fine-grained token with package-read access |
+
+Create a GitHub environment named `production` and require the owner as a
+reviewer. Protect `main` with required PR checks. Enable secret scanning and
+push protection.
+
+The deployment user must access Docker without world-writable socket
+permissions. Add the user to the intended Docker group; never use
+`chmod 666 /var/run/docker.sock`.
+
+## Build and deploy
+
+1. Merge the reviewed PR to `main` and wait for the push-triggered **CD** run.
+   It performs `build_only` and produces the candidate image and attestation.
+2. Take a complete backup and verify its checksum and restoreability. Record a
+   non-secret snapshot or backup reference.
+3. Open **Actions -> CD -> Run workflow**, select `main`, and enter:
+   - `mode=deploy`
+   - `expected_sha=<full 40-character main SHA>`
+   - `backup_reference=<completed restorable backup reference>`
+4. At the `production` environment gate, independently verify the SHA, backup,
+   candidate checks, and expected image before approving.
+5. CD pulls the image by digest, runs read-only release preflight, stops and
+   retains the old poller, migrates, runs read-only verification, then requires
+   a healthy restart-free candidate for 60 seconds.
+
+For a validation build without host access, dispatch `mode=build_only` with the
+selected full SHA. `latest` is never a deployment identity.
+
+## Release activation
+
+After the candidate is healthy, leave `PUBLIC_PURCHASES_ENABLED=false` while
+the operator completes the Telegram and Logfire smoke matrix. The mandatory
+commerce check is one real operator-only 1-Star checkout followed by **Refund
+latest 1-Star test**. Confirm exactly-once fulfillment, Telegram refund
+acceptance, the normal clawback update, and unchanged balances on replay.
+
+Only after the release checklist passes:
+
+1. set `PUBLIC_PURCHASES_ENABLED=true` in `/opt/derp/.env.prod`;
+2. redeploy the same `main` SHA through the approval gate;
+3. use the Telegram operator console to sync command scopes;
+4. verify that public invoices show product version `2026-07-28-v1`;
+5. tag the deployed commit `v0.1.0` and record its image digest and Alembic head.
+
+See [`docs/release-v0.1.0.md`](../docs/release-v0.1.0.md) for the complete
+acceptance matrix and no-go conditions.
+
+## Basic inspection
+
+```sh
+docker ps -a --filter 'name=derp-bot'
+docker logs --tail 200 derp-bot
+docker inspect derp-bot
+docker stats --no-stream derp-bot
+```
+
+Do not restart a previous image after a forward migration unless its schema
+compatibility check passes. Follow `docs/deployment.md` for every failed-release
+or rollback decision.

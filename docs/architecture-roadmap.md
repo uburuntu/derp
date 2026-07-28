@@ -116,9 +116,9 @@ to make these flows reliable.
   when possible, and offer the smallest useful recovery action.
 
 This intentionally spends slightly more input bandwidth and tokens for natural
-follow-ups. For the configured Flash models, carrying one ordinary image across
-the current history windows costs at most a few cents before cache discounts;
-latency and bandwidth are the more important measurements.
+follow-ups. For the reviewed multimodal routes, carrying one ordinary image
+across the current history windows costs at most a few cents before cache
+discounts; latency and bandwidth are the more important measurements.
 
 ### Spending and purchases
 
@@ -223,17 +223,29 @@ latency and bandwidth are the more important measurements.
 
 ## Resolved product contract
 
-Everything in this section is decided. Numeric tuning can be derived during
-implementation without reopening the product design.
+Everything in this section is decided. Future numeric tuning uses observed
+production data and a new immutable catalog version; it does not reopen the
+product design or mutate issued products.
 
 ### Product scope
 
 - Derp is group-first. Private chats remain fully supported.
 - Pydantic AI remains the agent runtime, aiogram remains the Telegram runtime,
   and PostgreSQL remains the durable source of truth.
-- Google is the only implemented model provider in v1. A single model catalog
-  keeps the execution boundary replaceable without building a multi-provider
-  framework.
+- OpenRouter is the primary text and image inference plane. Reviewed immutable
+  catalog entries bind routing/privacy policy, capabilities, limits, provider
+  prices, and source evidence to execution and billing.
+- Paid and group OpenRouter requests require data-collection denial and ZDR
+  routing. Consented zero-cost models are explicitly non-ZDR, unlimited, and
+  available only in private and inline contexts; request, token, timeout, and
+  output bounds still apply and every call remains accounted for.
+- Google remains the direct TTS provider and explicit rollback where a direct
+  adapter exists. Free inline inference fails closed when OpenRouter is disabled.
+  Standalone transcription, deep thinking, and video generation remain hidden
+  until their complete privacy, accounting, and delivery paths ship.
+- Runtime requests never inherit drifting reasoning defaults: optional ordinary
+  and free roles disable reasoning, the dedicated reasoning role uses high
+  effort, and the catalog-mandatory multimodal role uses minimal effort.
 - Derp speaks only when invoked. Ambient history improves understanding; it
   never grants permission to join conversations automatically.
 
@@ -258,15 +270,20 @@ implementation without reopening the product design.
   allowance from that purchase or cycle. If some were already consumed, record
   explicit credit debt and block further paid use until reconciled; never make
   a spendable inventory negative.
-- Fully consuming any subscription allowance must cost no more than net payment
-  revenue after Telegram and Stars fees. The owner's `$25/month` risk tolerance
-  is a global project loss ceiling, not a per-subscriber subsidy.
-- Free or subsidized inference is upside only and never part of the price
-  assumption.
-- Initial tier prices and allowance sizes are an engineering calibration task:
-  correct the model catalog, measure real usage bands, apply the margin and
-  global loss guardrail, then launch the smallest understandable set of one
-  personal plan and a few top-up packs.
+- Product version `2026-07-28-v1` uses Telegram's dated `$0.013/Star` reward,
+  a conservative `$0.01/Star` planning floor, a 15% private-topic fee scenario,
+  and maximum provider liability of `$0.0007` per credit. Private-chat Topics
+  remain disabled for launch, so the fee is a stress case rather than expected
+  revenue. The dated source links and calculation ledger live in
+  `docs/release-v0.1.0.md`.
+- The immutable launch catalog is 50 Stars -> 600 credits, 250 -> 3,200,
+  750 -> 9,900, and a recurring 500-Star/30-day personal plan -> 6,750 credits.
+  Planning-floor margins are 16%, 10.4%, 7.6%, and 5.5% respectively. The
+  operator-only 1-Star test product grants 10 credits and is never public.
+- Fully consuming an allowance must stay within the conservative planning
+  revenue. Free inference is upside only and never part of paid economics; new
+  prices require a new immutable product version rather than mutating invoices
+  already issued.
 - The personal plan is a recurring 30-day Telegram Stars subscription. Each
   successful payment creates one idempotent, versioned allowance cycle anchored
   to Telegram's subscription expiration time in UTC. Allowance does not roll
@@ -403,7 +420,7 @@ Milestones are vertical outcomes, not layers to perfect indefinitely. Each
 milestone must leave the bot releasable and remove the obsolete path it
 replaces.
 
-### Implementation status (2026-07-21)
+### Implementation status (2026-07-28)
 
 The product contract above remains normative. This ledger records what is
 shipped and keeps code completion distinct from external release activation.
@@ -413,28 +430,32 @@ reported separately rather than counted as code:
 
 | Milestone | Weight earned | Evidence and remaining implementation work |
 | --- | ---: | --- |
-| M0: contain and characterize | 10/10 | Canonical catalog/plans, typed outcomes, Alembic-only test schemas, drift and characterization coverage, and fail-closed purchase intake are shipped. |
+| M0: contain and characterize | 10/10 | Canonical Google/OpenRouter catalogs and plans, reviewed provider drift evidence, typed outcomes, Alembic-only schemas, and fail-closed purchase intake are shipped. |
 | M1: continuous conversation | 27/30 | Scoped native history, complete-turn trimming, ambient onboarding, privacy controls, shared facts, media references, and bounded on-demand hydration are shipped. Chat-user preferences and real-client journey evidence remain. |
-| M2: trustworthy paid operations | 28/30 | Immutable quotes, atomic wallets and settlement, consent, subscriptions, purchase intents, image approval/delivery, clawbacks, and reconciliation are shipped. Standard chat captures only acknowledged model content but does not yet persist text for post-crash resend. Public Stars intake remains closed pending the real-payment gate. |
+| M2: trustworthy paid operations | 28/30 | Immutable launch products and quotes, atomic wallets and settlement, consent, subscriptions, purchase intents, image approval/delivery, clawbacks, and reconciliation are shipped. Standard chat captures only acknowledged model content but does not yet persist text for post-crash resend. Public Stars intake remains closed pending the real-payment gate. |
 | M3: polished premium work | 18/20 | Image/editing and command TTS use bounded providers plus durable approval, artifact, delivery, resend, and spend reversal. Thinking and video fail closed until their typed cores have equally complete adapters. |
-| M4: pragmatic hardening | 9/10 | Matched-route DI, bounded concurrency, privacy-safe Logfire/OTel, reconciliation workers, migration/concurrency/privacy tests, immutable images, readiness, and recovery docs are shipped. Empirical cache/cost tuning remains ongoing. |
+| M4: pragmatic hardening | 9/10 | Matched-route DI, bounded concurrency, privacy-safe Logfire/OTel, reconciliation workers, migration/concurrency/privacy tests, immutable images, read-only release checks, manual digest deployment, readiness, and recovery docs are shipped. Empirical cache/cost tuning remains ongoing. |
 
 This score is implementation coverage, not a production-acceptance claim.
 Release activation still requires evidence that cannot be manufactured by the
 automated suite:
 
-1. Run one real admin `/debug_buy` Stars payment plus replay/refund checks and
-   verify exactly-once fulfillment to the intended wallet before enabling
-   `PUBLIC_PURCHASES_ENABLED`.
+1. Deploy with `PUBLIC_PURCHASES_ENABLED=false`, then run one real operator
+   1-Star checkout plus the confirmed latest-test refund. Verify exactly-once
+   fulfillment, normal clawback, and replay behavior before enabling intake.
 2. Smoke private, group, and forum journeys on real Telegram clients, including
    ambient disclosure, scoped command menus, private financial views, deferred
    image approval, TTS/FFmpeg delivery, uncertain resend, and inline editing.
-3. Verify live Google model/quota behavior and observe real latency, cached and
-   uncached tokens, and cost bands before tuning windows or adding caches.
+3. Run the read-only OpenRouter key/catalog check, exercise consented unlimited
+   free and paid ZDR routes, and verify direct Google TTS. Observe latency,
+   cached/uncached/reasoning tokens, reconciliation, and actual cost.
 4. Inspect production Logfire ingestion for zero prompt, message, binary, tool
    argument, callback, and payment-payload content.
-5. Rehearse the documented backup, restore, readiness, and compatibility-bound
-   rollback path on the production host.
+5. Rehearse backup restore, read-only preflight/verification, readiness, and
+   compatibility-bound rollback; deploy only through the exact-SHA production
+   approval gate.
+6. Publish and register the privacy-policy URL in BotFather, then verify the
+   English and Russian privacy, terms, consent, and deletion surfaces.
 
 The milestone lists below remain the acceptance history and extension backlog;
 future-tense wording does not override this dated ledger.
@@ -452,8 +473,8 @@ baselines.
   validation, and Telegram sender constraints.
 - Test PostgreSQL from Alembic migrations only; stop using ORM metadata creation
   to conceal schema drift.
-- Create the single Google model catalog before building quotes. Replace the
-  stale Flash Lite and Flash prices and remove the duplicate runtime tier map.
+- Create the canonical provider catalogs before building quotes. Replace stale
+  prices and remove duplicate runtime tier maps.
 - Introduce the minimal `ExecutionPlan` and typed outcome vocabulary without a
   broad framework.
 
@@ -610,9 +631,12 @@ their typed cores receive complete adapters.
 
 ### AR-005: Model selection had two sources of truth (resolved)
 
-`derp/catalog/google.py` owns model IDs, lifecycle, capabilities, limits,
-sources, and pricing. Runtime plans and immutable quotes carry the same exact
-catalog spec; policy stores semantic keys only.
+`derp/catalog/google.py` owns direct-Google facts and
+`derp/catalog/openrouter.py` owns the reviewed primary inference catalog,
+routing/privacy rules, capabilities, limits, sources, and pricing. Runtime plans
+and immutable quotes carry the same exact catalog spec; policy stores semantic
+keys only. The tracked OpenRouter snapshot and ignored raw evidence make drift
+review explicit.
 
 ### AR-006: Payment fulfillment lacks a durable intent (resolved, gated)
 
@@ -678,7 +702,7 @@ orchestration.
 ### AR-015: Observability can violate privacy (resolved in code)
 
 `derp/observability.py` owns Logfire 4.38 and OpenTelemetry lifecycle, redacting
-providers and exceptions, content-free Pydantic AI/Google spans, and explicit
+providers and exceptions, content-free Pydantic AI/provider spans, and explicit
 flush/shutdown. Global HTTPX instrumentation is forbidden, and privacy
 regressions are tested. Production ingestion inspection remains an activation
 gate.
@@ -697,7 +721,8 @@ justified.
   credits.
 - Cross-chat memory, global user profiles, and third-party personal facts.
 - Automatic unsolicited participation in group conversations.
-- Multi-provider execution beyond a replaceable Google boundary.
+- Additional inference providers or public model choice beyond the reviewed
+  OpenRouter plane and explicit Google TTS/rollback boundary.
 - Persisted context epochs and explicit provider caches without measured need.
 - A durable workflow engine and crash-resuming provider jobs.
 - Provider choice based on shared-prompt or free-inference terms without a
@@ -777,6 +802,8 @@ Gitignored source checkouts matching the dependency lock are available locally:
 - `references/pydantic-ai` at Pydantic AI v2.14.1
 - `references/aiogram` at aiogram v3.30.0
 - `references/logfire` at Logfire v4.38.0
+- `docs/inference/openrouter-reviewed.json` plus ignored raw evidence refreshed
+  through `scripts/openrouter_references.py`
 
 Recreate them after a fresh clone:
 

@@ -40,8 +40,9 @@ available.
 | Usage | User/chat totals and rows changed in 24 hours, retained-message totals, chat-type counts, and artifact count/bytes |
 | Commerce | Canonical available/reserved/consumed/debt credits, fulfilled/clawed-back Stars, entitlement/renewal counts, and purchase/receipt states |
 | Operations | Paid-operation, delivery, and deferred-approval state counts |
+| Inference | Aggregate attempts and states, tokens by category, reconciled and pending OpenRouter cost, reviewed role availability, and cached live key/catalog status |
 | Runtime | Derp/Python/library versions, purchase and AI-content-export flags, database-pool gauges, worker state, and the verified model catalog |
-| Tests | Database-read status, the live 1-Star checkout, and command-menu reconciliation |
+| Tests | Database-read status, the live 1-Star checkout/refund, and command-menu reconciliation |
 
 The attention count combines review-required purchases/receipts, failed paid
 operations, failed or uncertain deliveries, wallet debt presence, unavailable
@@ -52,8 +53,9 @@ Diagnostic snapshots never expose message or prompt content, tool arguments,
 callback or payment payloads, row-level user/chat/payment identifiers, invoice
 or charge IDs, artifact paths or content bytes, signed URLs, tokens, secrets, raw
 environment variables, or arbitrary database queries. The console also has no
-row drill-down, shell, direct balance mutation, refund control, or generic SQL
-control.
+row drill-down, shell, direct balance mutation, arbitrary refund, or generic SQL
+control. Its only refund action selects the operator's latest fulfilled fixed
+1-Star test on the server and accepts no payment or user identifiers.
 
 ## Maintenance
 
@@ -68,7 +70,8 @@ operator-supplied arguments.
 | Operations | Reconcile quotes, reservations, executions, and durable delivery recovery |
 | Deliveries | Reconcile interrupted/retryable deliveries and expire artifacts |
 | Approvals | Expire deferred tool approvals |
-| All passes | Run the five passes above in that order |
+| Inference | Reconcile bounded OpenRouter usage/cost records without replaying provider work |
+| All passes | Run the six passes above in that order |
 
 Every action first issues a single-use token bound to the operator and exact
 action. The default lifetime is two minutes. A token mismatch, reuse, expiry,
@@ -88,6 +91,17 @@ operator who confirms Telegram's final payment prompt spends one real Star.
 The hidden product remains available through private `/debug_buy` for
 compatibility; retired legacy debug commands redirect to `/operator`.
 
+`Refund latest 1-Star test` requires a second single-use confirmation. The bot
+selects only that operator's latest fulfilled debug product and calls Telegram's
+Stars refund API with its stored charge. Telegram's normal refund update then
+drives the existing idempotent receipt clawback; the control does not mutate a
+wallet directly and cannot target public products.
+
+`Run read-only check` on the inference page reads only OpenRouter key spending
+limits and the live model catalog. It sends no prompt and performs no inference.
+The page also exposes aggregate recorded tokens, reconciliation state, and
+actual cost without user, chat, request, or provider-response identifiers.
+
 `Sync command menu` reapplies the complete desired command state for every
 supported locale and current audience, including each configured operator's
 private chat scope. It is idempotent and also removes the default scope,
@@ -100,6 +114,8 @@ Successful operator actions emit:
 - `operator.maintenance_pass_completed`
 - `operator.command_menu_sync_completed`
 - `operator.debug_purchase_intent_presented`
+- `operator.test_refund_requested`
+- `operator.inference_read_check_completed`
 - `telegram.command_menu_configured`
 
 Degraded or failed boundaries use privacy-safe `report_exception()` events:
@@ -112,6 +128,10 @@ Degraded or failed boundaries use privacy-safe `report_exception()` events:
   `operator.maintenance_result_render_failed`
 - `operator.test_purchase_open_failed` and
   `operator.debug_purchase_invoice_link_failed`
+- `operator.test_refund_confirmation_render_failed`,
+  `operator.test_refund_failed`, and `operator.test_refund_result_render_failed`
+- `operator.inference_read_check_failed` and
+  `operator.inference_check_result_render_failed`
 - `operator.command_menu_sync_failed` and
   `operator.command_menu_result_render_failed`
 
@@ -126,6 +146,8 @@ secrets to these events.
 - Snapshots are live reads, not stored time series. User and chat 24-hour values
   mean rows changed by their `updated_at` timestamps; retained messages use the
   Telegram message timestamp.
+- OpenRouter balance/catalog results are process-local cached metadata. A failed
+  probe is explicit and never changes catalog enablement or sends inference.
 - A database-query failure degrades the database snapshot as a unit. Use
   telemetry for the cause; the console intentionally does not return exception
   details.
@@ -153,9 +175,10 @@ inside the Telegram handler.
 Keep `operator.router` and `operator.rejection_router` before debug and chat
 routes. Add route-scoped dependencies only when a control requires them; the
 current operator callback plan loads database models solely for the 1-Star test.
-The current operator routes need no mutable model injection; the checkout's
-subsequent purchase callback uses the separately scoped debug dependency plan.
-Keep callbacks actor-bound and private-chat-bound.
+The refund service is a narrow runtime dependency that performs its own bounded
+server-side lookup. The checkout's subsequent purchase callback uses the
+separately scoped debug dependency plan. Keep callbacks actor-bound and
+private-chat-bound.
 
 When deleting or renaming a control, first remove it from the desired command
 menu and resync every scope. Retain a fail-closed rejection for stale commands
