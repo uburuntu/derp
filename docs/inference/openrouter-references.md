@@ -64,6 +64,11 @@ after versioned terms/privacy consent and only in private or inline contexts;
 they remain blocked in groups and under strict ZDR. A dedicated model with no
 provider-to-ZDR mapping is unverified and must fail closed.
 
+Runtime chat requests never inherit changing upstream reasoning defaults.
+Optional ordinary and free roles disable reasoning, `CHAT_REASONING` explicitly
+uses high effort, and the catalog-mandatory `CHAT_MULTIMODAL` model explicitly
+uses minimal effort.
+
 ## Review and accept
 
 Inspect the ignored raw responses, candidate, and diff. Verify at least:

@@ -83,7 +83,6 @@ def _service(
         recorder,
         free_plan=free_plan,
         policy=policy,
-        clock=lambda: NOW,
     )
     return service, executor, recorder
 
@@ -94,7 +93,7 @@ async def test_consent_is_required_without_subsidized_private_fallback() -> None
 
     outcome = await service.answer(_invocation("private please", consented=False))
 
-    assert outcome == InlineChatFailed(InlineChatFailureReason.FREE_MODE_REQUIRED, None)
+    assert outcome == InlineChatFailed(InlineChatFailureReason.FREE_MODE_REQUIRED)
     executor.answer.assert_not_awaited()
     recorder.start.assert_not_awaited()
 
@@ -105,7 +104,7 @@ async def test_consented_free_model_has_no_daily_admission_limit() -> None:
 
     outcomes = [await service.answer(_invocation("answer")) for _ in range(3)]
 
-    assert outcomes == [InlineChatCompleted("bounded answer", 0)] * 3
+    assert outcomes == [InlineChatCompleted("bounded answer")] * 3
     assert executor.answer.await_count == 3
     assert recorder.start.await_count == 3
     assert recorder.succeed_reports.await_count == 3
@@ -142,7 +141,7 @@ async def test_provider_report_is_recorded() -> None:
     )
 
     assert await service.answer(_invocation("account")) == InlineChatCompleted(
-        "accounted", 0
+        "accounted"
     )
     recorder.succeed_reports.assert_awaited_once()
     assert recorder.succeed_reports.await_args.args[1] == (report,)
@@ -155,9 +154,7 @@ async def test_accounting_failure_prevents_untracked_provider_call() -> None:
 
     outcome = await service.answer(_invocation("answer"))
 
-    assert outcome == InlineChatFailed(
-        InlineChatFailureReason.ACCOUNTING_UNAVAILABLE, None
-    )
+    assert outcome == InlineChatFailed(InlineChatFailureReason.ACCOUNTING_UNAVAILABLE)
     executor.answer.assert_not_awaited()
 
 
@@ -177,7 +174,7 @@ async def test_provider_timeout_is_bounded_and_recorded_failed() -> None:
     outcome = await service.answer(_invocation("answer"))
 
     assert started.is_set()
-    assert outcome == InlineChatFailed(InlineChatFailureReason.PROVIDER_TIMEOUT, None)
+    assert outcome == InlineChatFailed(InlineChatFailureReason.PROVIDER_TIMEOUT)
     recorder.fail.assert_awaited_once()
 
 
@@ -191,8 +188,8 @@ async def test_oversized_or_rejected_output_is_not_exposed() -> None:
     rejected, _, _ = _service(InlineProviderExecution(Rejected(RejectionReason.POLICY)))
 
     assert await oversized.answer(_invocation("answer")) == InlineChatFailed(
-        InlineChatFailureReason.UNUSABLE_OUTPUT, None
+        InlineChatFailureReason.UNUSABLE_OUTPUT
     )
     assert await rejected.answer(_invocation("answer")) == InlineChatFailed(
-        InlineChatFailureReason.PROVIDER_REJECTED, None
+        InlineChatFailureReason.PROVIDER_REJECTED
     )

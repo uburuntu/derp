@@ -1,6 +1,6 @@
-"""Telegram adapters for bounded governed inline answers.
+"""Telegram adapters for unlimited governed inline answers.
 
-Provider admission and execution live in the inline feature service.
+Consent, accounting, and execution live in the inline feature service.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.features.inline_chat import (
     InlineChatCompleted,
-    InlineChatExhausted,
     InlineChatFailed,
     InlineChatFailureReason,
     InlineChatFeatureService,
@@ -162,13 +161,6 @@ async def chosen_inline_result(
             reply_markup=_add_to_chat_markup(),
         )
         return
-    if isinstance(outcome, InlineChatExhausted):
-        await sender.edit_inline(
-            chosen_result.inline_message_id,
-            _("You've used today's inline answers. Try again after 00:00 UTC."),
-            reply_markup=_start_personal_chat_markup(),
-        )
-        return
     if isinstance(outcome, InlineChatInvalid):
         await sender.edit_inline(
             chosen_result.inline_message_id,
@@ -184,7 +176,6 @@ async def chosen_inline_result(
                 _start_personal_chat_markup()
                 if outcome.reason
                 in {
-                    InlineChatFailureReason.ALLOWANCE_UNAVAILABLE,
                     InlineChatFailureReason.ACCOUNTING_UNAVAILABLE,
                     InlineChatFailureReason.FREE_MODE_REQUIRED,
                 }
@@ -198,10 +189,7 @@ async def chosen_inline_result(
 def _inline_failure_text(reason: InlineChatFailureReason) -> str:
     if reason is InlineChatFailureReason.FREE_MODE_REQUIRED:
         return _("Enable free models in Derp settings, or use paid private chat.")
-    if reason in {
-        InlineChatFailureReason.ALLOWANCE_UNAVAILABLE,
-        InlineChatFailureReason.ACCOUNTING_UNAVAILABLE,
-    }:
+    if reason is InlineChatFailureReason.ACCOUNTING_UNAVAILABLE:
         return _("I couldn't verify this request. Open Derp and try again.")
     if reason is InlineChatFailureReason.PROVIDER_TIMEOUT:
         return _("That took too long. Try again.")

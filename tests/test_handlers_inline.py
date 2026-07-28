@@ -10,7 +10,6 @@ import pytest
 
 from derp.features.inline_chat import (
     InlineChatCompleted,
-    InlineChatExhausted,
     InlineChatFailed,
     InlineChatFailureReason,
     InlineChatInvalid,
@@ -151,7 +150,6 @@ async def test_chosen_inline_result_success():
     service = AsyncMock()
     service.answer.return_value = InlineChatCompleted(
         "Python is a programming language.",
-        9,
     )
 
     await chosen_inline_result(
@@ -262,45 +260,31 @@ async def test_chosen_inline_result_rejects_untrusted_result_identity() -> None:
     ("outcome", "expected"),
     [
         (
-            InlineChatExhausted(datetime(2026, 7, 22, tzinfo=UTC), 10),
-            "You've used today's inline answers. Try again after 00:00 UTC.",
-        ),
-        (
             InlineChatInvalid(),
             "That question is empty or too long. Shorten it and try again.",
         ),
         (
-            InlineChatFailed(
-                InlineChatFailureReason.ALLOWANCE_UNAVAILABLE,
-                None,
-            ),
+            InlineChatFailed(InlineChatFailureReason.ACCOUNTING_UNAVAILABLE),
             "I couldn't verify this request. Open Derp and try again.",
         ),
         (
-            InlineChatFailed(
-                InlineChatFailureReason.ACCOUNTING_UNAVAILABLE,
-                None,
-            ),
-            "I couldn't verify this request. Open Derp and try again.",
-        ),
-        (
-            InlineChatFailed(InlineChatFailureReason.FREE_MODE_REQUIRED, None),
+            InlineChatFailed(InlineChatFailureReason.FREE_MODE_REQUIRED),
             "Enable free models in Derp settings, or use paid private chat.",
         ),
         (
-            InlineChatFailed(InlineChatFailureReason.PROVIDER_TIMEOUT, 8),
+            InlineChatFailed(InlineChatFailureReason.PROVIDER_TIMEOUT),
             "That took too long. Try again.",
         ),
         (
-            InlineChatFailed(InlineChatFailureReason.PROVIDER_REJECTED, 8),
+            InlineChatFailed(InlineChatFailureReason.PROVIDER_REJECTED),
             "I couldn't answer that question. Try wording it differently.",
         ),
         (
-            InlineChatFailed(InlineChatFailureReason.UNUSABLE_OUTPUT, 8),
+            InlineChatFailed(InlineChatFailureReason.UNUSABLE_OUTPUT),
             "I couldn't produce a useful answer. Try wording it differently.",
         ),
         (
-            InlineChatFailed(InlineChatFailureReason.PROVIDER_ERROR, 8),
+            InlineChatFailed(InlineChatFailureReason.PROVIDER_ERROR),
             "I couldn't answer that here. Try again.",
         ),
     ],

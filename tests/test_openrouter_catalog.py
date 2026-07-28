@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
 import pytest
 
 from derp.catalog import (
+    OPENROUTER_CATALOG_VERIFIED_ON,
     OPENROUTER_MODEL_CATALOG,
     ChatSelection,
     DataCollectionPolicy,
@@ -22,6 +24,7 @@ from derp.llm.providers import openrouter_settings, pseudonymous_inference_user
 
 
 def test_catalog_uses_canonical_pinned_slugs_and_decimal_prices() -> None:
+    assert OPENROUTER_CATALOG_VERIFIED_ON == date(2026, 7, 28)
     assert set(OPENROUTER_MODEL_CATALOG) == set(ModelRole)
     for model in OPENROUTER_MODEL_CATALOG.values():
         assert model.provider is InferenceProvider.OPENROUTER
@@ -137,6 +140,7 @@ def test_request_settings_preserve_reviewed_routing_and_pseudonymous_user() -> N
         "max_price": {"prompt": 2, "completion": 10},
     }
     assert request["openrouter_usage"] == {"include": True}
+    assert request["openrouter_reasoning"] == {"enabled": False}
     assert request["openai_user"] == pseudonym  # type: ignore[typeddict-item]
     assert pseudonym.startswith("derp_")
     assert pseudonym == pseudonymous_inference_user(UUID(int=42))
@@ -146,4 +150,40 @@ def test_request_settings_preserve_reviewed_routing_and_pseudonymous_user() -> N
     assert economy["openrouter_provider"]["max_price"] == {  # type: ignore[index]
         "prompt": 0.25,
         "completion": 1.5,
+    }
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        ModelRole.CHAT_ECONOMY,
+        ModelRole.CHAT_STANDARD,
+        ModelRole.FREE_TEXT,
+        ModelRole.FREE_VISUAL,
+        ModelRole.FREE_AUDIO,
+    ],
+)
+def test_optional_ordinary_chat_roles_explicitly_disable_reasoning(
+    role: ModelRole,
+) -> None:
+    settings = openrouter_settings(get_openrouter_model(role))
+
+    assert settings["openrouter_reasoning"] == {"enabled": False}
+
+
+def test_dedicated_reasoning_role_is_the_only_high_effort_role() -> None:
+    settings = openrouter_settings(get_openrouter_model(ModelRole.CHAT_REASONING))
+
+    assert settings["openrouter_reasoning"] == {
+        "enabled": True,
+        "effort": "high",
+    }
+
+
+def test_mandatory_multimodal_reasoning_is_pinned_to_minimal_effort() -> None:
+    settings = openrouter_settings(get_openrouter_model(ModelRole.CHAT_MULTIMODAL))
+
+    assert settings["openrouter_reasoning"] == {
+        "enabled": True,
+        "effort": "minimal",
     }

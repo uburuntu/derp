@@ -16,14 +16,12 @@ from derp.features.image import (
     PreparedImageEditRequest,
 )
 from derp.features.inline_chat import (
-    DEFAULT_INLINE_DAILY_REQUESTS,
     FREE_INLINE_CHAT_PLAN,
     INLINE_CHAT_PLAN,
     MAX_INLINE_OUTPUT_CHARS,
     MAX_INLINE_OUTPUT_TOKENS,
     MAX_INLINE_QUERY_CHARS,
     InlineChatCompleted,
-    InlineChatExhausted,
     InlineChatFailed,
     InlineChatFailureReason,
     InlineChatFeatureService,
@@ -87,7 +85,6 @@ _IMAGE_OPERATION_EXPORTS = frozenset(
 )
 
 __all__ = [
-    "DEFAULT_INLINE_DAILY_REQUESTS",
     "FREE_INLINE_CHAT_PLAN",
     "INLINE_CHAT_PLAN",
     "MAX_IMAGE_OUTPUT_BYTES",
@@ -121,7 +118,6 @@ __all__ = [
     "ImageRequest",
     "ImageSourceLoader",
     "InlineChatCompleted",
-    "InlineChatExhausted",
     "InlineChatFailed",
     "InlineChatFailureReason",
     "InlineChatFeatureService",

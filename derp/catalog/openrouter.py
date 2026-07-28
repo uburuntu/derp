@@ -27,7 +27,7 @@ from derp.catalog.google import (
     VideoResolution,
 )
 
-OPENROUTER_CATALOG_VERIFIED_ON: Final = date(2026, 7, 21)
+OPENROUTER_CATALOG_VERIFIED_ON: Final = date(2026, 7, 28)
 OPENROUTER_MODELS_URL: Final = "https://openrouter.ai/api/v1/models"
 OPENROUTER_PRIVACY_URL: Final = (
     "https://openrouter.ai/docs/features/privacy-and-logging"

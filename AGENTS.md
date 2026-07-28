@@ -202,7 +202,7 @@ when its replacement is covered and working or the public surface fails closed.
   - `derp/db/*`: database session and query functions.
   - `derp/models/*`: normalized history and policy, wallet lots/events/consent,
     quotes and operations, approvals, artifacts and delivery intents, billing,
-    shared facts, and inline allowances.
+    and shared facts.
   - `derp/tools/*`: LLM tool implementations exposed through governed toolsets.
   - `derp/llm/*`: LLM provider abstraction and agent factories.
   - `derp/locales/*`: i18n resources and compiled catalogs.
@@ -253,8 +253,8 @@ when its replacement is covered and working or the public surface fails closed.
     requests converge on one approval, operation, feature, and delivery path.
   - `derp/handlers/tts.py`: exact quote -> authenticated approval -> bounded
     TTS -> durable voice artifact -> capture/delivery/reversal.
-  - `derp/handlers/inline.py`: free economy answers admitted by an atomic
-    per-user UTC-day allowance with strict request/token/output limits.
+  - `derp/handlers/inline.py`: consented zero-cost answers with strict
+    per-request input, token, timeout, and output limits.
   - `premium_suspension.py`: `/think` and `/video` fail closed with no provider
     call or charge until their new services receive complete adapters.
 - **Tools & Toolsets:**
@@ -290,8 +290,8 @@ outcomes; do not add another direct-sending implementation.
   their cohesive subsystems and exchange typed domain values.
 - **Models:** SQLAlchemy models cover users/chats, normalized history and policy,
   wallet lots/events/consent, quotes and paid operations, deferred approvals,
-  artifacts and delivery attempts, purchase intents/receipts/subscriptions,
-  shared facts, and inline daily allowances.
+  artifacts and delivery attempts, purchase intents/receipts/subscriptions, and
+  shared facts.
 - **Migrations:** Alembic is authoritative. Generate migrations with
   `make db-revision MSG="..."`; parity tests must fail on model/schema drift.
 
@@ -308,8 +308,8 @@ The bot uses a credit-based monetization system with tiered access to features.
 - **Model Keys:** Stable semantic keys select immutable Google model specs. The
   shared spec carries the exact provider ID, lifecycle, limits, capabilities,
   source links, and current pricing used by both execution and billing.
-- **Free Tier:** An unfunded ordinary chat turn gets one idempotently claimed
-  economy run. Inline chat has its own atomic per-user UTC-day allowance.
+- **Free Tier:** Consented zero-cost OpenRouter models have no daily admission
+  quota; each request remains bounded by input, token, timeout, and output limits.
 - **Paid Tier:** Users/chats with credits unlock the standard chat role, longer
   context, and premium tools.
 
@@ -355,8 +355,8 @@ derp/billing/
 - Paid chat, image, and TTS use immutable operation IDs and atomic settlement.
 - Only premium tools backed by durable approval/accounting are visible to the
   agent. Thinking and video are absent from toolsets and intercepted commands.
-- Free web-search usage remains in `daily_usage`; inline use has the separate
-  concurrency-safe `inline_daily_allowances` table.
+- Free web-search usage remains in `daily_usage`; zero-cost model requests are
+  unlimited after versioned consent and remain fully accounted for.
 
 ### Extending
 

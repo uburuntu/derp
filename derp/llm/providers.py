@@ -15,6 +15,7 @@ from pydantic_ai.models.openrouter import (
     OpenRouterModel,
     OpenRouterModelSettings,
     OpenRouterProviderConfig,
+    OpenRouterReasoning,
 )
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
@@ -36,6 +37,15 @@ if TYPE_CHECKING:
 _openrouter_provider: OpenRouterProvider | None = None
 _OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 _OPENROUTER_TIMEOUT = httpx.Timeout(120.0, connect=10.0, write=30.0, pool=10.0)
+_OPTIONAL_NON_REASONING_ROLES = frozenset(
+    {
+        ModelRole.CHAT_ECONOMY,
+        ModelRole.CHAT_STANDARD,
+        ModelRole.FREE_TEXT,
+        ModelRole.FREE_VISUAL,
+        ModelRole.FREE_AUDIO,
+    }
+)
 
 
 def _shared_openrouter_provider() -> OpenRouterProvider:
@@ -93,6 +103,18 @@ def _max_price(ceiling: PriceCeiling | None) -> dict[str, float]:
     return {name: value for name, value in values.items() if value is not None}
 
 
+def _reasoning_policy(model: ModelSpec) -> OpenRouterReasoning | None:
+    """Make chat reasoning intentional instead of accepting provider defaults."""
+    if model.key is ModelRole.CHAT_REASONING:
+        return {"enabled": True, "effort": "high"}
+    if model.key is ModelRole.CHAT_MULTIMODAL:
+        # The reviewed Gemini 3.5 Flash catalog marks reasoning as mandatory.
+        return {"enabled": True, "effort": "minimal"}
+    if model.key in _OPTIONAL_NON_REASONING_ROLES:
+        return {"enabled": False}
+    return None
+
+
 def openrouter_settings(
     model: ModelSpec,
     *,
@@ -120,6 +142,8 @@ def openrouter_settings(
         "openrouter_provider": provider,
         "openrouter_usage": {"include": True},
     }
+    if reasoning := _reasoning_policy(model):
+        result["openrouter_reasoning"] = reasoning
     if pseudonymous_user:
         result["openai_user"] = pseudonymous_user  # type: ignore[typeddict-unknown-key]
     if (

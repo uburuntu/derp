@@ -12,7 +12,6 @@ from derp.models.credit_transaction import CreditTransaction
 from derp.models.daily_usage import DailyUsage
 from derp.models.delivery import Artifact, DeliveryIntent
 from derp.models.inference_usage import InferenceUsage
-from derp.models.inline_allowance import InlineDailyAllowance
 from derp.models.message import Message
 from derp.models.paid_operation import (
     DeferredToolRequest,
@@ -53,6 +52,5 @@ __all__ = [
     "DailyUsage",
     "Artifact",
     "DeliveryIntent",
-    "InlineDailyAllowance",
     "InferenceUsage",
 ]

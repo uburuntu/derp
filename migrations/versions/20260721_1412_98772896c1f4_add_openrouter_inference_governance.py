@@ -1,7 +1,7 @@
 """add OpenRouter inference governance
 
 Revision ID: 98772896c1f4
-Revises: 5e6b666d0b7a
+Revises: 7e1fee80789f
 Create Date: 2026-07-21 14:12:30.741604+00:00
 
 """
@@ -11,10 +11,9 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-
 # revision identifiers, used by Alembic.
 revision: str = "98772896c1f4"
-down_revision: str | None = "5e6b666d0b7a"
+down_revision: str | None = "7e1fee80789f"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -96,9 +95,7 @@ def upgrade() -> None:
         sa.Column(
             "reconciliation_requested_at", sa.DateTime(timezone=True), nullable=True
         ),
-        sa.Column(
-            "reconciliation_retry_at", sa.DateTime(timezone=True), nullable=True
-        ),
+        sa.Column("reconciliation_retry_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("reconciliation_claim_token", sa.Uuid(), nullable=True),
         sa.Column(
             "reconciliation_claimed_at", sa.DateTime(timezone=True), nullable=True

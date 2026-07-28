@@ -67,7 +67,8 @@
           "web_search": "0.01"
         },
         "reasoning": {
-          "default_effort": "medium",
+          "default_effort": "high",
+          "default_enabled": true,
           "mandatory": false,
           "supported_efforts": [
             "high",
@@ -327,7 +328,6 @@
       },
       "surface": "primary",
       "zdr_provider_tags": [
-        "amazon-bedrock/claude-on-aws",
         "amazon-bedrock/global",
         "amazon-bedrock/us-east-1",
         "azure/us-east-2",
@@ -2316,7 +2316,7 @@
     "openai/whisper-large-v3"
   ],
   "provider": "openrouter",
-  "retrieved_at": "2026-07-21T14:00:40Z",
+  "retrieved_at": "2026-07-28T11:36:50Z",
   "runtime_unavailable": [
     "google/gemini-3.1-flash-tts-preview",
     "google/veo-3.1",
@@ -2329,15 +2329,15 @@
       "id": "data-collection",
       "response_bytes": 2464,
       "response_sha256": "sha256:af6354747b1e4dc4c1fa84f34de8205d7e2578764341aa06ccd9c4998a4dde17",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:af6354747b1e4dc4c1fa84f34de8205d7e2578764341aa06ccd9c4998a4dde17",
       "url": "https://openrouter.ai/docs/guides/privacy/data-collection.md"
     },
     {
       "id": "docs-index",
-      "response_bytes": 39413,
-      "response_sha256": "sha256:ce48a20564b34b822c4059f23b95ba588e47c268f61c861851285408615a9b69",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_bytes": 40708,
+      "response_sha256": "sha256:68f377d1bd0777b83868b888f6a429739bf2bf4cbd6a76494c2ed71eafba582c",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:34e7647b93cda7b98cea6226c2175bdf3033221acd43afd73d497f6827a2a85b",
       "url": "https://openrouter.ai/docs/llms.txt"
     },
@@ -2345,7 +2345,7 @@
       "id": "free-variant",
       "response_bytes": 789,
       "response_sha256": "sha256:d5cdec2c1c71776c94b9a26417662120d2978b1fc9149963d49ef6b977d7c3d5",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:d5cdec2c1c71776c94b9a26417662120d2978b1fc9149963d49ef6b977d7c3d5",
       "url": "https://openrouter.ai/docs/guides/routing/model-variants/free.md"
     },
@@ -2353,87 +2353,87 @@
       "id": "image-endpoints:google/gemini-3.1-flash-image",
       "response_bytes": 1183,
       "response_sha256": "sha256:be9d700ee208a564ac7aa4b36a014195320b191a6571e54a7bcdd3be1b26984e",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:59b70b7f2536aa3f3c42b385493efe31eb16faa90fa68aa262043abff483dcef",
       "url": "https://openrouter.ai/api/v1/images/models/google/gemini-3.1-flash-image/endpoints"
     },
     {
       "id": "image-guide",
-      "response_bytes": 21673,
-      "response_sha256": "sha256:318334da619fc3469943526259029857117b8d62cf1807ebc7725bae54cbdd7b",
-      "retrieved_at": "2026-07-21T14:00:40Z",
-      "review_sha256": "sha256:318334da619fc3469943526259029857117b8d62cf1807ebc7725bae54cbdd7b",
+      "response_bytes": 21713,
+      "response_sha256": "sha256:4d0cd4a9da98efb0f9f763b21e99f95a84759b7cd5ab59f3563ec7d0fe6f2576",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:4d0cd4a9da98efb0f9f763b21e99f95a84759b7cd5ab59f3563ec7d0fe6f2576",
       "url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation.md"
     },
     {
       "id": "image-models",
-      "response_bytes": 29925,
-      "response_sha256": "sha256:420fb81d712918ebd69ad2fed015aebcb88b9e04efe2bd936e80078df180c5ef",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_bytes": 29289,
+      "response_sha256": "sha256:c99a9d47e67fe816ad8585b30857f062b7b1b09098c9b283087d7c946a3ff064",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:28be8eaf8a859e89d79d7d63dc48484ddc3445c5ad953b90b22a739b1cd51e76",
       "url": "https://openrouter.ai/api/v1/images/models"
     },
     {
       "id": "model-endpoints:anthropic/claude-sonnet-5",
-      "response_bytes": 6420,
-      "response_sha256": "sha256:27b28baf34e00ebb81460a13b2d9063d00bffdbdd25233184423a00cdaabcd55",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_bytes": 6404,
+      "response_sha256": "sha256:8fb32ec7914cd8bced4c2462ecfee09ddc0948bf054a8558d41d7f3c174eb7a7",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:35087d6ea22b9a4a8178e43e718745e2d6ffc8d66a841ce84c6925ff5fae15db",
       "url": "https://openrouter.ai/api/v1/models/anthropic/claude-sonnet-5/endpoints"
     },
     {
       "id": "model-endpoints:google/gemini-3.1-flash-image",
       "response_bytes": 2096,
-      "response_sha256": "sha256:ec73720b296a35cd3121df0a2ecbcf60ded95526879b2ffc50562adbdf23f765",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_sha256": "sha256:757649a55b9a2747253eb0e5ecb4ba116b7b9ecbd82e79553b4ad713289cadca",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:8f9ef1812643223381359c5661dc9fb8fd6ebd932dc9f67f944fc9c310213e9c",
       "url": "https://openrouter.ai/api/v1/models/google/gemini-3.1-flash-image/endpoints"
     },
     {
       "id": "model-endpoints:google/gemini-3.1-flash-lite",
-      "response_bytes": 6456,
-      "response_sha256": "sha256:405a6a05995e5bad6f2457a5ec6676bd0ddb2f062edb588a6c0fc6669f3b8563",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_bytes": 6450,
+      "response_sha256": "sha256:3d9e575444f1b201d5daa2717cec02c9a3ad7e919b199516fb8c33cf6e08ac80",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:e3ef951a2ce089f96f2bb6765f9aa7b6d6c24c7c7db15cb8e831c934639eb03d",
       "url": "https://openrouter.ai/api/v1/models/google/gemini-3.1-flash-lite/endpoints"
     },
     {
       "id": "model-endpoints:google/gemini-3.5-flash",
-      "response_bytes": 6317,
-      "response_sha256": "sha256:1a512237790c4c6ff02ceb26eb659fd3a8e0640ca7da9365ea4914ce7a3380f1",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_bytes": 6272,
+      "response_sha256": "sha256:36f36eccfb8c89068a63e4f8a00f448d8d38bb52e4878f36dd60757271b404bb",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:42420ff31f58bf9694c8aece18c2074da9297009a6bbddc47f3b2ea8fe831e08",
       "url": "https://openrouter.ai/api/v1/models/google/gemini-3.5-flash/endpoints"
     },
     {
       "id": "model-endpoints:google/gemma-4-31b-it:free",
-      "response_bytes": 1186,
-      "response_sha256": "sha256:bf4f387f3d44ba5272a07d3d96f25d14cc97bb2f1051950350e6ffed8e5d5d34",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_bytes": 1201,
+      "response_sha256": "sha256:d8f6aafc0d4ddb30c5c445e53b1552b5f6c153ef2b7e67548d7cae0460f743b7",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:cb81b468a5b4bcb9db0983ab76050c0fd2e6110bfd628bb6eb72fd25a587e5ce",
       "url": "https://openrouter.ai/api/v1/models/google/gemma-4-31b-it:free/endpoints"
     },
     {
       "id": "model-endpoints:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-      "response_bytes": 1248,
-      "response_sha256": "sha256:1e9845a7f4100a6fe7334a53eb43eadfd56997c3048f8aae10e87cdfc58b4b5a",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_bytes": 1233,
+      "response_sha256": "sha256:47840de664875ecfab1621565f6277f9107302f14ada7fc4993116bfe82f1a15",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:853dbea2c887973ec07f23b82bfd73d900d6279862e83602fbdabcdec54fe839",
       "url": "https://openrouter.ai/api/v1/models/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free/endpoints"
     },
     {
       "id": "model-endpoints:nvidia/nemotron-3-ultra-550b-a55b:free",
-      "response_bytes": 1206,
-      "response_sha256": "sha256:3fc66480b5f28bf6f240316ef17f5e10b0524dce2db13213487ab9a47ecd52d5",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_bytes": 1207,
+      "response_sha256": "sha256:3ae28a911ca185589c692f4cd2c5989b3536e01b34ba394e3e911ba6a8cdf675",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:6ddf049e57d1ce66747efb6839348574f9bc748e1383945e04b9428ebe7376a1",
       "url": "https://openrouter.ai/api/v1/models/nvidia/nemotron-3-ultra-550b-a55b:free/endpoints"
     },
     {
       "id": "model-endpoints:openai/gpt-5.6-sol",
-      "response_bytes": 4936,
-      "response_sha256": "sha256:8f2f1b0ff96930eeb58e7c174976dbb0ae63253489245679b5ccf15520937714",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_bytes": 4931,
+      "response_sha256": "sha256:5d8fba0ffe541f06a4cb80667b4fbc8e1a4041a02b0c6f4926cf53833393523a",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:364bc7a1f1780dfb561a19a09b5494fd05f5c3576135c8cae464cd14a046637e",
       "url": "https://openrouter.ai/api/v1/models/openai/gpt-5.6-sol/endpoints"
     },
@@ -2441,55 +2441,55 @@
       "id": "model-fallbacks",
       "response_bytes": 7174,
       "response_sha256": "sha256:b4dac9acb2da6a7569d0dbab781976d3bbb663a94f22cb175789efa960f84415",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:b4dac9acb2da6a7569d0dbab781976d3bbb663a94f22cb175789efa960f84415",
       "url": "https://openrouter.ai/docs/guides/routing/model-fallbacks.md"
     },
     {
       "id": "models",
-      "response_bytes": 524043,
-      "response_sha256": "sha256:bd80ecae37a745b0ce7405d82dd02ba98d876f93ccb83c0dfff7c9f465a51dac",
-      "retrieved_at": "2026-07-21T14:00:40Z",
-      "review_sha256": "sha256:4b76ddd685d200ad5cc0e453ff79be75d5e2adfb7017edc0acf49414f7b465bb",
+      "response_bytes": 533098,
+      "response_sha256": "sha256:d8a9bbd09bf57e75b004e32c7767b12250924b3765113c85e3c1ad61ee66f45b",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:6cdd32bebfefb379b8cfd9c68699aa5a719a3b41c872b11bedd6556c3dc1d222",
       "url": "https://openrouter.ai/api/v1/models"
     },
     {
       "id": "models-guide",
       "response_bytes": 15099,
       "response_sha256": "sha256:ec41ee9720a8587a68ed4c674f7d6a2a6e23384e8b56101107d1b85d0c514b21",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:ec41ee9720a8587a68ed4c674f7d6a2a6e23384e8b56101107d1b85d0c514b21",
       "url": "https://openrouter.ai/docs/guides/overview/models.md"
     },
     {
       "id": "openapi",
-      "response_bytes": 1636429,
-      "response_sha256": "sha256:388af91776cd2598610637a2ec5afb1c991d60247c070f49ceab484b1811b8a9",
-      "retrieved_at": "2026-07-21T14:00:40Z",
-      "review_sha256": "sha256:f2040d30d43c39b2056cd349df33e0b356d186fb1093fb90643d39857096bde8",
+      "response_bytes": 1660091,
+      "response_sha256": "sha256:987ad9f27842d7cba1b503e3c7aa8130f90372aadaa8ac8aa04f0ae463a48cde",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:7939c9a02da74dde2ca6afa28b3bf0cbf3fc817e491c4488484c9975dbbae586",
       "url": "https://openrouter.ai/openapi.json"
     },
     {
       "id": "provider-logging",
       "response_bytes": 4921,
       "response_sha256": "sha256:17eb88c4b1b75cf436564ff18eefe172648e46ad412dda8f7220dec8e89cc7f8",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:17eb88c4b1b75cf436564ff18eefe172648e46ad412dda8f7220dec8e89cc7f8",
       "url": "https://openrouter.ai/docs/guides/privacy/provider-logging.md"
     },
     {
       "id": "provider-selection",
-      "response_bytes": 67621,
-      "response_sha256": "sha256:2c9a1f0245fbd15fd5fef14aea1eea72a4b490eb5f88a9de945056e75df44f07",
-      "retrieved_at": "2026-07-21T14:00:40Z",
-      "review_sha256": "sha256:2c9a1f0245fbd15fd5fef14aea1eea72a4b490eb5f88a9de945056e75df44f07",
+      "response_bytes": 67805,
+      "response_sha256": "sha256:b02ab4c1a439c184a4ce71682dde66917cdf87dcd2b51d8c75b81921bd1dac63",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:b02ab4c1a439c184a4ce71682dde66917cdf87dcd2b51d8c75b81921bd1dac63",
       "url": "https://openrouter.ai/docs/guides/routing/provider-selection.md"
     },
     {
       "id": "stt-guide",
       "response_bytes": 14313,
       "response_sha256": "sha256:0cbf317b514570a939f47d4f174ddecbb541ddbfe2660344890605b37840ba75",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:0cbf317b514570a939f47d4f174ddecbb541ddbfe2660344890605b37840ba75",
       "url": "https://openrouter.ai/docs/guides/overview/multimodal/stt.md"
     },
@@ -2497,7 +2497,7 @@
       "id": "tts-guide",
       "response_bytes": 13999,
       "response_sha256": "sha256:961964e59da4ab131dc36fdf2123603f07857ac73bc2984472209fef47a773cd",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:961964e59da4ab131dc36fdf2123603f07857ac73bc2984472209fef47a773cd",
       "url": "https://openrouter.ai/docs/guides/overview/multimodal/tts.md"
     },
@@ -2505,31 +2505,31 @@
       "id": "video-guide",
       "response_bytes": 22450,
       "response_sha256": "sha256:67659b2ffcb3432614cc9689321284521a8e89f4f3a5e662bdd6cc7ca7d6bed5",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:67659b2ffcb3432614cc9689321284521a8e89f4f3a5e662bdd6cc7ca7d6bed5",
       "url": "https://openrouter.ai/docs/guides/overview/multimodal/video-generation.md"
     },
     {
       "id": "video-models",
       "response_bytes": 15967,
-      "response_sha256": "sha256:c8c05164c429c8eb7b25a9d67b4a46e23aed49b86e47bd85bffddc9e055a4f30",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "response_sha256": "sha256:b67137c25712a319ade4268270bf5dd0605dd01d2a6f1fe3bce97befe57607e7",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:0d29517297cd9e04e197bf9d651001df7e6f34654bad9d80b45d6bc08fc171a9",
       "url": "https://openrouter.ai/api/v1/videos/models"
     },
     {
       "id": "zdr-endpoints",
-      "response_bytes": 539688,
-      "response_sha256": "sha256:ff888b4f08ebed51750bbb24164b640e3d7d3223beee698f95db077fec8dd542",
-      "retrieved_at": "2026-07-21T14:00:40Z",
-      "review_sha256": "sha256:594683f8db44f09cf1334f78243a61ed6f3efadb23f41e2bbc7c11dfed6c8513",
+      "response_bytes": 552692,
+      "response_sha256": "sha256:26d73139b4c35b1328920a1bd745acff055723582df9ef4412ba93f69035302c",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:3d8e29cef621b6d68d4ec5bb8afdfa454003326f0b36ccfe5937cf1d69927d01",
       "url": "https://openrouter.ai/api/v1/endpoints/zdr"
     },
     {
       "id": "zero-data-retention",
       "response_bytes": 8473,
       "response_sha256": "sha256:750c7cdc46efba63a68f95be6c7b9e4db748568025b206755e7a55ead33efdf2",
-      "retrieved_at": "2026-07-21T14:00:40Z",
+      "retrieved_at": "2026-07-28T11:36:50Z",
       "review_sha256": "sha256:750c7cdc46efba63a68f95be6c7b9e4db748568025b206755e7a55ead33efdf2",
       "url": "https://openrouter.ai/docs/guides/features/zdr.md"
     }

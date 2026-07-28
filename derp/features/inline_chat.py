@@ -1,13 +1,11 @@
-"""Governed inline chat with atomic admission and inference accounting."""
+"""Governed unlimited free inline chat with per-request inference accounting."""
 
 from __future__ import annotations
 
 import asyncio
 import math
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Final, Protocol
 
@@ -41,8 +39,6 @@ MAX_INLINE_QUERY_BYTES: Final = 1_024
 MAX_INLINE_OUTPUT_CHARS: Final = 2_000
 MAX_INLINE_OUTPUT_BYTES: Final = 8_000
 MAX_INLINE_OUTPUT_TOKENS: Final = 256
-MAX_INLINE_DAILY_REQUESTS: Final = 100
-DEFAULT_INLINE_DAILY_REQUESTS: Final = 10
 INLINE_CHAT_PLAN: Final = plan_execution(
     Feature.INLINE_CHAT,
     ModelRole.CHAT_ECONOMY,
@@ -121,55 +117,6 @@ class InlineChatInvocation:
             raise TypeError("privacy must be an InferencePrivacyPreference")
 
 
-@dataclass(frozen=True, slots=True)
-class InlineAllowanceGranted:
-    """One provider attempt was atomically admitted for the UTC day."""
-
-    usage_date: date
-    used_count: int
-    limit: int
-
-    def __post_init__(self) -> None:
-        _validate_allowance_count(self.used_count, self.limit)
-        if self.used_count > self.limit:
-            raise ValueError("granted allowance cannot exceed its limit")
-
-    @property
-    def remaining(self) -> int:
-        return self.limit - self.used_count
-
-
-@dataclass(frozen=True, slots=True)
-class InlineAllowanceExhausted:
-    """No provider attempt was admitted for the UTC day."""
-
-    usage_date: date
-    used_count: int
-    limit: int
-
-    def __post_init__(self) -> None:
-        _validate_allowance_count(self.used_count, self.limit)
-        if self.used_count < self.limit:
-            raise ValueError("exhausted allowance must have reached its limit")
-
-
-type InlineAllowanceClaim = InlineAllowanceGranted | InlineAllowanceExhausted
-
-
-class InlineAllowanceClaimer(Protocol):
-    """Atomic admission boundary implemented by PostgreSQL."""
-
-    async def claim(
-        self,
-        *,
-        user_id: uuid.UUID,
-        usage_date: date,
-        limit: int,
-    ) -> InlineAllowanceClaim:
-        """Admit at most ``limit`` provider attempts for one user and day."""
-        ...
-
-
 class InlineChatProviderExecutor(Protocol):
     """Provider adapter with no persistence or Telegram effects."""
 
@@ -210,7 +157,6 @@ class InlineProviderExecution:
 class InlineChatFailureReason(StrEnum):
     """Stable failure categories exposed to the Telegram adapter."""
 
-    ALLOWANCE_UNAVAILABLE = "allowance_unavailable"
     ACCOUNTING_UNAVAILABLE = "accounting_unavailable"
     FREE_MODE_REQUIRED = "free_mode_required"
     PROVIDER_TIMEOUT = "provider_timeout"
@@ -221,65 +167,38 @@ class InlineChatFailureReason(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class InlineChatCompleted:
-    """One bounded answer was produced after a successful allowance claim."""
+    """One bounded answer was produced."""
 
     text: str = field(repr=False)
-    allowance_remaining: int
 
     def __post_init__(self) -> None:
         output = TextOutput(self.text)
-        _validate_nonnegative_count(
-            "allowance_remaining",
-            self.allowance_remaining,
-        )
         object.__setattr__(self, "text", output.text)
 
 
 @dataclass(frozen=True, slots=True)
 class InlineChatInvalid:
-    """The query was rejected before any allowance was consumed."""
-
-
-@dataclass(frozen=True, slots=True)
-class InlineChatExhausted:
-    """The user's UTC-day provider allowance is exhausted."""
-
-    reset_at: datetime
-    limit: int
-
-    def __post_init__(self) -> None:
-        if self.reset_at.tzinfo is None or self.reset_at.utcoffset() is None:
-            raise ValueError("reset_at must be timezone-aware")
-        _validate_positive_count("limit", self.limit)
+    """The query was rejected before provider execution."""
 
 
 @dataclass(frozen=True, slots=True)
 class InlineChatFailed:
-    """Admission or provider execution failed without exposing private details."""
+    """Accounting or provider execution failed without private details."""
 
     reason: InlineChatFailureReason
-    allowance_remaining: int | None
 
     def __post_init__(self) -> None:
         if not isinstance(self.reason, InlineChatFailureReason):
             raise TypeError("reason must be an InlineChatFailureReason")
-        if self.allowance_remaining is not None:
-            _validate_nonnegative_count(
-                "allowance_remaining",
-                self.allowance_remaining,
-            )
 
 
-type InlineChatOutcome = (
-    InlineChatCompleted | InlineChatInvalid | InlineChatExhausted | InlineChatFailed
-)
+type InlineChatOutcome = InlineChatCompleted | InlineChatInvalid | InlineChatFailed
 
 
 @dataclass(frozen=True, slots=True)
 class InlineChatPolicy:
-    """Hard cost, transport, and output limits for free inline answers."""
+    """Hard per-request transport and output limits for free inline answers."""
 
-    daily_requests: int = DEFAULT_INLINE_DAILY_REQUESTS
     provider_deadline_seconds: float = 20.0
     max_output_tokens: int = MAX_INLINE_OUTPUT_TOKENS
     max_output_chars: int = MAX_INLINE_OUTPUT_CHARS
@@ -288,7 +207,6 @@ class InlineChatPolicy:
 
     def __post_init__(self) -> None:
         for name in (
-            "daily_requests",
             "max_output_tokens",
             "max_output_chars",
             "max_output_bytes",
@@ -299,10 +217,6 @@ class InlineChatPolicy:
                 raise TypeError(f"{name} must be an integer")
             if value <= 0:
                 raise ValueError(f"{name} must be positive")
-        if self.daily_requests > MAX_INLINE_DAILY_REQUESTS:
-            raise ValueError(
-                f"daily_requests must not exceed {MAX_INLINE_DAILY_REQUESTS}"
-            )
         if self.max_output_tokens > MAX_INLINE_OUTPUT_TOKENS:
             raise ValueError(
                 f"max_output_tokens must not exceed {MAX_INLINE_OUTPUT_TOKENS}"
@@ -334,10 +248,7 @@ class InlineChatFeatureService:
         *,
         free_plan: ExecutionPlan | None,
         policy: InlineChatPolicy | None = None,
-        clock: Callable[[], datetime] | None = None,
     ) -> None:
-        if clock is not None and not callable(clock):
-            raise TypeError("clock must be callable")
         self._executor = executor
         if free_plan is not None and (
             free_plan.feature is not Feature.INLINE_CHAT
@@ -349,7 +260,6 @@ class InlineChatFeatureService:
         self._inference_recorder = inference_recorder
         self._free_plan = free_plan
         self._policy = policy or InlineChatPolicy()
-        self._clock = clock or _utc_now
 
     async def answer(self, invocation: InlineChatInvocation) -> InlineChatOutcome:
         """Return one typed inline outcome without retaining query content."""
@@ -357,7 +267,7 @@ class InlineChatFeatureService:
             raise TypeError("invocation must be an InlineChatInvocation")
         plan = self._select_plan(invocation.privacy)
         if plan is None:
-            return InlineChatFailed(InlineChatFailureReason.FREE_MODE_REQUIRED, None)
+            return InlineChatFailed(InlineChatFailureReason.FREE_MODE_REQUIRED)
         with logfire.span(
             "inline_chat.operation",
             feature=Feature.INLINE_CHAT.value,
@@ -388,7 +298,6 @@ class InlineChatFeatureService:
             if not isinstance(provider_outcome, Succeeded):
                 outcome = InlineChatFailed(
                     provider_outcome,
-                    None,
                 )
                 return self._record_outcome(span, outcome)
 
@@ -399,12 +308,11 @@ class InlineChatFeatureService:
             ):
                 outcome = InlineChatFailed(
                     InlineChatFailureReason.UNUSABLE_OUTPUT,
-                    None,
                 )
                 return self._record_outcome(span, outcome)
 
             span.set_attribute("derp.inline.output_chars", len(output.text))
-            outcome = InlineChatCompleted(output.text, 0)
+            outcome = InlineChatCompleted(output.text)
             return self._record_outcome(span, outcome)
 
     def _select_plan(
@@ -506,12 +414,6 @@ class InlineChatFeatureService:
                 inference_usage_id=str(attempt.id),
             )
 
-    def _aware_now(self) -> datetime:
-        now = self._clock()
-        if now.tzinfo is None or now.utcoffset() is None:
-            raise ValueError("inline chat clock must be timezone-aware")
-        return now
-
     @staticmethod
     def _record_outcome(
         span: logfire.LogfireSpan,
@@ -519,67 +421,25 @@ class InlineChatFeatureService:
     ) -> InlineChatOutcome:
         if isinstance(outcome, InlineChatCompleted):
             category = "completed"
-            remaining = outcome.allowance_remaining
-        elif isinstance(outcome, InlineChatExhausted):
-            category = "allowance_exhausted"
-            remaining = 0
         elif isinstance(outcome, InlineChatInvalid):
             category = "invalid"
-            remaining = -1
         elif isinstance(outcome, InlineChatFailed):
             category = f"failed:{outcome.reason.value}"
-            remaining = outcome.allowance_remaining
         else:  # pragma: no cover - closed outcome union
             raise TypeError(f"unsupported inline outcome: {type(outcome).__name__}")
         span.set_attribute("derp.inline.outcome", category)
-        if remaining is not None and remaining >= 0:
-            span.set_attribute("derp.inline.allowance_remaining", remaining)
         return outcome
 
 
-def _validate_allowance_count(used_count: int, limit: int) -> None:
-    for name, value in (("used_count", used_count), ("limit", limit)):
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise TypeError(f"{name} must be an integer")
-    if used_count < 0:
-        raise ValueError("used_count must not be negative")
-    if limit <= 0:
-        raise ValueError("limit must be positive")
-
-
-def _validate_nonnegative_count(name: str, value: int) -> None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{name} must be an integer")
-    if value < 0:
-        raise ValueError(f"{name} must not be negative")
-
-
-def _validate_positive_count(name: str, value: int) -> None:
-    _validate_nonnegative_count(name, value)
-    if value == 0:
-        raise ValueError(f"{name} must be positive")
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
 __all__ = [
-    "DEFAULT_INLINE_DAILY_REQUESTS",
     "FREE_INLINE_CHAT_PLAN",
     "INLINE_CHAT_PLAN",
-    "MAX_INLINE_DAILY_REQUESTS",
     "MAX_INLINE_OUTPUT_BYTES",
     "MAX_INLINE_OUTPUT_CHARS",
     "MAX_INLINE_OUTPUT_TOKENS",
     "MAX_INLINE_QUERY_BYTES",
     "MAX_INLINE_QUERY_CHARS",
-    "InlineAllowanceClaim",
-    "InlineAllowanceClaimer",
-    "InlineAllowanceExhausted",
-    "InlineAllowanceGranted",
     "InlineChatCompleted",
-    "InlineChatExhausted",
     "InlineChatFailed",
     "InlineChatFailureReason",
     "InlineChatFeatureService",
