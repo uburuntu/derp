@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Final, Protocol, cast
 
 import logfire
@@ -17,14 +18,29 @@ from derp.approvals.maintenance import DeferredApprovalExpiryWorker
 from derp.approvals.types import DeferredToolStatus
 from derp.billing import SubscriptionExpiryWorker
 from derp.billing.types import SubscriptionStatus
+from derp.catalog import (
+    OPENROUTER_CATALOG_VERIFIED_ON,
+    OPENROUTER_MODEL_CATALOG,
+    ImagePricing,
+    ModelCapability,
+    ModelRole,
+    ModelSpec,
+    TokenPricing,
+)
 from derp.db import DatabaseManager
 from derp.delivery import DeliveryMaintenanceReport, DeliveryMaintenanceWorker
 from derp.history.retention import HistoryRetentionWorker
+from derp.inference import (
+    OpenRouterCostReconciliationReport,
+    OpenRouterCostReconciliationWorker,
+)
+from derp.inference_usage import CostReconciliationStatus, InferenceStatus
 from derp.models import (
     Artifact,
     Chat,
     DeferredToolRequest,
     DeliveryIntent,
+    InferenceUsage,
     Message,
     PaidOperation,
     PaymentReceipt,
@@ -35,6 +51,7 @@ from derp.models import (
     WalletLot,
 )
 from derp.observability import report_exception
+from derp.openrouter import ModelListQuery, OpenRouterClient, OpenRouterModel
 from derp.operations import (
     DeliveryState,
     OperationReconciliationReport,
@@ -47,11 +64,18 @@ from derp.operator.types import (
     OperatorConsoleSnapshot,
     OperatorDatabaseSnapshot,
     OperatorDatabaseStatus,
+    OperatorInferenceAttemptTotals,
+    OperatorInferenceCatalogSnapshot,
+    OperatorInferenceConnectivitySnapshot,
+    OperatorInferenceSnapshot,
+    OperatorInferenceTokenTotals,
+    OperatorInferenceUsageTotals,
     OperatorMaintenanceAction,
     OperatorMaintenancePass,
     OperatorMaintenanceResult,
     OperatorNamedCount,
     OperatorPoolSnapshot,
+    OperatorProbeStatus,
     OperatorRuntimeSnapshot,
     OperatorStarsTotals,
     OperatorSubscriptionTotals,
@@ -95,7 +119,9 @@ _WORKER_ACTIONS: Final = (
     OperatorMaintenanceAction.OPERATIONS,
     OperatorMaintenanceAction.DELIVERIES,
     OperatorMaintenanceAction.APPROVALS,
+    OperatorMaintenanceAction.INFERENCE,
 )
+_ONE_MILLION: Final = Decimal(1_000_000)
 
 
 def _utc_now() -> datetime:
@@ -114,6 +140,9 @@ class OperatorConsoleService:
         operation_reconciliation: OperationReconciliationWorker,
         delivery_maintenance: DeliveryMaintenanceWorker,
         approval_expiry: DeferredApprovalExpiryWorker,
+        inference_reconciliation: OpenRouterCostReconciliationWorker | None = None,
+        openrouter_client: OpenRouterClient | None = None,
+        enabled_model_roles: Collection[ModelRole] | None = None,
         monotonic_clock: MonotonicClock = time.monotonic,
         utc_clock: UtcClock = _utc_now,
     ) -> None:
@@ -125,10 +154,19 @@ class OperatorConsoleService:
         self._operation_reconciliation = operation_reconciliation
         self._delivery_maintenance = delivery_maintenance
         self._approval_expiry = approval_expiry
+        self._inference_reconciliation = inference_reconciliation
+        self._openrouter_client = openrouter_client
         self._monotonic_clock = monotonic_clock
         self._utc_clock = utc_clock
         self._started_at = monotonic_clock()
         self._maintenance_lock = asyncio.Lock()
+        self._inference_check_lock = asyncio.Lock()
+        self._inference_catalog = self._build_inference_catalog(enabled_model_roles)
+        self._inference_connectivity = (
+            OperatorInferenceConnectivitySnapshot.not_checked()
+            if openrouter_client is not None
+            else OperatorInferenceConnectivitySnapshot.not_configured()
+        )
 
     async def snapshot(self) -> OperatorConsoleSnapshot:
         """Return runtime state and aggregate-only database diagnostics."""
@@ -144,7 +182,96 @@ class OperatorConsoleService:
                 level="warning",
             )
             database = OperatorDatabaseSnapshot.degraded()
-        return OperatorConsoleSnapshot(runtime=runtime, database=database)
+        return OperatorConsoleSnapshot(
+            runtime=runtime,
+            database=database,
+            inference=OperatorInferenceSnapshot(
+                catalog=self._inference_catalog,
+                connectivity=self._inference_connectivity,
+                usage=database.inference_usage,
+            ),
+        )
+
+    async def check_inference_connectivity(
+        self,
+        actor_id: int,
+    ) -> OperatorInferenceConnectivitySnapshot:
+        """Refresh cached balance and model-catalog state without running inference."""
+        if isinstance(actor_id, bool) or not isinstance(actor_id, int) or actor_id <= 0:
+            raise ValueError("actor_id must be a positive integer")
+        if self._openrouter_client is None:
+            return self._inference_connectivity
+
+        async with self._inference_check_lock:
+            balance_status = OperatorProbeStatus.FAILED
+            key_limit: Decimal | None = None
+            key_usage: Decimal | None = None
+            key_remaining: Decimal | None = None
+            try:
+                key = await self._openrouter_client.get_current_key()
+                balance_status = OperatorProbeStatus.READY
+                key_limit = key.limit
+                key_usage = key.usage
+                key_remaining = key.limit_remaining
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                report_exception(
+                    "operator.inference_balance_check_failed",
+                    exception=exc,
+                    level="warning",
+                    actor_id=actor_id,
+                )
+
+            catalog_status = OperatorProbeStatus.FAILED
+            catalog_model_count: int | None = None
+            visible_enabled_roles: tuple[str, ...] = ()
+            try:
+                page = await self._openrouter_client.list_models(
+                    ModelListQuery(limit=1000, output_modalities=("all",))
+                )
+                visible_models = {model.id: model for model in page.data}
+                visible_enabled_roles = tuple(
+                    role.value
+                    for role in self._enabled_model_roles
+                    if (
+                        live := visible_models.get(
+                            OPENROUTER_MODEL_CATALOG[role].provider_model_id
+                        )
+                    )
+                    and _live_model_matches(OPENROUTER_MODEL_CATALOG[role], live)
+                )
+                catalog_status = OperatorProbeStatus.READY
+                catalog_model_count = page.total_count
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                report_exception(
+                    "operator.inference_catalog_check_failed",
+                    exception=exc,
+                    level="warning",
+                    actor_id=actor_id,
+                )
+
+            self._inference_connectivity = OperatorInferenceConnectivitySnapshot(
+                balance_status=balance_status,
+                catalog_status=catalog_status,
+                key_limit_usd=key_limit,
+                key_usage_usd=key_usage,
+                key_remaining_usd=key_remaining,
+                catalog_model_count=catalog_model_count,
+                visible_enabled_roles=visible_enabled_roles,
+            )
+
+        logfire.info(
+            "operator.inference_read_check_completed",
+            actor_id=actor_id,
+            balance_status=balance_status.value,
+            catalog_status=catalog_status.value,
+            catalog_model_count=catalog_model_count,
+            visible_enabled_role_count=len(visible_enabled_roles),
+        )
+        return self._inference_connectivity
 
     async def run_maintenance(
         self,
@@ -207,6 +334,11 @@ class OperatorConsoleService:
                 OperatorWorkerStatus(
                     OperatorMaintenanceAction.APPROVALS,
                     self._approval_expiry.is_running,
+                ),
+                OperatorWorkerStatus(
+                    OperatorMaintenanceAction.INFERENCE,
+                    self._inference_reconciliation is not None
+                    and self._inference_reconciliation.is_running,
                 ),
             ),
         )
@@ -310,6 +442,7 @@ class OperatorConsoleService:
                 count=int(artifact_row[0]),
                 bytes=int(artifact_row[1]),
             )
+            inference_usage = await self._inference_usage_totals(session, cutoff)
 
         return OperatorDatabaseSnapshot(
             status=OperatorDatabaseStatus.READY,
@@ -328,6 +461,105 @@ class OperatorConsoleService:
             stars=stars,
             subscriptions=subscriptions,
             artifacts=artifacts,
+            inference_usage=inference_usage,
+        )
+
+    @staticmethod
+    async def _inference_usage_totals(
+        session: AsyncSession,
+        cutoff: datetime,
+    ) -> OperatorInferenceUsageTotals:
+        recent = InferenceUsage.provider_started_at >= cutoff
+        succeeded = InferenceUsage.status == InferenceStatus.SUCCEEDED.value
+        failed = InferenceUsage.status == InferenceStatus.FAILED.value
+        pending = InferenceUsage.status == InferenceStatus.PENDING.value
+        row = (
+            await session.execute(
+                select(
+                    func.count(),
+                    func.count().filter(recent),
+                    func.count().filter(succeeded),
+                    func.count().filter(succeeded, recent),
+                    func.count().filter(failed),
+                    func.count().filter(failed, recent),
+                    func.count().filter(pending),
+                    func.count().filter(pending, recent),
+                    func.coalesce(func.sum(InferenceUsage.input_tokens), 0),
+                    func.coalesce(func.sum(InferenceUsage.output_tokens), 0),
+                    func.coalesce(func.sum(InferenceUsage.total_tokens), 0),
+                    func.coalesce(func.sum(InferenceUsage.cache_read_tokens), 0),
+                    func.coalesce(func.sum(InferenceUsage.cache_write_tokens), 0),
+                    func.coalesce(func.sum(InferenceUsage.reasoning_tokens), 0),
+                    func.coalesce(func.sum(InferenceUsage.audio_input_tokens), 0),
+                    func.coalesce(func.sum(InferenceUsage.audio_output_tokens), 0),
+                    func.count().filter(
+                        InferenceUsage.reconciliation_status
+                        == CostReconciliationStatus.PENDING.value
+                    ),
+                    func.count().filter(
+                        InferenceUsage.reconciliation_status
+                        == CostReconciliationStatus.UNAVAILABLE.value
+                    ),
+                    func.coalesce(
+                        func.sum(InferenceUsage.actual_cost_usd).filter(
+                            InferenceUsage.reconciliation_status
+                            == CostReconciliationStatus.RECONCILED.value
+                        ),
+                        0,
+                    ),
+                ).select_from(InferenceUsage)
+            )
+        ).one()
+        return OperatorInferenceUsageTotals(
+            attempts=OperatorInferenceAttemptTotals(
+                total=int(row[0]),
+                recent_24h=int(row[1]),
+                succeeded=int(row[2]),
+                succeeded_24h=int(row[3]),
+                failed=int(row[4]),
+                failed_24h=int(row[5]),
+                pending=int(row[6]),
+                pending_24h=int(row[7]),
+            ),
+            tokens=OperatorInferenceTokenTotals(
+                input=int(row[8]),
+                output=int(row[9]),
+                total=int(row[10]),
+                cache_read=int(row[11]),
+                cache_write=int(row[12]),
+                reasoning=int(row[13]),
+                audio_input=int(row[14]),
+                audio_output=int(row[15]),
+            ),
+            pending_cost_reconciliation=int(row[16]),
+            unavailable_cost_count=int(row[17]),
+            reconciled_cost_usd=Decimal(str(row[18])),
+        )
+
+    def _build_inference_catalog(
+        self,
+        enabled_model_roles: Collection[ModelRole] | None,
+    ) -> OperatorInferenceCatalogSnapshot:
+        roles = tuple(
+            OPENROUTER_MODEL_CATALOG
+            if enabled_model_roles is None
+            else enabled_model_roles
+        )
+        if any(not isinstance(role, ModelRole) for role in roles):
+            raise TypeError("enabled model roles must contain only ModelRole values")
+        if len(roles) != len(set(roles)):
+            raise ValueError("enabled model roles must not contain duplicates")
+        if unknown := set(roles) - set(OPENROUTER_MODEL_CATALOG):
+            raise ValueError(f"enabled model roles are not catalogued: {unknown!r}")
+        self._enabled_model_roles = tuple(sorted(roles, key=lambda role: role.value))
+        return OperatorInferenceCatalogSnapshot(
+            verified_on=OPENROUTER_CATALOG_VERIFIED_ON,
+            enabled_roles=tuple(role.value for role in self._enabled_model_roles),
+            available_roles=tuple(
+                role.value
+                for role in self._enabled_model_roles
+                if OPENROUTER_MODEL_CATALOG[role].available
+            ),
         )
 
     @staticmethod
@@ -438,6 +670,13 @@ class OperatorConsoleService:
         elif action is OperatorMaintenanceAction.APPROVALS:
             count = await self._approval_expiry.sweep()
             counts = self._counts(expired_request_count=count)
+        elif action is OperatorMaintenanceAction.INFERENCE:
+            if self._inference_reconciliation is None:
+                counts = self._counts(configured_count=0)
+            else:
+                counts = self._inference_counts(
+                    await self._inference_reconciliation.sweep()
+                )
         else:
             raise ValueError("all cannot be dispatched as an individual pass")
         return OperatorMaintenancePass(action=action, counts=counts)
@@ -479,6 +718,21 @@ class OperatorConsoleService:
             phase_failure_count=report.phase_failure_count,
         )
 
+    @classmethod
+    def _inference_counts(
+        cls,
+        report: OpenRouterCostReconciliationReport,
+    ) -> tuple[OperatorNamedCount, ...]:
+        return cls._counts(
+            configured_count=1,
+            claimed_count=report.claimed_count,
+            reconciled_count=report.reconciled_count,
+            retry_scheduled_count=report.retry_scheduled_count,
+            unavailable_count=report.unavailable_count,
+            claim_lost_count=report.claim_lost_count,
+            stale_attempt_count=report.stale_attempt_count,
+        )
+
     @staticmethod
     def _counts(**values: int) -> tuple[OperatorNamedCount, ...]:
         return tuple(OperatorNamedCount(name, value) for name, value in values.items())
@@ -491,6 +745,45 @@ class OperatorConsoleService:
 
     def _elapsed_ms(self, started_at: float) -> float:
         return self._elapsed_seconds(started_at) * 1_000
+
+
+def _live_model_matches(expected: ModelSpec, live: OpenRouterModel) -> bool:
+    if (
+        expected.canonical_model_id
+        and live.canonical_slug != expected.canonical_model_id
+    ):
+        return False
+    output_modality = (
+        "image"
+        if ModelCapability.IMAGE_OUTPUT in expected.capabilities
+        else "audio"
+        if ModelCapability.AUDIO_OUTPUT in expected.capabilities
+        else "video"
+        if ModelCapability.VIDEO_OUTPUT in expected.capabilities
+        else "text"
+    )
+    if output_modality not in live.architecture.output_modalities:
+        return False
+    pricing = expected.pricing
+    if live.pricing.prompt is None or live.pricing.completion is None:
+        return False
+    if isinstance(pricing, TokenPricing):
+        band = pricing.bands[0]
+        return (
+            live.pricing.prompt * _ONE_MILLION == band.input_per_million
+            and live.pricing.completion * _ONE_MILLION == band.output_per_million
+        )
+    if isinstance(pricing, ImagePricing):
+        return (
+            live.pricing.prompt * _ONE_MILLION == pricing.input_per_million
+            and live.pricing.completion * _ONE_MILLION
+            == pricing.text_output_per_million
+            and live.pricing.image_output is not None
+            and pricing.output_token_per_million is not None
+            and live.pricing.image_output * _ONE_MILLION
+            == pricing.output_token_per_million
+        )
+    return False
 
 
 __all__ = ["OperatorConsoleService"]

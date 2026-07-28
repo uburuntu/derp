@@ -26,7 +26,7 @@ from derp.approvals.image_tools import (
     ImageToolRunContext,
     finishing_quote_from_history,
 )
-from derp.catalog import GoogleModelKey, get_google_model
+from derp.catalog import GoogleModelKey, get_google_model, get_openrouter_model
 from derp.delivery import DeliveryTarget
 from derp.execution import Feature, plan_execution
 from derp.features import (
@@ -282,3 +282,13 @@ def test_finishing_quote_is_identical_after_durable_history_round_trip() -> None
     assert finishing_quote_from_history(restored) == finishing_quote_from_history(
         history
     )
+
+
+def test_finishing_quote_supports_paid_multimodal_chat_plan() -> None:
+    model = get_openrouter_model(GoogleModelKey.CHAT_MULTIMODAL)
+    plan, quote_input = finishing_quote_from_history(
+        (ModelResponse(parts=[], model_name=model.provider_model_id),)
+    )
+
+    assert plan.model is model
+    assert quote_input.model_key is GoogleModelKey.CHAT_MULTIMODAL

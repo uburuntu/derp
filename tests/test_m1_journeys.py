@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import logfire
@@ -47,6 +47,7 @@ from derp.features.chat_accounting import ChatTurnAccounting
 from derp.handlers.context_settings import ContextAction, ContextCallback
 from derp.media import MediaReference
 from derp.models import Message as MessageModel
+from derp.models import Wallet, WalletLot
 from derp.operations import OperationLedger
 from derp.tools.policy import ActorRole
 
@@ -404,8 +405,26 @@ async def test_m1_dispatch_journey_matrix(
         deletion_chat,
     ):
         chat.context_notice_version = 1
+        chat.shared_credit_spending_enabled = True
     forum_chat.ambient_history_enabled = True
     deletion_chat.ambient_history_enabled = True
+    wallets = [Wallet(user_id=admin_model.id)] + [
+        Wallet(chat_id=chat.id)
+        for chat in (mention_chat, reply_chat, forum_chat, deletion_chat)
+    ]
+    db_session.add_all(wallets)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            WalletLot(
+                wallet_id=wallet.id,
+                kind="purchased",
+                granted_credits=10_000,
+                available_credits=10_000,
+            )
+            for wallet in wallets
+        ]
+    )
     await db_session.flush()
 
     admin = User(
@@ -444,6 +463,10 @@ async def test_m1_dispatch_journey_matrix(
         payloads={"topic-11-photo": b"topic-11-image-bytes"}
     )
     operation_ledger = OperationLedger(database.session)
+    inference_recorder = MagicMock()
+    inference_recorder.start = AsyncMock(return_value=MagicMock())
+    inference_recorder.succeed = AsyncMock(return_value=())
+    inference_recorder.fail = AsyncMock()
     runtime = Runtime(
         bot=bot,
         db=database,
@@ -458,6 +481,9 @@ async def test_m1_dispatch_journey_matrix(
         paid_media_approval_coordinator=MagicMock(),
         tts_paid_media_adapter=MagicMock(),
         inline_chat_service=MagicMock(),
+        inference_recorder=inference_recorder,
+        openrouter_client=None,
+        inference_reconciliation=None,
         deferred_tool_approval_service=MagicMock(),
         operator_console=MagicMock(),
     )

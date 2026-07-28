@@ -15,7 +15,7 @@ from sqlalchemy import case, exists, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from derp.catalog import GoogleModelKey, get_google_model
+from derp.catalog import InferenceProvider, ModelRole
 from derp.execution import Feature
 from derp.models import (
     Artifact,
@@ -145,7 +145,6 @@ class OperationLedger:
         if thread_id is not None and thread_id <= 0:
             raise ValueError("thread_id must be positive")
 
-        model = get_google_model(quote.key.model_key)
         quote_values = {
             "id": quote.id.value,
             "operation_id": quote.operation_id.value,
@@ -155,7 +154,8 @@ class OperationLedger:
             "thread_id": thread_id,
             "feature": quote.key.feature.value,
             "model_key": quote.key.model_key.value,
-            "provider_model_id": model.provider_model_id,
+            "provider": quote.provider.value,
+            "provider_model_id": quote.provider_model_id,
             "context_band": quote.key.context_band.value,
             "variant": quote.key.variant,
             "amount_credits": quote.credits,
@@ -1126,6 +1126,7 @@ class OperationLedger:
             "thread_id",
             "feature",
             "model_key",
+            "provider",
             "provider_model_id",
             "context_band",
             "variant",
@@ -1171,10 +1172,12 @@ class OperationLedger:
             operation_id=OperationId(stored.operation_id),
             key=QuoteKey(
                 feature=Feature(stored.feature),
-                model_key=GoogleModelKey(stored.model_key),
+                model_key=ModelRole(stored.model_key),
                 context_band=ContextBand(stored.context_band),
                 variant=stored.variant,
             ),
+            provider=InferenceProvider(stored.provider),
+            provider_model_id=stored.provider_model_id,
             credits=stored.amount_credits,
             estimated_provider_cost_usd=stored.estimated_provider_cost_usd,
             created_at=stored.created_at,

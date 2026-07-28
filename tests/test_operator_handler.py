@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,6 +17,7 @@ from derp.handlers.operator import (
     OperatorView,
     build_maintenance_result_panel,
     build_operator_panel,
+    check_operator_inference,
     request_operator_maintenance,
     run_operator_maintenance,
     show_operator_console,
@@ -28,11 +31,18 @@ from derp.operator import (
     OperatorControlConfig,
     OperatorDatabaseSnapshot,
     OperatorDatabaseStatus,
+    OperatorInferenceAttemptTotals,
+    OperatorInferenceCatalogSnapshot,
+    OperatorInferenceConnectivitySnapshot,
+    OperatorInferenceSnapshot,
+    OperatorInferenceTokenTotals,
+    OperatorInferenceUsageTotals,
     OperatorMaintenanceAction,
     OperatorMaintenancePass,
     OperatorMaintenanceResult,
     OperatorNamedCount,
     OperatorPoolSnapshot,
+    OperatorProbeStatus,
     OperatorRuntimeSnapshot,
     OperatorStarsTotals,
     OperatorSubscriptionTotals,
@@ -149,7 +159,54 @@ def _snapshot(*, degraded: bool = False) -> OperatorConsoleSnapshot:
             ),
             artifacts=OperatorArtifactTotals(count=14, bytes=2_048),
         )
-    return OperatorConsoleSnapshot(runtime=runtime, database=database)
+    inference = OperatorInferenceSnapshot(
+        catalog=OperatorInferenceCatalogSnapshot(
+            verified_on=date(2026, 7, 21),
+            enabled_roles=("chat_standard", "image", "tts"),
+            available_roles=("chat_standard", "image"),
+        ),
+        connectivity=OperatorInferenceConnectivitySnapshot(
+            balance_status=OperatorProbeStatus.READY,
+            catalog_status=OperatorProbeStatus.READY,
+            key_limit_usd=Decimal("10"),
+            key_usage_usd=Decimal("2.25"),
+            key_remaining_usd=Decimal("7.75"),
+            catalog_model_count=321,
+            visible_enabled_roles=("chat_standard", "image"),
+        ),
+        usage=None
+        if degraded
+        else OperatorInferenceUsageTotals(
+            attempts=OperatorInferenceAttemptTotals(
+                total=50,
+                recent_24h=10,
+                succeeded=42,
+                succeeded_24h=8,
+                failed=5,
+                failed_24h=1,
+                pending=3,
+                pending_24h=1,
+            ),
+            tokens=OperatorInferenceTokenTotals(
+                input=10_000,
+                output=2_000,
+                total=12_000,
+                cache_read=4_000,
+                cache_write=500,
+                reasoning=800,
+                audio_input=100,
+                audio_output=200,
+            ),
+            pending_cost_reconciliation=2,
+            unavailable_cost_count=1,
+            reconciled_cost_usd=Decimal("1.234567"),
+        ),
+    )
+    return OperatorConsoleSnapshot(
+        runtime=runtime,
+        database=database,
+        inference=inference,
+    )
 
 
 def _callback(message: Message, *, user_id: int = 42) -> MagicMock:
@@ -192,6 +249,26 @@ def test_overview_surfaces_aggregate_attention_without_identifiers() -> None:
     assert "prod · up 1d 1h" in text
     assert "Attention: 5 signals" in text
     assert "12345" not in text
+
+
+def test_inference_view_shows_accounting_and_read_only_connectivity() -> None:
+    text, markup = build_operator_panel(
+        OperatorView.INFERENCE,
+        _snapshot(),
+        _config(),
+    )
+
+    assert "Attempts: 10 / 24h · 50 total" in text
+    assert "success 8/42 · failed 1/5 · pending 1/3" in text
+    assert "Cost: $1.234567 reconciled · 2 pending · 1 unavailable" in text
+    assert "Input 10,000 · output 2,000 · total 12,000" in text
+    assert "Roles: 2/3 available · reviewed 2026-07-21" in text
+    assert "Available roles: <code>chat_standard</code> · <code>image</code>" in text
+    assert "Unavailable roles: <code>tts</code>" in text
+    assert "OpenRouter key: $7.75 of $10 left · $2.25 used" in text
+    assert "OpenRouter catalog: 321 models · 2/3 enabled visible" in text
+    assert "reviewed-model" not in text
+    assert markup.inline_keyboard[0][0].text == "Run read-only check"
 
 
 def test_russian_operator_views_are_concise_and_use_derp_persona(
@@ -273,6 +350,25 @@ async def test_group_operator_command_redirects_without_loading_stats(
 
     console.snapshot.assert_not_awaited()
     assert "/operator" in message.reply.await_args.args[0]
+
+
+async def test_inference_check_runs_metadata_reads_then_refreshes_page(
+    make_message,
+) -> None:
+    message = make_message(text="operator", chat_id=42, chat_type="private")
+    message.edit_text = AsyncMock()
+    callback = _callback(message)
+    console = MagicMock()
+    console.check_inference_connectivity = AsyncMock()
+    console.snapshot = AsyncMock(return_value=_snapshot())
+
+    await check_operator_inference(callback, console, _config())
+
+    callback.answer.assert_awaited_once_with("Checking inference")
+    console.check_inference_connectivity.assert_awaited_once_with(42)
+    console.snapshot.assert_awaited_once_with()
+    assert message.edit_text.await_count == 1
+    assert message.edit_text.await_args.args[0].startswith("<b>Inference</b>")
 
 
 async def test_maintenance_confirmation_is_bound_then_consumed_once(

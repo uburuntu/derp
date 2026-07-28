@@ -12,7 +12,13 @@ from sqlalchemy import Select, select
 
 from derp.approvals.service import DeferredToolApprovalService
 from derp.approvals.types import DeferredToolHandle
-from derp.catalog import GoogleModelKey, get_google_model
+from derp.catalog import (
+    GoogleModelKey,
+    InferenceProvider,
+    get_google_model,
+    get_openrouter_model,
+)
+from derp.config import settings
 from derp.db import DatabaseManager
 from derp.delivery import DeliveryTarget
 from derp.execution import ExecutionPlan, Feature, plan_execution
@@ -211,7 +217,11 @@ class ImageToolApprovalCoordinator:
         )
         quote = await self._image_operations.ensure_quote(
             invocation,
-            plan_execution(call.feature, GoogleModelKey.IMAGE),
+            plan_execution(
+                call.feature,
+                GoogleModelKey.IMAGE,
+                provider=settings.inference_provider(call.feature),
+            ),
             call.request,
             finishing_plan=finishing_plan,
             finishing_quote_input=finishing_quote_input,
@@ -230,18 +240,36 @@ def finishing_quote_from_history(
     history: Sequence[ModelMessage],
 ) -> tuple[ExecutionPlan, FinishingChatQuoteInput]:
     """Build the deterministic post-approval allowance from durable history."""
-    supported = (GoogleModelKey.CHAT_ECONOMY, GoogleModelKey.CHAT_STANDARD)
+    supported = (
+        GoogleModelKey.CHAT_ECONOMY,
+        GoogleModelKey.CHAT_STANDARD,
+        GoogleModelKey.CHAT_MULTIMODAL,
+    )
     model_key: GoogleModelKey | None = None
+    model_provider: InferenceProvider | None = None
     for message in reversed(history):
         if not isinstance(message, ModelResponse) or message.model_name is None:
             continue
         for candidate in supported:
-            if message.model_name == get_google_model(candidate).provider_model_id:
-                model_key = candidate
+            candidates = [
+                (InferenceProvider.OPENROUTER, get_openrouter_model(candidate))
+            ]
+            try:
+                candidates.append(
+                    (InferenceProvider.GOOGLE, get_google_model(candidate))
+                )
+            except KeyError:
+                pass
+            for provider, model in candidates:
+                if message.model_name == model.provider_model_id:
+                    model_key = candidate
+                    model_provider = provider
+                    break
+            if model_key is not None:
                 break
         if model_key is not None:
             break
-    if model_key is None:
+    if model_key is None or model_provider is None:
         raise DeferredImageToolError(
             "deferred chat model cannot be reconstructed from trusted history"
         )
@@ -250,7 +278,7 @@ def finishing_quote_from_history(
         DEFAULT_TOKEN_ESTIMATOR.estimate_text(repr(message)) + 4 for message in history
     )
     return (
-        plan_execution(Feature.CHAT, model_key),
+        plan_execution(Feature.CHAT, model_key, provider=model_provider),
         FinishingChatQuoteInput(model_key, input_tokens),
     )
 

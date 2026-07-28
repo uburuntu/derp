@@ -11,6 +11,7 @@ from typing import Protocol
 from google import genai
 from google.genai import types
 
+from derp.catalog import InferenceProvider
 from derp.delivery.types import DeliveryMedia, TelegramMediaKind
 from derp.execution import (
     ExecutionPlan,
@@ -86,6 +87,8 @@ class GoogleTtsExecutor:
     ) -> Outcome[TtsProviderOutput]:
         """Generate one bounded voice using the exact catalog model."""
         pricing = require_tts_pricing(plan)
+        if plan.model.provider is not InferenceProvider.GOOGLE:
+            raise ValueError("Google TTS executor requires a direct Google plan")
         max_output_tokens = pricing.audio_tokens_per_second * request.max_output_seconds
         if (
             plan.model.output_token_limit is not None

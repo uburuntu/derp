@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from derp.catalog import InferenceProvider
 from derp.config import Settings
+from derp.execution import Feature
 
 
 def _settings(**overrides: object) -> Settings:
@@ -43,6 +45,23 @@ def test_admin_ids_remains_a_deprecated_input_alias() -> None:
 
 def test_development_may_run_without_an_operator() -> None:
     assert _settings().operator_ids == frozenset()
+
+
+def test_feature_provider_defaults_to_openrouter_with_explicit_rollback() -> None:
+    default = _settings(openrouter_api_key="test-openrouter-key")
+    rollback = _settings(openrouter_enabled_features=[])
+
+    assert default.inference_provider(Feature.IMAGE_GENERATE) is (
+        InferenceProvider.OPENROUTER
+    )
+    assert rollback.inference_provider(Feature.IMAGE_GENERATE) is (
+        InferenceProvider.GOOGLE
+    )
+    assert default.inference_provider(Feature.TTS) is InferenceProvider.GOOGLE
+    assert default.inference_provider(Feature.TRANSCRIBE) is InferenceProvider.GOOGLE
+    assert (
+        default.inference_provider(Feature.VIDEO_GENERATE) is InferenceProvider.GOOGLE
+    )
 
 
 def test_example_environment_does_not_authorize_a_real_operator() -> None:

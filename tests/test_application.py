@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from derp.application import APPLICATION_ROUTERS, open_runtime
+from derp.catalog import InferenceProvider
 from derp.handlers import chat, debug, donations, operator, payments, premium_suspension
 
 
@@ -151,6 +152,10 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
         artifact_store_path=tmp_path / "artifacts",
         callback_signing_key=b"runtime-test-key".ljust(32, b"!"),
         google_api_paid_key=SimpleNamespace(get_secret_value=lambda: "test-google-key"),
+        openrouter_api_key=None,
+        openrouter_enabled_features=frozenset(),
+        uses_openrouter=lambda _feature: False,
+        inference_provider=lambda _feature: InferenceProvider.GOOGLE,
     )
     tts_executor = FakeTtsExecutor(events)
 
@@ -211,9 +216,12 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
                 is runtime.image_operation_coordinator._request_binder
             )
             assert runtime.tts_paid_media_adapter.service._executor is tts_executor
+            assert runtime.openrouter_client is None
+            assert runtime.inference_reconciliation is None
+            assert runtime.inline_chat_service._free_plan is None
             assert (
-                runtime.inline_chat_service._allowance._transactions.__self__
-                is database
+                runtime.inline_chat_service._inference_recorder
+                is runtime.inference_recorder
             )
             reconciler = reconciliation_worker.call_args.args[0]
             assert reconciler._delivery is runtime.delivery_service

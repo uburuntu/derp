@@ -28,20 +28,22 @@ from derp.billing import (
     PaymentSettlementService,
     SubscriptionExpiryWorker,
 )
+from derp.catalog import InferenceProvider, ModelRole
 from derp.command_menu import configure_bot_command_menu
 from derp.common.audio import convert_to_ogg_opus
 from derp.config import Settings
 from derp.db import DatabaseManager, init_db_manager
-from derp.db.inline_allowance import PostgresInlineAllowance
 from derp.delivery import (
     MAX_TELEGRAM_FILE_BYTES,
     DeliveryMaintenanceWorker,
     DeliveryService,
     ResendTokenCodec,
 )
+from derp.execution import Feature, model_roles_for_features, plan_execution
 from derp.features import (
     ImageFeatureService,
     ImageOperationCoordinator,
+    ImageProviderRouter,
     InlineChatFeatureService,
     TtsFeatureService,
 )
@@ -66,8 +68,15 @@ from derp.handlers import (
 )
 from derp.health import RuntimeHeartbeat
 from derp.history.retention import HistoryRetentionWorker
+from derp.inference import (
+    InferenceRecorder,
+    OpenRouterCostReconciliationService,
+    OpenRouterCostReconciliationWorker,
+)
+from derp.inference_usage import InferenceUsageRepository
 from derp.llm.image_executor import PydanticAIImageExecutor
 from derp.llm.inline_executor import PydanticAIInlineExecutor
+from derp.llm.providers import close_model_providers
 from derp.llm.tts_executor import GoogleTtsExecutor
 from derp.media import MediaGateway, TelegramImageSourceLoader
 from derp.middlewares.api_persist import PersistBotActionsMiddleware
@@ -77,6 +86,7 @@ from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
 from derp.middlewares.route_dependencies import setup_route_dependencies
 from derp.middlewares.sender import MessageSenderMiddleware
+from derp.openrouter import OpenRouterClient, OpenRouterImageExecutor
 from derp.operations import (
     OperationLedger,
     OperationReconciler,
@@ -131,6 +141,9 @@ class Runtime:
     paid_media_approval_coordinator: PaidMediaApprovalCoordinator
     tts_paid_media_adapter: TtsPaidMediaAdapter
     inline_chat_service: InlineChatFeatureService
+    inference_recorder: InferenceRecorder
+    openrouter_client: OpenRouterClient | None
+    inference_reconciliation: OpenRouterCostReconciliationWorker | None
     deferred_tool_approval_service: DeferredToolApprovalService
     operator_console: OperatorConsoleService
 
@@ -162,16 +175,28 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
     async with AsyncExitStack() as stack:
         stack.push_async_callback(db.disconnect)
         await stack.enter_async_context(bot)
+        stack.push_async_callback(close_model_providers)
         media_client = await stack.enter_async_context(
             httpx.AsyncClient(follow_redirects=False)
         )
         await db.connect()
+        openrouter_client = None
+        if settings.openrouter_api_key is not None:
+            openrouter_client = await stack.enter_async_context(
+                OpenRouterClient(
+                    api_key=settings.openrouter_api_key.get_secret_value(),
+                    app_url=settings.resolved_openrouter_app_url,
+                    app_title=settings.openrouter_app_title,
+                )
+            )
         media_gateway = MediaGateway(media_client)
         artifact_store = FilesystemArtifactStore(
             settings.artifact_store_path,
             max_item_bytes=MAX_TELEGRAM_FILE_BYTES,
         )
         operation_ledger = OperationLedger(db.session)
+        inference_usage = InferenceUsageRepository(db.session)
+        inference_recorder = InferenceRecorder(inference_usage)
         chat_turn_accounting = ChatTurnAccounting(operation_ledger)
         delivery_service = DeliveryService(
             db.session,
@@ -182,8 +207,15 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
         )
         quote_engine = QuoteEngine()
         request_binder = OperationRequestBinder(settings.callback_signing_key)
+        image_executors = {
+            InferenceProvider.GOOGLE: PydanticAIImageExecutor(),
+        }
+        if openrouter_client is not None:
+            image_executors[InferenceProvider.OPENROUTER] = OpenRouterImageExecutor(
+                openrouter_client
+            )
         image_service = ImageFeatureService(
-            PydanticAIImageExecutor(),
+            ImageProviderRouter(image_executors),
             source_loader=TelegramImageSourceLoader(media_gateway, bot=bot),
         )
         image_operation_coordinator = ImageOperationCoordinator(
@@ -192,6 +224,7 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             image_service,
             delivery_service,
             request_binder,
+            inference_recorder=inference_recorder,
         )
         paid_media_operation_coordinator = PaidMediaOperationCoordinator(
             operation_ledger,
@@ -208,17 +241,47 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             converter=convert_to_ogg_opus,
         )
         stack.push_async_callback(tts_executor.aclose)
-        tts_paid_media_adapter = TtsPaidMediaAdapter(TtsFeatureService(tts_executor))
+        tts_paid_media_adapter = TtsPaidMediaAdapter(
+            TtsFeatureService(tts_executor),
+            plan=plan_execution(
+                Feature.TTS,
+                ModelRole.TTS,
+                provider=settings.inference_provider(Feature.TTS),
+            ),
+        )
         paid_media_approval_coordinator = PaidMediaApprovalCoordinator(
             paid_media_operation_coordinator,
             deferred_tool_approval_service,
             operation_ledger,
             request_binder,
         )
-        inline_chat_service = InlineChatFeatureService(
-            PostgresInlineAllowance(db.session),
-            PydanticAIInlineExecutor(),
+        inline_openrouter_enabled = (
+            settings.uses_openrouter(Feature.INLINE_CHAT)
+            and settings.openrouter_api_key is not None
         )
+        inline_chat_service = InlineChatFeatureService(
+            PydanticAIInlineExecutor(),
+            inference_recorder,
+            free_plan=(
+                plan_execution(
+                    Feature.INLINE_CHAT,
+                    ModelRole.FREE_TEXT,
+                    provider=InferenceProvider.OPENROUTER,
+                )
+                if inline_openrouter_enabled
+                else None
+            ),
+        )
+        inference_reconciliation = None
+        if openrouter_client is not None:
+            inference_reconciliation = await stack.enter_async_context(
+                OpenRouterCostReconciliationWorker(
+                    OpenRouterCostReconciliationService(
+                        inference_usage,
+                        openrouter_client,
+                    )
+                )
+            )
         history_retention = await stack.enter_async_context(HistoryRetentionWorker(db))
         subscription_expiry = await stack.enter_async_context(
             SubscriptionExpiryWorker(PaymentSettlementService(db.session))
@@ -241,6 +304,11 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             operation_reconciliation=operation_reconciliation,
             delivery_maintenance=delivery_maintenance,
             approval_expiry=approval_expiry,
+            inference_reconciliation=inference_reconciliation,
+            openrouter_client=openrouter_client,
+            enabled_model_roles=model_roles_for_features(
+                settings.openrouter_enabled_features
+            ),
         )
         yield Runtime(
             bot=bot,
@@ -256,6 +324,9 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             paid_media_approval_coordinator=paid_media_approval_coordinator,
             tts_paid_media_adapter=tts_paid_media_adapter,
             inline_chat_service=inline_chat_service,
+            inference_recorder=inference_recorder,
+            openrouter_client=openrouter_client,
+            inference_reconciliation=inference_reconciliation,
             deferred_tool_approval_service=deferred_tool_approval_service,
             operator_console=operator_console,
         )
@@ -281,6 +352,7 @@ def create_dispatcher(
         paid_media_approval_coordinator=runtime.paid_media_approval_coordinator,
         tts_paid_media_adapter=runtime.tts_paid_media_adapter,
         inline_chat_service=runtime.inline_chat_service,
+        inference_recorder=runtime.inference_recorder,
         deferred_tool_approval_service=runtime.deferred_tool_approval_service,
         operator_console=runtime.operator_console,
         operator_confirmations=OperatorConfirmationStore(),

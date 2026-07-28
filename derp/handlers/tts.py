@@ -75,6 +75,10 @@ async def handle_tts(
         return await message.reply(
             _("I couldn't verify your account. You weren't charged. Try again.")
         )
+    if not tts_paid_media_adapter.plan.model.available:
+        return await message.reply(
+            _("Voice generation is temporarily unavailable. You weren't charged.")
+        )
     try:
         request = TtsRequest(text, MAX_TTS_OUTPUT_SECONDS)
     except TypeError, ValueError:
@@ -96,7 +100,11 @@ async def handle_tts(
         prepared = await paid_media_approval_coordinator.prepare(
             context=context,
             tool_call=tool_call,
-            original_history=tts_command_history(request, tool_call),
+            original_history=tts_command_history(
+                request,
+                tool_call,
+                tts_paid_media_adapter.plan,
+            ),
             adapter=tts_paid_media_adapter,
         )
     except Exception as exc:

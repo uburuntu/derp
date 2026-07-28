@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from derp.catalog import GoogleModelKey
+from derp.catalog import GoogleModelKey, InferenceProvider
 from derp.execution import Feature
 from derp.operations import (
     ContextBand,
@@ -81,6 +81,8 @@ def test_quote_is_fixed_versioned_and_expires_closed() -> None:
             model_key=GoogleModelKey.CHAT_STANDARD,
             context_band=ContextBand.MEDIUM,
         ),
+        provider=InferenceProvider.OPENROUTER,
+        provider_model_id="anthropic/claude-sonnet-5",
         credits=12,
         estimated_provider_cost_usd=Decimal("0.007"),
         created_at=now,

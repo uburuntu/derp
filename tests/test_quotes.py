@@ -13,6 +13,7 @@ from derp.catalog import (
     GoogleModelKey,
     ImagePricing,
     ImageResolution,
+    InferenceProvider,
     TokenPricing,
     VideoResolution,
     get_openrouter_model,
@@ -130,7 +131,7 @@ def _quote(
             ),
             Decimal("0.96"),
             1_372,
-            "duration=8s;resolution=1080p",
+            "duration=8s;resolution=1080p;audio=yes",
         ),
     ],
 )
@@ -387,6 +388,31 @@ def test_composite_finishing_limits_and_allowance_version() -> None:
             ),
             created_at=NOW,
         )
+
+
+def test_composite_image_quote_supports_independent_provider_rollbacks() -> None:
+    quote = QuoteEngine().quote_composite_image(
+        quote_id=QuoteId.new(),
+        operation_id=_operation_id(Feature.IMAGE_GENERATE),
+        image_plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
+        finishing_plan=plan_execution(
+            Feature.CHAT,
+            GoogleModelKey.CHAT_ECONOMY,
+            provider=InferenceProvider.GOOGLE,
+        ),
+        quote_input=CompositeImageQuoteInput(
+            image=ImageGenerateQuoteInput(100, ImageResolution.ONE_K),
+            finishing=FinishingChatQuoteInput(
+                GoogleModelKey.CHAT_ECONOMY,
+                100,
+            ),
+        ),
+        created_at=NOW,
+    )
+
+    assert quote.provider is InferenceProvider.OPENROUTER
+    assert quote.pricing_version.startswith("mixed-")
+    assert len(quote.pricing_version) <= 32
 
 
 def test_quote_input_must_match_the_execution_feature() -> None:

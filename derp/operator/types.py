@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 from enum import StrEnum
 from typing import Self
 
@@ -17,6 +19,7 @@ class OperatorMaintenanceAction(StrEnum):
     OPERATIONS = "operations"
     DELIVERIES = "deliveries"
     APPROVALS = "approvals"
+    INFERENCE = "inference"
 
 
 class OperatorDatabaseStatus(StrEnum):
@@ -24,6 +27,15 @@ class OperatorDatabaseStatus(StrEnum):
 
     READY = "ready"
     DEGRADED = "degraded"
+
+
+class OperatorProbeStatus(StrEnum):
+    """State of one optional read-only provider diagnostic."""
+
+    NOT_CONFIGURED = "not_configured"
+    NOT_CHECKED = "not_checked"
+    READY = "ready"
+    FAILED = "failed"
 
 
 class OperatorMaintenanceCompletion(StrEnum):
@@ -45,6 +57,16 @@ def _require_duration(value: float, name: str) -> None:
         or value < 0
     ):
         raise ValueError(f"{name} must be a finite non-negative number")
+
+
+def _require_decimal(value: Decimal, name: str) -> None:
+    if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
+        raise ValueError(f"{name} must be a finite non-negative Decimal")
+
+
+def _require_finite_decimal(value: Decimal, name: str) -> None:
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise ValueError(f"{name} must be a finite Decimal")
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +158,181 @@ class OperatorSubscriptionTotals:
 
 
 @dataclass(frozen=True, slots=True)
+class OperatorInferenceAttemptTotals:
+    """Inference attempt totals partitioned by terminal state and time window."""
+
+    total: int
+    recent_24h: int
+    succeeded: int
+    succeeded_24h: int
+    failed: int
+    failed_24h: int
+    pending: int
+    pending_24h: int
+
+    def __post_init__(self) -> None:
+        for name in (
+            "total",
+            "recent_24h",
+            "succeeded",
+            "succeeded_24h",
+            "failed",
+            "failed_24h",
+            "pending",
+            "pending_24h",
+        ):
+            _require_count(getattr(self, name), name)
+        if self.succeeded + self.failed + self.pending != self.total:
+            raise ValueError("inference states must partition total attempts")
+        if self.succeeded_24h + self.failed_24h + self.pending_24h != self.recent_24h:
+            raise ValueError("recent inference states must partition recent attempts")
+        if self.succeeded_24h > self.succeeded:
+            raise ValueError("recent succeeded attempts cannot exceed their total")
+        if self.failed_24h > self.failed:
+            raise ValueError("recent failed attempts cannot exceed their total")
+        if self.pending_24h > self.pending:
+            raise ValueError("recent pending attempts cannot exceed their total")
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorInferenceTokenTotals:
+    """Provider-reported token usage without request or response content."""
+
+    input: int
+    output: int
+    total: int
+    cache_read: int
+    cache_write: int
+    reasoning: int
+    audio_input: int
+    audio_output: int
+
+    def __post_init__(self) -> None:
+        for name in (
+            "input",
+            "output",
+            "total",
+            "cache_read",
+            "cache_write",
+            "reasoning",
+            "audio_input",
+            "audio_output",
+        ):
+            _require_count(getattr(self, name), name)
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorInferenceUsageTotals:
+    """Aggregate inference accounting safe for the private operator console."""
+
+    attempts: OperatorInferenceAttemptTotals
+    tokens: OperatorInferenceTokenTotals
+    pending_cost_reconciliation: int
+    unavailable_cost_count: int
+    reconciled_cost_usd: Decimal
+
+    def __post_init__(self) -> None:
+        _require_count(
+            self.pending_cost_reconciliation,
+            "pending_cost_reconciliation",
+        )
+        _require_count(self.unavailable_cost_count, "unavailable_cost_count")
+        _require_decimal(self.reconciled_cost_usd, "reconciled_cost_usd")
+        if self.pending_cost_reconciliation > self.attempts.total:
+            raise ValueError("pending reconciliations cannot exceed inference attempts")
+        if self.unavailable_cost_count > self.attempts.total:
+            raise ValueError("unavailable costs cannot exceed inference attempts")
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorInferenceCatalogSnapshot:
+    """Reviewed local model-role coverage, independent of provider health."""
+
+    verified_on: date
+    enabled_roles: tuple[str, ...]
+    available_roles: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.verified_on, date):
+            raise TypeError("verified_on must be a date")
+        if len(self.enabled_roles) != len(set(self.enabled_roles)):
+            raise ValueError("enabled model roles must be unique")
+        if len(self.available_roles) != len(set(self.available_roles)):
+            raise ValueError("available model roles must be unique")
+        if any(not role for role in (*self.enabled_roles, *self.available_roles)):
+            raise ValueError("model roles must not be blank")
+        if not set(self.available_roles).issubset(self.enabled_roles):
+            raise ValueError("available model roles must be enabled")
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorInferenceConnectivitySnapshot:
+    """Cached outcomes from explicit read-only OpenRouter checks."""
+
+    balance_status: OperatorProbeStatus
+    catalog_status: OperatorProbeStatus
+    key_limit_usd: Decimal | None = None
+    key_usage_usd: Decimal | None = None
+    key_remaining_usd: Decimal | None = None
+    catalog_model_count: int | None = None
+    visible_enabled_roles: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        balance_values = (
+            self.key_limit_usd,
+            self.key_usage_usd,
+            self.key_remaining_usd,
+        )
+        if self.balance_status is OperatorProbeStatus.READY:
+            if self.key_usage_usd is None:
+                raise ValueError("ready key checks require usage")
+            _require_decimal(self.key_usage_usd, "key_usage_usd")
+            if (self.key_limit_usd is None) != (self.key_remaining_usd is None):
+                raise ValueError(
+                    "key limit and remaining values must be present together"
+                )
+            if self.key_limit_usd is not None:
+                _require_decimal(self.key_limit_usd, "key_limit_usd")
+                _require_decimal(self.key_remaining_usd, "key_remaining_usd")
+        elif any(value is not None for value in balance_values):
+            raise ValueError("unavailable balance checks cannot carry balances")
+
+        if self.catalog_status is OperatorProbeStatus.READY:
+            if self.catalog_model_count is None:
+                raise ValueError("ready catalog checks require a model count")
+            _require_count(self.catalog_model_count, "catalog_model_count")
+            if len(self.visible_enabled_roles) != len(set(self.visible_enabled_roles)):
+                raise ValueError("visible enabled model roles must be unique")
+        elif self.catalog_model_count is not None or self.visible_enabled_roles:
+            raise ValueError("unavailable catalog checks cannot carry catalog data")
+
+    @classmethod
+    def not_configured(cls) -> Self:
+        """Return the state used when no OpenRouter client is configured."""
+        return cls(
+            balance_status=OperatorProbeStatus.NOT_CONFIGURED,
+            catalog_status=OperatorProbeStatus.NOT_CONFIGURED,
+        )
+
+    @classmethod
+    def not_checked(cls) -> Self:
+        """Return the initial state before an explicit provider check."""
+        return cls(
+            balance_status=OperatorProbeStatus.NOT_CHECKED,
+            catalog_status=OperatorProbeStatus.NOT_CHECKED,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorInferenceSnapshot:
+    """Database accounting, reviewed catalog, and opt-in live diagnostics."""
+
+    catalog: OperatorInferenceCatalogSnapshot
+    connectivity: OperatorInferenceConnectivitySnapshot
+    usage: OperatorInferenceUsageTotals | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorPoolSnapshot:
     """Instantaneous non-sensitive database connection-pool gauges."""
 
@@ -178,6 +375,7 @@ class OperatorDatabaseSnapshot:
     stars: OperatorStarsTotals | None = None
     subscriptions: OperatorSubscriptionTotals | None = None
     artifacts: OperatorArtifactTotals | None = None
+    inference_usage: OperatorInferenceUsageTotals | None = None
 
     def __post_init__(self) -> None:
         aggregates = (
@@ -254,6 +452,7 @@ class OperatorConsoleSnapshot:
 
     runtime: OperatorRuntimeSnapshot
     database: OperatorDatabaseSnapshot
+    inference: OperatorInferenceSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,12 +501,19 @@ __all__ = [
     "OperatorConsoleSnapshot",
     "OperatorDatabaseSnapshot",
     "OperatorDatabaseStatus",
+    "OperatorInferenceAttemptTotals",
+    "OperatorInferenceCatalogSnapshot",
+    "OperatorInferenceConnectivitySnapshot",
+    "OperatorInferenceSnapshot",
+    "OperatorInferenceTokenTotals",
+    "OperatorInferenceUsageTotals",
     "OperatorMaintenanceAction",
     "OperatorMaintenanceCompletion",
     "OperatorMaintenancePass",
     "OperatorMaintenanceResult",
     "OperatorNamedCount",
     "OperatorPoolSnapshot",
+    "OperatorProbeStatus",
     "OperatorRuntimeSnapshot",
     "OperatorStarsTotals",
     "OperatorSubscriptionTotals",

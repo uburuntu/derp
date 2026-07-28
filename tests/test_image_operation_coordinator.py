@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from derp.artifacts import ArtifactStoreError
-from derp.catalog import GoogleModelKey
+from derp.catalog import GoogleModelKey, InferenceProvider
 from derp.delivery import (
     Delivered,
     DeliveryFailed,
@@ -376,6 +376,37 @@ async def test_quote_only_boundary_has_no_reservation_or_provider_effect(
 
 
 @pytest.mark.asyncio
+async def test_delayed_approval_reconstructs_provider_from_durable_quote(
+    env: Environment,
+) -> None:
+    google_plan = plan_execution(
+        Feature.IMAGE_GENERATE,
+        GoogleModelKey.IMAGE,
+        provider=InferenceProvider.GOOGLE,
+    )
+    google_quote = replace(
+        _quote(),
+        provider=InferenceProvider.GOOGLE,
+        provider_model_id=google_plan.model.provider_model_id,
+        catalog_verified_on=google_plan.model.pricing_verified_on,
+    )
+    env.ledger.get_snapshot.return_value = replace(
+        _snapshot(state=OperationState.QUOTED),
+        quote=google_quote,
+        provider_model_id=google_plan.model.provider_model_id,
+    )
+
+    reconstructed = await env.coordinator.execution_plan_for_quote(
+        OPERATION_ID,
+        Feature.IMAGE_GENERATE,
+    )
+
+    assert reconstructed is not PLAN
+    assert reconstructed.model is google_plan.model
+    env.ledger.get_snapshot.assert_awaited_once_with(OPERATION_ID)
+
+
+@pytest.mark.asyncio
 async def test_deferred_quote_includes_finishing_call_in_price_and_identity(
     env: Environment,
 ) -> None:
@@ -393,6 +424,9 @@ async def test_deferred_quote_includes_finishing_call_in_price_and_identity(
     assert "finish=chat_economy" in quote.key.variant
     pricing_input = env.ledger.ensure_quote.await_args.kwargs["pricing_input"]
     assert pricing_input["finishing_model_key"] == "chat_economy"
+    assert pricing_input["finishing_provider"] == "openrouter"
+    assert pricing_input["finishing_provider_model_id"]
+    assert pricing_input["finishing_catalog_verified_on"]
     assert pricing_input["finishing_input_tokens"] == 4_096
     env.ledger.reserve.assert_not_awaited()
 

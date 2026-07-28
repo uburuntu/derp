@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from google.genai import types
 
-from derp.catalog import GoogleModelKey
+from derp.catalog import GoogleModelKey, InferenceProvider
 from derp.execution import (
     Failed,
     FailureReason,
@@ -25,6 +25,12 @@ from derp.execution import (
 from derp.features import TtsProviderOutput, TtsRequest
 from derp.features.tts import MAX_TTS_OUTPUT_BYTES
 from derp.llm.tts_executor import GEMINI_TTS_SAMPLE_RATE, GoogleTtsExecutor
+
+TTS_PLAN = plan_execution(
+    Feature.TTS,
+    GoogleModelKey.TTS,
+    provider=InferenceProvider.GOOGLE,
+)
 
 
 def _response(
@@ -80,7 +86,7 @@ async def test_pcm_generation_uses_exact_catalog_model_and_bounded_config() -> N
     executor, factory, generate_content, converter = _executor(
         _response(_inline(pcm, "audio/L16;codec=pcm;rate=24000"))
     )
-    plan = plan_execution(Feature.TTS, GoogleModelKey.TTS)
+    plan = TTS_PLAN
 
     outcome = await executor.synthesize(
         plan,
@@ -114,7 +120,7 @@ async def test_wav_generation_derives_duration_before_conversion() -> None:
     executor, _, _, converter = _executor(_response(_inline(wav, "audio/wav")))
 
     outcome = await executor.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="Read this", max_output_seconds=3),
     )
 
@@ -149,7 +155,7 @@ async def test_provider_refusals_map_to_policy_without_reading_text(
     executor, _, _, converter = _executor(response)
 
     outcome = await executor.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="private source text", max_output_seconds=3),
     )
 
@@ -187,7 +193,7 @@ async def test_missing_or_malformed_audio_is_unusable(
     executor, _, _, converter = _executor(response)
 
     outcome = await executor.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="Read this", max_output_seconds=3),
     )
 
@@ -203,7 +209,7 @@ async def test_source_duration_over_declared_limit_is_not_converted() -> None:
     )
 
     outcome = await executor.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="Read this", max_output_seconds=3),
     )
 
@@ -223,7 +229,7 @@ async def test_oversized_source_audio_is_not_parsed_or_converted() -> None:
     )
 
     outcome = await executor.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="Read this", max_output_seconds=30),
     )
 
@@ -239,7 +245,7 @@ async def test_conversion_failure_is_a_content_free_provider_failure() -> None:
     converter.side_effect = RuntimeError("secret conversion detail")
 
     outcome = await executor.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="private source text", max_output_seconds=3),
     )
 
@@ -256,7 +262,7 @@ async def test_malformed_conversion_output_is_unusable(converted: object) -> Non
     )
 
     outcome = await executor.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="Read this", max_output_seconds=3),
     )
 
@@ -269,7 +275,7 @@ async def test_provider_exception_is_typed_without_exception_content() -> None:
     generate_content.side_effect = RuntimeError("private provider response")
 
     outcome = await executor.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="private prompt", max_output_seconds=3),
     )
 
@@ -285,7 +291,7 @@ async def test_malformed_sdk_response_is_unusable() -> None:
     generate_content.return_value = SimpleNamespace(parts=[])
 
     outcome = await executor.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="Read this", max_output_seconds=3),
     )
 

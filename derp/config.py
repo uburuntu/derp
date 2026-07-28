@@ -11,10 +11,21 @@ from typing import Annotated, Literal
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from derp.catalog import InferenceProvider
 from derp.execution import Feature
 from derp.health import DEFAULT_RUNTIME_HEALTH_PATH
 
 # Docs: https://docs.pydantic.dev/2.8/concepts/pydantic_settings/
+
+DEFAULT_OPENROUTER_FEATURES = frozenset(
+    {
+        Feature.CHAT,
+        Feature.INLINE_CHAT,
+        Feature.DEEP_THINK,
+        Feature.IMAGE_GENERATE,
+        Feature.IMAGE_EDIT,
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -44,11 +55,8 @@ class Settings(BaseSettings):
     openrouter_app_title: str = "Derp"
     openrouter_app_url: str | None = None
     openrouter_enabled_features: Annotated[frozenset[Feature], NoDecode] = Field(
-        default_factory=lambda: frozenset(Feature),
+        default_factory=lambda: DEFAULT_OPENROUTER_FEATURES,
     )
-    openrouter_free_user_daily_limit: int = Field(default=20, ge=0)
-    openrouter_free_global_daily_limit: int = Field(default=800, ge=0)
-
     # Logfire token
     logfire_token: SecretStr
     logfire_capture_ai_content: bool = False
@@ -152,6 +160,16 @@ class Settings(BaseSettings):
     def uses_openrouter(self, feature: Feature) -> bool:
         """Return whether a feature should use the default OpenRouter plane."""
         return feature in self.openrouter_enabled_features
+
+    def inference_provider(self, feature: Feature) -> InferenceProvider:
+        """Resolve one feature to OpenRouter or the explicit Google rollback."""
+        if not isinstance(feature, Feature):
+            raise TypeError("feature must be a Feature")
+        return (
+            InferenceProvider.OPENROUTER
+            if self.uses_openrouter(feature)
+            else InferenceProvider.GOOGLE
+        )
 
     @property
     def resolved_openrouter_app_url(self) -> str:

@@ -29,7 +29,13 @@ from pydantic_ai.exceptions import (
 
 from derp.approvals import DeferredToolApprovalService
 from derp.approvals.image_tools import ImageToolRunContext
-from derp.catalog import ModelRole
+from derp.catalog import (
+    ChatSelection,
+    InferenceProvider,
+    InputModality,
+    ModelRole,
+    ModelSelector,
+)
 from derp.common.extractor import Extractor
 from derp.config import settings
 from derp.db import (
@@ -38,10 +44,12 @@ from derp.db import (
     list_approved_shared_facts,
     store_tool_transcript,
 )
+from derp.execution import ExecutionPlan, Feature, plan_execution
 from derp.features import ImageOperationCoordinator
 from derp.features.chat_accounting import (
     ChatExecutionAlreadyHandled,
     ChatExecutionInProgress,
+    ChatFallbackUnavailable,
     ChatTurnAccounting,
     ChatTurnInvocation,
     EconomyChatExecutionGrant,
@@ -88,6 +96,15 @@ from derp.history.snapshot import (
     project_message_snapshot,
 )
 from derp.history.transcript import extract_tool_rounds, serialize_tool_rounds
+from derp.inference import (
+    FREE_INFERENCE_PRIVACY_VERSION,
+    FREE_INFERENCE_TOS_VERSION,
+    InferenceAttempt,
+    InferenceContext,
+    InferenceRecorder,
+    decide_non_zdr_free_inference,
+    project_inference_privacy,
+)
 from derp.llm import (
     AgentContentDelivered,
     AgentContentUnavailable,
@@ -113,6 +130,91 @@ from derp.tools.policy import (
 from derp.tools.shared_facts import SharedFactTools
 
 router = Router(name="chat")
+
+_IMAGE_MEDIA_TYPES = frozenset({"live_photo", "photo", "sticker"})
+_AUDIO_MEDIA_TYPES = frozenset({"audio", "voice"})
+_VIDEO_MEDIA_TYPES = frozenset({"animation", "video", "video_note"})
+
+
+def _chat_modalities(turn: UserTextTurn) -> frozenset[InputModality]:
+    modalities = {InputModality.TEXT}
+    media_types = {attachment.media_type for attachment in turn.attachments}
+    if media_types & _IMAGE_MEDIA_TYPES:
+        modalities.add(InputModality.IMAGE)
+    if media_types & _AUDIO_MEDIA_TYPES:
+        modalities.add(InputModality.AUDIO)
+    if media_types & _VIDEO_MEDIA_TYPES:
+        modalities.add(InputModality.VIDEO)
+    if "document" in media_types:
+        modalities.add(InputModality.PDF)
+    return frozenset(modalities)
+
+
+def _select_chat_plans(
+    *,
+    user: UserModel,
+    chat_type: str,
+    turn: UserTextTurn,
+) -> tuple[ExecutionPlan, ExecutionPlan | None]:
+    modalities = _chat_modalities(turn)
+    if not settings.uses_openrouter(Feature.CHAT):
+        return (
+            plan_execution(
+                Feature.CHAT,
+                ModelRole.CHAT_STANDARD,
+                provider=InferenceProvider.GOOGLE,
+            ),
+            None,
+        )
+
+    try:
+        context = InferenceContext(chat_type)
+    except ValueError:
+        context = InferenceContext.GROUP
+    free_decision = decide_non_zdr_free_inference(
+        project_inference_privacy(user),
+        context=context,
+        current_tos_version=FREE_INFERENCE_TOS_VERSION,
+        current_privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+    )
+    selector = ModelSelector()
+    paid_model = selector.select_chat(ChatSelection(paid=True, modalities=modalities))
+    fallback_model = None
+    if free_decision.allowed:
+        try:
+            fallback_model = selector.select_chat(
+                ChatSelection(
+                    paid=False,
+                    free_mode_allowed=True,
+                    modalities=modalities,
+                )
+            )
+        except ValueError:
+            fallback_model = None
+        if fallback_model is not None and not fallback_model.available:
+            fallback_model = None
+    return (
+        plan_execution(Feature.CHAT, paid_model),
+        plan_execution(Feature.CHAT, fallback_model) if fallback_model else None,
+    )
+
+
+async def _record_failed_inference(
+    recorder: InferenceRecorder,
+    attempt: InferenceAttempt,
+) -> None:
+    """Best-effort terminal state without masking the provider failure."""
+    try:
+        await recorder.fail(attempt)
+    except Exception as exc:
+        report_exception(
+            "inference_failure_recording_failed",
+            exception=exc,
+            level="warning",
+            inference_usage_id=str(attempt.id),
+        )
+
+
 router.include_router(tool_approvals_router)
 
 # Provider serialization and registered tool schemas are outside history estimation.
@@ -536,6 +638,9 @@ class ChatAgentHandler(MessageHandler):
         deferred_tool_approval_service: DeferredToolApprovalService | None = (
             self.data.get("deferred_tool_approval_service")
         )
+        inference_recorder: InferenceRecorder | None = self.data.get(
+            "inference_recorder"
+        )
         paid_operation_id: OperationId | None = None
         try:
             await ensure_group_context_notice(
@@ -544,7 +649,12 @@ class ChatAgentHandler(MessageHandler):
                 db=db,
                 bot=bot,
             )
-            if user_model is None or chat_model is None or chat_turn_accounting is None:
+            if (
+                user_model is None
+                or chat_model is None
+                or chat_turn_accounting is None
+                or inference_recorder is None
+            ):
                 return await self.event.reply(
                     _("I couldn't verify your account. You weren't charged. Try again.")
                 )
@@ -573,6 +683,11 @@ class ChatAgentHandler(MessageHandler):
                 HISTORY_WINDOWS[ModelRole.CHAT_STANDARD],
             )
             current_turn = _current_user_turn(self.event)
+            paid_plan, fallback_plan = _select_chat_plans(
+                user=user_model,
+                chat_type=self.event.chat.type,
+                turn=current_turn,
+            )
             estimated_input_tokens = _estimate_chat_input_tokens(
                 history=standard_probe,
                 current_turn=current_turn,
@@ -586,6 +701,8 @@ class ChatAgentHandler(MessageHandler):
                 chat_id=chat_model.id,
                 thread_id=self.event.message_thread_id,
                 estimated_input_tokens=estimated_input_tokens,
+                paid_plan=paid_plan,
+                fallback_plan=fallback_plan,
             )
             decision = await chat_turn_accounting.authorize(invocation)
             if isinstance(
@@ -600,6 +717,13 @@ class ChatAgentHandler(MessageHandler):
                 return None
             if isinstance(decision, PaidChatExecutionGrant):
                 paid_operation_id = decision.operation_id
+            elif isinstance(decision, ChatFallbackUnavailable):
+                return await self.event.reply(
+                    _(
+                        "No free model is available here. Enable free models in "
+                        "a private chat, or add credits for private models."
+                    )
+                )
             elif not isinstance(decision, EconomyChatExecutionGrant):
                 raise RuntimeError("chat accounting returned an unsupported decision")
             plan = decision.plan
@@ -708,24 +832,50 @@ class ChatAgentHandler(MessageHandler):
                     tools=len(toolset.tools),
                 )
 
-                with capture_outbound_history():
-                    with agent.parallel_tool_call_execution_mode("sequential"):
-                        result = await agent.run(
-                            user_prompt,
-                            message_history=history.messages,
-                            deps=deps,
-                            toolsets=[toolset],
-                            usage_limits=UsageLimits(
-                                request_limit=5,
-                                tool_calls_limit=3,
-                                input_tokens_limit=plan.model.input_token_limit,
-                                output_tokens_limit=plan.model.output_token_limit,
-                            ),
-                            model_settings=model_run_settings(
-                                plan.model,
-                                user_id=user_model.id,
-                            ),
-                        )
+                inference_attempt = await inference_recorder.start(
+                    model=plan.model,
+                    user_id=user_model.id,
+                    chat_id=chat_model.id,
+                    operation_id=decision.operation_id.value,
+                )
+                try:
+                    with capture_outbound_history():
+                        with agent.parallel_tool_call_execution_mode("sequential"):
+                            result = await agent.run(
+                                user_prompt,
+                                message_history=history.messages,
+                                deps=deps,
+                                toolsets=[toolset],
+                                usage_limits=UsageLimits(
+                                    request_limit=5,
+                                    tool_calls_limit=3,
+                                    input_tokens_limit=plan.model.input_token_limit,
+                                    output_tokens_limit=plan.model.output_token_limit,
+                                ),
+                                model_settings=model_run_settings(
+                                    plan.model,
+                                    user_id=user_model.id,
+                                ),
+                            )
+                except Exception:
+                    await _record_failed_inference(
+                        inference_recorder,
+                        inference_attempt,
+                    )
+                    raise
+
+                reports = await inference_recorder.succeed(
+                    inference_attempt,
+                    result.new_messages(),
+                )
+                span.set_attribute("derp.inference_responses", len(reports))
+                if reports:
+                    span.set_attribute(
+                        "gen_ai.response.model",
+                        reports[-1].actual_model,
+                    )
+                    if downstream := reports[-1].downstream_provider:
+                        span.set_attribute("gen_ai.provider.name", downstream)
 
                 tool_rounds = extract_tool_rounds(result.new_messages())
                 span.set_attribute("derp.tool_rounds", len(tool_rounds))

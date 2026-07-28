@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from decimal import Decimal
 from enum import StrEnum
 from html import escape
 from importlib.metadata import PackageNotFoundError, version
@@ -34,10 +35,12 @@ from derp.operator import (
     OperatorConsoleSnapshot,
     OperatorControlConfig,
     OperatorDatabaseSnapshot,
+    OperatorInferenceConnectivitySnapshot,
     OperatorMaintenanceAction,
     OperatorMaintenanceResult,
     OperatorNamedCount,
     OperatorOnlyFilter,
+    OperatorProbeStatus,
 )
 
 router = Router(name="operator")
@@ -56,6 +59,7 @@ class OperatorView(StrEnum):
     USAGE = "usage"
     COMMERCE = "money"
     OPERATIONS = "ops"
+    INFERENCE = "inference"
     RUNTIME = "runtime"
     MAINTENANCE = "maint"
     TESTS = "tests"
@@ -66,6 +70,7 @@ class OperatorUtility(StrEnum):
 
     TEST_PURCHASE = "buy"
     SYNC_COMMANDS = "commands"
+    INFERENCE_CHECK = "inference"
 
 
 class OperatorNavigationCallback(CallbackData, prefix="op"):
@@ -99,6 +104,8 @@ def build_operator_panel(
         return _commerce_panel(snapshot)
     if view is OperatorView.OPERATIONS:
         return _operations_panel(snapshot)
+    if view is OperatorView.INFERENCE:
+        return _inference_panel(snapshot)
     if view is OperatorView.RUNTIME:
         return _runtime_panel(snapshot, config)
     if view is OperatorView.MAINTENANCE:
@@ -374,6 +381,47 @@ async def sync_operator_command_menu(
     )
 
 
+@router.callback_query(
+    OperatorUtilityCallback.filter(F.action == OperatorUtility.INFERENCE_CHECK)
+)
+async def check_operator_inference(
+    callback: CallbackQuery,
+    operator_console: OperatorConsoleService,
+    operator_config: OperatorControlConfig,
+) -> None:
+    """Run only provider metadata reads, then refresh the inference page."""
+    message = await _private_operator_callback(callback)
+    if message is None:
+        return
+    await callback.answer(_("Checking inference"))
+    try:
+        await operator_console.check_inference_connectivity(callback.from_user.id)
+    except Exception as exc:
+        report_exception(
+            "operator.inference_read_check_failed",
+            exception=exc,
+            operator_id=callback.from_user.id,
+        )
+        await _edit_operator_message(
+            message,
+            _(
+                "<b>Inference check failed</b>\n"
+                "No inference request was sent. Check telemetry."
+            ),
+            _inference_navigation(),
+            operator_id=callback.from_user.id,
+            event="operator.inference_check_result_render_failed",
+        )
+        return
+    await _refresh_panel(
+        message,
+        view=OperatorView.INFERENCE,
+        operator_console=operator_console,
+        operator_config=operator_config,
+        operator_id=callback.from_user.id,
+    )
+
+
 @stale_callback_router.callback_query(F.data.startswith(_OPERATOR_CALLBACK_PREFIXES))
 async def reject_stale_operator_callback(callback: CallbackQuery) -> None:
     """Clear malformed or obsolete operator buttons for authorized actors."""
@@ -507,16 +555,17 @@ def _overview_panel(
         inline_keyboard=[
             [
                 _nav_button(_("Usage"), OperatorView.USAGE),
+                _nav_button(_("Inference"), OperatorView.INFERENCE),
+            ],
+            [
                 _nav_button(_("Commerce"), OperatorView.COMMERCE),
-            ],
-            [
                 _nav_button(_("Operations"), OperatorView.OPERATIONS),
-                _nav_button(_("Runtime"), OperatorView.RUNTIME),
             ],
             [
-                _nav_button(_("Maintenance"), OperatorView.MAINTENANCE),
+                _nav_button(_("Runtime"), OperatorView.RUNTIME),
                 _nav_button(_("Tests"), OperatorView.TESTS),
             ],
+            [_nav_button(_("Maintenance"), OperatorView.MAINTENANCE)],
             [_nav_button(_("Refresh"), OperatorView.OVERVIEW)],
         ]
     )
@@ -610,6 +659,82 @@ def _operations_panel(
     return text, _section_navigation(OperatorView.OPERATIONS)
 
 
+def _inference_panel(
+    snapshot: OperatorConsoleSnapshot,
+) -> tuple[str, InlineKeyboardMarkup]:
+    inference = snapshot.inference
+    if inference is None:
+        return (
+            _("<b>Inference</b>\nDiagnostics are unavailable."),
+            _inference_navigation(),
+        )
+
+    usage = inference.usage
+    if usage is None:
+        usage_text = _("Usage diagnostics are unavailable.")
+    else:
+        attempts = usage.attempts
+        tokens = usage.tokens
+        usage_text = _(
+            "Attempts: {recent} / 24h · {total} total\n"
+            "States (24h/total): success {success_recent}/{success} · "
+            "failed {failed_recent}/{failed} · pending {pending_recent}/{pending}\n"
+            "Cost: {cost} reconciled · {cost_pending} pending · "
+            "{cost_unavailable} unavailable\n\n"
+            "Tokens\n"
+            "Input {input} · output {output} · total {token_total}\n"
+            "Cache read {cache_read} · write {cache_write}\n"
+            "Reasoning {reasoning} · audio in/out {audio_input}/{audio_output}"
+        ).format(
+            recent=_number(attempts.recent_24h),
+            total=_number(attempts.total),
+            success_recent=_number(attempts.succeeded_24h),
+            success=_number(attempts.succeeded),
+            failed_recent=_number(attempts.failed_24h),
+            failed=_number(attempts.failed),
+            pending_recent=_number(attempts.pending_24h),
+            pending=_number(attempts.pending),
+            cost=_usd(usage.reconciled_cost_usd),
+            cost_pending=_number(usage.pending_cost_reconciliation),
+            cost_unavailable=_number(usage.unavailable_cost_count),
+            input=_number(tokens.input),
+            output=_number(tokens.output),
+            token_total=_number(tokens.total),
+            cache_read=_number(tokens.cache_read),
+            cache_write=_number(tokens.cache_write),
+            reasoning=_number(tokens.reasoning),
+            audio_input=_number(tokens.audio_input),
+            audio_output=_number(tokens.audio_output),
+        )
+
+    catalog = inference.catalog
+    connectivity = inference.connectivity
+    available_role_names = set(catalog.available_roles)
+    unavailable_roles = tuple(
+        role for role in catalog.enabled_roles if role not in available_role_names
+    )
+    text = _(
+        "<b>Inference</b>\n"
+        "{usage}\n\n"
+        "Models\n"
+        "Roles: {available}/{enabled} available · reviewed {reviewed}\n"
+        "Available roles: {available_roles}\n"
+        "Unavailable roles: {unavailable_roles}\n"
+        "OpenRouter key: {balance}\n"
+        "OpenRouter catalog: {provider_catalog}"
+    ).format(
+        usage=usage_text,
+        available=_number(len(catalog.available_roles)),
+        enabled=_number(len(catalog.enabled_roles)),
+        reviewed=catalog.verified_on.isoformat(),
+        available_roles=_format_roles(catalog.available_roles),
+        unavailable_roles=_format_roles(unavailable_roles),
+        balance=_inference_balance(connectivity),
+        provider_catalog=_inference_catalog(connectivity, len(catalog.enabled_roles)),
+    )
+    return text, _inference_navigation()
+
+
 def _runtime_panel(
     snapshot: OperatorConsoleSnapshot,
     config: OperatorControlConfig,
@@ -683,7 +808,14 @@ def _maintenance_panel() -> tuple[str, InlineKeyboardMarkup]:
                     _("Deliveries"), OperatorMaintenanceAction.DELIVERIES
                 ),
             ],
-            [_maintenance_button(_("Approvals"), OperatorMaintenanceAction.APPROVALS)],
+            [
+                _maintenance_button(
+                    _("Approvals"), OperatorMaintenanceAction.APPROVALS
+                ),
+                _maintenance_button(
+                    _("Inference"), OperatorMaintenanceAction.INFERENCE
+                ),
+            ],
             [_nav_button(_("Back"), OperatorView.OVERVIEW)],
         ]
     )
@@ -741,6 +873,25 @@ def _section_navigation(view: OperatorView) -> InlineKeyboardMarkup:
                 _nav_button(_("Back"), OperatorView.OVERVIEW),
                 _nav_button(_("Refresh"), view),
             ]
+        ]
+    )
+
+
+def _inference_navigation() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_("Run read-only check"),
+                    callback_data=OperatorUtilityCallback(
+                        action=OperatorUtility.INFERENCE_CHECK
+                    ).pack(),
+                )
+            ],
+            [
+                _nav_button(_("Back"), OperatorView.OVERVIEW),
+                _nav_button(_("Refresh"), OperatorView.INFERENCE),
+            ],
         ]
     )
 
@@ -810,6 +961,12 @@ def _format_buckets(buckets: tuple[OperatorNamedCount, ...]) -> str:
     return " · ".join(visible) if visible else _("none")
 
 
+def _format_roles(roles: tuple[str, ...]) -> str:
+    if not roles:
+        return _("none")
+    return " · ".join(f"<code>{escape(role)}</code>" for role in roles)
+
+
 def _state_label(name: str) -> str:
     labels = {
         "private": _("private"),
@@ -851,6 +1008,7 @@ def _maintenance_label(action: OperatorMaintenanceAction) -> str:
         OperatorMaintenanceAction.OPERATIONS: _("Operations"),
         OperatorMaintenanceAction.DELIVERIES: _("Deliveries"),
         OperatorMaintenanceAction.APPROVALS: _("Approvals"),
+        OperatorMaintenanceAction.INFERENCE: _("Inference"),
     }[action]
 
 
@@ -878,6 +1036,13 @@ def _maintenance_count_label(name: str) -> str:
         "artifact_examined_count": _("Examined artifacts"),
         "artifact_purged_count": _("Purged artifacts"),
         "artifact_failure_count": _("Artifact failures"),
+        "configured_count": _("Configured"),
+        "claimed_count": _("Claims"),
+        "reconciled_count": _("Reconciled costs"),
+        "retry_scheduled_count": _("Retries scheduled"),
+        "unavailable_count": _("Metadata unavailable"),
+        "claim_lost_count": _("Claims lost"),
+        "stale_attempt_count": _("Stale attempts closed"),
         "phase_failure_count": _("Phase failures"),
         "expired_request_count": _("Expired approvals"),
     }
@@ -886,6 +1051,49 @@ def _maintenance_count_label(name: str) -> str:
 
 def _number(value: int) -> str:
     return format_local_integer(value)
+
+
+def _usd(value: Decimal | None) -> str:
+    if value is None:
+        raise RuntimeError("ready inference balance omitted a value")
+    rendered = f"{value:,.6f}".rstrip("0").rstrip(".")
+    return f"${rendered}"
+
+
+def _inference_balance(snapshot: OperatorInferenceConnectivitySnapshot) -> str:
+    if snapshot.balance_status is OperatorProbeStatus.READY:
+        if snapshot.key_limit_usd is None:
+            return _("{used} used · no key limit").format(
+                used=_usd(snapshot.key_usage_usd)
+            )
+        return _("{remaining} of {limit} left · {used} used").format(
+            remaining=_usd(snapshot.key_remaining_usd),
+            limit=_usd(snapshot.key_limit_usd),
+            used=_usd(snapshot.key_usage_usd),
+        )
+    return _probe_status(snapshot.balance_status)
+
+
+def _inference_catalog(
+    snapshot: OperatorInferenceConnectivitySnapshot,
+    enabled_roles: int,
+) -> str:
+    if snapshot.catalog_status is OperatorProbeStatus.READY:
+        return _("{count} models · {visible}/{enabled} enabled visible").format(
+            count=_number(snapshot.catalog_model_count or 0),
+            visible=_number(len(snapshot.visible_enabled_roles)),
+            enabled=_number(enabled_roles),
+        )
+    return _probe_status(snapshot.catalog_status)
+
+
+def _probe_status(status: OperatorProbeStatus) -> str:
+    return {
+        OperatorProbeStatus.NOT_CONFIGURED: _("not configured"),
+        OperatorProbeStatus.NOT_CHECKED: _("not checked"),
+        OperatorProbeStatus.READY: _("ready"),
+        OperatorProbeStatus.FAILED: _("unavailable"),
+    }[status]
 
 
 def _duration(seconds: float) -> str:

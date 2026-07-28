@@ -20,6 +20,7 @@ from derp.features import (
     MediaContent,
     PreparedImageEditRequest,
 )
+from derp.inference.report import reports_from_messages
 from derp.llm.agents import create_image_agent
 from derp.media import MediaFamily
 
@@ -55,7 +56,7 @@ class PydanticAIImageExecutor:
         if request.style:
             prompt = f"{prompt}\n\nStyle: {request.style}"
         result = await self._agent_factory(plan).run(prompt)
-        return self._outcome(result)
+        return self._outcome(result, plan)
 
     async def edit(
         self,
@@ -72,12 +73,17 @@ class PydanticAIImageExecutor:
                 f"Edit this image: {request.prompt}",
             ]
         )
-        return self._outcome(result)
+        return self._outcome(result, plan)
 
     @staticmethod
     def _outcome(
         result: AgentRunResult[BinaryImage | str],
+        plan: ExecutionPlan,
     ) -> Outcome[ImageOutput]:
+        reports = reports_from_messages(
+            result.new_messages(),
+            requested_model=plan.model.provider_model_id,
+        )
         images = result.response.images
         if not images and isinstance(result.output, BinaryImage):
             images = [result.output]
@@ -91,7 +97,8 @@ class PydanticAIImageExecutor:
                             data=image.data,
                         )
                         for image in images
-                    )
+                    ),
+                    reports=reports,
                 )
             )
         if isinstance(result.output, str):
@@ -99,4 +106,8 @@ class PydanticAIImageExecutor:
         return Rejected(RejectionReason.UNUSABLE_OUTPUT)
 
 
-__all__ = ["ImageAgent", "ImageAgentFactory", "PydanticAIImageExecutor"]
+__all__ = [
+    "ImageAgent",
+    "ImageAgentFactory",
+    "PydanticAIImageExecutor",
+]

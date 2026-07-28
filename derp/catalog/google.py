@@ -53,7 +53,7 @@ class DataCollectionPolicy(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class PriceCeiling:
-    """OpenRouter routing ceilings, expressed in USD per million units."""
+    """OpenRouter ceilings: token rates per million, media/request rates per unit."""
 
     prompt: Decimal | None = None
     completion: Decimal | None = None
@@ -172,10 +172,16 @@ class ImagePricing:
     text_output_per_million: Decimal
     output_usd: tuple[tuple[ImageResolution, Decimal], ...]
     default_resolution: ImageResolution
+    output_token_per_million: Decimal | None = None
 
     def __post_init__(self) -> None:
         if self.input_per_million < 0 or self.text_output_per_million < 0:
             raise ValueError("Image token prices cannot be negative")
+        if (
+            self.output_token_per_million is not None
+            and self.output_token_per_million < 0
+        ):
+            raise ValueError("Image output token price cannot be negative")
         prices = dict(self.output_usd)
         if len(prices) != len(self.output_usd) or self.default_resolution not in prices:
             raise ValueError("Image prices must be unique and include the default")
@@ -256,6 +262,7 @@ class VideoPricing:
     default_resolution: VideoResolution
     default_duration_seconds: int
     supported_durations_seconds: frozenset[int]
+    output_per_second_without_audio: tuple[tuple[VideoResolution, Decimal], ...] = ()
 
     def __post_init__(self) -> None:
         prices = dict(self.output_per_second)
@@ -266,6 +273,11 @@ class VideoPricing:
             raise ValueError("Video prices must be unique and include the default")
         if any(price <= 0 for price in prices.values()):
             raise ValueError("Video output prices must be positive")
+        silent_prices = dict(self.output_per_second_without_audio)
+        if self.output_per_second_without_audio and set(silent_prices) != set(prices):
+            raise ValueError("Silent video prices must cover the same resolutions")
+        if any(price <= 0 for price in silent_prices.values()):
+            raise ValueError("Silent video output prices must be positive")
         if (
             not self.supported_durations_seconds
             or any(duration <= 0 for duration in self.supported_durations_seconds)
@@ -278,6 +290,7 @@ class VideoPricing:
         *,
         duration_seconds: int | None = None,
         resolution: VideoResolution | None = None,
+        generate_audio: bool = True,
     ) -> Decimal:
         duration = (
             self.default_duration_seconds
@@ -288,7 +301,12 @@ class VideoPricing:
             raise ValueError("Video duration must be positive")
         if duration not in self.supported_durations_seconds:
             raise ValueError(f"Unsupported video duration: {duration}")
-        rate = dict(self.output_per_second)[resolution or self.default_resolution]
+        rates = (
+            dict(self.output_per_second)
+            if generate_audio or not self.output_per_second_without_audio
+            else dict(self.output_per_second_without_audio)
+        )
+        rate = rates[resolution or self.default_resolution]
         return rate * duration
 
 
@@ -316,10 +334,13 @@ class ModelSpec:
     routing: RoutingPolicy | None = None
     retention_exception: str | None = None
     available: bool = True
+    canonical_model_id: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.provider_model_id:
+        if not self.provider_model_id.strip():
             raise ValueError("Provider model ID is required")
+        if self.canonical_model_id is not None and not self.canonical_model_id.strip():
+            raise ValueError("Canonical model ID must not be blank")
         if any(
             limit is not None and limit <= 0
             for limit in (self.input_token_limit, self.output_token_limit)

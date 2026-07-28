@@ -14,6 +14,11 @@ from derp.db.history import (
     store_tool_transcript,
     tombstone_user_messages,
 )
+from derp.db.inference_privacy import (
+    accept_non_zdr_free_inference,
+    get_inference_privacy_preference,
+    revoke_non_zdr_free_inference,
+)
 from derp.db.inline_allowance import PostgresInlineAllowance
 from derp.db.queries import (
     get_chat_by_telegram_id,
@@ -71,4 +76,7 @@ __all__ = [
     "propose_shared_fact",
     "reject_shared_fact",
     "PostgresInlineAllowance",
+    "accept_non_zdr_free_inference",
+    "get_inference_privacy_preference",
+    "revoke_non_zdr_free_inference",
 ]

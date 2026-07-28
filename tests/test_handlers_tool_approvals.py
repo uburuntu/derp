@@ -25,7 +25,7 @@ from derp.approvals.image_tools import (
 from derp.billing import CommercePolicy
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
 from derp.billing.telegram import PurchaseCallback, PurchaseTargetCode
-from derp.catalog import GoogleModelKey, ImageResolution
+from derp.catalog import GoogleModelKey, ImageResolution, InferenceProvider
 from derp.db import DatabaseManager
 from derp.delivery import DeliveryResendCallback
 from derp.execution import Feature, plan_execution
@@ -558,6 +558,7 @@ async def test_funding_preflight_does_not_spend_a_finishing_model_call(
     )
     lease = SimpleNamespace(
         snapshot=SimpleNamespace(
+            operation_id=operation_id,
             requester_id=requester_id,
             requester_telegram_id=22,
             chat_id=chat_id,
@@ -573,6 +574,13 @@ async def test_funding_preflight_does_not_spend_a_finishing_model_call(
         ),
     )
     image_operations = MagicMock()
+    image_operations.execution_plan_for_quote = AsyncMock(
+        return_value=plan_execution(
+            Feature.IMAGE_GENERATE,
+            GoogleModelKey.IMAGE,
+            provider=InferenceProvider.GOOGLE,
+        )
+    )
     image_operations.run = AsyncMock(return_value=funding)
     user_model = SimpleNamespace(id=requester_id)
     chat_model = SimpleNamespace(
@@ -602,6 +610,10 @@ async def test_funding_preflight_does_not_spend_a_finishing_model_call(
         )
 
     assert result == ImageResumeResult("", funding)
+    image_operations.execution_plan_for_quote.assert_awaited_once_with(
+        operation_id,
+        Feature.IMAGE_GENERATE,
+    )
     assert image_operations.run.await_args.kwargs["allow_personal_once"] is False
     create_agent.assert_not_called()
 

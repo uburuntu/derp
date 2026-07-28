@@ -9,7 +9,7 @@ from pydantic_ai import ModelMessage, ModelRequest, ModelResponse, ToolCallPart
 from pydantic_ai.messages import UserPromptPart
 
 from derp.approvals.paid_media import PaidMediaApprovalKind
-from derp.catalog import GoogleModelKey
+from derp.catalog import GoogleModelKey, InferenceProvider
 from derp.execution import (
     ExecutionPlan,
     Failed,
@@ -26,7 +26,11 @@ from derp.operations import TtsQuoteInput
 
 TTS_COMMAND_TOOL: Final = "command_tts"
 TTS_COMMAND_CALL_ID: Final = "command-tts"
-TTS_PLAN: Final = plan_execution(Feature.TTS, GoogleModelKey.TTS)
+TTS_PLAN: Final = plan_execution(
+    Feature.TTS,
+    GoogleModelKey.TTS,
+    provider=InferenceProvider.GOOGLE,
+)
 
 
 class DeferredTtsCallError(ValueError):
@@ -38,10 +42,10 @@ class TtsPaidMediaAdapter:
     """Map validated TTS calls onto the generic paid-media operation core."""
 
     service: TtsFeatureService
+    plan: ExecutionPlan = TTS_PLAN
 
     kind: ClassVar[PaidMediaApprovalKind] = PaidMediaApprovalKind.TTS
     tool_name: ClassVar[str] = TTS_COMMAND_TOOL
-    plan: ClassVar[ExecutionPlan] = TTS_PLAN
 
     def parse_tool_call(self, tool_call: ToolCallPart) -> TtsRequest:
         """Reconstruct TTS input only from framework-validated persisted args."""
@@ -104,6 +108,7 @@ def tts_command_tool_call(request: TtsRequest) -> ToolCallPart:
 def tts_command_history(
     request: TtsRequest,
     tool_call: ToolCallPart,
+    plan: ExecutionPlan = TTS_PLAN,
 ) -> tuple[ModelMessage, ...]:
     """Build minimal native history accepted by durable deferred serialization."""
     if tool_call.tool_name != TTS_COMMAND_TOOL:
@@ -112,7 +117,7 @@ def tts_command_history(
         ModelRequest(parts=[UserPromptPart(request.text)]),
         ModelResponse(
             parts=[tool_call],
-            model_name=TTS_PLAN.model.provider_model_id,
+            model_name=plan.model.provider_model_id,
         ),
     )
 

@@ -20,8 +20,14 @@ from pydantic_ai.messages import UserPromptPart
 
 from derp.approvals import DeferredToolApprovalService
 from derp.approvals.image_tools import ImageToolRunContext
-from derp.catalog import GoogleModelKey, get_google_model
+from derp.catalog import (
+    GoogleModelKey,
+    InferenceProvider,
+    get_google_model,
+    get_openrouter_model,
+)
 from derp.common.extractor import Extractor
+from derp.config import settings
 from derp.delivery import (
     Delivered,
     DeliveryAuthorizationError,
@@ -34,6 +40,7 @@ from derp.delivery import (
     ResendCallbackAuthorization,
     ResendResult,
 )
+from derp.execution import Feature
 from derp.features import (
     ImageAwaitingFunding,
     ImageDelivered,
@@ -251,7 +258,12 @@ async def _present_command_approval(
         )
         source = request.source
 
-    model = get_google_model(GoogleModelKey.CHAT_ECONOMY)
+    provider = settings.inference_provider(Feature.CHAT)
+    model = (
+        get_openrouter_model(GoogleModelKey.CHAT_ECONOMY)
+        if provider is InferenceProvider.OPENROUTER
+        else get_google_model(GoogleModelKey.CHAT_ECONOMY)
+    )
     history = (
         ModelRequest(parts=[UserPromptPart(request.prompt)]),
         ModelResponse(parts=[tool_call], model_name=model.provider_model_id),

@@ -10,6 +10,7 @@ from derp.approvals.image_tools import (
     DeferredImageCall,
 )
 from derp.catalog import GoogleModelKey
+from derp.config import settings
 from derp.execution import Feature, plan_execution
 from derp.features import (
     ImageAwaitingFunding,
@@ -93,12 +94,17 @@ async def _run_approved_image_tool(
     if outcome is None:
         outcome = await coordinator.run(
             call.invocation(context),
-            plan_execution(call.feature, GoogleModelKey.IMAGE),
+            plan_execution(
+                call.feature,
+                GoogleModelKey.IMAGE,
+                provider=settings.inference_provider(call.feature),
+            ),
             call.request,
             allow_personal_once=context.allow_personal_once,
             finishing_plan=plan_execution(
                 Feature.CHAT,
                 finishing_quote_input.model_key,
+                provider=ctx.deps.model.provider,
             ),
             finishing_quote_input=finishing_quote_input,
         )

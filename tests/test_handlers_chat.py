@@ -12,7 +12,7 @@ import pytest
 from pydantic_ai import BinaryContent, DeferredToolRequests, ModelRequest, ToolCallPart
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 
-from derp.catalog import GoogleModelKey
+from derp.catalog import GoogleModelKey, ModelRole
 from derp.execution import Feature, plan_execution
 from derp.features import ImageOperationCoordinator
 from derp.features.chat_accounting import (
@@ -33,6 +33,11 @@ from derp.history.core import LogicalTurn, TokenEstimator
 from derp.history.facts import ApprovedFact, render_approved_facts
 from derp.history.media import HydratedMedia
 from derp.history.service import HISTORY_WINDOWS, LoadedHistory
+from derp.inference import (
+    FREE_INFERENCE_PRIVACY_VERSION,
+    FREE_INFERENCE_TOS_VERSION,
+    InferencePrivacyMode,
+)
 from derp.llm import AgentContentDelivered, AgentContentUnavailable, AgentResult
 from derp.llm.prompts import BASE_SYSTEM_PROMPT
 from derp.operations import (
@@ -357,7 +362,7 @@ class TestBuildContextPrompt:
 
 
 def _paid_decision(invocation: ChatTurnInvocation) -> PaidChatExecutionGrant:
-    plan = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_STANDARD)
+    plan = invocation.paid_plan
     quote = QuoteEngine().quote(
         quote_id=QuoteId.new(),
         operation_id=invocation.operation_id,
@@ -378,7 +383,8 @@ def _economy_decision(invocation: ChatTurnInvocation) -> EconomyChatExecutionGra
     return EconomyChatExecutionGrant(
         invocation.operation_id,
         paid.quote,
-        plan_execution(Feature.CHAT, GoogleModelKey.CHAT_ECONOMY),
+        invocation.fallback_plan
+        or plan_execution(Feature.CHAT, GoogleModelKey.CHAT_ECONOMY),
         ReservationRejection.PERSONAL_CONSENT_REQUIRED,
     )
 
@@ -402,6 +408,7 @@ class ChatHandlerEnvironment:
     image_operations: MagicMock
     report_exception: MagicMock
     media_gateway: MagicMock
+    inference_recorder: MagicMock
 
     async def run(self) -> Any:
         return await ChatAgentHandler(
@@ -414,6 +421,7 @@ class ChatHandlerEnvironment:
             media_gateway=self.media_gateway,
             image_operation_coordinator=self.image_operations,
             deferred_tool_approval_service=MagicMock(),
+            inference_recorder=self.inference_recorder,
         ).handle()
 
 
@@ -493,6 +501,10 @@ def chat_handler_environment(
     image_operations = MagicMock(spec=ImageOperationCoordinator)
     report_exception = MagicMock()
     media_gateway = MagicMock()
+    inference_recorder = MagicMock()
+    inference_recorder.start = AsyncMock(return_value=MagicMock())
+    inference_recorder.succeed = AsyncMock(return_value=())
+    inference_recorder.fail = AsyncMock()
 
     monkeypatch.setattr(
         "derp.handlers.chat.ensure_group_context_notice",
@@ -548,6 +560,7 @@ def chat_handler_environment(
         image_operations=image_operations,
         report_exception=report_exception,
         media_gateway=media_gateway,
+        inference_recorder=inference_recorder,
     )
 
 
@@ -587,6 +600,27 @@ async def test_provider_failure_releases_paid_turn_before_fallback(
     assert env.message.reply.await_args.args[0] == (
         "I couldn't answer that. You weren't charged. Try again."
     )
+
+
+async def test_consented_free_turn_runs_without_daily_admission(
+    chat_handler_environment: ChatHandlerEnvironment,
+) -> None:
+    env = chat_handler_environment
+    env.user_model.inference_privacy_mode = (
+        InferencePrivacyMode.ALLOW_NON_ZDR_FREE.value
+    )
+    env.user_model.inference_privacy_revision = 2
+    env.user_model.free_inference_tos_version = FREE_INFERENCE_TOS_VERSION
+    env.user_model.free_inference_privacy_version = FREE_INFERENCE_PRIVACY_VERSION
+    env.user_model.free_inference_accepted_at = _HANDLER_NOW
+    env.user_model.free_inference_revoked_at = None
+    env.accounting.authorize.side_effect = _economy_decision
+    await env.run()
+
+    invocation = env.accounting.authorize.await_args.args[0]
+    assert invocation.fallback_plan is not None
+    assert invocation.fallback_plan.model.key is ModelRole.FREE_TEXT
+    env.agent.run.assert_awaited_once()
 
 
 async def test_selected_history_failure_releases_before_provider_call(

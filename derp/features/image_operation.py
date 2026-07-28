@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING
 import logfire
 
 from derp.artifacts import ArtifactStoreError
+from derp.catalog import (
+    InferenceProvider,
+    get_google_model_by_id,
+    get_openrouter_model_by_id,
+)
 from derp.delivery.types import (
     Delivered,
     DeliveryTarget,
@@ -33,6 +38,7 @@ from derp.features.image import (
     ImageGenerateRequest,
     ImageOutput,
 )
+from derp.observability import report_exception
 from derp.operations import (
     CompositeImageQuoteInput,
     DeliveryState,
@@ -56,6 +62,8 @@ from derp.operations import (
 
 if TYPE_CHECKING:
     from derp.delivery.service import DeliveryService
+    from derp.inference import InferenceAttempt, InferenceRecorder
+    from derp.inference_types import InferenceReport
 
 type ImageRequest = ImageGenerateRequest | ImageEditRequest
 
@@ -261,6 +269,7 @@ class ImageOperationCoordinator:
         delivery_service: DeliveryService,
         request_binder: OperationRequestBinder,
         *,
+        inference_recorder: InferenceRecorder | None = None,
         clock: Callable[[], datetime] = _utc_now,
         quote_id_factory: Callable[[], QuoteId] = QuoteId.new,
     ) -> None:
@@ -271,6 +280,7 @@ class ImageOperationCoordinator:
         if not isinstance(request_binder, OperationRequestBinder):
             raise TypeError("request_binder must be an OperationRequestBinder")
         self._request_binder = request_binder
+        self._inference_recorder = inference_recorder
         self._clock = clock
         self._quote_id_factory = quote_id_factory
 
@@ -328,8 +338,37 @@ class ImageOperationCoordinator:
                     await self._resume_operation(invocation.operation_id),
                 )
 
+            inference_attempt = None
+            if self._inference_recorder is not None:
+                try:
+                    inference_attempt = await self._inference_recorder.start(
+                        model=plan.model,
+                        user_id=invocation.requester_id,
+                        chat_id=invocation.chat_id,
+                        operation_id=invocation.operation_id.value,
+                    )
+                except Exception as exc:
+                    report_exception(
+                        "image_inference_accounting_start_failed",
+                        exception=exc,
+                        level="warning",
+                        operation_id=str(invocation.operation_id),
+                    )
+                    await self._ledger.release(
+                        invocation.operation_id,
+                        reason="image_inference_accounting_unavailable",
+                    )
+                    return self._record_outcome(
+                        span,
+                        ImageNotCharged(
+                            invocation.operation_id,
+                            ImageNotChargedReason.PROVIDER_FAILURE,
+                        ),
+                    )
+
             provider_outcome = await self._execute(plan, request)
             if isinstance(provider_outcome, Rejected):
+                await self._record_inference_failure(inference_attempt)
                 reason = self._rejection_reason(provider_outcome.reason)
                 await self._ledger.release(
                     invocation.operation_id,
@@ -340,6 +379,7 @@ class ImageOperationCoordinator:
                     ImageNotCharged(invocation.operation_id, reason),
                 )
             if isinstance(provider_outcome, Failed):
+                await self._record_inference_failure(inference_attempt)
                 await self._ledger.release(
                     invocation.operation_id,
                     reason=f"image_{provider_outcome.reason.value}",
@@ -353,6 +393,11 @@ class ImageOperationCoordinator:
                 )
             if not isinstance(provider_outcome, Succeeded):
                 raise RuntimeError("image service returned an unsupported outcome")
+
+            await self._record_inference_success(
+                inference_attempt,
+                provider_outcome.value.reports,
+            )
 
             try:
                 prepared = await self._delivery_service.persist_result(
@@ -427,9 +472,34 @@ class ImageOperationCoordinator:
             pricing_input=self._pricing_input(
                 invocation,
                 request,
+                finishing_plan=finishing_plan,
                 finishing_quote_input=finishing_quote_input,
             ),
         )
+
+    async def execution_plan_for_quote(
+        self,
+        operation_id: OperationId,
+        feature: Feature,
+    ) -> ExecutionPlan:
+        """Reconstruct the canonical image plan fixed by a durable quote."""
+        _require_operation_id(operation_id)
+        if feature not in {Feature.IMAGE_GENERATE, Feature.IMAGE_EDIT}:
+            raise ValueError(f"{feature.value} is not an image feature")
+        snapshot = await self._ledger.get_snapshot(operation_id)
+        quote = snapshot.quote
+        if quote.key.feature is not feature:
+            raise ValueError("quoted image feature does not match the resumed request")
+        resolver = (
+            get_openrouter_model_by_id
+            if quote.provider is InferenceProvider.OPENROUTER
+            else get_google_model_by_id
+        )
+        try:
+            model = resolver(quote.provider_model_id)
+        except KeyError:
+            raise ValueError("quoted image model is no longer in the catalog") from None
+        return ExecutionPlan(feature=feature, model=model)
 
     async def _reservation_rejected(
         self,
@@ -531,6 +601,39 @@ class ImageOperationCoordinator:
             return await self._image_service.generate(plan, request)
         return await self._image_service.edit(plan, request)
 
+    async def _record_inference_success(
+        self,
+        attempt: InferenceAttempt | None,
+        reports: tuple[InferenceReport, ...],
+    ) -> None:
+        if self._inference_recorder is None or attempt is None:
+            return
+        try:
+            await self._inference_recorder.succeed_reports(attempt, reports)
+        except Exception as exc:
+            report_exception(
+                "image_inference_accounting_complete_failed",
+                exception=exc,
+                level="warning",
+                inference_usage_id=str(attempt.id),
+            )
+
+    async def _record_inference_failure(
+        self,
+        attempt: InferenceAttempt | None,
+    ) -> None:
+        if self._inference_recorder is None or attempt is None:
+            return
+        try:
+            await self._inference_recorder.fail(attempt)
+        except Exception as exc:
+            report_exception(
+                "image_inference_accounting_complete_failed",
+                exception=exc,
+                level="warning",
+                inference_usage_id=str(attempt.id),
+            )
+
     @staticmethod
     def _record_quote(
         span: logfire.LogfireSpan,
@@ -603,6 +706,7 @@ class ImageOperationCoordinator:
         invocation: ImageInvocation,
         request: ImageRequest,
         *,
+        finishing_plan: ExecutionPlan | None = None,
         finishing_quote_input: FinishingChatQuoteInput | None = None,
     ) -> Mapping[str, object]:
         pricing_input: dict[str, object] = {
@@ -611,10 +715,17 @@ class ImageOperationCoordinator:
             "request_binding": self._request_binding(request),
             "delivery_binding": self._delivery_binding(invocation),
         }
-        if finishing_quote_input is not None:
+        if finishing_plan is not None and finishing_quote_input is not None:
             pricing_input.update(
                 {
                     "finishing_model_key": finishing_quote_input.model_key.value,
+                    "finishing_provider": finishing_plan.model.provider.value,
+                    "finishing_provider_model_id": (
+                        finishing_plan.model.provider_model_id
+                    ),
+                    "finishing_catalog_verified_on": (
+                        finishing_plan.model.pricing_verified_on.isoformat()
+                    ),
                     "finishing_input_tokens": finishing_quote_input.input_tokens,
                 }
             )

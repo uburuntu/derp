@@ -10,7 +10,7 @@ from typing import Final
 
 import logfire
 
-from derp.catalog import GoogleModelKey
+from derp.catalog import ModelRole
 from derp.execution import ExecutionPlan, Feature, plan_execution
 from derp.operations import (
     ChatQuoteInput,
@@ -31,8 +31,19 @@ from derp.operations import (
     record_operation_quote,
 )
 
-PAID_CHAT_PLAN: Final = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_STANDARD)
-ECONOMY_CHAT_PLAN: Final = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_ECONOMY)
+PAID_CHAT_PLAN: Final = plan_execution(Feature.CHAT, ModelRole.CHAT_STANDARD)
+ECONOMY_CHAT_PLAN: Final = plan_execution(Feature.CHAT, ModelRole.CHAT_ECONOMY)
+_PAID_CHAT_ROLES: Final = frozenset(
+    {ModelRole.CHAT_STANDARD, ModelRole.CHAT_MULTIMODAL}
+)
+_FALLBACK_CHAT_ROLES: Final = frozenset(
+    {
+        ModelRole.CHAT_ECONOMY,
+        ModelRole.FREE_TEXT,
+        ModelRole.FREE_VISUAL,
+        ModelRole.FREE_AUDIO,
+    }
+)
 
 _FUNDING_REJECTIONS: Final = frozenset(
     {
@@ -47,7 +58,7 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _require_standard_quote(operation_id: OperationId, quote: Quote) -> None:
+def _require_paid_quote(operation_id: OperationId, quote: Quote) -> None:
     if not isinstance(operation_id, OperationId):
         raise TypeError("operation_id must be an OperationId")
     if not isinstance(quote, Quote):
@@ -56,9 +67,9 @@ def _require_standard_quote(operation_id: OperationId, quote: Quote) -> None:
         raise ValueError("quote must belong to the chat operation")
     if (
         quote.key.feature is not Feature.CHAT
-        or quote.key.model_key is not GoogleModelKey.CHAT_STANDARD
+        or quote.key.model_key not in _PAID_CHAT_ROLES
     ):
-        raise ValueError("chat accounting requires a standard chat quote")
+        raise ValueError("chat accounting requires a paid chat quote")
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +82,8 @@ class ChatTurnInvocation:
     chat_id: uuid.UUID
     thread_id: int | None
     estimated_input_tokens: int
+    paid_plan: ExecutionPlan = PAID_CHAT_PLAN
+    fallback_plan: ExecutionPlan | None = ECONOMY_CHAT_PLAN
 
     def __post_init__(self) -> None:
         if isinstance(self.telegram_chat_id, bool) or not isinstance(
@@ -94,6 +107,16 @@ class ChatTurnInvocation:
             if self.thread_id <= 0:
                 raise ValueError("thread_id must be positive")
         ChatQuoteInput(self.estimated_input_tokens)
+        if (
+            self.paid_plan.feature is not Feature.CHAT
+            or self.paid_plan.model.key not in _PAID_CHAT_ROLES
+        ):
+            raise ValueError("paid_plan must use a paid chat role")
+        if self.fallback_plan is not None and (
+            self.fallback_plan.feature is not Feature.CHAT
+            or self.fallback_plan.model.key not in _FALLBACK_CHAT_ROLES
+        ):
+            raise ValueError("fallback_plan must use an economy or free chat role")
 
     @property
     def operation_id(self) -> OperationId:
@@ -120,9 +143,13 @@ class PaidChatExecutionGrant:
     authorization: FundingAuthorization
 
     def __post_init__(self) -> None:
-        _require_standard_quote(self.operation_id, self.quote)
-        if self.plan != PAID_CHAT_PLAN:
-            raise ValueError("paid chat execution requires the standard chat plan")
+        _require_paid_quote(self.operation_id, self.quote)
+        if (
+            self.plan.feature is not Feature.CHAT
+            or self.plan.model.key is not self.quote.key.model_key
+            or self.plan.model.key not in _PAID_CHAT_ROLES
+        ):
+            raise ValueError("paid chat execution must match its quoted model")
         if not isinstance(self.authorization, FundingAuthorization):
             raise TypeError("authorization must be a FundingAuthorization")
 
@@ -137,11 +164,28 @@ class EconomyChatExecutionGrant:
     rejection: ReservationRejection
 
     def __post_init__(self) -> None:
-        _require_standard_quote(self.operation_id, self.quote)
-        if self.plan != ECONOMY_CHAT_PLAN:
-            raise ValueError("economy chat execution requires the economy chat plan")
+        _require_paid_quote(self.operation_id, self.quote)
+        if (
+            self.plan.feature is not Feature.CHAT
+            or self.plan.model.key not in _FALLBACK_CHAT_ROLES
+        ):
+            raise ValueError("fallback chat execution requires an economy or free plan")
         if self.rejection not in _FUNDING_REJECTIONS:
             raise ValueError("economy fallback requires a funding rejection")
+
+
+@dataclass(frozen=True, slots=True)
+class ChatFallbackUnavailable:
+    """Funding failed and policy forbids an implicit provider fallback."""
+
+    operation_id: OperationId
+    quote: Quote
+    rejection: ReservationRejection
+
+    def __post_init__(self) -> None:
+        _require_paid_quote(self.operation_id, self.quote)
+        if self.rejection not in _FUNDING_REJECTIONS:
+            raise ValueError("unavailable fallback requires a funding rejection")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +197,7 @@ class ChatExecutionInProgress:
     authorization: FundingAuthorization
 
     def __post_init__(self) -> None:
-        _require_standard_quote(self.operation_id, self.quote)
+        _require_paid_quote(self.operation_id, self.quote)
         if not isinstance(self.authorization, FundingAuthorization):
             raise TypeError("authorization must be a FundingAuthorization")
 
@@ -179,7 +223,7 @@ class ChatExecutionAlreadyHandled:
     authorization: FundingAuthorization | None
 
     def __post_init__(self) -> None:
-        _require_standard_quote(self.operation_id, self.quote)
+        _require_paid_quote(self.operation_id, self.quote)
         if self.state not in _ALREADY_HANDLED_STATES:
             raise ValueError("already-handled state must forbid provider execution")
         if self.authorization is not None and not isinstance(
@@ -193,6 +237,7 @@ type ChatTurnDecision = (
     | EconomyChatExecutionGrant
     | ChatExecutionInProgress
     | ChatExecutionAlreadyHandled
+    | ChatFallbackUnavailable
 )
 
 
@@ -242,7 +287,7 @@ class ChatTurnAccounting:
         proposed = self._quote_engine.quote(
             quote_id=self._quote_id_factory(),
             operation_id=operation_id,
-            plan=PAID_CHAT_PLAN,
+            plan=invocation.paid_plan,
             quote_input=ChatQuoteInput(invocation.estimated_input_tokens),
             created_at=self._aware_now(),
         )
@@ -264,9 +309,17 @@ class ChatTurnAccounting:
                 allow_personal_once=False,
             )
             if isinstance(reservation, ReservationRejected):
-                decision = await self._rejection_decision(reservation, quote)
+                decision = await self._rejection_decision(
+                    reservation,
+                    quote,
+                    fallback_plan=invocation.fallback_plan,
+                )
             else:
-                decision = await self._claim_or_observe(reservation, quote)
+                decision = await self._claim_or_observe(
+                    reservation,
+                    quote,
+                    paid_plan=invocation.paid_plan,
+                )
             self._set_decision(span, decision)
             return decision
 
@@ -380,6 +433,8 @@ class ChatTurnAccounting:
         self,
         rejection: ReservationRejected,
         quote: Quote,
+        *,
+        fallback_plan: ExecutionPlan | None,
     ) -> ChatTurnDecision:
         if rejection.reason not in _FUNDING_REJECTIONS:
             return await self._observe(rejection.operation_id)
@@ -391,10 +446,16 @@ class ChatTurnAccounting:
         except InvalidOperationTransitionError:
             return await self._observe(rejection.operation_id)
         if canceled.changed:
+            if fallback_plan is None:
+                return ChatFallbackUnavailable(
+                    rejection.operation_id,
+                    quote,
+                    rejection.reason,
+                )
             return EconomyChatExecutionGrant(
                 rejection.operation_id,
                 quote,
-                ECONOMY_CHAT_PLAN,
+                fallback_plan,
                 rejection.reason,
             )
         return await self._observe(rejection.operation_id)
@@ -403,6 +464,8 @@ class ChatTurnAccounting:
         self,
         reservation: ReservedOperation,
         quote: Quote,
+        *,
+        paid_plan: ExecutionPlan,
     ) -> ChatTurnDecision:
         try:
             claim = await self._ledger.mark_executing(reservation.operation_id)
@@ -412,7 +475,7 @@ class ChatTurnAccounting:
             return PaidChatExecutionGrant(
                 reservation.operation_id,
                 quote,
-                PAID_CHAT_PLAN,
+                paid_plan,
                 reservation.authorization,
             )
         return await self._observe(reservation.operation_id)
@@ -431,7 +494,7 @@ class ChatTurnAccounting:
                     return PaidChatExecutionGrant(
                         operation_id,
                         snapshot.quote,
-                        PAID_CHAT_PLAN,
+                        self._paid_plan(snapshot.quote),
                         snapshot.funding_authorization,
                     )
                 continue
@@ -464,9 +527,9 @@ class ChatTurnAccounting:
         quote = snapshot.quote
         if (
             quote.key.feature is not Feature.CHAT
-            or quote.key.model_key is not GoogleModelKey.CHAT_STANDARD
+            or quote.key.model_key not in _PAID_CHAT_ROLES
         ):
-            raise ValueError("operation is not a standard ordinary chat turn")
+            raise ValueError("operation is not an ordinary paid chat turn")
         return snapshot
 
     @staticmethod
@@ -490,7 +553,16 @@ class ChatTurnAccounting:
         record_operation_quote(
             span,
             quote,
-            provider_model_id=PAID_CHAT_PLAN.model.provider_model_id,
+            provider_model_id=quote.provider_model_id,
+        )
+
+    @staticmethod
+    def _paid_plan(quote: Quote) -> ExecutionPlan:
+        _require_paid_quote(quote.operation_id, quote)
+        return plan_execution(
+            Feature.CHAT,
+            quote.key.model_key,
+            provider=quote.provider,
         )
 
     @staticmethod
@@ -504,6 +576,9 @@ class ChatTurnAccounting:
         elif isinstance(decision, EconomyChatExecutionGrant):
             authorization = None
             outcome = "economy_execution_granted"
+        elif isinstance(decision, ChatFallbackUnavailable):
+            authorization = None
+            outcome = "fallback_unavailable"
         elif isinstance(decision, ChatExecutionInProgress):
             authorization = decision.authorization
             outcome = "execution_in_progress"
@@ -531,6 +606,7 @@ class ChatTurnAccounting:
 __all__ = [
     "ChatExecutionAlreadyHandled",
     "ChatExecutionInProgress",
+    "ChatFallbackUnavailable",
     "ChatTurnAccounting",
     "ChatTurnDecision",
     "ChatTurnInvocation",

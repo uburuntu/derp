@@ -19,6 +19,7 @@ from derp.execution import (
     RejectionReason,
     Succeeded,
     execution_plan_scope,
+    model_roles_for_features,
     plan_execution,
     require_execution_plan,
 )
@@ -85,6 +86,28 @@ def test_semantic_roles_default_to_openrouter_with_google_as_explicit_rollback()
 
     assert default.model is get_openrouter_model(GoogleModelKey.CHAT_STANDARD)
     assert rollback.model is get_google_model(GoogleModelKey.CHAT_STANDARD)
+
+
+def test_enabled_features_expand_to_deterministic_model_roles() -> None:
+    roles = model_roles_for_features(
+        {Feature.CHAT, Feature.IMAGE_GENERATE, Feature.TRANSCRIBE}
+    )
+
+    assert roles == (
+        GoogleModelKey.CHAT_ECONOMY,
+        GoogleModelKey.CHAT_STANDARD,
+        GoogleModelKey.CHAT_MULTIMODAL,
+        GoogleModelKey.IMAGE,
+        GoogleModelKey.STT,
+        GoogleModelKey.FREE_TEXT,
+        GoogleModelKey.FREE_VISUAL,
+        GoogleModelKey.FREE_AUDIO,
+    )
+
+
+def test_enabled_feature_role_mapping_rejects_untyped_values() -> None:
+    with pytest.raises(TypeError, match="Feature"):
+        model_roles_for_features({"chat"})  # type: ignore[arg-type]
 
 
 def test_plan_is_frozen_and_retains_exact_catalog_spec() -> None:

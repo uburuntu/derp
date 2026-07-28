@@ -1,4 +1,4 @@
-"""Telegram adapters for bounded free inline answers.
+"""Telegram adapters for bounded governed inline answers.
 
 Provider admission and execution live in the inline feature service.
 """
@@ -29,11 +29,14 @@ from derp.features.inline_chat import (
     InlineChatFailureReason,
     InlineChatFeatureService,
     InlineChatInvalid,
+    InlineChatInvocation,
 )
+from derp.inference.privacy import project_inference_privacy
 from derp.models import User as UserModel
 from derp.observability import report_exception
 
 router = Router(name="inline")
+_INLINE_REQUEST_NAMESPACE = uuid.UUID("a14fc0e4-cc5c-4d91-ae24-8aa260b680de")
 
 
 @router.inline_query(F.query == "")
@@ -58,7 +61,7 @@ async def inline_query_empty(query: InlineQuery) -> Any:
             ]
         ),
     )
-    await query.answer([result], cache_time=300)
+    await query.answer([result], cache_time=300, is_personal=True)
 
 
 @router.inline_query(F.query != "")
@@ -94,6 +97,7 @@ async def inline_query_with_text(query: InlineQuery) -> Any:
             start_parameter="start",
         ),
         cache_time=300,
+        is_personal=True,
     )
 
 
@@ -117,9 +121,26 @@ async def chosen_inline_result(
         )
         return
     try:
+        request_id = _inline_request_id(
+            user_model.id,
+            chosen_result.result_id,
+            chosen_result.inline_message_id,
+        )
+    except TypeError, ValueError, AttributeError:
+        await sender.edit_inline(
+            chosen_result.inline_message_id,
+            _("I couldn't verify this request. Open Derp and try again."),
+            reply_markup=_start_personal_chat_markup(),
+        )
+        return
+    try:
         outcome = await inline_chat_service.answer(
-            user_id=user_model.id,
-            query=chosen_result.query,
+            InlineChatInvocation(
+                request_id=request_id,
+                user_id=user_model.id,
+                query=chosen_result.query,
+                privacy=project_inference_privacy(user_model),
+            )
         )
     except Exception as exc:
         report_exception(
@@ -161,7 +182,12 @@ async def chosen_inline_result(
             _inline_failure_text(outcome.reason),
             reply_markup=(
                 _start_personal_chat_markup()
-                if outcome.reason is InlineChatFailureReason.ALLOWANCE_UNAVAILABLE
+                if outcome.reason
+                in {
+                    InlineChatFailureReason.ALLOWANCE_UNAVAILABLE,
+                    InlineChatFailureReason.ACCOUNTING_UNAVAILABLE,
+                    InlineChatFailureReason.FREE_MODE_REQUIRED,
+                }
                 else _retry_inline_markup()
             ),
         )
@@ -170,7 +196,12 @@ async def chosen_inline_result(
 
 
 def _inline_failure_text(reason: InlineChatFailureReason) -> str:
-    if reason is InlineChatFailureReason.ALLOWANCE_UNAVAILABLE:
+    if reason is InlineChatFailureReason.FREE_MODE_REQUIRED:
+        return _("Enable free models in Derp settings, or use paid private chat.")
+    if reason in {
+        InlineChatFailureReason.ALLOWANCE_UNAVAILABLE,
+        InlineChatFailureReason.ACCOUNTING_UNAVAILABLE,
+    }:
         return _("I couldn't verify this request. Open Derp and try again.")
     if reason is InlineChatFailureReason.PROVIDER_TIMEOUT:
         return _("That took too long. Try again.")
@@ -179,6 +210,23 @@ def _inline_failure_text(reason: InlineChatFailureReason) -> str:
     if reason is InlineChatFailureReason.UNUSABLE_OUTPUT:
         return _("I couldn't produce a useful answer. Try wording it differently.")
     return _("I couldn't answer that here. Try again.")
+
+
+def _inline_request_id(
+    user_id: uuid.UUID,
+    result_id: str,
+    inline_message_id: str,
+) -> uuid.UUID:
+    """Derive one opaque idempotency key per sent inline message."""
+    if not isinstance(user_id, uuid.UUID):
+        raise TypeError("user_id must be a UUID")
+    template_id = uuid.UUID(result_id)
+    if not isinstance(inline_message_id, str) or not inline_message_id.strip():
+        raise ValueError("inline_message_id must not be blank")
+    return uuid.uuid5(
+        _INLINE_REQUEST_NAMESPACE,
+        f"{user_id}:{template_id}:{inline_message_id}",
+    )
 
 
 def _add_to_chat_markup() -> InlineKeyboardMarkup:

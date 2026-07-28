@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from derp.catalog import GoogleModelKey, ImageResolution
+from derp.catalog import GoogleModelKey, ImageResolution, InferenceProvider
 from derp.execution import (
     Failed,
     FailureReason,
@@ -28,6 +28,7 @@ from derp.features.image import (
     ImageFeatureService,
     ImageGenerateRequest,
     ImageOutput,
+    ImageProviderRouter,
     PreparedImageEditRequest,
 )
 from derp.features.types import MediaContent
@@ -159,6 +160,44 @@ async def test_generate_passes_exact_plan_and_request_to_executor() -> None:
     assert result is success
     executor.generate.assert_awaited_once_with(plan, request)
     executor.edit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_router_uses_the_provider_fixed_in_each_plan() -> None:
+    request = ImageGenerateRequest(prompt="a lighthouse")
+    google = SimpleNamespace(generate=AsyncMock(), edit=AsyncMock())
+    openrouter_result = Succeeded(ImageOutput(images=(_image(),)))
+    openrouter = SimpleNamespace(
+        generate=AsyncMock(return_value=openrouter_result),
+        edit=AsyncMock(),
+    )
+    router = ImageProviderRouter(
+        {
+            InferenceProvider.GOOGLE: google,
+            InferenceProvider.OPENROUTER: openrouter,
+        }
+    )
+    plan = plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE)
+
+    result = await router.generate(plan, request)
+
+    assert result is openrouter_result
+    openrouter.generate.assert_awaited_once_with(plan, request)
+    google.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_router_fails_closed_when_plan_provider_is_unconfigured() -> (
+    None
+):
+    executor = SimpleNamespace(generate=AsyncMock(), edit=AsyncMock())
+    router = ImageProviderRouter({InferenceProvider.GOOGLE: executor})
+    plan = plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE)
+
+    with pytest.raises(RuntimeError, match="no image executor configured"):
+        await router.generate(plan, ImageGenerateRequest(prompt="a lighthouse"))
+
+    executor.generate.assert_not_awaited()
 
 
 @pytest.mark.asyncio

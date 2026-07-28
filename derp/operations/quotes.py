@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
@@ -172,12 +173,15 @@ class VideoGenerateQuoteInput:
     input_tokens: int
     duration_seconds: int
     resolution: VideoResolution
+    generate_audio: bool = True
 
     def __post_init__(self) -> None:
         _validate_token_count(self.input_tokens)
         _validate_positive_int(self.duration_seconds, "duration_seconds")
         if not isinstance(self.resolution, VideoResolution):
             raise TypeError("resolution must be a VideoResolution")
+        if not isinstance(self.generate_audio, bool):
+            raise TypeError("generate_audio must be a boolean")
 
 
 type QuoteInput = (
@@ -367,10 +371,12 @@ def _estimate_provider_cost(
             pricing.estimate_usd(
                 duration_seconds=quote_input.duration_seconds,
                 resolution=quote_input.resolution,
+                generate_audio=quote_input.generate_audio,
             ),
             (
                 f"duration={quote_input.duration_seconds}s;"
-                f"resolution={quote_input.resolution.value}"
+                f"resolution={quote_input.resolution.value};"
+                f"audio={'yes' if quote_input.generate_audio else 'no'}"
             ),
         )
     raise TypeError(f"unsupported quote input: {type(quote_input).__name__}")
@@ -470,11 +476,13 @@ class QuoteEngine:
                 context_band=band,
                 variant=variant,
             ),
+            provider=plan.model.provider,
+            provider_model_id=plan.model.provider_model_id,
             credits=self.policy.credits_for(provider_cost),
             estimated_provider_cost_usd=provider_cost,
             created_at=created_at,
             expires_at=created_at + self.policy.ttl,
-            pricing_version=self.policy.version,
+            pricing_version=_pricing_version(plan, self.policy),
             catalog_verified_on=plan.model.pricing_verified_on,
         )
 
@@ -497,12 +505,6 @@ class QuoteEngine:
                 f"{type(quote_input.image).__name__} cannot price "
                 f"{image_plan.feature.value}"
             )
-        if (
-            image_plan.model.pricing_verified_on
-            != finishing_plan.model.pricing_verified_on
-        ):
-            raise ValueError("composite plans must share one catalog pricing version")
-
         image_band = _validate_model_input(
             image_plan,
             quote_input.image.input_tokens,
@@ -537,13 +539,48 @@ class QuoteEngine:
                     allowance=self.policy.image_finishing,
                 ),
             ),
+            provider=image_plan.model.provider,
+            provider_model_id=image_plan.model.provider_model_id,
             credits=self.policy.credits_for(provider_cost),
             estimated_provider_cost_usd=provider_cost,
             created_at=created_at,
             expires_at=created_at + self.policy.ttl,
-            pricing_version=self.policy.version,
+            pricing_version=_composite_pricing_version(
+                image_plan,
+                finishing_plan,
+                self.policy,
+            ),
             catalog_verified_on=image_plan.model.pricing_verified_on,
         )
+
+
+def _pricing_version(plan: ExecutionPlan, policy: QuotePolicy) -> str:
+    if policy.version != PRICING_VERSION:
+        return policy.version
+    return (
+        f"{plan.model.provider.value}-{plan.model.pricing_verified_on.isoformat()}-v1"
+    )
+
+
+def _composite_pricing_version(
+    image_plan: ExecutionPlan,
+    finishing_plan: ExecutionPlan,
+    policy: QuotePolicy,
+) -> str:
+    image_version = _pricing_version(image_plan, policy)
+    finishing_version = _pricing_version(finishing_plan, policy)
+    if image_version == finishing_version:
+        return image_version
+    identity = "|".join(
+        (
+            image_version,
+            finishing_version,
+            image_plan.model.provider_model_id,
+            finishing_plan.model.provider_model_id,
+        )
+    )
+    digest = hashlib.sha256(identity.encode("ascii")).hexdigest()[:16]
+    return f"mixed-{digest}-v1"
 
 
 __all__ = [

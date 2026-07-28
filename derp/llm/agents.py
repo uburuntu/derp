@@ -109,7 +109,7 @@ def create_image_agent(
         name="image",
         output_type=BinaryImage | str,
         instructions=IMAGE_SYSTEM_PROMPT,
-        retries=2,  # Image models may need more attempts for output validation
+        retries=0,
     )
 
     logfire.debug(

@@ -10,7 +10,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Final, Self
 
-from derp.catalog import GoogleModelKey
+from derp.catalog import InferenceProvider, ModelRole
 from derp.execution import Feature
 
 _OPERATION_NAMESPACE: Final = uuid.UUID("84eeeaac-25bb-4b87-a239-1236076990dc")
@@ -110,7 +110,7 @@ class QuoteKey:
     """Pricing identity independent from provider request variance."""
 
     feature: Feature
-    model_key: GoogleModelKey
+    model_key: ModelRole
     context_band: ContextBand
     variant: str = "default"
 
@@ -126,6 +126,8 @@ class Quote:
     id: QuoteId
     operation_id: OperationId
     key: QuoteKey
+    provider: InferenceProvider
+    provider_model_id: str
     credits: int
     estimated_provider_cost_usd: Decimal
     created_at: datetime
@@ -136,6 +138,10 @@ class Quote:
     def __post_init__(self) -> None:
         if self.credits < 0:
             raise ValueError("quoted credits must not be negative")
+        if not isinstance(self.provider, InferenceProvider):
+            raise TypeError("provider must be an InferenceProvider")
+        if not self.provider_model_id.strip():
+            raise ValueError("provider_model_id must not be blank")
         if self.estimated_provider_cost_usd < 0:
             raise ValueError("provider cost must not be negative")
         _require_aware(self.created_at, "created_at")

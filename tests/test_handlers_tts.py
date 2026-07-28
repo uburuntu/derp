@@ -31,8 +31,9 @@ from derp.approvals.paid_media import (
 )
 from derp.billing import CommercePolicy
 from derp.billing.telegram import PurchaseCallback, PurchaseTargetCode
+from derp.catalog import InferenceProvider, ModelRole
 from derp.delivery import PaidMediaResendCallback, ProgressStage
-from derp.execution import Feature
+from derp.execution import Feature, plan_execution
 from derp.features.paid_media_operation import (
     PaidMediaAwaitingFunding,
     PaidMediaDelivered,
@@ -128,7 +129,14 @@ def _lease(snapshot: DeferredToolSnapshot) -> ResumeLease:
 def _adapter() -> TtsPaidMediaAdapter:
     service = MagicMock(spec=TtsFeatureService)
     service.synthesize = AsyncMock()
-    return TtsPaidMediaAdapter(service)
+    return TtsPaidMediaAdapter(
+        service,
+        plan=plan_execution(
+            Feature.TTS,
+            ModelRole.TTS,
+            provider=InferenceProvider.GOOGLE,
+        ),
+    )
 
 
 @pytest.mark.asyncio

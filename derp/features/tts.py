@@ -141,6 +141,8 @@ class TtsFeatureService:
     ) -> Outcome[DeliveryMedia]:
         """Synthesize one voice within the declared and catalog limits."""
         pricing = require_tts_pricing(plan)
+        if not plan.model.available:
+            return Failed(FailureReason.PROVIDER_ERROR)
         output_tokens = pricing.audio_tokens_per_second * request.max_output_seconds
         if request.max_output_seconds > self._policy.max_output_seconds:
             return Rejected(RejectionReason.INVALID_INPUT)

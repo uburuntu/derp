@@ -27,6 +27,7 @@ def _result(
     return SimpleNamespace(
         output=output,
         response=SimpleNamespace(images=images),
+        new_messages=lambda: [],
     )
 
 

@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "provider": "openrouter",
+  "reviewed_snapshot": "docs/inference/openrouter-reviewed.json",
+  "references_root": "references/openrouter",
+  "default_policy_profile": "private_zdr",
+  "policy_profiles": {
+    "private_zdr": {
+      "allow_fallbacks": true,
+      "allowed_contexts": [
+        "group",
+        "inline",
+        "private"
+      ],
+      "data_collection": "deny",
+      "require_parameters": true,
+      "requires_versioned_consent": false,
+      "zero_data_retention": true
+    },
+    "consented_non_zdr_free": {
+      "allow_fallbacks": true,
+      "allowed_contexts": [
+        "inline",
+        "private"
+      ],
+      "data_collection": "allow",
+      "require_parameters": true,
+      "requires_versioned_consent": true,
+      "zero_data_retention": false
+    }
+  },
+  "openapi_paths": [
+    "/audio/speech",
+    "/audio/transcriptions",
+    "/chat/completions",
+    "/endpoints/zdr",
+    "/images",
+    "/images/models",
+    "/images/models/{author}/{slug}/endpoints",
+    "/models",
+    "/models/{author}/{slug}/endpoints",
+    "/videos",
+    "/videos/models"
+  ],
+  "sources": [
+    {
+      "id": "docs-index",
+      "url": "https://openrouter.ai/docs/llms.txt",
+      "format": "text",
+      "destination": "docs/llms.txt",
+      "projection": "docs_index"
+    },
+    {
+      "id": "openapi",
+      "url": "https://openrouter.ai/openapi.json",
+      "format": "json",
+      "destination": "api/openapi.json",
+      "projection": "openapi_contract"
+    },
+    {
+      "id": "models",
+      "url": "https://openrouter.ai/api/v1/models",
+      "format": "json",
+      "destination": "api/models.json",
+      "projection": "primary_models"
+    },
+    {
+      "id": "image-models",
+      "url": "https://openrouter.ai/api/v1/images/models",
+      "format": "json",
+      "destination": "api/image-models.json",
+      "projection": "image_models"
+    },
+    {
+      "id": "video-models",
+      "url": "https://openrouter.ai/api/v1/videos/models",
+      "format": "json",
+      "destination": "api/video-models.json",
+      "projection": "video_models"
+    },
+    {
+      "id": "zdr-endpoints",
+      "url": "https://openrouter.ai/api/v1/endpoints/zdr",
+      "format": "json",
+      "destination": "api/zdr-endpoints.json",
+      "projection": "zdr_endpoints"
+    },
+    {
+      "id": "models-guide",
+      "url": "https://openrouter.ai/docs/guides/overview/models.md",
+      "format": "text",
+      "destination": "docs/models.md",
+      "projection": "full"
+    },
+    {
+      "id": "image-guide",
+      "url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation.md",
+      "format": "text",
+      "destination": "docs/image-generation.md",
+      "projection": "full"
+    },
+    {
+      "id": "video-guide",
+      "url": "https://openrouter.ai/docs/guides/overview/multimodal/video-generation.md",
+      "format": "text",
+      "destination": "docs/video-generation.md",
+      "projection": "full"
+    },
+    {
+      "id": "stt-guide",
+      "url": "https://openrouter.ai/docs/guides/overview/multimodal/stt.md",
+      "format": "text",
+      "destination": "docs/stt.md",
+      "projection": "full"
+    },
+    {
+      "id": "tts-guide",
+      "url": "https://openrouter.ai/docs/guides/overview/multimodal/tts.md",
+      "format": "text",
+      "destination": "docs/tts.md",
+      "projection": "full"
+    },
+    {
+      "id": "provider-selection",
+      "url": "https://openrouter.ai/docs/guides/routing/provider-selection.md",
+      "format": "text",
+      "destination": "docs/provider-selection.md",
+      "projection": "full"
+    },
+    {
+      "id": "model-fallbacks",
+      "url": "https://openrouter.ai/docs/guides/routing/model-fallbacks.md",
+      "format": "text",
+      "destination": "docs/model-fallbacks.md",
+      "projection": "full"
+    },
+    {
+      "id": "free-variant",
+      "url": "https://openrouter.ai/docs/guides/routing/model-variants/free.md",
+      "format": "text",
+      "destination": "docs/free-variant.md",
+      "projection": "full"
+    },
+    {
+      "id": "zero-data-retention",
+      "url": "https://openrouter.ai/docs/guides/features/zdr.md",
+      "format": "text",
+      "destination": "docs/zero-data-retention.md",
+      "projection": "full"
+    },
+    {
+      "id": "data-collection",
+      "url": "https://openrouter.ai/docs/guides/privacy/data-collection.md",
+      "format": "text",
+      "destination": "docs/data-collection.md",
+      "projection": "full"
+    },
+    {
+      "id": "provider-logging",
+      "url": "https://openrouter.ai/docs/guides/privacy/provider-logging.md",
+      "format": "text",
+      "destination": "docs/provider-logging.md",
+      "projection": "full"
+    }
+  ],
+  "endpoint_sources": [
+    {
+      "id": "model-endpoints",
+      "catalog": "primary",
+      "url_template": "https://openrouter.ai/api/v1/models/{slug}/endpoints",
+      "destination": "api/model-endpoints/{slug_file}.json",
+      "projection": "model_endpoints"
+    },
+    {
+      "id": "image-endpoints",
+      "catalog": "images",
+      "url_template": "https://openrouter.ai/api/v1/images/models/{slug}/endpoints",
+      "destination": "api/image-endpoints/{slug_file}.json",
+      "projection": "image_endpoints"
+    }
+  ],
+  "models": [
+    {
+      "key": "gemini_3_1_flash_lite",
+      "name": "Gemini 3.1 Flash Lite",
+      "slug": "google/gemini-3.1-flash-lite",
+      "surface": "primary",
+      "api_path": "/chat/completions",
+      "policy_profile": "private_zdr"
+    },
+    {
+      "key": "claude_sonnet_5",
+      "name": "Claude Sonnet 5",
+      "slug": "anthropic/claude-sonnet-5",
+      "surface": "primary",
+      "api_path": "/chat/completions",
+      "policy_profile": "private_zdr"
+    },
+    {
+      "key": "gemini_3_5_flash",
+      "name": "Gemini 3.5 Flash",
+      "slug": "google/gemini-3.5-flash",
+      "surface": "primary",
+      "api_path": "/chat/completions",
+      "policy_profile": "private_zdr"
+    },
+    {
+      "key": "gpt_5_6_sol",
+      "name": "GPT-5.6 Sol",
+      "slug": "openai/gpt-5.6-sol",
+      "surface": "primary",
+      "api_path": "/chat/completions",
+      "policy_profile": "private_zdr"
+    },
+    {
+      "key": "gemini_3_1_flash_image",
+      "name": "Gemini 3.1 Flash Image",
+      "slug": "google/gemini-3.1-flash-image",
+      "surface": "images",
+      "api_path": "/images",
+      "policy_profile": "private_zdr"
+    },
+    {
+      "key": "gemini_3_1_flash_tts",
+      "name": "Gemini 3.1 Flash TTS",
+      "slug": "google/gemini-3.1-flash-tts-preview",
+      "surface": "speech",
+      "api_path": "/audio/speech",
+      "policy_profile": "private_zdr"
+    },
+    {
+      "key": "whisper_large_v3",
+      "name": "Whisper Large V3",
+      "slug": "openai/whisper-large-v3",
+      "surface": "transcriptions",
+      "api_path": "/audio/transcriptions",
+      "policy_profile": "private_zdr"
+    },
+    {
+      "key": "veo_3_1_fast",
+      "name": "Veo 3.1 Fast",
+      "slug": "google/veo-3.1-fast",
+      "surface": "videos",
+      "api_path": "/videos",
+      "policy_profile": "private_zdr"
+    },
+    {
+      "key": "veo_3_1_standard",
+      "name": "Veo 3.1 Standard",
+      "slug": "google/veo-3.1",
+      "surface": "videos",
+      "api_path": "/videos",
+      "policy_profile": "private_zdr"
+    },
+    {
+      "key": "free_text_reasoning",
+      "name": "Nemotron 3 Ultra",
+      "slug": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "surface": "primary",
+      "api_path": "/chat/completions",
+      "policy_profile": "consented_non_zdr_free"
+    },
+    {
+      "key": "free_text_google",
+      "name": "Gemma 4 31B",
+      "slug": "google/gemma-4-31b-it:free",
+      "surface": "primary",
+      "api_path": "/chat/completions",
+      "policy_profile": "consented_non_zdr_free"
+    },
+    {
+      "key": "free_multimodal_reasoning",
+      "name": "Nemotron 3 Nano Omni",
+      "slug": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "surface": "primary",
+      "api_path": "/chat/completions",
+      "policy_profile": "consented_non_zdr_free"
+    }
+  ]
+}

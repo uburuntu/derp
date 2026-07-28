@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from decimal import ROUND_CEILING, Decimal
+from decimal import Decimal
 from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
+import httpx
+from openai import AsyncOpenAI
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 from pydantic_ai.models.openrouter import (
     OpenRouterModel,
@@ -31,13 +33,54 @@ if TYPE_CHECKING:
     from pydantic_ai.models import Model, ModelSettings
 
 
-def _ceiling_value(value: Decimal | None) -> int | None:
+_openrouter_provider: OpenRouterProvider | None = None
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+_OPENROUTER_TIMEOUT = httpx.Timeout(120.0, connect=10.0, write=30.0, pool=10.0)
+
+
+def _shared_openrouter_provider() -> OpenRouterProvider:
+    """Return the process-owned OpenRouter provider used by all agents."""
+    global _openrouter_provider
+    if _openrouter_provider is None:
+        if app_settings.openrouter_api_key is None:
+            raise RuntimeError(
+                "OPENROUTER_API_KEY is required for OpenRouter inference"
+            )
+        http_client = httpx.AsyncClient(
+            transport=httpx.AsyncHTTPTransport(retries=0),
+            timeout=_OPENROUTER_TIMEOUT,
+            follow_redirects=False,
+        )
+        client = AsyncOpenAI(
+            api_key=app_settings.openrouter_api_key.get_secret_value(),
+            base_url=_OPENROUTER_BASE_URL,
+            timeout=_OPENROUTER_TIMEOUT,
+            max_retries=0,
+            default_headers={
+                "HTTP-Referer": app_settings.resolved_openrouter_app_url,
+                "X-OpenRouter-Title": app_settings.openrouter_app_title,
+            },
+            http_client=http_client,
+        )
+        _openrouter_provider = OpenRouterProvider(openai_client=client)
+    return _openrouter_provider
+
+
+async def close_model_providers() -> None:
+    """Close process-owned provider transports at application shutdown."""
+    global _openrouter_provider
+    provider, _openrouter_provider = _openrouter_provider, None
+    if provider is not None:
+        await provider.client.close()
+
+
+def _ceiling_value(value: Decimal | None) -> float | None:
     if value is None:
         return None
-    return int(value.to_integral_value(rounding=ROUND_CEILING))
+    return float(value)
 
 
-def _max_price(ceiling: PriceCeiling | None) -> dict[str, int]:
+def _max_price(ceiling: PriceCeiling | None) -> dict[str, float]:
     if ceiling is None:
         return {}
     values = {
@@ -102,18 +145,9 @@ def create_model(
         )
 
     if spec.provider is InferenceProvider.OPENROUTER:
-        if app_settings.openrouter_api_key is None:
-            raise RuntimeError(
-                "OPENROUTER_API_KEY is required for OpenRouter inference"
-            )
-        provider = OpenRouterProvider(
-            api_key=app_settings.openrouter_api_key.get_secret_value(),
-            app_url=app_settings.resolved_openrouter_app_url,
-            app_title=app_settings.openrouter_app_title,
-        )
         return OpenRouterModel(
             spec.provider_model_id,
-            provider=provider,
+            provider=_shared_openrouter_provider(),
             settings=openrouter_settings(spec),
         )
 

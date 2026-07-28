@@ -115,6 +115,7 @@ def _token_model(
     route: RoutingPolicy,
     lifecycle: ModelLifecycle = ModelLifecycle.STABLE,
     bands: tuple[TokenPriceBand, ...] | None = None,
+    canonical_model_id: str | None = None,
 ) -> ModelSpec:
     return ModelSpec(
         key=role,
@@ -133,6 +134,7 @@ def _token_model(
         pricing_verified_on=OPENROUTER_CATALOG_VERIFIED_ON,
         provider=InferenceProvider.OPENROUTER,
         routing=route,
+        canonical_model_id=canonical_model_id,
     )
 
 
@@ -147,6 +149,7 @@ _MODELS = (
         input_limit=1_048_576,
         output_limit=65_536,
         route=_private_route(prompt="0.25", completion="1.50"),
+        canonical_model_id="google/gemini-3.1-flash-lite-20260507",
     ),
     _token_model(
         role=ModelRole.CHAT_STANDARD,
@@ -156,10 +159,11 @@ _MODELS = (
         output_price="10.00",
         capabilities=_VISUAL_TEXT,
         input_limit=1_000_000,
-        output_limit=64_000,
+        output_limit=128_000,
         route=_private_route(
             prompt="2.00", completion="10.00", provider_order=("anthropic",)
         ),
+        canonical_model_id="anthropic/claude-sonnet-5-20260630",
     ),
     _token_model(
         role=ModelRole.CHAT_MULTIMODAL,
@@ -171,6 +175,7 @@ _MODELS = (
         input_limit=1_048_576,
         output_limit=65_536,
         route=_private_route(prompt="1.50", completion="9.00"),
+        canonical_model_id="google/gemini-3.5-flash-20260519",
     ),
     _token_model(
         role=ModelRole.CHAT_REASONING,
@@ -186,6 +191,7 @@ _MODELS = (
             TokenPriceBand(Decimal("5.00"), Decimal("30.00"), 272_000),
             TokenPriceBand(Decimal("10.00"), Decimal("45.00")),
         ),
+        canonical_model_id="openai/gpt-5.6-sol-20260709",
     ),
     ModelSpec(
         key=ModelRole.IMAGE,
@@ -214,6 +220,7 @@ _MODELS = (
                 (ImageResolution.FOUR_K, Decimal("0.151")),
             ),
             default_resolution=ImageResolution.ONE_K,
+            output_token_per_million=Decimal("60.00"),
         ),
         documentation_url=_model_url("google/gemini-3.1-flash-image"),
         pricing_url=OPENROUTER_MODELS_URL,
@@ -222,9 +229,11 @@ _MODELS = (
         routing=_private_route(
             prompt="0.50",
             completion="3.00",
+            image="0.151",
             request="0.151",
             provider_order=("google-vertex",),
         ),
+        canonical_model_id="google/gemini-3.1-flash-image-20260528",
     ),
     ModelSpec(
         key=ModelRole.TTS,
@@ -293,6 +302,11 @@ _MODELS = (
             default_resolution=VideoResolution.HD_720P,
             default_duration_seconds=6,
             supported_durations_seconds=frozenset({4, 6, 8}),
+            output_per_second_without_audio=(
+                (VideoResolution.HD_720P, Decimal("0.08")),
+                (VideoResolution.HD_1080P, Decimal("0.10")),
+                (VideoResolution.UHD_4K, Decimal("0.25")),
+            ),
         ),
         documentation_url=_model_url("google/veo-3.1-fast"),
         pricing_url=OPENROUTER_MODELS_URL,
@@ -301,6 +315,7 @@ _MODELS = (
         routing=_VIDEO_ROUTE,
         retention_exception="OpenRouter video generation temporarily retains job media.",
         available=False,
+        canonical_model_id="google/veo-3.1-fast-20260320",
     ),
     ModelSpec(
         key=ModelRole.VIDEO_STANDARD,
@@ -325,6 +340,11 @@ _MODELS = (
             default_resolution=VideoResolution.HD_720P,
             default_duration_seconds=6,
             supported_durations_seconds=frozenset({4, 6, 8}),
+            output_per_second_without_audio=(
+                (VideoResolution.HD_720P, Decimal("0.20")),
+                (VideoResolution.HD_1080P, Decimal("0.20")),
+                (VideoResolution.UHD_4K, Decimal("0.40")),
+            ),
         ),
         documentation_url=_model_url("google/veo-3.1"),
         pricing_url=OPENROUTER_MODELS_URL,
@@ -333,6 +353,7 @@ _MODELS = (
         routing=_VIDEO_ROUTE,
         retention_exception="OpenRouter video generation temporarily retains job media.",
         available=False,
+        canonical_model_id="google/veo-3.1-20260320",
     ),
     _token_model(
         role=ModelRole.FREE_TEXT,
@@ -341,9 +362,10 @@ _MODELS = (
         input_price="0",
         output_price="0",
         capabilities=_TEXT_TOOLS,
-        input_limit=262_144,
-        output_limit=32_768,
+        input_limit=1_000_000,
+        output_limit=65_536,
         route=_FREE_ROUTE,
+        canonical_model_id="nvidia/nemotron-3-ultra-550b-a55b-20260604",
     ),
     _token_model(
         role=ModelRole.FREE_VISUAL,
@@ -351,10 +373,11 @@ _MODELS = (
         name="Gemma 4 31B IT (free)",
         input_price="0",
         output_price="0",
-        capabilities=_VISUAL_TEXT,
-        input_limit=131_072,
-        output_limit=16_384,
+        capabilities=_VISUAL_TEXT | {ModelCapability.VIDEO_INPUT},
+        input_limit=262_144,
+        output_limit=32_768,
         route=_FREE_ROUTE,
+        canonical_model_id="google/gemma-4-31b-it-20260402",
     ),
     _token_model(
         role=ModelRole.FREE_AUDIO,
@@ -363,9 +386,10 @@ _MODELS = (
         input_price="0",
         output_price="0",
         capabilities=_OMNI_TEXT,
-        input_limit=131_072,
-        output_limit=16_384,
+        input_limit=256_000,
+        output_limit=65_536,
         route=_FREE_ROUTE,
+        canonical_model_id=("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428"),
     ),
 )
 

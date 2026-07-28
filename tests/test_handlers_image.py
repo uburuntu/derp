@@ -12,7 +12,11 @@ from aiogram.types import CallbackQuery, PhotoSize
 from pydantic_ai import DeferredToolRequests, ModelResponse
 
 from derp.approvals import DeferredToolApprovalService
-from derp.catalog import GoogleModelKey, ImageResolution, get_google_model
+from derp.catalog import (
+    GoogleModelKey,
+    ImageResolution,
+    get_openrouter_model,
+)
 from derp.delivery import (
     Delivered,
     DeliveryAuthorizationError,
@@ -193,7 +197,7 @@ async def test_imagine_builds_stable_scoped_deferred_approval(
     assert isinstance(response, ModelResponse)
     assert (
         response.model_name
-        == get_google_model(GoogleModelKey.CHAT_ECONOMY).provider_model_id
+        == get_openrouter_model(GoogleModelKey.CHAT_ECONOMY).provider_model_id
     )
     coordinator.run.assert_not_awaited()
     assert result is message

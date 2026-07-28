@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import math
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Protocol
 
-from derp.catalog import ImageResolution
+from derp.catalog import ImageResolution, InferenceProvider
 from derp.execution import (
     ExecutionPlan,
     Failed,
@@ -20,6 +21,7 @@ from derp.execution import (
     Succeeded,
 )
 from derp.features.types import MediaContent
+from derp.inference_types import InferenceReport
 from derp.media.gateway import DEFAULT_ALLOWED_MIME_TYPES
 from derp.media.types import MediaFamily, MediaReference, normalize_mime_type
 
@@ -127,6 +129,7 @@ class ImageOutput:
     """Provider-independent images awaiting feature-policy validation."""
 
     images: tuple[MediaContent, ...]
+    reports: tuple[InferenceReport, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.images, tuple):
@@ -137,6 +140,10 @@ class ImageOutput:
             raise TypeError("image output entries must be MediaContent")
         if any(image.family is not MediaFamily.IMAGE for image in self.images):
             raise ValueError("image output may contain only image media")
+        if not isinstance(self.reports, tuple):
+            raise TypeError("image reports must use an immutable tuple")
+        if any(not isinstance(report, InferenceReport) for report in self.reports):
+            raise TypeError("image reports must contain InferenceReport values")
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +220,49 @@ class ImageProviderExecutor(Protocol):
     ) -> Outcome[ImageOutput]:
         """Edit bounded source media using the exact execution plan."""
         ...
+
+
+class ImageProviderRouter:
+    """Dispatch image work by the provider fixed in its execution plan."""
+
+    def __init__(
+        self,
+        executors: Mapping[InferenceProvider, ImageProviderExecutor],
+    ) -> None:
+        if not executors:
+            raise ValueError("at least one image provider executor is required")
+        for provider, executor in executors.items():
+            if not isinstance(provider, InferenceProvider):
+                raise TypeError("image executor keys must be InferenceProvider values")
+            if not callable(getattr(executor, "generate", None)) or not callable(
+                getattr(executor, "edit", None)
+            ):
+                raise TypeError("image executors must implement generate and edit")
+        self._executors = MappingProxyType(dict(executors))
+
+    async def generate(
+        self,
+        plan: ExecutionPlan,
+        request: ImageGenerateRequest,
+    ) -> Outcome[ImageOutput]:
+        """Generate through the provider selected before billing."""
+        return await self._executor(plan).generate(plan, request)
+
+    async def edit(
+        self,
+        plan: ExecutionPlan,
+        request: PreparedImageEditRequest,
+    ) -> Outcome[ImageOutput]:
+        """Edit through the provider selected before billing."""
+        return await self._executor(plan).edit(plan, request)
+
+    def _executor(self, plan: ExecutionPlan) -> ImageProviderExecutor:
+        try:
+            return self._executors[plan.model.provider]
+        except KeyError:
+            raise RuntimeError(
+                f"no image executor configured for {plan.model.provider.value}"
+            ) from None
 
 
 class ImageFeatureService:
@@ -322,6 +372,7 @@ __all__ = [
     "ImageGenerateRequest",
     "ImageOutput",
     "ImageProviderExecutor",
+    "ImageProviderRouter",
     "ImageSourceLoader",
     "PreparedImageEditRequest",
 ]

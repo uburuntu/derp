@@ -51,13 +51,12 @@ from derp.approvals.image_tools import (
 from derp.billing import CLOSED_COMMERCE_POLICY, CommercePolicy
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
 from derp.billing.telegram import PurchaseCallback, PurchaseTargetCode
-from derp.catalog import GoogleModelKey
 from derp.common.extractor import Extractor
 from derp.common.sender import MessageSender
 from derp.config import settings
 from derp.db import DatabaseManager, store_tool_transcript
 from derp.delivery import DeliveryResendCallback
-from derp.execution import Feature, plan_execution
+from derp.execution import Feature
 from derp.features import (
     ImageAwaitingFunding,
     ImageDelivered,
@@ -446,9 +445,13 @@ async def _resume_approved_image(
         tool_call_id=lease.snapshot.tool_call_id,
     )
     deferred_call = DeferredImageCall.parse(tool_call, source=source)
+    image_plan = await image_operations.execution_plan_for_quote(
+        lease.snapshot.operation_id,
+        deferred_call.feature,
+    )
     outcome = await image_operations.run(
         deferred_call.invocation(image_context),
-        plan_execution(deferred_call.feature, GoogleModelKey.IMAGE),
+        image_plan,
         deferred_call.request,
         allow_personal_once=allow_personal_once,
         finishing_plan=plan,

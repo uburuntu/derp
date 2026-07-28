@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from derp.catalog import AudioPricing, GoogleModelKey
+from derp.catalog import AudioPricing, GoogleModelKey, InferenceProvider
 from derp.delivery.types import DeliveryMedia, TelegramMediaKind
 from derp.execution import (
     Failed,
@@ -30,6 +30,12 @@ from derp.features.tts import (
     TtsProviderOutput,
     TtsRequest,
     require_tts_pricing,
+)
+
+TTS_PLAN = plan_execution(
+    Feature.TTS,
+    GoogleModelKey.TTS,
+    provider=InferenceProvider.GOOGLE,
 )
 
 
@@ -117,7 +123,7 @@ def test_tts_policy_rejects_unbounded_configuration() -> None:
 
 @pytest.mark.asyncio
 async def test_service_passes_exact_plan_and_exposes_only_delivery_media() -> None:
-    plan = plan_execution(Feature.TTS, GoogleModelKey.TTS)
+    plan = TTS_PLAN
     request = TtsRequest(text="hello", max_output_seconds=3)
     provider_output = _provider_output()
     executor = SimpleNamespace(
@@ -154,7 +160,7 @@ async def test_service_rejects_duration_above_product_policy_before_provider() -
     )
 
     outcome = await service.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="hello", max_output_seconds=3),
     )
 
@@ -181,7 +187,7 @@ async def test_provider_deadline_cancels_execution_and_returns_typed_failure() -
     )
 
     outcome = await service.synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="hello", max_output_seconds=3),
     )
 
@@ -191,7 +197,7 @@ async def test_provider_deadline_cancels_execution_and_returns_typed_failure() -
 
 @pytest.mark.asyncio
 async def test_service_preserves_typed_rejections_and_maps_provider_errors() -> None:
-    plan = plan_execution(Feature.TTS, GoogleModelKey.TTS)
+    plan = TTS_PLAN
     request = TtsRequest(text="hello", max_output_seconds=3)
     rejection = Rejected(RejectionReason.POLICY)
     executor = SimpleNamespace(synthesize=AsyncMock(return_value=rejection))
@@ -222,7 +228,7 @@ async def test_service_rejects_unusable_duration_bytes_or_payload(
     )
 
     outcome = await TtsFeatureService(executor, policy=policy).synthesize(
-        plan_execution(Feature.TTS, GoogleModelKey.TTS),
+        TTS_PLAN,
         TtsRequest(text="hello", max_output_seconds=3),
     )
 

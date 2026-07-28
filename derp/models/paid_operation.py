@@ -51,6 +51,10 @@ class OperationQuote(Base):
             "'large'::text, 'maximum'::text])",
             name="operation_quote_context_band_allowed",
         ),
+        CheckConstraint(
+            "provider::text = ANY (ARRAY['openrouter'::text, 'google'::text])",
+            name="operation_quote_provider_allowed",
+        ),
         UniqueConstraint("id", "operation_id", name="uq_operation_quote_operation"),
         Index("idx_operation_quote_scope", "chat_id", "thread_id", "created_at"),
     )
@@ -67,6 +71,9 @@ class OperationQuote(Base):
     thread_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     feature: Mapped[str] = mapped_column(String(32))
     model_key: Mapped[str] = mapped_column(String(32))
+    provider: Mapped[str] = mapped_column(
+        String(32), default="google", server_default=text("'google'")
+    )
     provider_model_id: Mapped[str] = mapped_column(String(100))
     context_band: Mapped[str] = mapped_column(String(16))
     variant: Mapped[str] = mapped_column(String(64), default="default")

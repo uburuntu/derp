@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -76,6 +76,40 @@ _REQUIRED_CAPABILITIES: Mapping[Feature, frozenset[ModelCapability]] = MappingPr
         ),
     }
 )
+
+_MODEL_ROLES_BY_FEATURE: Mapping[Feature, frozenset[ModelRole]] = MappingProxyType(
+    {
+        Feature.CHAT: frozenset(
+            {
+                ModelRole.CHAT_ECONOMY,
+                ModelRole.CHAT_STANDARD,
+                ModelRole.CHAT_MULTIMODAL,
+                ModelRole.FREE_TEXT,
+                ModelRole.FREE_VISUAL,
+                ModelRole.FREE_AUDIO,
+            }
+        ),
+        Feature.INLINE_CHAT: frozenset({ModelRole.CHAT_ECONOMY, ModelRole.FREE_TEXT}),
+        Feature.DEEP_THINK: frozenset({ModelRole.CHAT_REASONING}),
+        Feature.IMAGE_GENERATE: frozenset({ModelRole.IMAGE}),
+        Feature.IMAGE_EDIT: frozenset({ModelRole.IMAGE}),
+        Feature.TTS: frozenset({ModelRole.TTS}),
+        Feature.TRANSCRIBE: frozenset({ModelRole.STT}),
+        Feature.VIDEO_GENERATE: frozenset(
+            {ModelRole.VIDEO_FAST, ModelRole.VIDEO_STANDARD}
+        ),
+    }
+)
+
+
+def model_roles_for_features(features: Collection[Feature]) -> tuple[ModelRole, ...]:
+    """Return deterministic catalog roles reachable through selected features."""
+    if any(not isinstance(feature, Feature) for feature in features):
+        raise TypeError("features must contain only Feature values")
+    enabled = {
+        role for feature in features for role in _MODEL_ROLES_BY_FEATURE[feature]
+    }
+    return tuple(role for role in ModelRole if role in enabled)
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +228,7 @@ __all__ = [
     "RejectionReason",
     "Succeeded",
     "execution_plan_scope",
+    "model_roles_for_features",
     "plan_execution",
     "require_execution_plan",
 ]

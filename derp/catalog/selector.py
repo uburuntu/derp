@@ -66,10 +66,12 @@ class ModelSelector:
 
     @staticmethod
     def _free_role(modalities: frozenset[InputModality]) -> ModelRole:
-        if InputModality.VIDEO in modalities:
-            raise ValueError("No reviewed free model supports video input")
         if InputModality.AUDIO in modalities:
             return ModelRole.FREE_AUDIO
-        if modalities & {InputModality.IMAGE, InputModality.PDF}:
+        if modalities & {
+            InputModality.IMAGE,
+            InputModality.PDF,
+            InputModality.VIDEO,
+        }:
             return ModelRole.FREE_VISUAL
         return ModelRole.FREE_TEXT

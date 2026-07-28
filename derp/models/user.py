@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, CheckConstraint, String, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from derp.models.base import Base, TimestampMixin
@@ -27,6 +28,43 @@ class User(TimestampMixin, Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint("credits >= 0", name="user_credits_non_negative"),
+        CheckConstraint(
+            "inference_privacy_mode::text = ANY "
+            "(ARRAY['private_only'::text, 'allow_non_zdr_free'::text])",
+            name="user_inference_privacy_mode_allowed",
+        ),
+        CheckConstraint(
+            "inference_privacy_revision > 0",
+            name="user_inference_privacy_revision_positive",
+        ),
+        CheckConstraint(
+            "num_nonnulls(free_inference_tos_version, "
+            "free_inference_privacy_version, free_inference_accepted_at) "
+            "= ANY (ARRAY[0, 3])",
+            name="user_free_inference_acceptance_complete",
+        ),
+        CheckConstraint(
+            "coalesce(length(btrim(free_inference_tos_version::text)), 1) > 0 "
+            "AND coalesce(length(btrim(free_inference_privacy_version::text)), 1) "
+            "> 0",
+            name="user_free_inference_versions_nonblank",
+        ),
+        CheckConstraint(
+            "inference_privacy_mode::text = 'private_only'::text AND "
+            "(free_inference_accepted_at IS NULL AND "
+            "free_inference_revoked_at IS NULL OR "
+            "free_inference_accepted_at IS NOT NULL AND "
+            "free_inference_revoked_at IS NOT NULL) OR "
+            "inference_privacy_mode::text = 'allow_non_zdr_free'::text AND "
+            "free_inference_accepted_at IS NOT NULL AND "
+            "free_inference_revoked_at IS NULL",
+            name="user_free_inference_state_complete",
+        ),
+        CheckConstraint(
+            "free_inference_revoked_at IS NULL OR "
+            "free_inference_revoked_at >= free_inference_accepted_at",
+            name="user_free_inference_revocation_order",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -40,6 +78,30 @@ class User(TimestampMixin, Base):
 
     # Credit balance for paid features
     credits: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+
+    # Non-ZDR free inference remains opt-in and private/inline-only at policy time.
+    inference_privacy_mode: Mapped[str] = mapped_column(
+        String(32),
+        default="private_only",
+        server_default=text("'private_only'"),
+    )
+    inference_privacy_revision: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default=text("1"),
+    )
+    free_inference_tos_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    free_inference_privacy_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    free_inference_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    free_inference_revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Relationships
     messages: Mapped[list[Message]] = relationship(back_populates="user")

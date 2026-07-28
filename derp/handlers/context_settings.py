@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Annotated
 from uuid import UUID
 
 import logfire
@@ -22,26 +23,41 @@ from aiogram.types import (
     Message,
 )
 from aiogram.utils.i18n import gettext as _
+from pydantic import Field
 
 from derp.command_menu import creation_command_specs
 from derp.common.localization import format_local_date, format_local_month_day
 from derp.db import (
     DatabaseManager,
     SharedFactDecisionConflictError,
+    accept_non_zdr_free_inference,
     acknowledge_context_notice,
     approve_shared_fact,
     claim_member_notice,
     clear_history_scope,
     forget_approved_shared_facts,
+    get_inference_privacy_preference,
     reject_shared_fact,
     remove_disqualified_message,
+    revoke_non_zdr_free_inference,
     set_admin_policy,
     set_ambient_history,
     set_chat_policy_flag,
     set_history_retention,
     tombstone_user_messages,
 )
+from derp.db.inference_privacy import InferencePrivacyRevisionConflictError
 from derp.history.policy import CONTEXT_NOTICE_VERSION, ChatPolicyFlag
+from derp.inference import (
+    FREE_INFERENCE_PRIVACY_URL,
+    FREE_INFERENCE_PRIVACY_VERSION,
+    FREE_INFERENCE_TOS_URL,
+    FREE_INFERENCE_TOS_VERSION,
+    InferenceContext,
+    InferencePrivacyPreference,
+    NonZdrFreeInferenceReason,
+    decide_non_zdr_free_inference,
+)
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
@@ -79,6 +95,7 @@ class ContextAction(StrEnum):
     MENU = "menu"
     CREATION = "creation"
     PRIVACY = "privacy"
+    INFERENCE_PRIVACY = "model_privacy"
     TOGGLE = "toggle"
     RETENTION = "retention"
     DELETE_MINE_CONFIRM = "delete_mine_confirm"
@@ -100,6 +117,23 @@ class ContextCallback(CallbackData, prefix="ctx"):
 
     action: ContextAction
     value: int = 0
+
+
+class InferencePrivacyAction(StrEnum):
+    """Version-bound actions for the free-model privacy preference."""
+
+    REVIEW = "r"
+    ACCEPT = "a"
+    REVOKE = "x"
+
+
+class InferencePrivacyCallback(CallbackData, prefix="ifp"):
+    """Bind a legal preference action to the documents the user reviewed."""
+
+    action: InferencePrivacyAction
+    tos_version: str
+    privacy_version: str
+    preference_revision: Annotated[int, Field(ge=1, le=2_147_483_647)]
 
 
 _POLICY_FLAGS = {
@@ -321,6 +355,17 @@ def build_context_panel(
             )
         )
     rows.append(personal_rows)
+    if is_private:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_("Model privacy"),
+                    callback_data=ContextCallback(
+                        action=ContextAction.INFERENCE_PRIVACY
+                    ).pack(),
+                )
+            ]
+        )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -566,6 +611,109 @@ def build_privacy_panel(
         retention_days,
     ).format(days=retention_days)
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_inference_privacy_panel(
+    preference: InferencePrivacyPreference,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Render the effective inference mode and its single next action."""
+    decision = decide_non_zdr_free_inference(
+        preference,
+        context=InferenceContext.PRIVATE,
+        current_tos_version=FREE_INFERENCE_TOS_VERSION,
+        current_privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+    )
+    if decision.allowed:
+        mode = _("Mode: Free models allowed")
+        detail = _(
+            "Free-model providers may store prompts and replies. This permission "
+            "applies only in private chat and inline mode. Groups stay private."
+        )
+        label = _("Use private models only")
+        action = InferencePrivacyAction.REVOKE
+    else:
+        mode = _("Mode: Private")
+        if decision.reason is NonZdrFreeInferenceReason.LEGAL_REACCEPTANCE_REQUIRED:
+            detail = _(
+                "The free-model terms changed. Review them to enable free models "
+                "again. Groups stay private."
+            )
+        else:
+            detail = _(
+                "Derp uses zero-data-retention models. Free models are optional and "
+                "may let providers store prompts and replies. They can run only in "
+                "private chat and inline mode. Groups stay private."
+            )
+        label = _("Review free-model terms")
+        action = InferencePrivacyAction.REVIEW
+
+    text = _("<b>Model privacy</b>\n{mode}\n\n{detail}").format(
+        mode=mode,
+        detail=detail,
+    )
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=InferencePrivacyCallback(
+                        action=action,
+                        tos_version=FREE_INFERENCE_TOS_VERSION,
+                        privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+                        preference_revision=preference.revision,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_("Back"),
+                    callback_data=ContextCallback(action=ContextAction.MENU).pack(),
+                )
+            ],
+        ]
+    )
+    return text, markup
+
+
+def build_inference_privacy_review(
+    preference_revision: int,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Show the legal review immediately before explicit acceptance."""
+    text = _(
+        "<b>Allow free models?</b>\n\n"
+        "Free-model providers may store prompts and replies under their own "
+        "policies. By continuing, you agree to OpenRouter's Terms and Privacy "
+        "Policy.\n\n"
+        "This applies only in private chat and inline mode. Groups stay private."
+    )
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=_("Terms"), url=FREE_INFERENCE_TOS_URL),
+                InlineKeyboardButton(text=_("Privacy"), url=FREE_INFERENCE_PRIVACY_URL),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_("I agree, allow free models"),
+                    callback_data=InferencePrivacyCallback(
+                        action=InferencePrivacyAction.ACCEPT,
+                        tos_version=FREE_INFERENCE_TOS_VERSION,
+                        privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+                        preference_revision=preference_revision,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_("Back"),
+                    callback_data=ContextCallback(
+                        action=ContextAction.INFERENCE_PRIVACY
+                    ).pack(),
+                )
+            ],
+        ]
+    )
+    return text, markup
 
 
 def build_destructive_confirmation(
@@ -881,6 +1029,208 @@ async def toggle_personal_spend(
             if enabled
             else _("I'll ask before using your credits here")
         ),
+        show_alert=True,
+    )
+
+
+async def _private_inference_privacy_message(
+    query: CallbackQuery,
+    user_model: UserModel | None,
+) -> Message | None:
+    message = query.message
+    if (
+        not isinstance(message, Message)
+        or message.chat.type != "private"
+        or message.chat.id != query.from_user.id
+        or not user_model
+        or user_model.telegram_id != query.from_user.id
+    ):
+        await query.answer(
+            _("Open model privacy in your private chat."), show_alert=True
+        )
+        return None
+    return message
+
+
+def _current_free_inference_legal_versions(
+    callback_data: InferencePrivacyCallback,
+) -> bool:
+    return (
+        callback_data.tos_version == FREE_INFERENCE_TOS_VERSION
+        and callback_data.privacy_version == FREE_INFERENCE_PRIVACY_VERSION
+    )
+
+
+async def _show_current_inference_privacy_review(
+    query: CallbackQuery,
+    message: Message,
+    *,
+    preference_revision: int,
+    terms_changed: bool = False,
+) -> None:
+    text, markup = build_inference_privacy_review(preference_revision)
+    await message.edit_text(text, reply_markup=markup)
+    if terms_changed:
+        await query.answer(
+            _("The terms changed. Review the latest versions."), show_alert=True
+        )
+    else:
+        await query.answer()
+
+
+async def _show_stale_inference_privacy_panel(
+    query: CallbackQuery,
+    message: Message,
+    preference: InferencePrivacyPreference,
+) -> None:
+    text, markup = build_inference_privacy_panel(preference)
+    await message.edit_text(text, reply_markup=markup)
+    await query.answer(
+        _("This model privacy button expired. Open the setting again."),
+        show_alert=True,
+    )
+
+
+@router.callback_query(
+    ContextCallback.filter(F.action == ContextAction.INFERENCE_PRIVACY)
+)
+async def show_inference_privacy_menu(
+    query: CallbackQuery,
+    db: DatabaseManager,
+    user_model: UserModel | None,
+) -> None:
+    """Show one actor's effective model privacy mode in private chat only."""
+    if (message := await _private_inference_privacy_message(query, user_model)) is None:
+        return
+    async with db.read_session() as session:
+        preference = await get_inference_privacy_preference(session, user_model.id)
+    text, markup = build_inference_privacy_panel(preference)
+    await message.edit_text(text, reply_markup=markup)
+    await query.answer()
+
+
+@router.callback_query(
+    InferencePrivacyCallback.filter(F.action == InferencePrivacyAction.REVIEW)
+)
+async def review_inference_privacy_terms(
+    query: CallbackQuery,
+    callback_data: InferencePrivacyCallback,
+    db: DatabaseManager,
+    user_model: UserModel | None,
+) -> None:
+    """Place the current legal documents immediately before acceptance."""
+    if (message := await _private_inference_privacy_message(query, user_model)) is None:
+        return
+    async with db.read_session() as session:
+        preference = await get_inference_privacy_preference(session, user_model.id)
+    if callback_data.preference_revision != preference.revision:
+        return await _show_stale_inference_privacy_panel(
+            query,
+            message,
+            preference,
+        )
+    await _show_current_inference_privacy_review(
+        query,
+        message,
+        preference_revision=preference.revision,
+        terms_changed=not _current_free_inference_legal_versions(callback_data),
+    )
+
+
+@router.callback_query(
+    InferencePrivacyCallback.filter(F.action == InferencePrivacyAction.ACCEPT)
+)
+async def accept_inference_privacy_terms(
+    query: CallbackQuery,
+    callback_data: InferencePrivacyCallback,
+    db: DatabaseManager,
+    user_model: UserModel | None,
+) -> None:
+    """Persist explicit acceptance of exactly the reviewed legal versions."""
+    if (message := await _private_inference_privacy_message(query, user_model)) is None:
+        return
+    if not _current_free_inference_legal_versions(callback_data):
+        async with db.read_session() as session:
+            preference = await get_inference_privacy_preference(session, user_model.id)
+        if callback_data.preference_revision != preference.revision:
+            return await _show_stale_inference_privacy_panel(
+                query,
+                message,
+                preference,
+            )
+        return await _show_current_inference_privacy_review(
+            query,
+            message,
+            preference_revision=preference.revision,
+            terms_changed=True,
+        )
+    try:
+        async with db.session() as session:
+            preference = await accept_non_zdr_free_inference(
+                session,
+                user_model.id,
+                expected_revision=callback_data.preference_revision,
+                tos_version=callback_data.tos_version,
+                privacy_version=callback_data.privacy_version,
+            )
+    except InferencePrivacyRevisionConflictError as exc:
+        return await _show_stale_inference_privacy_panel(
+            query,
+            message,
+            exc.current,
+        )
+    text, markup = build_inference_privacy_panel(preference)
+    await message.edit_text(text, reply_markup=markup)
+    logfire.info(
+        "inference_privacy_preference_changed",
+        mode=preference.mode.value,
+        preference_revision=preference.revision,
+    )
+    await query.answer(
+        _("Free models are now allowed in private chat and inline mode.")
+    )
+
+
+@router.callback_query(
+    InferencePrivacyCallback.filter(F.action == InferencePrivacyAction.REVOKE)
+)
+async def revoke_inference_privacy_terms(
+    query: CallbackQuery,
+    callback_data: InferencePrivacyCallback,
+    db: DatabaseManager,
+    user_model: UserModel | None,
+) -> None:
+    """Return to private-only inference with one idempotent action."""
+    if (message := await _private_inference_privacy_message(query, user_model)) is None:
+        return
+    try:
+        async with db.session() as session:
+            preference = await revoke_non_zdr_free_inference(
+                session,
+                user_model.id,
+                expected_revision=callback_data.preference_revision,
+            )
+    except InferencePrivacyRevisionConflictError as exc:
+        return await _show_stale_inference_privacy_panel(
+            query,
+            message,
+            exc.current,
+        )
+    text, markup = build_inference_privacy_panel(preference)
+    await message.edit_text(text, reply_markup=markup)
+    logfire.info(
+        "inference_privacy_preference_changed",
+        mode=preference.mode.value,
+        preference_revision=preference.revision,
+    )
+    await query.answer(_("Private models only."))
+
+
+@router.callback_query(F.data.startswith("ifp:"))
+async def reject_stale_inference_privacy_callback(query: CallbackQuery) -> None:
+    """Consume malformed or obsolete preference controls."""
+    await query.answer(
+        _("This model privacy button expired. Open the setting again."),
         show_alert=True,
     )
 
@@ -1370,12 +1720,20 @@ async def disclose_context_to_new_members(
 __all__ = [
     "ContextAction",
     "ContextCallback",
+    "FREE_INFERENCE_PRIVACY_URL",
+    "FREE_INFERENCE_PRIVACY_VERSION",
+    "FREE_INFERENCE_TOS_URL",
+    "FREE_INFERENCE_TOS_VERSION",
+    "InferencePrivacyAction",
+    "InferencePrivacyCallback",
     "actor_can_manage",
     "ambient_delivery_available",
     "build_creation_panel",
     "build_credit_panel",
     "build_context_panel",
     "build_destructive_confirmation",
+    "build_inference_privacy_panel",
+    "build_inference_privacy_review",
     "build_privacy_panel",
     "ensure_group_context_notice",
     "router",

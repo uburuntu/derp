@@ -51,6 +51,15 @@ def test_private_and_free_routes_have_opposite_explicit_data_policy() -> None:
     assert free.pricing.estimate_usd(input_tokens=1_000, output_tokens=1_000) == 0
 
 
+def test_image_route_caps_per_image_without_conflating_output_token_units() -> None:
+    image = get_openrouter_model(ModelRole.IMAGE)
+    assert image.routing is not None
+    assert image.routing.max_price is not None
+
+    assert image.routing.max_price.image == Decimal("0.151")
+    assert image.routing.max_price.request == Decimal("0.151")
+
+
 def test_unlisted_dedicated_media_models_fail_closed_at_transport_boundary() -> None:
     for role in (
         ModelRole.TTS,
@@ -102,15 +111,16 @@ def test_selector_is_deterministic_and_capability_aware(
     assert ModelSelector().select_chat(selection).key is expected
 
 
-def test_free_video_understanding_has_no_implicit_paid_fallback() -> None:
-    with pytest.raises(ValueError, match="No reviewed free model"):
-        ModelSelector().select_chat(
-            ChatSelection(
-                paid=False,
-                free_mode_allowed=True,
-                modalities=frozenset({InputModality.TEXT, InputModality.VIDEO}),
-            )
+def test_free_video_understanding_uses_reviewed_visual_model() -> None:
+    model = ModelSelector().select_chat(
+        ChatSelection(
+            paid=False,
+            free_mode_allowed=True,
+            modalities=frozenset({InputModality.TEXT, InputModality.VIDEO}),
         )
+    )
+
+    assert model.key is ModelRole.FREE_VISUAL
 
 
 def test_request_settings_preserve_reviewed_routing_and_pseudonymous_user() -> None:
@@ -131,3 +141,9 @@ def test_request_settings_preserve_reviewed_routing_and_pseudonymous_user() -> N
     assert pseudonym.startswith("derp_")
     assert pseudonym == pseudonymous_inference_user(UUID(int=42))
     assert pseudonym != pseudonymous_inference_user(UUID(int=43))
+
+    economy = openrouter_settings(get_openrouter_model(ModelRole.CHAT_ECONOMY))
+    assert economy["openrouter_provider"]["max_price"] == {  # type: ignore[index]
+        "prompt": 0.25,
+        "completion": 1.5,
+    }
