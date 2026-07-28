@@ -30,6 +30,7 @@ from derp.features import (
 from derp.inference_types import InferenceReport
 from derp.inference_usage import InferenceTokenUsage
 from derp.media import MediaFamily
+from derp.observability import report_exception
 from derp.openrouter.errors import OpenRouterError
 from derp.openrouter.types import (
     ImageGenerationRequest as OpenRouterImageRequest,
@@ -70,11 +71,32 @@ class OpenRouterImageClient(Protocol):
     ) -> ImageGenerationResult: ...
 
 
+class OpenRouterImageRoutePolicy(Protocol):
+    """Live, content-free admission check for one private image request."""
+
+    async def allows(
+        self,
+        plan: ExecutionPlan,
+        *,
+        resolution: ImageResolution,
+        input_reference_count: int,
+    ) -> bool: ...
+
+
 class OpenRouterImageExecutor:
     """Execute one image request through the reviewed private Vertex route."""
 
-    def __init__(self, client: OpenRouterImageClient) -> None:
+    def __init__(
+        self,
+        client: OpenRouterImageClient,
+        route_policy: OpenRouterImageRoutePolicy,
+    ) -> None:
+        if not callable(getattr(client, "generate_image", None)):
+            raise TypeError("client must support image generation")
+        if not callable(getattr(route_policy, "allows", None)):
+            raise TypeError("route_policy must support live admission")
         self._client = client
+        self._route_policy = route_policy
 
     async def generate(
         self,
@@ -84,6 +106,12 @@ class OpenRouterImageExecutor:
         """Generate one image using the exact catalog-selected model."""
         self._require_executor_plan(plan, Feature.IMAGE_GENERATE)
         if not self._has_reviewed_private_route(plan):
+            return Rejected(RejectionReason.POLICY)
+        if not await self._live_route_allowed(
+            plan,
+            resolution=request.resolution,
+            input_reference_count=0,
+        ):
             return Rejected(RejectionReason.POLICY)
         prompt = request.prompt
         if request.style:
@@ -103,6 +131,12 @@ class OpenRouterImageExecutor:
         """Edit one bounded source image through the same pinned endpoint."""
         self._require_executor_plan(plan, Feature.IMAGE_EDIT)
         if not self._has_reviewed_private_route(plan):
+            return Rejected(RejectionReason.POLICY)
+        if not await self._live_route_allowed(
+            plan,
+            resolution=request.resolution,
+            input_reference_count=1,
+        ):
             return Rejected(RejectionReason.POLICY)
         encoded = base64.b64encode(request.source.data).decode("ascii")
         reference = MediaReference(
@@ -144,6 +178,28 @@ class OpenRouterImageExecutor:
         except TypeError, ValueError:
             return Rejected(RejectionReason.UNUSABLE_OUTPUT)
         return Succeeded(output)
+
+    async def _live_route_allowed(
+        self,
+        plan: ExecutionPlan,
+        *,
+        resolution: ImageResolution,
+        input_reference_count: int,
+    ) -> bool:
+        try:
+            return await self._route_policy.allows(
+                plan,
+                resolution=resolution,
+                input_reference_count=input_reference_count,
+            )
+        except Exception as exc:
+            report_exception(
+                "openrouter.image_route_attestation_failed",
+                exception=exc,
+                level="warning",
+                model=plan.model.provider_model_id,
+            )
+            return False
 
     @staticmethod
     def _reports(
@@ -235,6 +291,8 @@ class OpenRouterImageExecutor:
             and route.require_parameters
             and route.data_collection is DataCollectionPolicy.DENY
             and route.zero_data_retention
+            and route.max_price.image is not None
+            and route.max_price.request is not None
             and route.provider_order
             in {
                 (_CATALOG_VERTEX_ROUTE,),
@@ -249,4 +307,5 @@ __all__ = [
     "OPENROUTER_IMAGE_VERTEX_ENDPOINT",
     "OpenRouterImageClient",
     "OpenRouterImageExecutor",
+    "OpenRouterImageRoutePolicy",
 ]

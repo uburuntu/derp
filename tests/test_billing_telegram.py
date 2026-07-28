@@ -205,3 +205,28 @@ async def test_subscription_provider_maps_renewal_to_telegram_cancellation(
         telegram_payment_charge_id="subscription-charge",
         is_canceled=not enabled,
     )
+
+
+@pytest.mark.asyncio
+async def test_subscription_provider_requires_explicit_telegram_confirmation() -> None:
+    bot = MagicMock()
+    bot.edit_user_star_subscription = AsyncMock(return_value=False)
+    provider = TelegramSubscriptionRenewalProvider(bot)
+
+    with pytest.raises(RuntimeError, match="did not confirm"):
+        await provider.set_renewal(
+            SubscriptionRenewalCommand(
+                payer_telegram_id=12345,
+                telegram_payment_charge_id="subscription-charge",
+                enabled=False,
+            )
+        )
+
+
+def test_subscription_command_rejects_non_boolean_state() -> None:
+    with pytest.raises(TypeError, match="enabled must be a bool"):
+        SubscriptionRenewalCommand(
+            payer_telegram_id=12345,
+            telegram_payment_charge_id="subscription-charge",
+            enabled=1,  # type: ignore[arg-type]
+        )

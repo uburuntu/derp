@@ -68,6 +68,9 @@ class InferenceUsageRepository:
             "provider_model_id": start.provider_model_id,
             "provider_response_id": None,
             "provider_generation_id": None,
+            "actual_model_id": None,
+            "downstream_provider": None,
+            "route_policy_matched": True,
             **_token_values(None),
             "usage_available": False,
             "actual_cost_usd": None,
@@ -134,6 +137,9 @@ class InferenceUsageRepository:
             stored.provider_completed_at = completion.completed_at
             stored.provider_response_id = completion.provider_response_id
             stored.provider_generation_id = completion.provider_generation_id
+            stored.actual_model_id = completion.actual_model_id
+            stored.downstream_provider = completion.downstream_provider
+            stored.route_policy_matched = completion.route_policy_matched
             _apply_tokens(stored, completion.tokens)
             stored.usage_available = completion.tokens is not None
             stored.usage_recorded_at = recorded_at
@@ -141,7 +147,17 @@ class InferenceUsageRepository:
             stored.reconciliation_requested_at = (
                 recorded_at
                 if completion.cost_reconciliation_status
-                is CostReconciliationStatus.PENDING
+                in {
+                    CostReconciliationStatus.PENDING,
+                    CostReconciliationStatus.RECONCILED,
+                }
+                else None
+            )
+            stored.actual_cost_usd = completion.actual_cost_usd
+            stored.reconciled_at = (
+                recorded_at
+                if completion.cost_reconciliation_status
+                is CostReconciliationStatus.RECONCILED
                 else None
             )
             stored.reconciliation_retry_at = None
@@ -507,6 +523,13 @@ def _completion_matches(
         stored.status == completion.outcome.value
         and stored.provider_response_id == completion.provider_response_id
         and stored.provider_generation_id == completion.provider_generation_id
+        and stored.actual_model_id == completion.actual_model_id
+        and stored.downstream_provider == completion.downstream_provider
+        and stored.route_policy_matched == completion.route_policy_matched
+        and (
+            completion.actual_cost_usd is None
+            or stored.actual_cost_usd == completion.actual_cost_usd
+        )
         and stored.usage_available == (completion.tokens is not None)
         and _stored_tokens(stored) == completion.tokens
         and (
@@ -578,6 +601,9 @@ def _snapshot(stored: InferenceUsage) -> InferenceUsageSnapshot:
         provider_model_id=stored.provider_model_id,
         provider_response_id=stored.provider_response_id,
         provider_generation_id=stored.provider_generation_id,
+        actual_model_id=stored.actual_model_id,
+        downstream_provider=stored.downstream_provider,
+        route_policy_matched=stored.route_policy_matched,
         tokens=_stored_tokens(stored),
         actual_cost_usd=stored.actual_cost_usd,
         status=InferenceStatus(stored.status),

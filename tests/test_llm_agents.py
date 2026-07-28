@@ -58,7 +58,6 @@ def test_chat_toolset_has_one_policy_aware_tool_per_capability() -> None:
     assert set(toolset.tools) == {
         "edit_image",
         "generate_image",
-        "web_search",
     }
 
 

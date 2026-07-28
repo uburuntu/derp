@@ -26,7 +26,16 @@ from derp.artifacts import FilesystemArtifactStore
 from derp.billing import (
     CommercePolicy,
     PaymentSettlementService,
+    PaymentUpdateInboxService,
+    PaymentUpdateReplayWorker,
     SubscriptionExpiryWorker,
+    SubscriptionManagementService,
+    SubscriptionRenewalWorker,
+)
+from derp.billing.telegram import TelegramSubscriptionRenewalProvider
+from derp.billing.telegram_updates import (
+    DurablePaymentDispatcher,
+    TelegramPaymentUpdateNotifier,
 )
 from derp.catalog import InferenceProvider, ModelRole
 from derp.command_menu import configure_bot_command_menu
@@ -56,9 +65,9 @@ from derp.handlers import (
     context_settings,
     credit_cmds,
     debug,
-    donations,
     image,
     inline,
+    legal_support,
     operator,
     paid_media_delivery,
     payments,
@@ -86,7 +95,12 @@ from derp.middlewares.event_context import EventContextMiddleware
 from derp.middlewares.log_updates import LogUpdatesMiddleware
 from derp.middlewares.route_dependencies import setup_route_dependencies
 from derp.middlewares.sender import MessageSenderMiddleware
-from derp.openrouter import OpenRouterClient, OpenRouterImageExecutor
+from derp.openrouter import (
+    OPENROUTER_IMAGE_VERTEX_ENDPOINT,
+    OpenRouterClient,
+    OpenRouterImageExecutor,
+    OpenRouterImageRouteGuard,
+)
 from derp.operations import (
     OperationLedger,
     OperationReconciler,
@@ -99,7 +113,10 @@ from derp.operator import (
     OperatorConfirmationStore,
     OperatorConsoleService,
     OperatorControlConfig,
+    OperatorDebugRefundService,
+    OperatorDebugRefundWorker,
 )
+from derp.support import SupportRequestService, TermsAcceptanceService
 from derp.tools.authorization import ActorRoleResolver
 
 logger = logging.getLogger(__name__)
@@ -109,9 +126,9 @@ APPLICATION_ROUTERS = (
     operator.rejection_router,
     debug.router,
     debug.rejection_router,
+    legal_support.router,
     context_settings.router,
     basic.router,
-    donations.router,
     credit_cmds.router,
     premium_suspension.router,
     payments.router,
@@ -146,6 +163,11 @@ class Runtime:
     inference_reconciliation: OpenRouterCostReconciliationWorker | None
     deferred_tool_approval_service: DeferredToolApprovalService
     operator_console: OperatorConsoleService
+    operator_debug_refunds: OperatorDebugRefundService
+    payment_update_inbox: PaymentUpdateInboxService
+    payment_update_replay: PaymentUpdateReplayWorker
+    operator_debug_refund_replay: OperatorDebugRefundWorker
+    subscription_renewal_replay: SubscriptionRenewalWorker
 
 
 def create_bot(settings: Settings) -> Bot:
@@ -195,6 +217,23 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             max_item_bytes=MAX_TELEGRAM_FILE_BYTES,
         )
         operation_ledger = OperationLedger(db.session)
+        payment_settlement = PaymentSettlementService(db.session)
+        payment_update_inbox = PaymentUpdateInboxService(
+            db.session,
+            payment_settlement,
+        )
+        payment_update_replay = await stack.enter_async_context(
+            PaymentUpdateReplayWorker(
+                payment_update_inbox,
+                TelegramPaymentUpdateNotifier(bot),
+            )
+        )
+        subscription_renewal_replay = await stack.enter_async_context(
+            SubscriptionRenewalWorker(
+                SubscriptionManagementService(db.session),
+                TelegramSubscriptionRenewalProvider(bot),
+            )
+        )
         inference_usage = InferenceUsageRepository(db.session)
         inference_recorder = InferenceRecorder(inference_usage)
         chat_turn_accounting = ChatTurnAccounting(operation_ledger)
@@ -212,7 +251,11 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
         }
         if openrouter_client is not None:
             image_executors[InferenceProvider.OPENROUTER] = OpenRouterImageExecutor(
-                openrouter_client
+                openrouter_client,
+                OpenRouterImageRouteGuard(
+                    openrouter_client,
+                    provider_tag=OPENROUTER_IMAGE_VERTEX_ENDPOINT,
+                ),
             )
         image_service = ImageFeatureService(
             ImageProviderRouter(image_executors),
@@ -284,7 +327,7 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             )
         history_retention = await stack.enter_async_context(HistoryRetentionWorker(db))
         subscription_expiry = await stack.enter_async_context(
-            SubscriptionExpiryWorker(PaymentSettlementService(db.session))
+            SubscriptionExpiryWorker(payment_settlement)
         )
         operation_reconciliation = await stack.enter_async_context(
             OperationReconciliationWorker(
@@ -297,10 +340,21 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
         approval_expiry = await stack.enter_async_context(
             DeferredApprovalExpiryWorker(deferred_tool_approval_service)
         )
+        operator_debug_refunds = OperatorDebugRefundService(
+            db.session,
+            bot,
+            payment_settlement,
+        )
+        operator_debug_refund_replay = await stack.enter_async_context(
+            OperatorDebugRefundWorker(operator_debug_refunds)
+        )
         operator_console = OperatorConsoleService(
             db,
             history_retention=history_retention,
             subscription_expiry=subscription_expiry,
+            subscription_renewal=subscription_renewal_replay,
+            payment_update_replay=payment_update_replay,
+            debug_refund_reconciliation=operator_debug_refund_replay,
             operation_reconciliation=operation_reconciliation,
             delivery_maintenance=delivery_maintenance,
             approval_expiry=approval_expiry,
@@ -329,6 +383,11 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             inference_reconciliation=inference_reconciliation,
             deferred_tool_approval_service=deferred_tool_approval_service,
             operator_console=operator_console,
+            operator_debug_refunds=operator_debug_refunds,
+            payment_update_inbox=payment_update_inbox,
+            payment_update_replay=payment_update_replay,
+            operator_debug_refund_replay=operator_debug_refund_replay,
+            subscription_renewal_replay=subscription_renewal_replay,
         )
 
 
@@ -340,8 +399,9 @@ def create_dispatcher(
     """Assemble middleware and routers for a configured runtime."""
     bot = runtime.bot
     db = runtime.db
-    dispatcher = Dispatcher(
+    dispatcher = DurablePaymentDispatcher(
         storage=MemoryStorage(),
+        payment_update_inbox=runtime.payment_update_inbox,
         media_gateway=runtime.media_gateway,
         actor_role_resolver=runtime.actor_role_resolver,
         operation_ledger=runtime.operation_ledger,
@@ -355,6 +415,9 @@ def create_dispatcher(
         inference_recorder=runtime.inference_recorder,
         deferred_tool_approval_service=runtime.deferred_tool_approval_service,
         operator_console=runtime.operator_console,
+        operator_debug_refunds=runtime.operator_debug_refunds,
+        support_requests=SupportRequestService(db.session),
+        terms_acceptance=TermsAcceptanceService(db.session),
         operator_confirmations=OperatorConfirmationStore(),
         operator_access=OperatorAccessPolicy.from_ids(settings.operator_ids),
         operator_config=OperatorControlConfig(

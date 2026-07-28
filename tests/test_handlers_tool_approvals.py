@@ -590,12 +590,9 @@ async def test_funding_preflight_does_not_spend_a_finishing_model_call(
         shared_facts_member_edit=False,
     )
 
-    with (
-        patch(
-            "derp.handlers.tool_approvals.load_persisted_image_source",
-            new=AsyncMock(return_value=None),
-        ),
-        patch("derp.handlers.tool_approvals.create_chat_agent") as create_agent,
+    with patch(
+        "derp.handlers.tool_approvals.load_persisted_image_source",
+        new=AsyncMock(return_value=None),
     ):
         result = await _resume_approved_image(
             callback=callback,
@@ -615,7 +612,6 @@ async def test_funding_preflight_does_not_spend_a_finishing_model_call(
         Feature.IMAGE_GENERATE,
     )
     assert image_operations.run.await_args.kwargs["allow_personal_once"] is False
-    create_agent.assert_not_called()
 
 
 @pytest.mark.asyncio

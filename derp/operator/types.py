@@ -16,6 +16,7 @@ class OperatorMaintenanceAction(StrEnum):
     ALL = "all"
     HISTORY = "history"
     SUBSCRIPTIONS = "subscriptions"
+    PAYMENTS = "payments"
     OPERATIONS = "operations"
     DELIVERIES = "deliveries"
     APPROVALS = "approvals"
@@ -130,6 +131,49 @@ class OperatorStarsTotals:
 
 
 @dataclass(frozen=True, slots=True)
+class OperatorSupportTotals:
+    """Content-free support queue totals."""
+
+    open: int
+    payment_open: int
+    resolved: int
+
+    def __post_init__(self) -> None:
+        _require_count(self.open, "open")
+        _require_count(self.payment_open, "payment_open")
+        _require_count(self.resolved, "resolved")
+        if self.payment_open > self.open:
+            raise ValueError("payment_open cannot exceed open")
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorPaymentUpdateTotals:
+    """Crash-safe payment inbox health without payment identifiers."""
+
+    pending: int
+    processing: int
+    completed: int
+    attention: int
+    due: int
+    reply_failed: int
+    reply_skipped: int
+
+    def __post_init__(self) -> None:
+        for name in (
+            "pending",
+            "processing",
+            "completed",
+            "attention",
+            "due",
+            "reply_failed",
+            "reply_skipped",
+        ):
+            _require_count(getattr(self, name), name)
+        if self.due > self.pending + self.processing:
+            raise ValueError("due updates must be pending or processing")
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorArtifactTotals:
     """Persisted artifact metadata totals without paths or content."""
 
@@ -143,18 +187,31 @@ class OperatorArtifactTotals:
 
 @dataclass(frozen=True, slots=True)
 class OperatorSubscriptionTotals:
-    """Subscription status, current entitlement, and renewal aggregates."""
+    """Subscription entitlement and durable renewal-command health."""
 
     status_active: int
     entitled: int
     auto_renewing: int
+    renewal_pending: int = 0
+    renewal_processing: int = 0
+    renewal_attention: int = 0
+    renewal_due: int = 0
 
     def __post_init__(self) -> None:
-        _require_count(self.status_active, "status_active")
-        _require_count(self.entitled, "entitled")
-        _require_count(self.auto_renewing, "auto_renewing")
+        for name in (
+            "status_active",
+            "entitled",
+            "auto_renewing",
+            "renewal_pending",
+            "renewal_processing",
+            "renewal_attention",
+            "renewal_due",
+        ):
+            _require_count(getattr(self, name), name)
         if self.auto_renewing > self.entitled:
             raise ValueError("auto_renewing cannot exceed entitled")
+        if self.renewal_due > self.renewal_pending + self.renewal_processing:
+            raise ValueError("due renewal commands must be pending or processing")
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +286,7 @@ class OperatorInferenceUsageTotals:
     tokens: OperatorInferenceTokenTotals
     pending_cost_reconciliation: int
     unavailable_cost_count: int
+    route_policy_violation_count: int
     reconciled_cost_usd: Decimal
 
     def __post_init__(self) -> None:
@@ -237,11 +295,17 @@ class OperatorInferenceUsageTotals:
             "pending_cost_reconciliation",
         )
         _require_count(self.unavailable_cost_count, "unavailable_cost_count")
+        _require_count(
+            self.route_policy_violation_count,
+            "route_policy_violation_count",
+        )
         _require_decimal(self.reconciled_cost_usd, "reconciled_cost_usd")
         if self.pending_cost_reconciliation > self.attempts.total:
             raise ValueError("pending reconciliations cannot exceed inference attempts")
         if self.unavailable_cost_count > self.attempts.total:
             raise ValueError("unavailable costs cannot exceed inference attempts")
+        if self.route_policy_violation_count > self.attempts.total:
+            raise ValueError("route violations cannot exceed inference attempts")
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,6 +437,9 @@ class OperatorDatabaseSnapshot:
     intent_states: tuple[OperatorNamedCount, ...] | None = None
     receipt_states: tuple[OperatorNamedCount, ...] | None = None
     stars: OperatorStarsTotals | None = None
+    support: OperatorSupportTotals | None = None
+    payment_updates: OperatorPaymentUpdateTotals | None = None
+    refund_request_states: tuple[OperatorNamedCount, ...] | None = None
     subscriptions: OperatorSubscriptionTotals | None = None
     artifacts: OperatorArtifactTotals | None = None
     inference_usage: OperatorInferenceUsageTotals | None = None
@@ -392,6 +459,9 @@ class OperatorDatabaseSnapshot:
             self.intent_states,
             self.receipt_states,
             self.stars,
+            self.support,
+            self.payment_updates,
+            self.refund_request_states,
             self.subscriptions,
             self.artifacts,
         )
@@ -513,6 +583,7 @@ __all__ = [
     "OperatorMaintenanceResult",
     "OperatorNamedCount",
     "OperatorPoolSnapshot",
+    "OperatorPaymentUpdateTotals",
     "OperatorProbeStatus",
     "OperatorRuntimeSnapshot",
     "OperatorStarsTotals",

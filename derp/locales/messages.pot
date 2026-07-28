@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: derp 0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-28 13:42+0100\n"
+"POT-Creation-Date: 2026-07-28 15:16+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -29,7 +29,7 @@ msgstr ""
 msgid "Turn text into speech"
 msgstr ""
 
-#: derp/command_menu.py:83 derp/command_menu.py:109
+#: derp/command_menu.py:83 derp/command_menu.py:111
 msgid "See what Derp can do"
 msgstr ""
 
@@ -37,122 +37,130 @@ msgstr ""
 msgid "Manage privacy and history"
 msgstr ""
 
-#: derp/command_menu.py:85 derp/command_menu.py:111
+#: derp/command_menu.py:85 derp/command_menu.py:113
 msgid "Open privacy and deletion controls"
 msgstr ""
 
+#: derp/command_menu.py:86
+msgid "Review terms for purchases"
+msgstr ""
+
 #: derp/command_menu.py:87
-msgid "See credits and recent charges"
+msgid "Contact in-bot support"
+msgstr ""
+
+#: derp/command_menu.py:88
+msgid "Get purchase and refund support"
 msgstr ""
 
 #: derp/command_menu.py:90
-msgid "Buy credits for yourself"
+msgid "See credits and recent charges"
 msgstr ""
 
 #: derp/command_menu.py:93
+msgid "Buy credits for yourself"
+msgstr ""
+
+#: derp/command_menu.py:96
 msgid "Manage your monthly plan"
 msgstr ""
 
-#: derp/command_menu.py:94 derp/command_menu.py:119
+#: derp/command_menu.py:97 derp/command_menu.py:119
 msgid "Forget a message you reply to"
 msgstr ""
 
-#: derp/command_menu.py:95 derp/command_menu.py:120
-msgid "Support Derp with Stars"
-msgstr ""
-
-#: derp/command_menu.py:99
+#: derp/command_menu.py:101
 msgid "Open operator console"
 msgstr ""
 
-#: derp/command_menu.py:103
+#: derp/command_menu.py:105
 msgid "Manage chat settings"
 msgstr ""
 
-#: derp/command_menu.py:105
+#: derp/command_menu.py:107
 msgid "View chat settings"
 msgstr ""
 
-#: derp/command_menu.py:108 derp/handlers/context_settings.py:239
+#: derp/command_menu.py:110 derp/handlers/context_settings.py:240
 #: derp/handlers/inline.py:47 derp/handlers/inline.py:74
 msgid "Ask Derp"
 msgstr ""
 
-#: derp/command_menu.py:113
+#: derp/command_menu.py:115
 msgid "See personal and chat credits"
 msgstr ""
 
-#: derp/command_menu.py:116
+#: derp/command_menu.py:118
 msgid "Buy credits for this chat"
 msgstr ""
 
-#: derp/billing/telegram.py:51
+#: derp/billing/telegram.py:53
 #, python-brace-format
 msgid "{count} credit"
 msgid_plural "{count} credits"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/billing/telegram.py:55
+#: derp/billing/telegram.py:57
 #, python-brace-format
 msgid "{count} Star"
 msgid_plural "{count} Stars"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/billing/telegram.py:59
+#: derp/billing/telegram.py:61
 #, python-brace-format
 msgid "{count} day"
 msgid_plural "{count} days"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/billing/telegram.py:73
+#: derp/billing/telegram.py:75
 #, python-brace-format
 msgid "{credits} · {stars}"
 msgstr ""
 
-#: derp/billing/telegram.py:92
+#: derp/billing/telegram.py:94
 #, python-brace-format
 msgid "{plan} · {stars} / {days}"
 msgstr ""
 
-#: derp/billing/telegram.py:93 derp/billing/telegram.py:124
+#: derp/billing/telegram.py:95 derp/billing/telegram.py:126
 msgid "Derp Personal"
 msgstr ""
 
-#: derp/billing/telegram.py:106 derp/handlers/paid_media_controls.py:117
-#: derp/handlers/tool_approvals.py:636
+#: derp/billing/telegram.py:108 derp/handlers/paid_media_controls.py:117
+#: derp/handlers/tool_approvals.py:588
 msgid "Buy chat credits"
 msgstr ""
 
-#: derp/billing/telegram.py:108
+#: derp/billing/telegram.py:110
 msgid "Buy personal credits"
 msgstr ""
 
-#: derp/billing/telegram.py:111
+#: derp/billing/telegram.py:113
 msgid "Choose an option. Telegram asks you to confirm before charging."
 msgstr ""
 
-#: derp/billing/telegram.py:126
+#: derp/billing/telegram.py:128
 msgid "Derp credits"
 msgstr ""
 
-#: derp/billing/telegram.py:135
+#: derp/billing/telegram.py:137
 #, python-brace-format
 msgid ""
 "{credits} every {days} for {stars}. Renews automatically until canceled. "
 "Telegram asks you to confirm the first charge."
 msgstr ""
 
-#: derp/billing/telegram.py:144
+#: derp/billing/telegram.py:146
 #, python-brace-format
 msgid ""
 "{credits} for this chat. One-time price: {stars}. Telegram charges you "
 "only after you confirm."
 msgstr ""
 
-#: derp/billing/telegram.py:149
+#: derp/billing/telegram.py:151
 #, python-brace-format
 msgid ""
 "{credits} for your account. One-time price: {stars}. Telegram charges you"
@@ -208,83 +216,83 @@ msgid ""
 " add credits for private models."
 msgstr ""
 
-#: derp/handlers/chat.py:997
+#: derp/handlers/chat.py:1008
 msgid "I'm busy right now. You weren't charged. Try again in about a minute."
 msgstr ""
 
-#: derp/handlers/chat.py:1007 derp/handlers/chat.py:1038
-#: derp/handlers/chat.py:1048
+#: derp/handlers/chat.py:1018 derp/handlers/chat.py:1049
+#: derp/handlers/chat.py:1059
 msgid "I couldn't answer that. You weren't charged. Try again."
 msgstr ""
 
-#: derp/handlers/chat.py:1022
+#: derp/handlers/chat.py:1033
 msgid ""
 "That request became too complex. You weren't charged. Try a simpler "
 "version."
 msgstr ""
 
-#: derp/handlers/context_settings.py:81
+#: derp/handlers/context_settings.py:82
 #, python-brace-format
 msgid ""
 "Reply with one short instruction for this chat, or send {clear} to remove"
 " it."
 msgstr ""
 
-#: derp/handlers/context_settings.py:150
+#: derp/handlers/context_settings.py:151
 msgid "Members can now edit shared facts"
 msgstr ""
 
-#: derp/handlers/context_settings.py:152
+#: derp/handlers/context_settings.py:153
 msgid "Shared facts now need admin review"
 msgstr ""
 
-#: derp/handlers/context_settings.py:156
+#: derp/handlers/context_settings.py:157
 msgid "Chat credits are available"
 msgstr ""
 
-#: derp/handlers/context_settings.py:156
+#: derp/handlers/context_settings.py:157
 msgid "Chat credits are paused"
 msgstr ""
 
-#: derp/handlers/context_settings.py:159
+#: derp/handlers/context_settings.py:160
 msgid "Paid features are enabled"
 msgstr ""
 
-#: derp/handlers/context_settings.py:159
+#: derp/handlers/context_settings.py:160
 msgid "Paid features are disabled"
 msgstr ""
 
-#: derp/handlers/context_settings.py:209 derp/handlers/context_settings.py:216
+#: derp/handlers/context_settings.py:210 derp/handlers/context_settings.py:217
 msgid "On"
 msgstr ""
 
-#: derp/handlers/context_settings.py:211
+#: derp/handlers/context_settings.py:212
 #, python-brace-format
 msgid "History: On · {days} day"
 msgid_plural "History: On · {days} days"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:216
+#: derp/handlers/context_settings.py:217
 msgid "Off"
 msgstr ""
 
-#: derp/handlers/context_settings.py:218
+#: derp/handlers/context_settings.py:219
 #, python-brace-format
 msgid "Context: {state} · {days} day"
 msgid_plural "Context: {state} · {days} days"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:226
+#: derp/handlers/context_settings.py:227
 msgid "Mentions only"
 msgstr ""
 
-#: derp/handlers/context_settings.py:227
+#: derp/handlers/context_settings.py:228
 msgid "Context: Mentions only"
 msgstr ""
 
-#: derp/handlers/context_settings.py:230
+#: derp/handlers/context_settings.py:231
 #, python-brace-format
 msgid ""
 "<b>Derp</b>\n"
@@ -295,266 +303,273 @@ msgid ""
 "and delete their own saved messages."
 msgstr ""
 
-#: derp/handlers/context_settings.py:244
+#: derp/handlers/context_settings.py:245
 #, python-brace-format
 msgid "History: {days}d"
 msgstr ""
 
-#: derp/handlers/context_settings.py:246
+#: derp/handlers/context_settings.py:247
 msgid "Turn context off"
 msgstr ""
 
-#: derp/handlers/context_settings.py:248
+#: derp/handlers/context_settings.py:249
 msgid "Turn context on"
 msgstr ""
 
-#: derp/handlers/context_settings.py:250
+#: derp/handlers/context_settings.py:251
 #, python-brace-format
 msgid "Context: {state}"
 msgstr ""
 
-#: derp/handlers/context_settings.py:269
+#: derp/handlers/context_settings.py:270
 #, python-brace-format
 msgid "{days}d{selected}"
 msgstr ""
 
-#: derp/handlers/context_settings.py:287
+#: derp/handlers/context_settings.py:288
 msgid "Require admin fact review"
 msgstr ""
 
-#: derp/handlers/context_settings.py:289
+#: derp/handlers/context_settings.py:290
 msgid "Let members edit facts"
 msgstr ""
 
-#: derp/handlers/context_settings.py:298
+#: derp/handlers/context_settings.py:299
 msgid "Pause chat credits"
 msgstr ""
 
-#: derp/handlers/context_settings.py:300
+#: derp/handlers/context_settings.py:301
 msgid "Enable chat credits"
 msgstr ""
 
-#: derp/handlers/context_settings.py:313
+#: derp/handlers/context_settings.py:314
 msgid "Disable paid features"
 msgstr ""
 
-#: derp/handlers/context_settings.py:315
+#: derp/handlers/context_settings.py:316
 msgid "Enable paid features"
 msgstr ""
 
-#: derp/handlers/context_settings.py:323
+#: derp/handlers/context_settings.py:324
 msgid "Set chat instructions"
 msgstr ""
 
-#: derp/handlers/context_settings.py:333 derp/handlers/context_settings.py:377
+#: derp/handlers/context_settings.py:334 derp/handlers/context_settings.py:378
 msgid "Create"
 msgstr ""
 
-#: derp/handlers/context_settings.py:337
+#: derp/handlers/context_settings.py:338
 msgid "Credits"
 msgstr ""
 
-#: derp/handlers/context_settings.py:344
+#: derp/handlers/context_settings.py:345
 msgid "Privacy & history"
 msgstr ""
 
-#: derp/handlers/context_settings.py:351
+#: derp/handlers/context_settings.py:352
 msgid "Change how my credits are used"
 msgstr ""
 
-#: derp/handlers/context_settings.py:363
+#: derp/handlers/context_settings.py:364
 msgid "Model privacy"
 msgstr ""
 
-#: derp/handlers/context_settings.py:388 derp/handlers/context_settings.py:501
-#: derp/handlers/context_settings.py:604 derp/handlers/context_settings.py:676
-#: derp/handlers/context_settings.py:715 derp/handlers/operator.py:939
-#: derp/handlers/operator.py:980 derp/handlers/operator.py:1001
-#: derp/handlers/operator.py:1020
+#: derp/handlers/context_settings.py:389 derp/handlers/context_settings.py:502
+#: derp/handlers/context_settings.py:613 derp/handlers/context_settings.py:685
+#: derp/handlers/context_settings.py:725 derp/handlers/operator.py:229
+#: derp/handlers/operator.py:1341 derp/handlers/operator.py:1382
+#: derp/handlers/operator.py:1403 derp/handlers/operator.py:1422
+#: derp/handlers/operator.py:1433 derp/handlers/operator.py:1457
 msgid "Back"
 msgstr ""
 
-#: derp/handlers/context_settings.py:407 derp/handlers/context_settings.py:942
+#: derp/handlers/context_settings.py:408 derp/handlers/context_settings.py:952
 #, python-brace-format
 msgid "Monthly plan: {credits} credit"
 msgid_plural "Monthly plan: {credits} credits"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:412
+#: derp/handlers/context_settings.py:413
 msgid "renews"
 msgstr ""
 
-#: derp/handlers/context_settings.py:412
+#: derp/handlers/context_settings.py:413
 msgid "ends"
 msgstr ""
 
-#: derp/handlers/context_settings.py:413
+#: derp/handlers/context_settings.py:414
 #, python-brace-format
 msgid "{allowance} · {renewal} {date}"
 msgstr ""
 
-#: derp/handlers/context_settings.py:419
+#: derp/handlers/context_settings.py:420
 #, python-brace-format
 msgid "{allowance} · no active plan"
 msgstr ""
 
-#: derp/handlers/context_settings.py:423
+#: derp/handlers/context_settings.py:424
 msgid "<b>Credits</b>"
 msgstr ""
 
-#: derp/handlers/context_settings.py:425
+#: derp/handlers/context_settings.py:426
 msgid "<b>Your credits</b>"
 msgstr ""
 
-#: derp/handlers/context_settings.py:428 derp/handlers/context_settings.py:947
+#: derp/handlers/context_settings.py:429 derp/handlers/context_settings.py:957
 #, python-brace-format
 msgid "Purchased: {credits} credit"
 msgid_plural "Purchased: {credits} credits"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:436 derp/handlers/context_settings.py:474
+#: derp/handlers/context_settings.py:437 derp/handlers/context_settings.py:475
 #, python-brace-format
 msgid "Reserved: {credits} credit"
 msgid_plural "Reserved: {credits} credits"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:444
+#: derp/handlers/context_settings.py:445
 #, python-brace-format
 msgid "Payment debt: {credits} credit · paid features are paused"
 msgid_plural "Payment debt: {credits} credits · paid features are paused"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:450
+#: derp/handlers/context_settings.py:451
 msgid "<b>Recent activity</b>"
 msgstr ""
 
-#: derp/handlers/context_settings.py:456 derp/handlers/context_settings.py:961
+#: derp/handlers/context_settings.py:457 derp/handlers/context_settings.py:971
 msgid "available"
 msgstr ""
 
-#: derp/handlers/context_settings.py:456
+#: derp/handlers/context_settings.py:457
 msgid "paused by admins"
 msgstr ""
 
-#: derp/handlers/context_settings.py:460
+#: derp/handlers/context_settings.py:461
 msgid "<b>This chat's credits</b>"
 msgstr ""
 
-#: derp/handlers/context_settings.py:462
+#: derp/handlers/context_settings.py:463
 #, python-brace-format
 msgid "Purchased: {credits} credit · {state}"
 msgid_plural "Purchased: {credits} credits · {state}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:480
+#: derp/handlers/context_settings.py:481
 msgid "<b>Recent chat activity</b>"
 msgstr ""
 
-#: derp/handlers/context_settings.py:486
+#: derp/handlers/context_settings.py:487
 msgid "Ask before using my credits"
 msgstr ""
 
-#: derp/handlers/context_settings.py:488
+#: derp/handlers/context_settings.py:489
 msgid "Use my credits without asking"
 msgstr ""
 
-#: derp/handlers/context_settings.py:511
+#: derp/handlers/context_settings.py:512
 msgid "Chat"
 msgstr ""
 
-#: derp/handlers/context_settings.py:512
+#: derp/handlers/context_settings.py:513
 msgid "Inline chat"
 msgstr ""
 
-#: derp/handlers/context_settings.py:513
+#: derp/handlers/context_settings.py:514
 msgid "Deep thinking"
 msgstr ""
 
-#: derp/handlers/context_settings.py:514
+#: derp/handlers/context_settings.py:515
 msgid "Image generation"
 msgstr ""
 
-#: derp/handlers/context_settings.py:515
+#: derp/handlers/context_settings.py:516
 msgid "Image editing"
 msgstr ""
 
-#: derp/handlers/context_settings.py:516
+#: derp/handlers/context_settings.py:517
 msgid "Voice"
 msgstr ""
 
-#: derp/handlers/context_settings.py:517
+#: derp/handlers/context_settings.py:518
 msgid "Video generation"
 msgstr ""
 
-#: derp/handlers/context_settings.py:518
+#: derp/handlers/context_settings.py:519
 msgid "Paid feature"
 msgstr ""
 
-#: derp/handlers/context_settings.py:522
+#: derp/handlers/context_settings.py:523
 #, python-brace-format
 msgid "{feature}: -{credits} credit · {date}"
 msgid_plural "{feature}: -{credits} credits · {date}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:532
+#: derp/handlers/context_settings.py:533
 #, python-brace-format
 msgid "{feature} refund: +{credits} credit · {date}"
 msgid_plural "{feature} refund: +{credits} credits · {date}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:542
+#: derp/handlers/context_settings.py:543
 #, python-brace-format
 msgid "Payment refund: -{credits} credit · {date}"
 msgid_plural "Payment refund: -{credits} credits · {date}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:550
+#: derp/handlers/context_settings.py:551
 #, python-brace-format
 msgid "Payment debt: {credits} credit · {date}"
 msgid_plural "Payment debt: {credits} credits · {date}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:567 derp/handlers/context_settings.py:1338
-#: derp/handlers/context_settings.py:1394
+#: derp/handlers/context_settings.py:568 derp/handlers/context_settings.py:1348
+#: derp/handlers/context_settings.py:1404
 msgid "topic"
 msgstr ""
 
-#: derp/handlers/context_settings.py:567 derp/handlers/context_settings.py:1338
-#: derp/handlers/context_settings.py:1394
+#: derp/handlers/context_settings.py:568 derp/handlers/context_settings.py:1348
+#: derp/handlers/context_settings.py:1404
 msgid "chat"
 msgstr ""
 
-#: derp/handlers/context_settings.py:571
+#: derp/handlers/context_settings.py:572
 msgid "Delete my messages"
 msgstr ""
 
-#: derp/handlers/context_settings.py:582
+#: derp/handlers/context_settings.py:583
 #, python-brace-format
 msgid "Clear this {scope}"
 msgstr ""
 
-#: derp/handlers/context_settings.py:588
+#: derp/handlers/context_settings.py:589
 msgid "Forget shared facts"
 msgstr ""
 
-#: derp/handlers/context_settings.py:597
+#: derp/handlers/context_settings.py:598 derp/handlers/legal_support.py:73
+#: derp/handlers/legal_support.py:127
 msgid "Privacy policy"
 msgstr ""
 
-#: derp/handlers/context_settings.py:598
+#: derp/handlers/context_settings.py:599 derp/handlers/legal_support.py:72
+#: derp/handlers/legal_support.py:126
 msgid "Terms of use"
 msgstr ""
 
-#: derp/handlers/context_settings.py:610
+#: derp/handlers/context_settings.py:605
+msgid "Contact support"
+msgstr ""
+
+#: derp/handlers/context_settings.py:619
 #, python-brace-format
 msgid ""
 "<b>Privacy and history</b>\n"
@@ -571,42 +586,42 @@ msgid_plural ""
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:634
+#: derp/handlers/context_settings.py:643
 msgid "Mode: Free models allowed"
 msgstr ""
 
-#: derp/handlers/context_settings.py:636
+#: derp/handlers/context_settings.py:645
 msgid ""
 "Free-model providers may store prompts and replies. This permission "
 "applies only in private chat and inline mode. Groups stay private."
 msgstr ""
 
-#: derp/handlers/context_settings.py:639
+#: derp/handlers/context_settings.py:648
 msgid "Use private models only"
 msgstr ""
 
-#: derp/handlers/context_settings.py:642
+#: derp/handlers/context_settings.py:651
 msgid "Mode: Private"
 msgstr ""
 
-#: derp/handlers/context_settings.py:645
+#: derp/handlers/context_settings.py:654
 msgid ""
 "The free-model terms changed. Review them to enable free models again. "
 "Groups stay private."
 msgstr ""
 
-#: derp/handlers/context_settings.py:650
+#: derp/handlers/context_settings.py:659
 msgid ""
 "Derp uses zero-data-retention models. Free models are optional and may "
 "let providers store prompts and replies. They can run only in private "
 "chat and inline mode. Groups stay private."
 msgstr ""
 
-#: derp/handlers/context_settings.py:654
+#: derp/handlers/context_settings.py:663
 msgid "Review free-model terms"
 msgstr ""
 
-#: derp/handlers/context_settings.py:657
+#: derp/handlers/context_settings.py:666
 #, python-brace-format
 msgid ""
 "<b>Model privacy</b>\n"
@@ -615,295 +630,297 @@ msgid ""
 "{detail}"
 msgstr ""
 
-#: derp/handlers/context_settings.py:690
+#: derp/handlers/context_settings.py:699
 msgid ""
 "<b>Allow free models?</b>\n"
 "\n"
 "Free-model providers may store prompts and replies under their own "
-"policies. By continuing, you agree to OpenRouter's Terms and Privacy "
-"Policy.\n"
+"policies. By continuing, you allow Derp to send prompts and replies to "
+"OpenRouter and selected free-model providers under the linked Terms and "
+"Privacy Policy.\n"
 "\n"
 "This applies only in private chat and inline mode. Groups stay private."
 msgstr ""
 
-#: derp/handlers/context_settings.py:699
+#: derp/handlers/context_settings.py:709
 msgid "Terms"
 msgstr ""
 
-#: derp/handlers/context_settings.py:700
+#: derp/handlers/context_settings.py:710
 msgid "Privacy"
 msgstr ""
 
-#: derp/handlers/context_settings.py:704
+#: derp/handlers/context_settings.py:714
 msgid "I agree, allow free models"
 msgstr ""
 
-#: derp/handlers/context_settings.py:734
+#: derp/handlers/context_settings.py:744
 msgid ""
 "This deletes Derp's saved messages and media references. Telegram "
 "messages and copies made by other people remain."
 msgstr ""
 
-#: derp/handlers/context_settings.py:737
+#: derp/handlers/context_settings.py:747
 #, python-brace-format
 msgid ""
 "<b>{label}?</b>\n"
 "{detail}"
 msgstr ""
 
-#: derp/handlers/context_settings.py:742
+#: derp/handlers/context_settings.py:752
 msgid "Delete"
 msgstr ""
 
-#: derp/handlers/context_settings.py:746 derp/handlers/operator.py:250
-#: derp/handlers/operator.py:384 derp/handlers/paid_media_controls.py:48
-#: derp/handlers/paid_media_controls.py:136 derp/handlers/tool_approvals.py:585
+#: derp/handlers/context_settings.py:756 derp/handlers/operator.py:337
+#: derp/handlers/operator.py:471 derp/handlers/operator.py:722
+#: derp/handlers/paid_media_controls.py:48
+#: derp/handlers/paid_media_controls.py:136 derp/handlers/tool_approvals.py:537
 msgid "Cancel"
 msgstr ""
 
-#: derp/handlers/context_settings.py:940
+#: derp/handlers/context_settings.py:950
 msgid "Your credits"
 msgstr ""
 
-#: derp/handlers/context_settings.py:955
+#: derp/handlers/context_settings.py:965
 #, python-brace-format
 msgid "Payment debt: {credits} credit"
 msgid_plural "Payment debt: {credits} credits"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:961
+#: derp/handlers/context_settings.py:971
 msgid "paused"
 msgstr ""
 
-#: derp/handlers/context_settings.py:964
+#: derp/handlers/context_settings.py:974
 #, python-brace-format
 msgid "This chat: {credits} purchased credit ({state})"
 msgid_plural "This chat: {credits} purchased credits ({state})"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:972
+#: derp/handlers/context_settings.py:982
 msgid "always"
 msgstr ""
 
-#: derp/handlers/context_settings.py:972
+#: derp/handlers/context_settings.py:982
 msgid "ask first"
 msgstr ""
 
-#: derp/handlers/context_settings.py:973
+#: derp/handlers/context_settings.py:983
 #, python-brace-format
 msgid "Use my credits here: {state}"
 msgstr ""
 
-#: derp/handlers/context_settings.py:990
+#: derp/handlers/context_settings.py:1000
 msgid "Credits are unavailable"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1030
-#: derp/handlers/context_settings.py:1614
+#: derp/handlers/context_settings.py:1040
+#: derp/handlers/context_settings.py:1624
 msgid "This setting only applies in groups"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1037
-#: derp/handlers/context_settings.py:1610
+#: derp/handlers/context_settings.py:1047
+#: derp/handlers/context_settings.py:1620
 msgid "This setting is no longer valid"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1053
+#: derp/handlers/context_settings.py:1063
 msgid "Your credits can be used here without asking"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1055
+#: derp/handlers/context_settings.py:1065
 msgid "I'll ask before using your credits here"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1074
+#: derp/handlers/context_settings.py:1084
 msgid "Open model privacy in your private chat."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1100
+#: derp/handlers/context_settings.py:1110
 msgid "The terms changed. Review the latest versions."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1114
-#: derp/handlers/context_settings.py:1258
+#: derp/handlers/context_settings.py:1124
+#: derp/handlers/context_settings.py:1268
 msgid "This model privacy button expired. Open the setting again."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1215
+#: derp/handlers/context_settings.py:1225
 msgid "Free models are now allowed in private chat and inline mode."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1251
+#: derp/handlers/context_settings.py:1261
 msgid "Private models only."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1291
+#: derp/handlers/context_settings.py:1301
 msgid "Delete your saved messages from this chat"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1306
-#: derp/handlers/context_settings.py:1356
+#: derp/handlers/context_settings.py:1316
+#: derp/handlers/context_settings.py:1366
 msgid "History is unavailable"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1322
-#: derp/handlers/context_settings.py:1375
+#: derp/handlers/context_settings.py:1332
+#: derp/handlers/context_settings.py:1385
 #, python-brace-format
 msgid "Deleted {count} saved message"
 msgid_plural "Deleted {count} saved messages"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:1336
-#: derp/handlers/context_settings.py:1359
+#: derp/handlers/context_settings.py:1346
+#: derp/handlers/context_settings.py:1369
 msgid "Only chat admins can clear history"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1341
+#: derp/handlers/context_settings.py:1351
 #, python-brace-format
 msgid "Clear saved history for this {scope}"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1391
-#: derp/handlers/context_settings.py:1419
+#: derp/handlers/context_settings.py:1401
+#: derp/handlers/context_settings.py:1429
 msgid "Only chat admins can forget shared facts"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1397
+#: derp/handlers/context_settings.py:1407
 #, python-brace-format
 msgid "Forget approved facts in this {scope}"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1399
+#: derp/handlers/context_settings.py:1409
 msgid ""
 "This deletes approved facts here. Saved conversation history stays "
 "unchanged."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1416
+#: derp/handlers/context_settings.py:1426
 msgid "Shared facts are unavailable"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1436
+#: derp/handlers/context_settings.py:1446
 #, python-brace-format
 msgid "Forgot {count} approved fact"
 msgid_plural "Forgot {count} approved facts"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:1454
+#: derp/handlers/context_settings.py:1464
 msgid "This proposal is unavailable"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1458
+#: derp/handlers/context_settings.py:1468
 msgid "A chat admin must review this fact"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1464
+#: derp/handlers/context_settings.py:1474
 msgid "This proposal is no longer valid"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1482
+#: derp/handlers/context_settings.py:1492
 msgid "This fact was already reviewed or is no longer available"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1487
+#: derp/handlers/context_settings.py:1497
 msgid "Approved"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1489
+#: derp/handlers/context_settings.py:1499
 msgid "Rejected"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1492
+#: derp/handlers/context_settings.py:1502
 #, python-brace-format
 msgid ""
 "<b>{state} shared fact</b>\n"
 "<blockquote>{fact}</blockquote>"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1510
-#: derp/handlers/context_settings.py:1564
-#: derp/handlers/context_settings.py:1604
+#: derp/handlers/context_settings.py:1520
+#: derp/handlers/context_settings.py:1574
+#: derp/handlers/context_settings.py:1614
 msgid "Settings are unavailable"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1513
-#: derp/handlers/context_settings.py:1567
-#: derp/handlers/context_settings.py:1607
+#: derp/handlers/context_settings.py:1523
+#: derp/handlers/context_settings.py:1577
+#: derp/handlers/context_settings.py:1617
 msgid "Only chat admins can change this"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1521
+#: derp/handlers/context_settings.py:1531
 msgid "Telegram only sends me mentions right now"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1538
+#: derp/handlers/context_settings.py:1548
 msgid "Context is on"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1541
+#: derp/handlers/context_settings.py:1551
 #, python-brace-format
 msgid "Context is off · {count} saved message deleted"
 msgid_plural "Context is off · {count} saved messages deleted"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:1587
+#: derp/handlers/context_settings.py:1597
 #, python-brace-format
 msgid "Messages will be kept for {days} day"
 msgid_plural "Messages will be kept for {days} days"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/context_settings.py:1647
+#: derp/handlers/context_settings.py:1657
 msgid "Only chat admins can set instructions"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1653
+#: derp/handlers/context_settings.py:1663
 msgid "One short instruction"
 msgstr ""
 
-#: derp/handlers/context_settings.py:1670
+#: derp/handlers/context_settings.py:1680
 msgid "Only chat admins can set instructions."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1687
+#: derp/handlers/context_settings.py:1697
 msgid "Keep the instruction under 2,048 characters."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1691
+#: derp/handlers/context_settings.py:1701
 msgid "Chat instructions saved."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1691
+#: derp/handlers/context_settings.py:1701
 msgid "Chat instructions cleared."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1699
+#: derp/handlers/context_settings.py:1709
 msgid "Reply to one of your own messages with /forget."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1710
+#: derp/handlers/context_settings.py:1720
 msgid "That message isn't saved here or doesn't belong to you."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1715
+#: derp/handlers/context_settings.py:1725
 msgid ""
 "Deleted Derp's saved copy. The Telegram message and copies made by other "
 "people remain."
 msgstr ""
 
-#: derp/handlers/context_settings.py:1739
+#: derp/handlers/context_settings.py:1749
 msgid ""
 "Derp uses recent messages for follow-up answers. Open /settings to view "
 "history and deletion settings."
 msgstr ""
 
 #: derp/handlers/credit_cmds.py:43 derp/handlers/credit_cmds.py:98
-#: derp/handlers/subscriptions.py:115
+#: derp/handlers/subscriptions.py:116
 msgid "I couldn't find your account. Try again."
 msgstr ""
 
@@ -960,7 +977,7 @@ msgstr ""
 msgid "Telegram could not prepare the invoice. Try again."
 msgstr ""
 
-#: derp/handlers/debug.py:166 derp/handlers/payments.py:155
+#: derp/handlers/debug.py:166 derp/handlers/payments.py:178
 msgid "this chat"
 msgstr ""
 
@@ -980,7 +997,7 @@ msgstr ""
 msgid "Pay {stars} Star"
 msgstr ""
 
-#: derp/handlers/debug.py:188 derp/handlers/payments.py:170
+#: derp/handlers/debug.py:188 derp/handlers/payments.py:193
 msgid "Invoice ready"
 msgstr ""
 
@@ -1039,14 +1056,14 @@ msgid ""
 "credits here, then try again."
 msgstr ""
 
-#: derp/handlers/image.py:77 derp/handlers/tool_approvals.py:689
+#: derp/handlers/image.py:77 derp/handlers/tool_approvals.py:641
 #: derp/handlers/tts.py:389
 msgid ""
 "Paid features are paused for this balance. You weren't charged. Clear the"
 " payment debt to continue."
 msgstr ""
 
-#: derp/handlers/image.py:82 derp/handlers/tool_approvals.py:694
+#: derp/handlers/image.py:82 derp/handlers/tool_approvals.py:646
 #, python-brace-format
 msgid ""
 "This image needs {credits} credit. You weren't charged. Add credits and "
@@ -1077,12 +1094,12 @@ msgstr ""
 msgid "The price expired. You weren't charged. Send the request again."
 msgstr ""
 
-#: derp/handlers/image.py:106 derp/handlers/tool_approvals.py:234
+#: derp/handlers/image.py:106 derp/handlers/tool_approvals.py:229
 #: derp/handlers/tts.py:183 derp/handlers/tts.py:420
 msgid "Canceled. You weren't charged."
 msgstr ""
 
-#: derp/handlers/image.py:107 derp/handlers/tool_approvals.py:740
+#: derp/handlers/image.py:107 derp/handlers/tool_approvals.py:692
 msgid "I couldn't create the image. You weren't charged. Try again."
 msgstr ""
 
@@ -1090,11 +1107,11 @@ msgstr ""
 msgid "Image delivered."
 msgstr ""
 
-#: derp/handlers/image.py:118 derp/handlers/tool_approvals.py:734
+#: derp/handlers/image.py:118 derp/handlers/tool_approvals.py:686
 msgid "I couldn't deliver the image. Your credits were returned."
 msgstr ""
 
-#: derp/handlers/image.py:121 derp/handlers/tool_approvals.py:716
+#: derp/handlers/image.py:121 derp/handlers/tool_approvals.py:668
 msgid ""
 "The image may already be in the chat. You won't be charged again. Check "
 "first, then tap Send again if it's missing."
@@ -1104,7 +1121,7 @@ msgstr ""
 msgid "Preparing your image..."
 msgstr ""
 
-#: derp/handlers/image.py:127 derp/handlers/tool_approvals.py:303
+#: derp/handlers/image.py:127 derp/handlers/tool_approvals.py:298
 msgid "Creating your image..."
 msgstr ""
 
@@ -1113,7 +1130,7 @@ msgid "Sending your image..."
 msgstr ""
 
 #: derp/handlers/image.py:142 derp/handlers/paid_media_delivery.py:80
-#: derp/handlers/tool_approvals.py:723
+#: derp/handlers/tool_approvals.py:675
 msgid "Send again"
 msgstr ""
 
@@ -1211,37 +1228,166 @@ msgstr ""
 msgid "Ask another question"
 msgstr ""
 
-#: derp/handlers/operator.py:129
+#: derp/handlers/legal_support.py:66
+msgid "Accepted for purchases"
+msgstr ""
+
+#: derp/handlers/legal_support.py:68
+msgid "Accept these terms before buying credits or a plan."
+msgstr ""
+
+#: derp/handlers/legal_support.py:80
+msgid "Accept terms"
+msgstr ""
+
+#: derp/handlers/legal_support.py:89
+#, python-brace-format
+msgid ""
+"<b>Terms and privacy</b>\n"
+"{state}"
+msgstr ""
+
+#: derp/handlers/legal_support.py:101
+#, python-brace-format
+msgid "{kind}: <code>{reference}</code>"
+msgstr ""
+
+#: derp/handlers/legal_support.py:108
+#, python-brace-format
+msgid ""
+"\n"
+"\n"
+"Open cases\n"
+"{cases}"
+msgstr ""
+
+#: derp/handlers/legal_support.py:113
+#, python-brace-format
+msgid ""
+"<b>Support</b>\n"
+"Choose the closest category. Derp stores the category and case reference,"
+" not a free-form support message.{current}"
+msgstr ""
+
+#: derp/handlers/legal_support.py:142 derp/handlers/legal_support.py:159
+msgid "Open Derp privately and use /terms."
+msgstr ""
+
+#: derp/handlers/legal_support.py:166
+msgid "These terms changed. Open /terms and review the current version."
+msgstr ""
+
+#: derp/handlers/legal_support.py:178
+msgid "Terms accepted"
+msgstr ""
+
+#: derp/handlers/legal_support.py:195 derp/handlers/legal_support.py:235
+#: derp/handlers/legal_support.py:256
+msgid "Open Derp privately and use /support."
+msgstr ""
+
+#: derp/handlers/legal_support.py:214
+msgid "Open Derp privately and use /paysupport."
+msgstr ""
+
+#: derp/handlers/legal_support.py:259
+msgid "This support button expired."
+msgstr ""
+
+#: derp/handlers/legal_support.py:269 derp/handlers/legal_support.py:302
+msgid "You already have several open cases. Use /support to check them."
+msgstr ""
+
+#: derp/handlers/legal_support.py:280
+msgid "Case opened"
+msgstr ""
+
+#: derp/handlers/legal_support.py:280
+msgid "Case already open"
+msgstr ""
+
+#: derp/handlers/legal_support.py:320
+#, python-brace-format
+msgid ""
+"<b>New support case</b>\n"
+"Type: {kind}\n"
+"Reference: <code>{reference}</code>"
+msgstr ""
+
+#: derp/handlers/legal_support.py:351 derp/handlers/operator.py:1654
+msgid "Payment or credits"
+msgstr ""
+
+#: derp/handlers/legal_support.py:352 derp/handlers/operator.py:1655
+msgid "Refund"
+msgstr ""
+
+#: derp/handlers/legal_support.py:353 derp/handlers/operator.py:1656
+msgid "Privacy or data"
+msgstr ""
+
+#: derp/handlers/legal_support.py:354 derp/handlers/operator.py:1657
+msgid "Access or account"
+msgstr ""
+
+#: derp/handlers/operator.py:166
 msgid "<b>Maintenance pass completed</b>"
 msgstr ""
 
-#: derp/handlers/operator.py:132
+#: derp/handlers/operator.py:169
 #, python-brace-format
 msgid "{label}: {count}"
 msgstr ""
 
-#: derp/handlers/operator.py:143
+#: derp/handlers/operator.py:180
 msgid "No changes reported"
 msgstr ""
 
-#: derp/handlers/operator.py:148
+#: derp/handlers/operator.py:185
 #, python-brace-format
 msgid "Duration: {duration} ms"
 msgstr ""
 
-#: derp/handlers/operator.py:168
+#: derp/handlers/operator.py:198
+msgid "<b>Support queue</b>"
+msgstr ""
+
+#: derp/handlers/operator.py:204
+#, python-brace-format
+msgid ""
+"<code>{reference}</code> · {kind}\n"
+"{created_at} · user <code>{requester_id}</code>"
+msgstr ""
+
+#: derp/handlers/operator.py:215
+msgid "No open cases."
+msgstr ""
+
+#: derp/handlers/operator.py:219
+#, python-brace-format
+msgid "Resolve {reference}"
+msgstr ""
+
+#: derp/handlers/operator.py:231 derp/handlers/operator.py:1027
+#: derp/handlers/operator.py:1404 derp/handlers/operator.py:1423
+#: derp/handlers/operator.py:1435 derp/handlers/operator.py:1458
+msgid "Refresh"
+msgstr ""
+
+#: derp/handlers/operator.py:254
 msgid "Operator console is private. Open Derp directly and use /operator."
 msgstr ""
 
-#: derp/handlers/operator.py:186
+#: derp/handlers/operator.py:273
 msgid "Operator console is unavailable. Try again."
 msgstr ""
 
-#: derp/handlers/operator.py:229 derp/handlers/operator.py:361
+#: derp/handlers/operator.py:316 derp/handlers/operator.py:448
+#: derp/handlers/operator.py:695
 msgid "Too many pending confirmations. Try again shortly."
 msgstr ""
 
-#: derp/handlers/operator.py:235
+#: derp/handlers/operator.py:322
 #, python-brace-format
 msgid ""
 "<b>Confirm maintenance</b>\n"
@@ -1250,135 +1396,204 @@ msgid ""
 "This runs the live worker now."
 msgstr ""
 
-#: derp/handlers/operator.py:241
+#: derp/handlers/operator.py:328
 msgid "Run now"
 msgstr ""
 
-#: derp/handlers/operator.py:284 derp/handlers/operator.py:414
+#: derp/handlers/operator.py:371 derp/handlers/operator.py:501
+#: derp/handlers/operator.py:758
 msgid "This confirmation expired. Choose the action again."
 msgstr ""
 
-#: derp/handlers/operator.py:288
+#: derp/handlers/operator.py:375
 msgid "Maintenance started"
 msgstr ""
 
-#: derp/handlers/operator.py:303
+#: derp/handlers/operator.py:390
 msgid ""
 "<b>Maintenance interrupted</b>\n"
 "The pass did not complete. Check telemetry before retrying."
 msgstr ""
 
-#: derp/handlers/operator.py:327
+#: derp/handlers/operator.py:414
 msgid "Opening test checkout"
 msgstr ""
 
-#: derp/handlers/operator.py:338
+#: derp/handlers/operator.py:425
 msgid "Test checkout is unavailable. Try again."
 msgstr ""
 
-#: derp/handlers/operator.py:369
+#: derp/handlers/operator.py:456
 msgid ""
 "<b>Refund latest test?</b>\n"
 "Only your latest fulfilled 1-Star operator test can be refunded."
 msgstr ""
 
-#: derp/handlers/operator.py:376
+#: derp/handlers/operator.py:463
 msgid "Refund test"
 msgstr ""
 
-#: derp/handlers/operator.py:418
+#: derp/handlers/operator.py:505
 msgid "Requesting refund"
 msgstr ""
 
-#: derp/handlers/operator.py:428
+#: derp/handlers/operator.py:515
 msgid ""
 "<b>Test refund failed</b>\n"
 "Telegram did not confirm it. Check telemetry before retrying."
 msgstr ""
 
-#: derp/handlers/operator.py:438
+#: derp/handlers/operator.py:525
 msgid ""
 "<b>Test refund requested</b>\n"
-"Telegram accepted it. The normal refund update will claw back the test "
-"credits."
+"Telegram accepted it and the test credits were reconciled."
 msgstr ""
 
-#: derp/handlers/operator.py:444
+#: derp/handlers/operator.py:530
+msgid ""
+"<b>Test refund needs review</b>\n"
+"The provider outcome is pending. Don't retry it; check Commerce."
+msgstr ""
+
+#: derp/handlers/operator.py:535
+msgid ""
+"<b>Test refund rejected</b>\n"
+"Telegram confirmed that no refund was sent. The test can be retried."
+msgstr ""
+
+#: derp/handlers/operator.py:540
 msgid ""
 "<b>No refundable test</b>\n"
 "Complete the 1-Star checkout first, or wait for its settlement."
 msgstr ""
 
-#: derp/handlers/operator.py:468
+#: derp/handlers/operator.py:564
 msgid "Command sync started"
 msgstr ""
 
-#: derp/handlers/operator.py:483
+#: derp/handlers/operator.py:579
 msgid ""
 "<b>Command sync failed</b>\n"
 "Telegram did not accept the complete command state."
 msgstr ""
 
-#: derp/handlers/operator.py:492
+#: derp/handlers/operator.py:588
 msgid ""
 "<b>Command menu synced</b>\n"
 "Current locales and configured scopes now match."
 msgstr ""
 
-#: derp/handlers/operator.py:516
+#: derp/handlers/operator.py:612
 msgid "Checking inference"
 msgstr ""
 
-#: derp/handlers/operator.py:528
+#: derp/handlers/operator.py:624
 msgid ""
 "<b>Inference check failed</b>\n"
 "No inference request was sent. Check telemetry."
 msgstr ""
 
-#: derp/handlers/operator.py:549
+#: derp/handlers/operator.py:677
+msgid "Support queue is unavailable."
+msgstr ""
+
+#: derp/handlers/operator.py:680
+msgid "This case is no longer open."
+msgstr ""
+
+#: derp/handlers/operator.py:701
+#, python-brace-format
+msgid ""
+"<b>Resolve support case?</b>\n"
+"<code>{reference}</code> · {kind}\n"
+"{created_at} · user <code>{requester_id}</code>"
+msgstr ""
+
+#: derp/handlers/operator.py:714
+msgid "Resolve case"
+msgstr ""
+
+#: derp/handlers/operator.py:762
+msgid "Resolving case"
+msgstr ""
+
+#: derp/handlers/operator.py:775
+msgid "Support queue is unavailable. The case was not changed."
+msgstr ""
+
+#: derp/handlers/operator.py:783 derp/handlers/operator.py:836
+msgid "The case was already resolved."
+msgstr ""
+
+#: derp/handlers/operator.py:792
+#, python-brace-format
+msgid ""
+"<b>Support case resolved</b>\n"
+"{kind}: <code>{reference}</code>"
+msgstr ""
+
+#: derp/handlers/operator.py:810
+msgid "Notification failed. The case remains open."
+msgstr ""
+
+#: derp/handlers/operator.py:827
+msgid "The requester was notified, but closing failed. The case remains open."
+msgstr ""
+
+#: derp/handlers/operator.py:848
+msgid "Case resolved. The requester was notified."
+msgstr ""
+
+#: derp/handlers/operator.py:856
 msgid "This operator button expired. Open /operator again."
 msgstr ""
 
-#: derp/handlers/operator.py:557
+#: derp/handlers/operator.py:864
 msgid "This command isn't available."
 msgstr ""
 
-#: derp/handlers/operator.py:563
+#: derp/handlers/operator.py:870
 msgid "This control is no longer available."
 msgstr ""
 
-#: derp/handlers/operator.py:574
+#: derp/handlers/operator.py:881
 msgid "Open the operator console in your private chat."
 msgstr ""
 
-#: derp/handlers/operator.py:599
+#: derp/handlers/operator.py:906
 msgid ""
 "<b>Operator console unavailable</b>\n"
 "Try again."
 msgstr ""
 
-#: derp/handlers/operator.py:644 derp/handlers/operator.py:947
+#: derp/handlers/operator.py:933
+msgid ""
+"<b>Support queue unavailable</b>\n"
+"Try again."
+msgstr ""
+
+#: derp/handlers/operator.py:979 derp/handlers/operator.py:1349
 msgid "degraded"
 msgstr ""
 
-#: derp/handlers/operator.py:646
+#: derp/handlers/operator.py:981
 #, python-brace-format
 msgid "ready · {latency} ms"
 msgstr ""
 
-#: derp/handlers/operator.py:652 derp/handlers/operator.py:1089
-#: derp/handlers/operator.py:1094
+#: derp/handlers/operator.py:987 derp/handlers/operator.py:1550
+#: derp/handlers/operator.py:1555
 msgid "none"
 msgstr ""
 
-#: derp/handlers/operator.py:655
+#: derp/handlers/operator.py:990
 #, python-brace-format
 msgid "{count} signal"
 msgid_plural "{count} signals"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/operator.py:661
+#: derp/handlers/operator.py:996
 #, python-brace-format
 msgid ""
 "<b>Operator console</b>\n"
@@ -1389,42 +1604,41 @@ msgid ""
 "Attention: {attention}"
 msgstr ""
 
-#: derp/handlers/operator.py:677 derp/handlers/operator.py:699
+#: derp/handlers/operator.py:1012 derp/handlers/operator.py:1037
 msgid "Usage"
 msgstr ""
 
-#: derp/handlers/operator.py:678 derp/handlers/operator.py:936
-#: derp/handlers/operator.py:1139
+#: derp/handlers/operator.py:1013 derp/handlers/operator.py:1338
+#: derp/handlers/operator.py:1601
 msgid "Inference"
 msgstr ""
 
-#: derp/handlers/operator.py:681 derp/handlers/operator.py:731
+#: derp/handlers/operator.py:1016 derp/handlers/operator.py:1069
 msgid "Commerce"
 msgstr ""
 
-#: derp/handlers/operator.py:682 derp/handlers/operator.py:765
-#: derp/handlers/operator.py:925 derp/handlers/operator.py:1136
+#: derp/handlers/operator.py:1017
+msgid "Support"
+msgstr ""
+
+#: derp/handlers/operator.py:1020 derp/handlers/operator.py:1164
+#: derp/handlers/operator.py:1324 derp/handlers/operator.py:1598
 msgid "Operations"
 msgstr ""
 
-#: derp/handlers/operator.py:685
+#: derp/handlers/operator.py:1021
 msgid "Runtime"
 msgstr ""
 
-#: derp/handlers/operator.py:686
+#: derp/handlers/operator.py:1024
 msgid "Tests"
 msgstr ""
 
-#: derp/handlers/operator.py:688
+#: derp/handlers/operator.py:1025
 msgid "Maintenance"
 msgstr ""
 
-#: derp/handlers/operator.py:689 derp/handlers/operator.py:1002
-#: derp/handlers/operator.py:1021
-msgid "Refresh"
-msgstr ""
-
-#: derp/handlers/operator.py:706
+#: derp/handlers/operator.py:1044
 #, python-brace-format
 msgid ""
 "<b>Usage</b>\n"
@@ -1436,20 +1650,53 @@ msgid ""
 "Artifacts: {artifacts} · {artifact_size}"
 msgstr ""
 
-#: derp/handlers/operator.py:738
+#: derp/handlers/operator.py:1079
 #, python-brace-format
 msgid ""
 "<b>Commerce</b>\n"
 "Credits: {available} available · {reserved} reserved\n"
 "Consumed: {consumed} · debt: {debt}\n"
 "Stars: {fulfilled} fulfilled · {clawed_back} clawed back\n"
+"{economics}\n"
 "\n"
 "Subscriptions: {entitled} entitled · {renewing} renewing\n"
+"Renewal queue: {renewal_pending} pending · {renewal_processing} "
+"processing · {renewal_attention} attention · {renewal_due} due\n"
+"Support: {support_open} open · {support_payment} payment · "
+"{support_resolved} resolved\n"
+"Payment inbox: {payment_pending} pending · {payment_processing} "
+"processing · {payment_attention} attention · {payment_due} due\n"
+"Payment replies: {reply_failed} failed · {reply_skipped} skipped\n"
+"Refund requests: {refunds}\n"
 "Purchase intents: {intents}\n"
 "Receipts: {receipts}"
 msgstr ""
 
-#: derp/handlers/operator.py:770
+#: derp/handlers/operator.py:1132
+#, python-brace-format
+msgid "Economics floor: {revenue} revenue · AI cost unavailable"
+msgstr ""
+
+#: derp/handlers/operator.py:1138
+#, python-brace-format
+msgid ""
+"Economics floor: {revenue} revenue · {cost} reconciled AI cost · margin "
+"incomplete ({pending} pending, {unavailable} unavailable)"
+msgstr ""
+
+#: derp/handlers/operator.py:1147 derp/handlers/operator.py:1262
+#: derp/handlers/operator.py:1710
+msgid "unavailable"
+msgstr ""
+
+#: derp/handlers/operator.py:1151
+#, python-brace-format
+msgid ""
+"Economics floor: {revenue} revenue · {cost} recorded AI cost · {margin} "
+"margin"
+msgstr ""
+
+#: derp/handlers/operator.py:1169
 #, python-brace-format
 msgid ""
 "<b>Operations</b>\n"
@@ -1460,17 +1707,17 @@ msgid ""
 "Approvals: {approvals}"
 msgstr ""
 
-#: derp/handlers/operator.py:788
+#: derp/handlers/operator.py:1187
 msgid ""
 "<b>Inference</b>\n"
 "Diagnostics are unavailable."
 msgstr ""
 
-#: derp/handlers/operator.py:794
+#: derp/handlers/operator.py:1193
 msgid "Usage diagnostics are unavailable."
 msgstr ""
 
-#: derp/handlers/operator.py:799
+#: derp/handlers/operator.py:1198
 #, python-brace-format
 msgid ""
 "Attempts: {recent} / 24h · {total} total\n"
@@ -1485,7 +1732,7 @@ msgid ""
 "Reasoning {reasoning} · audio in/out {audio_input}/{audio_output}"
 msgstr ""
 
-#: derp/handlers/operator.py:837
+#: derp/handlers/operator.py:1236
 #, python-brace-format
 msgid ""
 "<b>Inference</b>\n"
@@ -1499,31 +1746,27 @@ msgid ""
 "OpenRouter catalog: {provider_catalog}"
 msgstr ""
 
-#: derp/handlers/operator.py:863 derp/handlers/operator.py:1223
-msgid "unavailable"
-msgstr ""
-
-#: derp/handlers/operator.py:865
+#: derp/handlers/operator.py:1264
 #, python-brace-format
 msgid "{open}/{size} open · {overflow} overflow"
 msgstr ""
 
-#: derp/handlers/operator.py:871
+#: derp/handlers/operator.py:1270
 #, python-brace-format
 msgid "{worker} {state}"
 msgstr ""
 
-#: derp/handlers/operator.py:873 derp/handlers/operator.py:899
-#: derp/handlers/operator.py:900
+#: derp/handlers/operator.py:1272 derp/handlers/operator.py:1298
+#: derp/handlers/operator.py:1299
 msgid "on"
 msgstr ""
 
-#: derp/handlers/operator.py:873 derp/handlers/operator.py:899
-#: derp/handlers/operator.py:900
+#: derp/handlers/operator.py:1272 derp/handlers/operator.py:1298
+#: derp/handlers/operator.py:1299
 msgid "off"
 msgstr ""
 
-#: derp/handlers/operator.py:887
+#: derp/handlers/operator.py:1286
 #, python-brace-format
 msgid ""
 "<b>Runtime</b>\n"
@@ -1537,37 +1780,41 @@ msgid ""
 "{models}"
 msgstr ""
 
-#: derp/handlers/operator.py:912
+#: derp/handlers/operator.py:1311
 msgid ""
 "<b>Maintenance</b>\n"
 "Run an immediate pass through the live runtime workers."
 msgstr ""
 
-#: derp/handlers/operator.py:916 derp/handlers/operator.py:1133
+#: derp/handlers/operator.py:1315 derp/handlers/operator.py:1594
 msgid "All passes"
 msgstr ""
 
-#: derp/handlers/operator.py:918 derp/handlers/operator.py:1134
-msgid "History"
-msgstr ""
-
-#: derp/handlers/operator.py:920 derp/handlers/operator.py:1135
+#: derp/handlers/operator.py:1318 derp/handlers/operator.py:1596
 msgid "Subscriptions"
 msgstr ""
 
-#: derp/handlers/operator.py:928 derp/handlers/operator.py:1137
+#: derp/handlers/operator.py:1320 derp/handlers/operator.py:1597
+msgid "Payments"
+msgstr ""
+
+#: derp/handlers/operator.py:1327 derp/handlers/operator.py:1599
 msgid "Deliveries"
 msgstr ""
 
-#: derp/handlers/operator.py:933 derp/handlers/operator.py:1138
+#: derp/handlers/operator.py:1331 derp/handlers/operator.py:1595
+msgid "History"
+msgstr ""
+
+#: derp/handlers/operator.py:1333 derp/handlers/operator.py:1600
 msgid "Approvals"
 msgstr ""
 
-#: derp/handlers/operator.py:947 derp/handlers/operator.py:1222
+#: derp/handlers/operator.py:1349 derp/handlers/operator.py:1709
 msgid "ready"
 msgstr ""
 
-#: derp/handlers/operator.py:949
+#: derp/handlers/operator.py:1351
 #, python-brace-format
 msgid ""
 "<b>Tests</b>\n"
@@ -1576,330 +1823,374 @@ msgid ""
 "Command menu: all locales and audience scopes"
 msgstr ""
 
-#: derp/handlers/operator.py:958
+#: derp/handlers/operator.py:1360
 msgid "Open 1-Star checkout"
 msgstr ""
 
-#: derp/handlers/operator.py:966
+#: derp/handlers/operator.py:1368
 msgid "Refund latest 1-Star test"
 msgstr ""
 
-#: derp/handlers/operator.py:974
+#: derp/handlers/operator.py:1376
 msgid "Sync command menu"
 msgstr ""
 
-#: derp/handlers/operator.py:990
+#: derp/handlers/operator.py:1392
 #, python-brace-format
 msgid ""
 "<b>{title}</b>\n"
 "Database diagnostics are unavailable."
 msgstr ""
 
-#: derp/handlers/operator.py:1013
+#: derp/handlers/operator.py:1415
+msgid "Open support queue"
+msgstr ""
+
+#: derp/handlers/operator.py:1450
 msgid "Run read-only check"
 msgstr ""
 
-#: derp/handlers/operator.py:1082
+#: derp/handlers/operator.py:1543
 #, python-brace-format
 msgid "{state} {count}"
 msgstr ""
 
-#: derp/handlers/operator.py:1100
+#: derp/handlers/operator.py:1561
 msgid "private"
 msgstr ""
 
-#: derp/handlers/operator.py:1101
+#: derp/handlers/operator.py:1562
 msgid "group"
 msgstr ""
 
-#: derp/handlers/operator.py:1102
+#: derp/handlers/operator.py:1563
 msgid "supergroup"
 msgstr ""
 
-#: derp/handlers/operator.py:1103
+#: derp/handlers/operator.py:1564
 msgid "channel"
 msgstr ""
 
-#: derp/handlers/operator.py:1104
+#: derp/handlers/operator.py:1565
 msgid "quoted"
 msgstr ""
 
-#: derp/handlers/operator.py:1105
+#: derp/handlers/operator.py:1566
 msgid "reserved"
 msgstr ""
 
-#: derp/handlers/operator.py:1106
+#: derp/handlers/operator.py:1567
 msgid "executing"
 msgstr ""
 
-#: derp/handlers/operator.py:1107
+#: derp/handlers/operator.py:1568
 msgid "captured"
 msgstr ""
 
-#: derp/handlers/operator.py:1108
+#: derp/handlers/operator.py:1569
 msgid "released"
 msgstr ""
 
-#: derp/handlers/operator.py:1109
+#: derp/handlers/operator.py:1570
 msgid "reversed"
 msgstr ""
 
-#: derp/handlers/operator.py:1110
+#: derp/handlers/operator.py:1571
 msgid "canceled"
 msgstr ""
 
-#: derp/handlers/operator.py:1111
+#: derp/handlers/operator.py:1572
 msgid "failed"
 msgstr ""
 
-#: derp/handlers/operator.py:1112
+#: derp/handlers/operator.py:1573
 msgid "not ready"
 msgstr ""
 
-#: derp/handlers/operator.py:1113
+#: derp/handlers/operator.py:1574
 msgid "pending"
 msgstr ""
 
-#: derp/handlers/operator.py:1114
+#: derp/handlers/operator.py:1575
 msgid "delivering"
 msgstr ""
 
-#: derp/handlers/operator.py:1115
+#: derp/handlers/operator.py:1576
 msgid "delivered"
 msgstr ""
 
-#: derp/handlers/operator.py:1116
+#: derp/handlers/operator.py:1577
 msgid "uncertain"
 msgstr ""
 
-#: derp/handlers/operator.py:1117
+#: derp/handlers/operator.py:1578
 msgid "expired"
 msgstr ""
 
-#: derp/handlers/operator.py:1118
+#: derp/handlers/operator.py:1579
 msgid "approved"
 msgstr ""
 
-#: derp/handlers/operator.py:1119
+#: derp/handlers/operator.py:1580
 msgid "denied"
 msgstr ""
 
-#: derp/handlers/operator.py:1120
+#: derp/handlers/operator.py:1581
 msgid "resumed"
 msgstr ""
 
-#: derp/handlers/operator.py:1121
+#: derp/handlers/operator.py:1582
 msgid "pre-checked"
 msgstr ""
 
-#: derp/handlers/operator.py:1122
+#: derp/handlers/operator.py:1583
 msgid "fulfilled"
 msgstr ""
 
-#: derp/handlers/operator.py:1123
+#: derp/handlers/operator.py:1584
 msgid "needs review"
 msgstr ""
 
-#: derp/handlers/operator.py:1124
+#: derp/handlers/operator.py:1585
 msgid "received"
 msgstr ""
 
-#: derp/handlers/operator.py:1125
+#: derp/handlers/operator.py:1586
 msgid "clawed back"
 msgstr ""
 
-#: derp/handlers/operator.py:1126
+#: derp/handlers/operator.py:1587
 msgid "active"
 msgstr ""
 
-#: derp/handlers/operator.py:1145
+#: derp/handlers/operator.py:1607
 msgid "Purged messages"
 msgstr ""
 
-#: derp/handlers/operator.py:1146
+#: derp/handlers/operator.py:1608
 msgid "Expired cycles"
 msgstr ""
 
-#: derp/handlers/operator.py:1147
+#: derp/handlers/operator.py:1609
+msgid "Payment updates claimed"
+msgstr ""
+
+#: derp/handlers/operator.py:1610
+msgid "Payment updates settled"
+msgstr ""
+
+#: derp/handlers/operator.py:1611
+msgid "Payment updates needing attention"
+msgstr ""
+
+#: derp/handlers/operator.py:1612
+msgid "Payment update retries"
+msgstr ""
+
+#: derp/handlers/operator.py:1613
+msgid "Payment replies sent"
+msgstr ""
+
+#: derp/handlers/operator.py:1614
+msgid "Payment replies failed"
+msgstr ""
+
+#: derp/handlers/operator.py:1615
+msgid "Payment replies skipped"
+msgstr ""
+
+#: derp/handlers/operator.py:1616
+msgid "Test refunds processed"
+msgstr ""
+
+#: derp/handlers/operator.py:1617
+msgid "Test refunds reconciled"
+msgstr ""
+
+#: derp/handlers/operator.py:1618
+msgid "Test refunds needing review"
+msgstr ""
+
+#: derp/handlers/operator.py:1619
 msgid "Examined operations"
 msgstr ""
 
-#: derp/handlers/operator.py:1148
+#: derp/handlers/operator.py:1620
 msgid "Expired quotes"
 msgstr ""
 
-#: derp/handlers/operator.py:1149
+#: derp/handlers/operator.py:1621
 msgid "Released reservations"
 msgstr ""
 
-#: derp/handlers/operator.py:1150
+#: derp/handlers/operator.py:1622
 msgid "Released executions"
 msgstr ""
 
-#: derp/handlers/operator.py:1151
+#: derp/handlers/operator.py:1623
 msgid "Recovered deliveries"
 msgstr ""
 
-#: derp/handlers/operator.py:1152
+#: derp/handlers/operator.py:1624
 msgid "Incomplete results"
 msgstr ""
 
-#: derp/handlers/operator.py:1153
+#: derp/handlers/operator.py:1625
 msgid "Race skips"
 msgstr ""
 
-#: derp/handlers/operator.py:1154
+#: derp/handlers/operator.py:1626
 msgid "Interrupted deliveries"
 msgstr ""
 
-#: derp/handlers/operator.py:1155
+#: derp/handlers/operator.py:1627
 msgid "Retry candidates"
 msgstr ""
 
-#: derp/handlers/operator.py:1156
+#: derp/handlers/operator.py:1628
 msgid "Delivered"
 msgstr ""
 
-#: derp/handlers/operator.py:1157
+#: derp/handlers/operator.py:1629
 msgid "Retryable failures"
 msgstr ""
 
-#: derp/handlers/operator.py:1158
+#: derp/handlers/operator.py:1630
 msgid "Terminal failures"
 msgstr ""
 
-#: derp/handlers/operator.py:1159
+#: derp/handlers/operator.py:1631
 msgid "Uncertain deliveries"
 msgstr ""
 
-#: derp/handlers/operator.py:1160
+#: derp/handlers/operator.py:1632
 msgid "Retry exceptions"
 msgstr ""
 
-#: derp/handlers/operator.py:1161
+#: derp/handlers/operator.py:1633
 msgid "Expired deliveries"
 msgstr ""
 
-#: derp/handlers/operator.py:1162
+#: derp/handlers/operator.py:1634
 msgid "Interruption failures"
 msgstr ""
 
-#: derp/handlers/operator.py:1163
+#: derp/handlers/operator.py:1635
 msgid "Expiration failures"
 msgstr ""
 
-#: derp/handlers/operator.py:1164
+#: derp/handlers/operator.py:1636
 msgid "Examined artifacts"
 msgstr ""
 
-#: derp/handlers/operator.py:1165
+#: derp/handlers/operator.py:1637
 msgid "Purged artifacts"
 msgstr ""
 
-#: derp/handlers/operator.py:1166
+#: derp/handlers/operator.py:1638
 msgid "Artifact failures"
 msgstr ""
 
-#: derp/handlers/operator.py:1167
+#: derp/handlers/operator.py:1639
 msgid "Configured"
 msgstr ""
 
-#: derp/handlers/operator.py:1168
+#: derp/handlers/operator.py:1640
 msgid "Claims"
 msgstr ""
 
-#: derp/handlers/operator.py:1169
+#: derp/handlers/operator.py:1641
 msgid "Reconciled costs"
 msgstr ""
 
-#: derp/handlers/operator.py:1170
+#: derp/handlers/operator.py:1642
 msgid "Retries scheduled"
 msgstr ""
 
-#: derp/handlers/operator.py:1171
+#: derp/handlers/operator.py:1643
 msgid "Metadata unavailable"
 msgstr ""
 
-#: derp/handlers/operator.py:1172
+#: derp/handlers/operator.py:1644
 msgid "Claims lost"
 msgstr ""
 
-#: derp/handlers/operator.py:1173
+#: derp/handlers/operator.py:1645
 msgid "Stale attempts closed"
 msgstr ""
 
-#: derp/handlers/operator.py:1174
+#: derp/handlers/operator.py:1646
 msgid "Phase failures"
 msgstr ""
 
-#: derp/handlers/operator.py:1175
+#: derp/handlers/operator.py:1647
 msgid "Expired approvals"
 msgstr ""
 
-#: derp/handlers/operator.py:1194
+#: derp/handlers/operator.py:1681
 #, python-brace-format
 msgid "{used} used · no key limit"
 msgstr ""
 
-#: derp/handlers/operator.py:1197
+#: derp/handlers/operator.py:1684
 #, python-brace-format
 msgid "{remaining} of {limit} left · {used} used"
 msgstr ""
 
-#: derp/handlers/operator.py:1210
+#: derp/handlers/operator.py:1697
 #, python-brace-format
 msgid "{count} models · {visible}/{enabled} enabled visible"
 msgstr ""
 
-#: derp/handlers/operator.py:1220
+#: derp/handlers/operator.py:1707
 msgid "not configured"
 msgstr ""
 
-#: derp/handlers/operator.py:1221
+#: derp/handlers/operator.py:1708
 msgid "not checked"
 msgstr ""
 
-#: derp/handlers/operator.py:1233
+#: derp/handlers/operator.py:1720
 #, python-brace-format
 msgid "{days}d {hours}h"
 msgstr ""
 
-#: derp/handlers/operator.py:1235
+#: derp/handlers/operator.py:1722
 #, python-brace-format
 msgid "{hours}h {minutes}m"
 msgstr ""
 
-#: derp/handlers/operator.py:1237
+#: derp/handlers/operator.py:1724
 #, python-brace-format
 msgid "{minutes}m {seconds}s"
 msgstr ""
 
-#: derp/handlers/operator.py:1241
+#: derp/handlers/operator.py:1728
 #, python-brace-format
 msgid "{seconds}s"
 msgstr ""
 
-#: derp/handlers/operator.py:1246
+#: derp/handlers/operator.py:1733
 msgid "B"
 msgstr ""
 
-#: derp/handlers/operator.py:1246
+#: derp/handlers/operator.py:1733
 msgid "KiB"
 msgstr ""
 
-#: derp/handlers/operator.py:1246
+#: derp/handlers/operator.py:1733
 msgid "MiB"
 msgstr ""
 
-#: derp/handlers/operator.py:1246
+#: derp/handlers/operator.py:1733
 msgid "GiB"
 msgstr ""
 
-#: derp/handlers/operator.py:1246
+#: derp/handlers/operator.py:1733
 msgid "TiB"
 msgstr ""
 
-#: derp/handlers/operator.py:1266
+#: derp/handlers/operator.py:1753
 msgid "unknown"
 msgstr ""
 
@@ -1912,16 +2203,16 @@ msgid "Create video"
 msgstr ""
 
 #: derp/handlers/paid_media_controls.py:69
-#: derp/handlers/paid_media_controls.py:128 derp/handlers/tool_approvals.py:598
-#: derp/handlers/tool_approvals.py:613
+#: derp/handlers/paid_media_controls.py:128 derp/handlers/tool_approvals.py:550
+#: derp/handlers/tool_approvals.py:565
 msgid "Try again"
 msgstr ""
 
-#: derp/handlers/paid_media_controls.py:94 derp/handlers/tool_approvals.py:620
+#: derp/handlers/paid_media_controls.py:94 derp/handlers/tool_approvals.py:572
 msgid "Use my credits once"
 msgstr ""
 
-#: derp/handlers/paid_media_controls.py:102 derp/handlers/tool_approvals.py:627
+#: derp/handlers/paid_media_controls.py:102 derp/handlers/tool_approvals.py:579
 msgid "Always use my credits"
 msgstr ""
 
@@ -1947,51 +2238,55 @@ msgstr ""
 msgid "Sending it now..."
 msgstr ""
 
-#: derp/handlers/payments.py:56
+#: derp/handlers/payments.py:69
 #, python-brace-format
 msgid "{stars} Star"
 msgid_plural "{stars} Stars"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/payments.py:71
+#: derp/handlers/payments.py:84
 msgid "Credit purchases aren't available yet. You won't be charged."
 msgstr ""
 
-#: derp/handlers/payments.py:77
+#: derp/handlers/payments.py:90
 msgid ""
 "This purchase is unavailable. You won't be charged. Open /buy and try "
 "again."
 msgstr ""
 
-#: derp/handlers/payments.py:85
+#: derp/handlers/payments.py:98
 msgid "This purchase is no longer valid. You won't be charged. Open /buy again."
 msgstr ""
 
-#: derp/handlers/payments.py:119
+#: derp/handlers/payments.py:137
+msgid "Review and accept the current terms before buying."
+msgstr ""
+
+#: derp/handlers/payments.py:142
 msgid "Your monthly plan is already active"
 msgstr ""
 
-#: derp/handlers/payments.py:125
+#: derp/handlers/payments.py:148
 msgid ""
 "This purchase option is no longer available. You won't be charged. Open "
 "/buy again."
 msgstr ""
 
-#: derp/handlers/payments.py:139
+#: derp/handlers/payments.py:162
 msgid "Telegram couldn't prepare the invoice. You won't be charged. Try again."
 msgstr ""
 
-#: derp/handlers/payments.py:149
+#: derp/handlers/payments.py:172
 #, python-brace-format
 msgid "Pay {price}"
 msgstr ""
 
-#: derp/handlers/payments.py:155
+#: derp/handlers/payments.py:178
 msgid "you"
 msgstr ""
 
-#: derp/handlers/payments.py:158
+#: derp/handlers/payments.py:181
 #, python-brace-format
 msgid ""
 "<b>{credits} credit for {owner}</b>\n"
@@ -2002,33 +2297,47 @@ msgid_plural ""
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/payments.py:185
+#: derp/handlers/payments.py:208
 msgid "This purchase option expired. You weren't charged. Open /buy again."
 msgstr ""
 
-#: derp/handlers/payments.py:215
+#: derp/handlers/payments.py:245
 msgid ""
 "This invoice expired or changed. You won't be charged. Open /buy and try "
 "again."
 msgstr ""
 
-#: derp/handlers/payments.py:247
+#: derp/handlers/payments.py:275
+msgid ""
+"Payment recorded. Credits are still processing. Don't pay again; check "
+"/credits shortly."
+msgstr ""
+
+#: derp/handlers/payments.py:301
 msgid ""
 "Telegram charged this payment, but your credits haven't been added. The "
-"payment needs review. Don't buy again; contact support with the receipt."
+"payment needs review. Don't buy again. Open /paysupport."
 msgstr ""
 
-#: derp/handlers/payments.py:256
+#: derp/handlers/payments.py:311 derp/handlers/payments.py:325
 msgid ""
 "Telegram charged this payment, but no credits were added because the "
-"details need review. Don't buy again; contact support."
+"details need review. Don't pay again. Open /paysupport."
 msgstr ""
 
-#: derp/handlers/payments.py:260
+#: derp/handlers/payments.py:319
+msgid "This payment was already refunded. No credits were added. Check /credits."
+msgstr ""
+
+#: derp/handlers/payments.py:322
+msgid "Payment processed. Check /credits."
+msgstr ""
+
+#: derp/handlers/payments.py:329
 msgid "This payment was already applied. No credits changed this time."
 msgstr ""
 
-#: derp/handlers/payments.py:263
+#: derp/handlers/payments.py:332
 #, python-brace-format
 msgid ""
 "<b>Plan active</b>\n"
@@ -2039,67 +2348,78 @@ msgid_plural ""
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/payments.py:269
+#: derp/handlers/payments.py:338
 msgid "<b>Payment complete</b>"
 msgstr ""
 
-#: derp/handlers/payments.py:271
+#: derp/handlers/payments.py:340
 #, python-brace-format
 msgid "Purchased credit available: {credits}"
 msgid_plural "Purchased credits available: {credits}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/payments.py:279
+#: derp/handlers/payments.py:348
 #, python-brace-format
 msgid "Used to repay payment debt: {credits} credit"
 msgid_plural "Used to repay payment debt: {credits} credits"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/payments.py:320 derp/handlers/payments.py:335
+#: derp/handlers/payments.py:398
 msgid ""
-"Telegram sent a refund, but it needs review. No credits changed. Contact "
-"support."
+"Refund recorded. Balance changes are still processing. Check /credits "
+"shortly."
 msgstr ""
 
-#: derp/handlers/payments.py:342
+#: derp/handlers/payments.py:421 derp/handlers/payments.py:436
+#: derp/handlers/payments.py:446
+msgid ""
+"Telegram sent a refund, but it needs review. No credits changed. Open "
+"/paysupport."
+msgstr ""
+
+#: derp/handlers/payments.py:450
+msgid "Refund processed. Check /credits."
+msgstr ""
+
+#: derp/handlers/payments.py:452
 msgid "This refund was already applied. No credits changed this time."
 msgstr ""
 
-#: derp/handlers/payments.py:345
+#: derp/handlers/payments.py:455
 msgid "<b>Refund complete</b>"
 msgstr ""
 
-#: derp/handlers/payments.py:347
+#: derp/handlers/payments.py:457
 #, python-brace-format
 msgid "Unused credit removed: {credits}"
 msgid_plural "Unused credits removed: {credits}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/payments.py:355
+#: derp/handlers/payments.py:465
 #, python-brace-format
 msgid "Payment debt added: {credits} credit. Paid features are paused."
 msgid_plural "Payment debt added: {credits} credits. Paid features are paused."
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/payments.py:383
+#: derp/handlers/payments.py:499
 msgid "I sent the payment details in a private chat."
 msgstr ""
 
-#: derp/handlers/payments.py:385
+#: derp/handlers/payments.py:501
 msgid ""
 "I couldn't send the payment details. Open Derp privately and check "
 "/credits."
 msgstr ""
 
-#: derp/handlers/payments.py:402
+#: derp/handlers/payments.py:518
 msgid "I sent the refund details in a private chat."
 msgstr ""
 
-#: derp/handlers/payments.py:404
+#: derp/handlers/payments.py:520
 msgid ""
 "I couldn't send the refund details. Open Derp privately and check "
 "/credits."
@@ -2109,42 +2429,42 @@ msgstr ""
 msgid "This feature isn't available right now. You weren't charged."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:62
+#: derp/handlers/subscriptions.py:63
 msgid "Expired"
 msgstr ""
 
-#: derp/handlers/subscriptions.py:63
+#: derp/handlers/subscriptions.py:64
 #, python-brace-format
 msgid "Your last paid period ended {date}."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:66
+#: derp/handlers/subscriptions.py:67
 msgid "Active · renews automatically"
 msgstr ""
 
-#: derp/handlers/subscriptions.py:67
+#: derp/handlers/subscriptions.py:68
 #, python-brace-format
 msgid "Your current credits are available until {date}."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:74
+#: derp/handlers/subscriptions.py:75
 msgid "Cancel automatic renewal"
 msgstr ""
 
-#: derp/handlers/subscriptions.py:83
+#: derp/handlers/subscriptions.py:84
 msgid "Active · renewal off"
 msgstr ""
 
-#: derp/handlers/subscriptions.py:84
+#: derp/handlers/subscriptions.py:85
 #, python-brace-format
 msgid "Your credits remain available until {date}."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:91
+#: derp/handlers/subscriptions.py:92
 msgid "Turn renewal back on"
 msgstr ""
 
-#: derp/handlers/subscriptions.py:99
+#: derp/handlers/subscriptions.py:100
 #, python-brace-format
 msgid ""
 "<b>Derp Personal</b>\n"
@@ -2153,142 +2473,154 @@ msgid ""
 "{timing}"
 msgstr ""
 
-#: derp/handlers/subscriptions.py:119
+#: derp/handlers/subscriptions.py:120
 msgid ""
 "<b>Derp Personal</b>\n"
 "You don't have a monthly plan."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:128
+#: derp/handlers/subscriptions.py:129
 msgid "I sent your plan details in a private chat."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:130
+#: derp/handlers/subscriptions.py:131
 msgid "I couldn't send your plan details. Open Derp privately and use /plan."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:147
+#: derp/handlers/subscriptions.py:148
 msgid "I can't manage this plan right now"
 msgstr ""
 
-#: derp/handlers/subscriptions.py:151
+#: derp/handlers/subscriptions.py:152
 msgid "This plan link is no longer valid. Open /plan again."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:156
+#: derp/handlers/subscriptions.py:157
 msgid "Open Derp privately to manage your plan."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:170
+#: derp/handlers/subscriptions.py:171
 msgid "This plan changed or expired. Open /plan again."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:180
+#: derp/handlers/subscriptions.py:181
 msgid "Telegram couldn't update renewal. Try again."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:189
+#: derp/handlers/subscriptions.py:190
 msgid "Renewal may have changed. Open /plan to check its current status."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:203
+#: derp/handlers/subscriptions.py:204
+msgid "Telegram hasn't confirmed this yet. Derp will retry."
+msgstr ""
+
+#: derp/handlers/subscriptions.py:206
+msgid "Renewal still isn't confirmed. Use /paysupport."
+msgstr ""
+
+#: derp/handlers/subscriptions.py:208
+msgid "This plan changed. Open /plan again."
+msgstr ""
+
+#: derp/handlers/subscriptions.py:211
 msgid "Automatic renewal is on"
 msgstr ""
 
-#: derp/handlers/subscriptions.py:205
+#: derp/handlers/subscriptions.py:213
 msgid "Automatic renewal is off. Your paid period stays active."
 msgstr ""
 
-#: derp/handlers/subscriptions.py:214
+#: derp/handlers/subscriptions.py:222
 msgid "This plan button expired. Open /plan again."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:149
+#: derp/handlers/tool_approvals.py:144
 msgid ""
 "I can only create one paid image at a time. You weren't charged. Ask for "
 "one image and try again."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:167
+#: derp/handlers/tool_approvals.py:162
 msgid ""
 "I need an image to edit. You weren't charged. Attach one or reply to one,"
 " then try again."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:176
+#: derp/handlers/tool_approvals.py:171
 msgid ""
 "I couldn't understand that image request. You weren't charged. Try again "
 "with one clear instruction."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:183
+#: derp/handlers/tool_approvals.py:178
 msgid "Edit this image"
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:183
+#: derp/handlers/tool_approvals.py:178
 msgid "Create this image"
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:186
+#: derp/handlers/tool_approvals.py:181
 #, python-brace-format
 msgid "{action} for {credits} credit?"
 msgid_plural "{action} for {credits} credits?"
 msgstr[0] ""
 msgstr[1] ""
 
-#: derp/handlers/tool_approvals.py:198
+#: derp/handlers/tool_approvals.py:193
 msgid "Edit image"
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:198
+#: derp/handlers/tool_approvals.py:193
 msgid "Create image"
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:220 derp/handlers/tool_approvals.py:290
+#: derp/handlers/tool_approvals.py:215 derp/handlers/tool_approvals.py:285
 #: derp/handlers/tts.py:157 derp/handlers/tts.py:223
 msgid "I can't use this request in this chat."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:226 derp/handlers/tool_approvals.py:770
+#: derp/handlers/tool_approvals.py:221 derp/handlers/tool_approvals.py:722
 msgid "This image request is already running."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:232 derp/handlers/tool_approvals.py:270
-#: derp/handlers/tool_approvals.py:782
+#: derp/handlers/tool_approvals.py:227 derp/handlers/tool_approvals.py:265
+#: derp/handlers/tool_approvals.py:734
 msgid "This image request expired. You weren't charged. Send it again."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:267 derp/handlers/tool_approvals.py:779
+#: derp/handlers/tool_approvals.py:262 derp/handlers/tool_approvals.py:731
 msgid "This image request has expired."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:295
+#: derp/handlers/tool_approvals.py:290
 msgid "This image request was canceled."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:302 derp/handlers/tts.py:272
+#: derp/handlers/tool_approvals.py:297 derp/handlers/tts.py:272
 msgid "Started"
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:353
+#: derp/handlers/tool_approvals.py:348
 msgid "I couldn't finish the image. Tap Try again."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:684
+#: derp/handlers/tool_approvals.py:636
 msgid ""
 "This chat can't cover the image. You weren't charged. Use your credits "
 "once or add chat credits."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:744
+#: derp/handlers/tool_approvals.py:696
 msgid "Still working on your image..."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:775
+#: derp/handlers/tool_approvals.py:727
 msgid "This image request is already complete."
 msgstr ""
 
-#: derp/handlers/tool_approvals.py:777
+#: derp/handlers/tool_approvals.py:729
 msgid "Image request complete."
 msgstr ""
 

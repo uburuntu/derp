@@ -18,6 +18,11 @@ from derp.billing import (
     FulfillmentResult,
     FulfillmentState,
     PaymentConflictError,
+    PaymentReplyDisposition,
+    PaymentSettlementState,
+    PaymentUpdateDisposition,
+    PaymentUpdateKind,
+    PaymentUpdateOutcome,
     PreCheckoutDecision,
     PreCheckoutRejection,
     PreCheckoutRequest,
@@ -35,7 +40,9 @@ from derp.handlers.payments import (
     handle_successful_payment,
     reject_malformed_buy_callback,
 )
+from derp.legal import TermsAcceptanceRequiredError
 from derp.observability import telemetry_fingerprint
+from derp.operator import OperatorAccessPolicy
 
 NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 OPEN_COMMERCE = CommercePolicy(public_intake_enabled=True)
@@ -142,6 +149,36 @@ class TestBuyCallback:
         callback.answer.assert_awaited_once_with(
             "This purchase is unavailable. You won't be charged. "
             "Open /buy and try again.",
+            show_alert=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_current_terms_are_required_before_invoice_creation(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+    ) -> None:
+        service = _purchase_intents()
+        service.create_top_up_intent.side_effect = TermsAcceptanceRequiredError
+        callback = _callback(make_message, make_user)
+
+        await handle_buy_callback(
+            callback,
+            PurchaseCallback(
+                kind=ProductKind.TOP_UP,
+                product_id="starter",
+                target=PurchaseTargetCode.USER,
+            ),
+            service,
+            mock_user_model(user_id=UUID(int=1), telegram_id=12345),
+            commerce_policy=OPEN_COMMERCE,
+        )
+
+        callback.bot.create_invoice_link.assert_not_awaited()
+        assert "Terms and privacy" in callback.message.answer.await_args.args[0]
+        callback.answer.assert_awaited_once_with(
+            "Review and accept the current terms before buying.",
             show_alert=True,
         )
 
@@ -443,7 +480,11 @@ class TestPreCheckout:
         pre_checkout.total_amount = 150
         pre_checkout.answer = AsyncMock()
 
-        await handle_pre_checkout(pre_checkout, service)
+        await handle_pre_checkout(
+            pre_checkout,
+            service,
+            commerce_policy=OPEN_COMMERCE,
+        )
 
         service.validate_pre_checkout.assert_awaited_once_with(
             PreCheckoutRequest(
@@ -451,9 +492,38 @@ class TestPreCheckout:
                 payer_telegram_id=12345,
                 currency="XTR",
                 total_amount=150,
-            )
+            ),
+            public_intake_enabled=True,
+            operator_debug_allowed=False,
         )
         pre_checkout.answer.assert_awaited_once_with(ok=True)
+
+    @pytest.mark.asyncio
+    async def test_closed_intake_only_exposes_operator_debug_exception(
+        self, make_user
+    ) -> None:
+        service = _purchase_intents()
+        service.validate_pre_checkout.return_value = PreCheckoutDecision(
+            approved=True,
+            intent_id=UUID(int=21),
+        )
+        pre_checkout = MagicMock()
+        pre_checkout.invoice_payload = "dpi1_debug-token"
+        pre_checkout.from_user = make_user(id=12345)
+        pre_checkout.currency = "XTR"
+        pre_checkout.total_amount = 1
+        pre_checkout.answer = AsyncMock()
+
+        await handle_pre_checkout(
+            pre_checkout,
+            service,
+            operator_access=OperatorAccessPolicy.from_ids((12345,)),
+        )
+
+        assert service.validate_pre_checkout.await_args.kwargs == {
+            "public_intake_enabled": False,
+            "operator_debug_allowed": True,
+        }
 
     @pytest.mark.asyncio
     async def test_rejected_decision_fails_checkout_closed(self, make_user) -> None:
@@ -659,6 +729,45 @@ class TestSuccessfulPayment:
         suppress_history.assert_called_once_with()
 
     @pytest.mark.asyncio
+    async def test_failed_group_private_delivery_is_durably_retried(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _payment_message(make_message, chat_type="supergroup")
+        message.bot.send_message.side_effect = RuntimeError("private chat unavailable")
+        sender = mock_sender(message=message)
+        outcome = PaymentUpdateOutcome(
+            inbox_id=UUID(int=70),
+            kind=PaymentUpdateKind.SUCCESSFUL,
+            disposition=PaymentUpdateDisposition.SETTLED,
+            lease_token=UUID(int=71),
+            fulfillment=FulfillmentResult(
+                receipt_id=UUID(int=72),
+                state=FulfillmentState.FULFILLED,
+                available_credits=10,
+            ),
+        )
+        inbox = MagicMock()
+        inbox.reconcile = AsyncMock(return_value=outcome)
+        inbox.finish_notification = AsyncMock()
+
+        with patch("derp.common.private_delivery.report_exception"):
+            await handle_successful_payment(
+                message,
+                sender,
+                _settlement(),
+                inbox,
+                outcome.inbox_id,
+            )
+
+        inbox.finish_notification.assert_awaited_once_with(
+            outcome,
+            PaymentReplyDisposition.FAILED,
+        )
+        assert sender.reply.await_args.args[0].startswith("I couldn't send")
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("result", "expected"),
         [
@@ -678,6 +787,14 @@ class TestSuccessfulPayment:
                 ),
                 "need review",
             ),
+            (
+                FulfillmentResult(
+                    receipt_id=UUID(int=52),
+                    state=FulfillmentState.CLAWED_BACK,
+                    idempotent=True,
+                ),
+                "already refunded",
+            ),
         ],
     )
     async def test_settlement_state_has_unambiguous_user_copy(
@@ -693,6 +810,36 @@ class TestSuccessfulPayment:
         await handle_successful_payment(message, sender, _settlement(result))
 
         assert expected in sender.reply.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_inbox_replay_uses_durable_clawed_back_copy(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _payment_message(make_message)
+        sender = mock_sender(message=message)
+        outcome = PaymentUpdateOutcome(
+            inbox_id=UUID(int=53),
+            kind=PaymentUpdateKind.SUCCESSFUL,
+            disposition=PaymentUpdateDisposition.SETTLED,
+            lease_token=UUID(int=54),
+            settlement_state=PaymentSettlementState.CLAWED_BACK,
+        )
+        inbox = MagicMock()
+        inbox.reconcile = AsyncMock(return_value=outcome)
+        inbox.finish_notification = AsyncMock()
+
+        await handle_successful_payment(
+            message,
+            sender,
+            _settlement(),
+            inbox,
+            outcome.inbox_id,
+        )
+
+        assert "already refunded" in sender.reply.await_args.args[0]
+        inbox.finish_notification.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_fulfillment_failure_does_not_tell_user_to_buy_again(
@@ -798,6 +945,44 @@ class TestRefundedPayment:
         assert "30" not in public
         assert "20" not in public
         suppress_history.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_successful_group_private_delivery_completes_reply_lease(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _refund_message(make_message, chat_type="supergroup")
+        sender = mock_sender(message=message)
+        outcome = PaymentUpdateOutcome(
+            inbox_id=UUID(int=73),
+            kind=PaymentUpdateKind.REFUNDED,
+            disposition=PaymentUpdateDisposition.SETTLED,
+            lease_token=UUID(int=74),
+            clawback=ClawbackResult(
+                receipt_id=UUID(int=75),
+                wallet_id=UUID(int=76),
+                removed_available_credits=10,
+                debt_created_credits=0,
+                idempotent=False,
+            ),
+        )
+        inbox = MagicMock()
+        inbox.reconcile = AsyncMock(return_value=outcome)
+        inbox.finish_notification = AsyncMock()
+
+        await handle_refunded_payment(
+            message,
+            sender,
+            _refund_settlement(),
+            inbox,
+            outcome.inbox_id,
+        )
+
+        inbox.finish_notification.assert_awaited_once_with(
+            outcome,
+            PaymentReplyDisposition.SENT,
+        )
 
     @pytest.mark.asyncio
     async def test_idempotent_refund_has_unambiguous_copy(

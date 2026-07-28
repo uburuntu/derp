@@ -3,15 +3,18 @@
 from derp.models.base import Base, TimestampMixin
 from derp.models.billing import (
     PaymentReceipt,
+    PaymentUpdateInbox,
     PurchaseIntent,
     Subscription,
     SubscriptionCycle,
+    SubscriptionRenewalCommandRecord,
 )
 from derp.models.chat import Chat
 from derp.models.credit_transaction import CreditTransaction
 from derp.models.daily_usage import DailyUsage
 from derp.models.delivery import Artifact, DeliveryIntent
 from derp.models.inference_usage import InferenceUsage
+from derp.models.legal_support import LegalAcceptance, SupportRequest
 from derp.models.message import Message
 from derp.models.paid_operation import (
     DeferredToolRequest,
@@ -19,11 +22,14 @@ from derp.models.paid_operation import (
     OperationQuote,
     PaidOperation,
 )
+from derp.models.refund import PaymentRefundRequest
 from derp.models.shared_fact import SharedFact, SharedFactState
 from derp.models.user import User
 from derp.models.wallet import (
     PersonalSpendConsent,
     Wallet,
+    WalletDebtRepaymentAllocation,
+    WalletDebtSource,
     WalletLedgerEntry,
     WalletLot,
 )
@@ -32,9 +38,12 @@ __all__ = [
     "Base",
     "TimestampMixin",
     "PaymentReceipt",
+    "PaymentUpdateInbox",
+    "PaymentRefundRequest",
     "PurchaseIntent",
     "Subscription",
     "SubscriptionCycle",
+    "SubscriptionRenewalCommandRecord",
     "User",
     "Chat",
     "Message",
@@ -46,6 +55,8 @@ __all__ = [
     "SharedFactState",
     "PersonalSpendConsent",
     "Wallet",
+    "WalletDebtRepaymentAllocation",
+    "WalletDebtSource",
     "WalletLedgerEntry",
     "WalletLot",
     "CreditTransaction",
@@ -53,4 +64,6 @@ __all__ = [
     "Artifact",
     "DeliveryIntent",
     "InferenceUsage",
+    "LegalAcceptance",
+    "SupportRequest",
 ]

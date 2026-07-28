@@ -1,6 +1,12 @@
 """Paid-operation domain values shared by billing, features, and delivery."""
 
 from derp.operations.bindings import OperationRequestBinder
+from derp.operations.debt import (
+    DebtRecovery,
+    DebtRepayment,
+    WalletDebtProvenance,
+    WalletDebtProvenanceError,
+)
 from derp.operations.ledger import (
     ImmutableQuoteConflictError,
     InvalidOperationTransitionError,
@@ -8,11 +14,15 @@ from derp.operations.ledger import (
     OperationLedgerError,
 )
 from derp.operations.quotes import (
+    CHAT_EXECUTION_ALLOWANCE_VERSION,
+    DEFAULT_CHAT_EXECUTION_ALLOWANCE,
     DEFAULT_IMAGE_FINISHING_ALLOWANCE,
     DEFAULT_QUOTE_POLICY,
     IMAGE_FINISHING_ALLOWANCE_VERSION,
     IMAGE_FINISHING_OUTPUT_TOKENS,
     PRICING_VERSION,
+    AgentExecutionBudget,
+    ChatExecutionAllowance,
     ChatQuoteInput,
     CompositeImageQuoteInput,
     DeepThinkQuoteInput,
@@ -27,6 +37,8 @@ from derp.operations.quotes import (
     QuotePolicy,
     TtsQuoteInput,
     VideoGenerateQuoteInput,
+    chat_execution_budget,
+    image_finishing_execution_budget,
 )
 from derp.operations.reconciliation import (
     DEFAULT_OPERATION_STALE_AFTER,
@@ -71,6 +83,10 @@ from derp.operations.types import (
 )
 
 __all__ = [
+    "AgentExecutionBudget",
+    "CHAT_EXECUTION_ALLOWANCE_VERSION",
+    "ChatExecutionAllowance",
+    "DEFAULT_CHAT_EXECUTION_ALLOWANCE",
     "DEFAULT_IMAGE_FINISHING_ALLOWANCE",
     "DEFAULT_QUOTE_POLICY",
     "DEFAULT_OPERATION_STALE_AFTER",
@@ -82,6 +98,8 @@ __all__ = [
     "CompositeImageQuoteInput",
     "ContextBand",
     "DeepThinkQuoteInput",
+    "DebtRecovery",
+    "DebtRepayment",
     "DeliveryState",
     "DeliveryReadiness",
     "FinishingChatQuoteInput",
@@ -125,9 +143,13 @@ __all__ = [
     "MAX_RECONCILIATION_INTERVAL",
     "MIN_OPERATION_STALE_AFTER",
     "WalletBalance",
+    "WalletDebtProvenance",
+    "WalletDebtProvenanceError",
     "WalletActivity",
     "WalletActivityKind",
     "WalletOwner",
     "WalletOwnerKind",
     "WalletStatement",
+    "chat_execution_budget",
+    "image_finishing_execution_budget",
 ]

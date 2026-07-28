@@ -148,6 +148,101 @@ class WalletLot(TimestampMixin, Base):
     )
 
 
+class WalletDebtSource(TimestampMixin, Base):
+    """Debt created by revoking one exact wallet-lot source."""
+
+    __tablename__ = "wallet_debt_sources"
+    __table_args__ = (
+        CheckConstraint(
+            "incurred_credits > 0",
+            name="wallet_debt_source_incurred_positive",
+        ),
+        CheckConstraint(
+            "outstanding_credits >= 0 AND recovered_credits >= 0 "
+            "AND (outstanding_credits + recovered_credits) <= incurred_credits",
+            name="wallet_debt_source_counters_valid",
+        ),
+        ForeignKeyConstraint(
+            ["source_wallet_lot_id", "wallet_id"],
+            ["wallet_lots.id", "wallet_lots.wallet_id"],
+            name="fk_wallet_debt_source_lot_wallet",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "source_wallet_lot_id",
+            name="uq_wallet_debt_source_lot",
+        ),
+        UniqueConstraint("id", "wallet_id", name="uq_wallet_debt_source_wallet"),
+        Index(
+            "idx_wallet_debt_sources_open",
+            "wallet_id",
+            "created_at",
+            "id",
+            postgresql_where=text("outstanding_credits > 0"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    wallet_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("wallets.id", ondelete="RESTRICT")
+    )
+    source_wallet_lot_id: Mapped[uuid.UUID] = mapped_column()
+    incurred_credits: Mapped[int] = mapped_column(Integer)
+    outstanding_credits: Mapped[int] = mapped_column(Integer)
+    recovered_credits: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+
+
+class WalletDebtRepaymentAllocation(TimestampMixin, Base):
+    """Exact grant-lot value applied to one debt source."""
+
+    __tablename__ = "wallet_debt_repayment_allocations"
+    __table_args__ = (
+        CheckConstraint(
+            "allocated_credits > 0",
+            name="wallet_debt_repayment_allocated_positive",
+        ),
+        CheckConstraint(
+            "restored_credits >= 0 AND revoked_credits >= 0 "
+            "AND (restored_credits + revoked_credits) <= allocated_credits",
+            name="wallet_debt_repayment_counters_valid",
+        ),
+        ForeignKeyConstraint(
+            ["debt_source_id", "wallet_id"],
+            ["wallet_debt_sources.id", "wallet_debt_sources.wallet_id"],
+            name="fk_wallet_debt_repayment_source_wallet",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["repayment_wallet_lot_id", "wallet_id"],
+            ["wallet_lots.id", "wallet_lots.wallet_id"],
+            name="fk_wallet_debt_repayment_lot_wallet",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "idx_wallet_debt_repayments_active",
+            "debt_source_id",
+            "created_at",
+            "repayment_wallet_lot_id",
+            postgresql_where=text(
+                "restored_credits + revoked_credits < allocated_credits"
+            ),
+        ),
+    )
+
+    debt_source_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    repayment_wallet_lot_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    wallet_id: Mapped[uuid.UUID] = mapped_column()
+    allocated_credits: Mapped[int] = mapped_column(Integer)
+    restored_credits: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+    revoked_credits: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+
+
 class PersonalSpendConsent(TimestampMixin, Base):
     """A user's durable permission to use their wallet in one chat."""
 
@@ -189,7 +284,8 @@ class WalletLedgerEntry(Base):
             "event_type::text = ANY (ARRAY["
             "'grant'::text, 'reserve'::text, 'capture'::text, "
             "'release'::text, 'reversal'::text, 'expire'::text, "
-            "'clawback'::text, 'debt_incurred'::text, 'debt_offset'::text])",
+            "'clawback'::text, 'debt_incurred'::text, 'debt_offset'::text, "
+            "'debt_restored'::text, 'debt_reopened'::text])",
             name="wallet_ledger_event_allowed",
         ),
         ForeignKeyConstraint(

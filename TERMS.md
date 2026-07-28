@@ -42,6 +42,10 @@ Digital services inside Telegram are sold in Telegram Stars. Telegram shows the
 exact price before charging. Credits are internal service units, not money or
 property; they cannot be transferred, withdrawn, or exchanged for cash.
 
+Before Derp creates a public invoice, you must review and explicitly accept the
+current version of these Terms in the bot. Derp keeps that versioned acceptance
+and binds it to the purchase intent for audit and dispute handling.
+
 Purchased top-up credits do not expire under the current catalog. The personal
 plan renews every 30 days until canceled and grants a new allowance for that
 period. Unused plan allowance does not roll over. Canceling renewal leaves the
@@ -90,8 +94,10 @@ published here and may be announced in the bot. Continued use after they take
 effect accepts the new terms; changed free-model terms require fresh consent.
 
 The only public contact and privacy-control channel is a private chat with Derp.
-Use `/privacy` to review policies and available controls. There is no separate
-email support channel.
+Use `/privacy` to review policies, `/support` for an in-bot case, and
+`/paysupport` for a purchase or refund. Telegram and `@BotSupport` cannot resolve
+a purchase from an independently operated bot. There is no separate email
+support channel.
 
 ## Русский
 
@@ -130,6 +136,10 @@ email support channel.
 Цифровые услуги внутри Telegram оплачиваются в Stars. Перед списанием Telegram
 показывает точную цену. Кредиты - внутренние единицы сервиса, а не деньги или
 имущество. Их нельзя передать, вывести или обменять на деньги.
+
+До создания публичного счёта нужно прочитать и явно принять текущую версию этих
+условий внутри Дерпа. Дерп хранит версию принятия и связывает её с намерением
+покупки для аудита и разбора споров.
 
 Купленные кредиты текущего каталога не сгорают. Личный план продлевается каждые
 30 дней до отмены и выдаёт новый лимит на период. Остаток лимита не переносится.
@@ -178,5 +188,6 @@ Telegram, магазины приложений, налоги, Fragment и ку�
 подтверждения.
 
 Единственный публичный канал связи и управления приватностью - личный чат с
-Дерпом. Отправьте `/privacy`, чтобы открыть политики и доступные настройки.
-Отдельной почты поддержки нет.
+Дерпом. `/privacy` открывает политики, `/support` создаёт обращение, а
+`/paysupport` нужен для покупок и возвратов. Telegram и `@BotSupport` не решают
+вопросы покупок у независимо управляемого бота. Отдельной почты поддержки нет.

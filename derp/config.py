@@ -17,15 +17,15 @@ from derp.health import DEFAULT_RUNTIME_HEALTH_PATH
 
 # Docs: https://docs.pydantic.dev/2.8/concepts/pydantic_settings/
 
-DEFAULT_OPENROUTER_FEATURES = frozenset(
+RELEASE_OPENROUTER_FEATURES = frozenset(
     {
         Feature.CHAT,
         Feature.INLINE_CHAT,
-        Feature.DEEP_THINK,
         Feature.IMAGE_GENERATE,
         Feature.IMAGE_EDIT,
     }
 )
+DEFAULT_OPENROUTER_FEATURES = RELEASE_OPENROUTER_FEATURES
 
 
 class Settings(BaseSettings):
@@ -126,13 +126,18 @@ class Settings(BaseSettings):
         """Production must have an explicit operator recovery path."""
         if self.environment == "prod" and not self.operator_ids:
             raise ValueError("OPERATOR_IDS must contain at least one ID in production")
+        if self.environment == "prod" and self.openrouter_api_key is None:
+            raise ValueError("OPENROUTER_API_KEY is required in production")
         if (
             self.environment == "prod"
-            and self.openrouter_enabled_features
-            and self.openrouter_api_key is None
+            and self.openrouter_enabled_features != RELEASE_OPENROUTER_FEATURES
         ):
+            required = ", ".join(
+                sorted(feature.value for feature in RELEASE_OPENROUTER_FEATURES)
+            )
             raise ValueError(
-                "OPENROUTER_API_KEY is required when OpenRouter features are enabled"
+                "OPENROUTER_ENABLED_FEATURES must match the reviewed production "
+                f"surface: {required}"
             )
         return self
 

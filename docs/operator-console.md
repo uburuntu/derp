@@ -38,23 +38,38 @@ available.
 | --- | --- |
 | Overview | Environment, process uptime, database readiness/latency, running workers, and an aggregate attention count |
 | Usage | User/chat totals and rows changed in 24 hours, retained-message totals, chat-type counts, and artifact count/bytes |
-| Commerce | Canonical available/reserved/consumed/debt credits, fulfilled/clawed-back Stars, entitlement/renewal counts, and purchase/receipt states |
+| Commerce | Canonical available/reserved/consumed/debt credits, fulfilled/clawed-back Stars, entitlement counts, durable renewal/payment/refund queue health, purchase/receipt states, and content-free support totals |
+| Support | The oldest eight open category-only cases with reference, category, creation time, and requester Telegram ID |
 | Operations | Paid-operation, delivery, and deferred-approval state counts |
 | Inference | Aggregate attempts and states, tokens by category, reconciled and pending OpenRouter cost, reviewed role availability, and cached live key/catalog status |
 | Runtime | Derp/Python/library versions, purchase and AI-content-export flags, database-pool gauges, worker state, and the verified model catalog |
 | Tests | Database-read status, the live 1-Star checkout/refund, and command-menu reconciliation |
 
 The attention count combines review-required purchases/receipts, failed paid
-operations, failed or uncertain deliveries, wallet debt presence, unavailable
-database diagnostics, and stopped workers. It is a triage signal, not an alert
-history.
+operations, failed or uncertain deliveries, open support cases, wallet debt
+presence, unavailable database diagnostics, and stopped workers. It is a triage
+signal, not an alert history.
+
+Each new `/support` or `/paysupport` case also sends configured operators a
+best-effort protected notice containing only its category and opaque case
+reference. The durable Support page is authoritative and remains usable if that
+notice fails. It exposes the requester Telegram ID only to allowlisted operators
+and never stores or displays user-authored case text.
+
+Resolution requires a second actor-bound, case-bound confirmation. Derp reloads
+the exact open case, sends its predefined resolution notice to the requester,
+and only then marks the case resolved. If notification fails, the case remains
+open. A crash may therefore produce a duplicate resolution notice after retry,
+but cannot silently close the requester's only in-bot support channel.
 
 Diagnostic snapshots never expose message or prompt content, tool arguments,
-callback or payment payloads, row-level user/chat/payment identifiers, invoice
+callback or payment payloads, row-level chat/payment identifiers, invoice
 or charge IDs, artifact paths or content bytes, signed URLs, tokens, secrets, raw
-environment variables, or arbitrary database queries. The console also has no
-row drill-down, shell, direct balance mutation, arbitrary refund, or generic SQL
-control. Its only refund action selects the operator's latest fulfilled fixed
+environment variables, or arbitrary database queries. The support queue's
+requester Telegram ID is the sole intentional row-level user identifier. The
+console otherwise has no row drill-down, shell, direct balance mutation,
+arbitrary refund, or generic SQL control. Its only refund action selects the
+operator's latest fulfilled fixed
 1-Star test on the server and accepts no payment or user identifiers.
 
 ## Maintenance
@@ -63,15 +78,21 @@ Maintenance invokes the exact worker instances already owned by the running
 application. Requests are serialized within the process and accept no
 operator-supplied arguments.
 
+Runtime reports `Payments` as on only when both the durable payment-update
+replay worker and operator-test refund reconciler are running. A manual payment
+pass returns separate aggregate counters for update settlement, user replies,
+and test-refund recovery.
+
 | Action | Live pass |
 | --- | --- |
 | History | Purge history past its retention boundary |
-| Subscriptions | Expire completed subscription cycles |
+| Subscriptions | Expire completed subscription cycles and replay durable renewal commands |
+| Payments | Replay durable Telegram payment updates and reconcile operator test refunds |
 | Operations | Reconcile quotes, reservations, executions, and durable delivery recovery |
 | Deliveries | Reconcile interrupted/retryable deliveries and expire artifacts |
 | Approvals | Expire deferred tool approvals |
 | Inference | Reconcile bounded OpenRouter usage/cost records without replaying provider work |
-| All passes | Run the six passes above in that order |
+| All passes | Run the seven passes above in that order |
 
 Every action first issues a single-use token bound to the operator and exact
 action. The default lifetime is two minutes. A token mismatch, reuse, expiry,
@@ -116,6 +137,7 @@ Successful operator actions emit:
 - `operator.debug_purchase_intent_presented`
 - `operator.test_refund_requested`
 - `operator.inference_read_check_completed`
+- `operator.support_case_resolved`
 - `telegram.command_menu_configured`
 
 Degraded or failed boundaries use privacy-safe `report_exception()` events:
@@ -134,6 +156,10 @@ Degraded or failed boundaries use privacy-safe `report_exception()` events:
   `operator.inference_check_result_render_failed`
 - `operator.command_menu_sync_failed` and
   `operator.command_menu_result_render_failed`
+- `operator.support_case_read_failed`,
+  `operator.support_resolution_notification_failed`,
+  `operator.support_resolution_failed`, and
+  `operator.support_queue_refresh_failed`
 
 Telemetry may include bounded action/count/timing fields and correlation IDs.
 Never add console content, callbacks, confirmation tokens, payment payloads, or

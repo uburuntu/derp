@@ -210,7 +210,7 @@ when its replacement is covered and working or the public surface fails closed.
 ## Event Handling & Middlewares
 
 - **Routers:** `operator`, `operator_rejection`, `debug`, `debug_rejection`,
-  `context_settings`, `basic`, `donations`, `credit_cmds`,
+  `legal_support`, `context_settings`, `basic`, `credit_cmds`,
   `premium_suspension`, `payments`, `subscriptions`, `paid_media_delivery`,
   `image`, `tts`, `inline`, then catch-all `chat`. Privileged rejection routers
   consume unauthorized or stale controls before conversation handling.
@@ -234,8 +234,9 @@ when its replacement is covered and working or the public surface fails closed.
 ## LLM Integration (Pydantic-AI)
 
 - **Provider Factory:** `derp/llm/providers.py` accepts an exact catalog spec or
-  semantic key and creates the corresponding Google model. Provider switching
-  is not currently implemented.
+  semantic key and creates the corresponding OpenRouter or Google model.
+  Production exposes only the reviewed OpenRouter chat/image routes; Google is
+  retained for TTS and explicit non-production recovery work.
 - **Agent Factories:** `derp/llm/agents.py` provides `create_chat_agent()`,
   `create_image_agent()`, and `create_inline_agent()`. They accept validated
   `ExecutionPlan` objects (or resolve a compatible default plan). Chat tools are
@@ -261,8 +262,8 @@ when its replacement is covered and working or the public surface fails closed.
   - `derp/tools/toolsets.py`: creates policy-derived `FunctionToolset` instances.
     Suspended premium capabilities are excluded even from manually assembled
     access values.
-  - Only web search uses the transitional `credit_aware_tool` wrapper. Image
-    tools require a server-approved deferred call and the operation ledger.
+  - Search is hidden until it has a governed provider adapter. Image tools
+    require a server-approved deferred call and the operation ledger.
   - Natural TTS, thinking, and video tools remain absent until they can preserve
     the same quote, approval, delivery, and parent-turn settlement guarantees.
 
@@ -277,7 +278,9 @@ adapters use explicit names such as `image_executor.py` and `tts_executor.py`.
 send Telegram messages or mutate balances. Thin command/tool adapters translate
 outcomes; do not add another direct-sending implementation.
 
-**Limits:** `UsageLimits(tool_calls_limit=3)` on agent runs to prevent abuse.
+**Limits:** Paid chat permits at most two model requests, three tool calls, and
+2048 output tokens per request. The quote covers the aggregate 4096-token
+output ceiling so execution cannot exceed its authorized budget.
 
 **Parameters:** Simple types (`str`, `int`, `bool`). Use `| None` for optionals.
 
@@ -289,8 +292,9 @@ outcomes; do not add another direct-sending implementation.
   approval, artifact, delivery, billing, wallet, and inline stores stay with
   their cohesive subsystems and exchange typed domain values.
 - **Models:** SQLAlchemy models cover users/chats, normalized history and policy,
-  wallet lots/events/consent, quotes and paid operations, deferred approvals,
-  artifacts and delivery attempts, purchase intents/receipts/subscriptions, and
+  wallet lots/events/consent/debt provenance, quotes and paid operations,
+  deferred approvals, artifacts and delivery attempts, legal acceptances,
+  support cases, purchase intents/receipts/payment updates/subscriptions, and
   shared facts.
 - **Migrations:** Alembic is authoritative. Generate migrations with
   `make db-revision MSG="..."`; parity tests must fail on model/schema drift.
@@ -305,9 +309,10 @@ The bot uses a credit-based monetization system with tiered access to features.
   purchased credits; a group wallet contains purchased shared credits. One
   operation uses one wallet, tries the chat first, and requires authenticated
   per-user/per-chat consent before personal fallback.
-- **Model Keys:** Stable semantic keys select immutable Google model specs. The
-  shared spec carries the exact provider ID, lifecycle, limits, capabilities,
-  source links, and current pricing used by both execution and billing.
+- **Model Keys:** Stable semantic keys select immutable provider model specs.
+  The shared spec carries the exact provider ID, lifecycle, limits,
+  capabilities, source links, routing policy, and current pricing used by both
+  execution and billing.
 - **Free Tier:** Consented zero-cost OpenRouter models have no daily admission
   quota; each request remains bounded by input, token, timeout, and output limits.
 - **Paid Tier:** Users/chats with credits unlock the standard chat role, longer
@@ -317,16 +322,20 @@ The bot uses a credit-based monetization system with tiered access to features.
 
 ```
 derp/catalog/
-└── google.py     # Immutable Google model specs, limits, capabilities, pricing
+├── google.py          # Immutable Google TTS specs and pricing
+└── openrouter.py      # Reviewed text/image models, routes, limits, and pricing
 derp/operations/
 ├── quotes.py          # Fixed catalog-derived quotes and context bands
 ├── ledger.py          # Wallet selection, reserve/capture/release/reversal
+├── debt.py            # Exact debt sources and repayment provenance
 ├── bindings.py        # HMAC request identities without stored content
 └── reconciliation.py  # Crash-boundary cleanup without provider replay
 derp/billing/
 ├── products.py        # Immutable top-ups and one recurring plan
 ├── intents.py         # Opaque, expiring, payer/target-bound purchase intents
-└── settlement.py      # Idempotent fulfillment, cycles, refunds, clawbacks
+├── payment_updates.py # Pre-ack payment inbox, settlement, and reply recovery
+├── subscriptions.py   # Cycles and leased absolute renewal commands
+└── settlement.py      # Idempotent fulfillment, refunds, and clawbacks
 ```
 
 - **OperationLedger:** The authoritative paid-operation state machine. Database
@@ -334,8 +343,8 @@ derp/billing/
 - **QuoteEngine:** Derives a fixed quote from the same canonical
   `ExecutionPlan` used at runtime. Pricing inputs contain bounded commercial
   values and keyed request/delivery bindings, never prompt content.
-- **Legacy CreditService:** Retained only for remaining compatibility and free
-  web-search accounting. New provider-backed work must not use it.
+- **Legacy CreditService:** Retained only for remaining compatibility. New
+  provider-backed work must not use it.
 
 ### Payment Flow
 
@@ -343,20 +352,27 @@ derp/billing/
   `PUBLIC_PURCHASES_ENABLED` and defaults closed until the real Stars smoke test
   is recorded. Reconciliation remains live even while intake is closed.
 - Invoice creation persists an opaque expiring intent before Telegram I/O.
+  Public intent creation requires an immutable acceptance of the current Terms
+  version and binds that acceptance to the intent; the operator-only 1-Star
+  diagnostic is the controlled exception.
   Pre-checkout validates payer, target, product version, currency, amount, and
-  expiry; successful payment fulfills exactly once by charge ID.
+  expiry. The dispatcher durably records every successful/refunded payment
+  update before polling can acknowledge it; replay settles exactly once and
+  retries the private result notice independently.
 - Subscription renewals create non-rolling 30-day allowance cycles. Cancellation
-  changes future renewal only; refunds claw back the exact purchase/cycle source
-  and record debt rather than making spendable inventory negative.
-- Donation billing is independent and remains before credit purchase routes.
+  is an absolute desired-state command with a durable lease and bounded retry.
+  Refunds claw back the exact purchase/cycle source; debt and later repayment
+  allocations retain source provenance rather than making inventory negative.
+- Donation billing is suspended. `/support` and `/paysupport` create bounded,
+  content-free in-bot cases and notify the private operator surface.
 
 ### Tool Credit Integration
 
 - Paid chat, image, and TTS use immutable operation IDs and atomic settlement.
 - Only premium tools backed by durable approval/accounting are visible to the
   agent. Thinking and video are absent from toolsets and intercepted commands.
-- Free web-search usage remains in `daily_usage`; zero-cost model requests are
-  unlimited after versioned consent and remain fully accounted for.
+- Zero-cost model requests are unlimited after versioned consent, remain
+  bounded per request, and are fully accounted for.
 
 ### Extending
 

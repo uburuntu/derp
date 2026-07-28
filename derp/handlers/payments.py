@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 import logfire
@@ -27,7 +28,12 @@ from derp.billing import (
     CommercePolicy,
     FulfillmentState,
     PaymentConflictError,
+    PaymentReplyDisposition,
     PaymentSettlementService,
+    PaymentSettlementState,
+    PaymentUpdateDisposition,
+    PaymentUpdateInboxService,
+    PaymentUpdateOutcome,
     PreCheckoutRequest,
     ProductKind,
     PurchaseIntentService,
@@ -40,11 +46,18 @@ from derp.billing.telegram import (
     PurchaseTargetCode,
     create_stars_invoice_link,
 )
-from derp.common.private_delivery import deliver_sensitive_reply
+from derp.common.private_delivery import (
+    SensitiveReplyDisposition,
+    SensitiveReplyResult,
+    deliver_sensitive_reply_with_disposition,
+)
 from derp.common.sender import MessageSender
+from derp.handlers.legal_support import TermsAcceptanceSource, build_terms_panel
+from derp.legal import TermsAcceptanceRequiredError
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception, telemetry_fingerprint
+from derp.operator import OperatorAccessPolicy
 
 router = Router(name="payments")
 intake_router = Router(name="credit_purchase_intake")
@@ -113,6 +126,16 @@ async def handle_buy_callback(
             callback.bot,
             handle,
             business_connection_id=callback.message.business_connection_id,
+        )
+    except TermsAcceptanceRequiredError:
+        text, markup = build_terms_panel(
+            accepted=False,
+            source=TermsAcceptanceSource.PURCHASE_GATE,
+        )
+        await callback.message.answer(text, reply_markup=markup, protect_content=True)
+        return await callback.answer(
+            _("Review and accept the current terms before buying."),
+            show_alert=True,
         )
     except ActiveSubscriptionError:
         return await callback.answer(
@@ -191,6 +214,8 @@ async def reject_malformed_buy_callback(callback: CallbackQuery) -> None:
 async def handle_pre_checkout(
     pre_checkout: PreCheckoutQuery,
     purchase_intents: PurchaseIntentService,
+    commerce_policy: CommercePolicy = CLOSED_COMMERCE_POLICY,
+    operator_access: OperatorAccessPolicy | None = None,
 ) -> None:
     """Approve only an exact, unexpired, server-stored purchase intent."""
     decision = await purchase_intents.validate_pre_checkout(
@@ -199,7 +224,12 @@ async def handle_pre_checkout(
             payer_telegram_id=pre_checkout.from_user.id,
             currency=pre_checkout.currency,
             total_amount=pre_checkout.total_amount,
-        )
+        ),
+        public_intake_enabled=commerce_policy.public_intake_enabled,
+        operator_debug_allowed=(
+            operator_access is not None
+            and operator_access.allows(pre_checkout.from_user.id)
+        ),
     )
     if decision.approved:
         await pre_checkout.answer(ok=True)
@@ -223,16 +253,40 @@ async def handle_successful_payment(
     message: Message,
     sender: MessageSender,
     payment_settlement: PaymentSettlementService,
+    payment_update_inbox: PaymentUpdateInboxService | None = None,
+    payment_update_inbox_id: uuid.UUID | None = None,
 ) -> None:
     """Record every captured charge, then fulfill matching terms exactly once."""
     payment = message.successful_payment
     if not payment or not message.from_user:
         return
 
+    inbox_outcome: PaymentUpdateOutcome | None = None
     try:
-        result = await payment_settlement.fulfill(
-            _captured_payment(payment, message.from_user.id)
-        )
+        if payment_update_inbox is not None and payment_update_inbox_id is not None:
+            inbox_outcome = await payment_update_inbox.reconcile(
+                payment_update_inbox_id
+            )
+            if inbox_outcome.disposition is PaymentUpdateDisposition.RETRY_SCHEDULED:
+                await _deliver_payment_reply(
+                    message,
+                    sender,
+                    _(
+                        "Payment recorded. Credits are still processing. "
+                        "Don't pay again; check /credits shortly."
+                    ),
+                )
+                return
+            if inbox_outcome.disposition in {
+                PaymentUpdateDisposition.BUSY,
+                PaymentUpdateDisposition.TERMINAL,
+            }:
+                return
+            result = inbox_outcome.fulfillment
+        else:
+            result = await payment_settlement.fulfill(
+                _captured_payment(payment, message.from_user.id)
+            )
     except Exception:
         report_exception(
             "payment_fulfillment_failed",
@@ -245,16 +299,31 @@ async def handle_successful_payment(
             sender,
             _(
                 "Telegram charged this payment, but your credits haven't been "
-                "added. The payment needs review. Don't buy again; contact support "
-                "with the receipt."
+                "added. The payment needs review. Don't buy again. Open /paysupport."
             ),
         )
         return
 
-    if result.state is FulfillmentState.NEEDS_REVIEW:
+    if inbox_outcome is not None and (
+        inbox_outcome.disposition is PaymentUpdateDisposition.ATTENTION
+    ):
         text = _(
             "Telegram charged this payment, but no credits were added because the "
-            "details need review. Don't buy again; contact support."
+            "details need review. Don't pay again. Open /paysupport."
+        )
+    elif (result is not None and result.state is FulfillmentState.CLAWED_BACK) or (
+        inbox_outcome is not None
+        and inbox_outcome.settlement_state is PaymentSettlementState.CLAWED_BACK
+    ):
+        text = _(
+            "This payment was already refunded. No credits were added. Check /credits."
+        )
+    elif result is None:
+        text = _("Payment processed. Check /credits.")
+    elif result.state is FulfillmentState.NEEDS_REVIEW:
+        text = _(
+            "Telegram charged this payment, but no credits were added because the "
+            "details need review. Don't pay again. Open /paysupport."
         )
     elif result.idempotent:
         text = _("This payment was already applied. No credits changed this time.")
@@ -282,15 +351,23 @@ async def handle_successful_payment(
                 ).format(credits=result.debt_offset_credits)
             )
         text = "\n".join(lines)
-    await _deliver_payment_reply(message, sender, text)
+    delivery = await _deliver_payment_reply(message, sender, text)
+    if inbox_outcome is not None and inbox_outcome.needs_notification:
+        await payment_update_inbox.finish_notification(
+            inbox_outcome,
+            _payment_reply_disposition(delivery),
+        )
 
-    logfire.info(
-        "payment_reconciled",
-        receipt_id=str(result.receipt_id),
-        state=result.state.value,
-        idempotent=result.idempotent,
-        charge_fingerprint=telemetry_fingerprint(payment.telegram_payment_charge_id),
-    )
+    if result is not None:
+        logfire.info(
+            "payment_reconciled",
+            receipt_id=str(result.receipt_id),
+            state=result.state.value,
+            idempotent=result.idempotent,
+            charge_fingerprint=telemetry_fingerprint(
+                payment.telegram_payment_charge_id
+            ),
+        )
 
 
 @reconciliation_router.message(F.refunded_payment)
@@ -298,6 +375,8 @@ async def handle_refunded_payment(
     message: Message,
     sender: MessageSender,
     payment_settlement: PaymentSettlementService,
+    payment_update_inbox: PaymentUpdateInboxService | None = None,
+    payment_update_inbox_id: uuid.UUID | None = None,
 ) -> None:
     """Validate and reconcile each Telegram refund against its captured charge."""
     payment = message.refunded_payment
@@ -305,8 +384,30 @@ async def handle_refunded_payment(
         return
 
     charge_fingerprint = telemetry_fingerprint(payment.telegram_payment_charge_id)
+    inbox_outcome: PaymentUpdateOutcome | None = None
     try:
-        result = await payment_settlement.clawback(_refunded_payment(payment))
+        if payment_update_inbox is not None and payment_update_inbox_id is not None:
+            inbox_outcome = await payment_update_inbox.reconcile(
+                payment_update_inbox_id
+            )
+            if inbox_outcome.disposition is PaymentUpdateDisposition.RETRY_SCHEDULED:
+                await _deliver_refund_reply(
+                    message,
+                    sender,
+                    _(
+                        "Refund recorded. Balance changes are still processing. "
+                        "Check /credits shortly."
+                    ),
+                )
+                return
+            if inbox_outcome.disposition in {
+                PaymentUpdateDisposition.BUSY,
+                PaymentUpdateDisposition.TERMINAL,
+            }:
+                return
+            result = inbox_outcome.clawback
+        else:
+            result = await payment_settlement.clawback(_refunded_payment(payment))
     except (LookupError, PaymentConflictError, ValueError) as exc:
         logfire.warning(
             "payment_refund_needs_review",
@@ -318,7 +419,7 @@ async def handle_refunded_payment(
             sender,
             _(
                 "Telegram sent a refund, but it needs review. No credits changed. "
-                "Contact support."
+                "Open /paysupport."
             ),
         )
         return
@@ -333,12 +434,21 @@ async def handle_refunded_payment(
             sender,
             _(
                 "Telegram sent a refund, but it needs review. No credits changed. "
-                "Contact support."
+                "Open /paysupport."
             ),
         )
         return
 
-    if result.idempotent:
+    if inbox_outcome is not None and (
+        inbox_outcome.disposition is PaymentUpdateDisposition.ATTENTION
+    ):
+        text = _(
+            "Telegram sent a refund, but it needs review. No credits changed. "
+            "Open /paysupport."
+        )
+    elif result is None:
+        text = _("Refund processed. Check /credits.")
+    elif result.idempotent:
         text = _("This refund was already applied. No credits changed this time.")
     else:
         lines = [
@@ -358,24 +468,30 @@ async def handle_refunded_payment(
                 ).format(credits=result.debt_created_credits)
             )
         text = "\n".join(lines)
-    await _deliver_refund_reply(message, sender, text)
+    delivery = await _deliver_refund_reply(message, sender, text)
+    if inbox_outcome is not None and inbox_outcome.needs_notification:
+        await payment_update_inbox.finish_notification(
+            inbox_outcome,
+            _payment_reply_disposition(delivery),
+        )
 
-    logfire.info(
-        "payment_refund_reconciled",
-        receipt_id=str(result.receipt_id),
-        idempotent=result.idempotent,
-        removed_credits=result.removed_available_credits,
-        debt_credits=result.debt_created_credits,
-        charge_fingerprint=charge_fingerprint,
-    )
+    if result is not None:
+        logfire.info(
+            "payment_refund_reconciled",
+            receipt_id=str(result.receipt_id),
+            idempotent=result.idempotent,
+            removed_credits=result.removed_available_credits,
+            debt_credits=result.debt_created_credits,
+            charge_fingerprint=charge_fingerprint,
+        )
 
 
 async def _deliver_payment_reply(
     message: Message,
     sender: MessageSender,
     text: str,
-) -> Message:
-    return await deliver_sensitive_reply(
+) -> SensitiveReplyResult:
+    return await deliver_sensitive_reply_with_disposition(
         message,
         sender,
         text,
@@ -393,8 +509,8 @@ async def _deliver_refund_reply(
     message: Message,
     sender: MessageSender,
     text: str,
-) -> Message:
-    return await deliver_sensitive_reply(
+) -> SensitiveReplyResult:
+    return await deliver_sensitive_reply_with_disposition(
         message,
         sender,
         text,
@@ -406,6 +522,16 @@ async def _deliver_refund_reply(
         ),
         failure_event="private_refund_delivery_failed",
     )
+
+
+def _payment_reply_disposition(
+    delivery: SensitiveReplyResult,
+) -> PaymentReplyDisposition:
+    return {
+        SensitiveReplyDisposition.SENT: PaymentReplyDisposition.SENT,
+        SensitiveReplyDisposition.FAILED: PaymentReplyDisposition.FAILED,
+        SensitiveReplyDisposition.SKIPPED: PaymentReplyDisposition.SKIPPED,
+    }[delivery.disposition]
 
 
 def _captured_payment(

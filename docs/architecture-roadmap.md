@@ -239,10 +239,11 @@ product design or mutate issued products.
   routing. Consented zero-cost models are explicitly non-ZDR, unlimited, and
   available only in private and inline contexts; request, token, timeout, and
   output bounds still apply and every call remains accounted for.
-- Google remains the direct TTS provider and explicit rollback where a direct
-  adapter exists. Free inline inference fails closed when OpenRouter is disabled.
-  Standalone transcription, deep thinking, and video generation remain hidden
-  until their complete privacy, accounting, and delivery paths ship.
+- Google remains the direct TTS provider. Compatibility inference adapters stay
+  available for local testing, but the production release rejects unreviewed
+  OpenRouter route downgrades. Standalone transcription, deep thinking, and
+  video generation remain hidden until their complete privacy, accounting, and
+  delivery paths ship.
 - Runtime requests never inherit drifting reasoning defaults: optional ordinary
   and free roles disable reasoning, the dedicated reasoning role uses high
   effort, and the catalog-mandatory multimodal role uses minimal effort.
@@ -295,8 +296,10 @@ product design or mutate issued products.
   cycle active until expiry. V1 has one plan, no upgrades, no proration, and no
   grace period. Purchased credits are unaffected by subscription cancellation.
 - Refunding a subscription payment applies the payment-clawback rule to that
-  cycle. `/credits` shows current-cycle allowance, expiration or renewal state,
-  purchased credits, and any debt.
+  cycle. A current-cycle refund immediately revokes local entitlement and
+  durably cancels future renewal through Telegram; an older-cycle refund does
+  not disturb a newer paid cycle. `/credits` shows current-cycle allowance,
+  expiration or renewal state, purchased credits, and any debt.
 
 ### Authorization and memory
 

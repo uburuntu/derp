@@ -15,7 +15,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from derp.approvals.maintenance import DeferredApprovalExpiryWorker
-from derp.billing import SubscriptionExpiryWorker
+from derp.billing import (
+    PaymentUpdateReplayReport,
+    PaymentUpdateReplayWorker,
+    SubscriptionExpiryWorker,
+    SubscriptionRenewalSweepReport,
+    SubscriptionRenewalWorker,
+)
 from derp.catalog import OPENROUTER_MODEL_CATALOG, ModelRole
 from derp.db import DatabaseManager
 from derp.delivery import DeliveryMaintenanceReport, DeliveryMaintenanceWorker
@@ -24,7 +30,14 @@ from derp.inference import (
     OpenRouterCostReconciliationReport,
     OpenRouterCostReconciliationWorker,
 )
-from derp.models import InferenceUsage, Subscription, Wallet, WalletLot
+from derp.models import (
+    InferenceUsage,
+    Subscription,
+    SubscriptionRenewalCommandRecord,
+    SupportRequest,
+    Wallet,
+    WalletLot,
+)
 from derp.models import Message as MessageModel
 from derp.openrouter import CurrentKeyInfo, OpenRouterClient, OpenRouterModel
 from derp.operations import (
@@ -34,9 +47,12 @@ from derp.operations import (
 from derp.operator import (
     OperatorActivityTotals,
     OperatorConsoleService,
+    OperatorDebugRefundSweep,
+    OperatorDebugRefundWorker,
     OperatorMaintenanceAction,
     OperatorProbeStatus,
     OperatorSubscriptionTotals,
+    OperatorSupportTotals,
 )
 
 
@@ -103,6 +119,17 @@ def build_service(
     sweeps = {
         OperatorMaintenanceAction.HISTORY: AsyncMock(return_value=2),
         OperatorMaintenanceAction.SUBSCRIPTIONS: AsyncMock(return_value=3),
+        OperatorMaintenanceAction.PAYMENTS: AsyncMock(
+            return_value=PaymentUpdateReplayReport(
+                claimed_count=6,
+                settled_count=4,
+                attention_count=1,
+                retry_scheduled_count=1,
+                reply_sent_count=3,
+                reply_failed_count=1,
+                reply_skipped_count=1,
+            )
+        ),
         OperatorMaintenanceAction.OPERATIONS: AsyncMock(
             return_value=operation_report()
         ),
@@ -116,6 +143,35 @@ def build_service(
     subscriptions = SimpleNamespace(
         is_running=True,
         sweep=sweeps[OperatorMaintenanceAction.SUBSCRIPTIONS],
+    )
+    subscription_renewal_sweep = AsyncMock(
+        return_value=SubscriptionRenewalSweepReport(
+            claimed_count=4,
+            applied_count=2,
+            retry_scheduled_count=1,
+            attention_count=1,
+        )
+    )
+    sweeps[OperatorMaintenanceAction.SUBSCRIPTIONS].renewal = subscription_renewal_sweep
+    subscription_renewal = SimpleNamespace(
+        is_running=True,
+        sweep=subscription_renewal_sweep,
+    )
+    debug_refund_sweep = AsyncMock(
+        return_value=OperatorDebugRefundSweep(
+            processed=3,
+            reconciled=2,
+            pending_review=1,
+        )
+    )
+    sweeps[OperatorMaintenanceAction.PAYMENTS].refund = debug_refund_sweep
+    payment_updates = SimpleNamespace(
+        is_running=True,
+        sweep=sweeps[OperatorMaintenanceAction.PAYMENTS],
+    )
+    debug_refunds = SimpleNamespace(
+        is_running=True,
+        sweep=debug_refund_sweep,
     )
     operations = SimpleNamespace(
         is_running=False,
@@ -135,6 +191,15 @@ def build_service(
             cast(DatabaseManager, db or MagicMock(spec=DatabaseManager)),
             history_retention=cast(HistoryRetentionWorker, history),
             subscription_expiry=cast(SubscriptionExpiryWorker, subscriptions),
+            subscription_renewal=cast(
+                SubscriptionRenewalWorker,
+                subscription_renewal,
+            ),
+            payment_update_replay=cast(PaymentUpdateReplayWorker, payment_updates),
+            debug_refund_reconciliation=cast(
+                OperatorDebugRefundWorker,
+                debug_refunds,
+            ),
             operation_reconciliation=cast(
                 OperationReconciliationWorker,
                 operations,
@@ -172,6 +237,7 @@ async def test_snapshot_preserves_runtime_state_when_database_is_degraded() -> N
     assert [worker.running for worker in snapshot.runtime.workers] == [
         True,
         True,
+        True,
         False,
         True,
         False,
@@ -192,6 +258,16 @@ async def test_snapshot_propagates_cancellation_without_reporting() -> None:
         await service.snapshot()
 
     report.assert_not_called()
+
+
+async def test_payment_runtime_status_requires_both_recovery_workers() -> None:
+    service, _ = build_service(FailingDatabase())
+    service._debug_refund_reconciliation.is_running = False
+
+    snapshot = await service.snapshot()
+
+    workers = {worker.action: worker.running for worker in snapshot.runtime.workers}
+    assert workers[OperatorMaintenanceAction.PAYMENTS] is False
 
 
 async def test_inference_check_reads_only_balance_and_public_catalog() -> None:
@@ -280,6 +356,7 @@ async def test_inference_check_preserves_partial_connectivity_results() -> None:
     [
         (OperatorMaintenanceAction.HISTORY, "purged_message_count", 2),
         (OperatorMaintenanceAction.SUBSCRIPTIONS, "expired_cycle_count", 3),
+        (OperatorMaintenanceAction.PAYMENTS, "payment_update_claimed_count", 6),
         (OperatorMaintenanceAction.OPERATIONS, "examined_count", 3),
         (OperatorMaintenanceAction.DELIVERIES, "retry_candidate_count", 2),
         (OperatorMaintenanceAction.APPROVALS, "expired_request_count", 5),
@@ -302,6 +379,12 @@ async def test_maintenance_dispatches_only_the_exact_worker(
     assert counts[expected_name] == expected_value
     for candidate, sweep in sweeps.items():
         assert sweep.await_count == (1 if candidate is action else 0)
+    assert sweeps[OperatorMaintenanceAction.SUBSCRIPTIONS].renewal.await_count == (
+        1 if action is OperatorMaintenanceAction.SUBSCRIPTIONS else 0
+    )
+    assert sweeps[OperatorMaintenanceAction.PAYMENTS].refund.await_count == (
+        1 if action is OperatorMaintenanceAction.PAYMENTS else 0
+    )
     info.assert_called_once()
     assert info.call_args.args == ("operator.maintenance_pass_completed",)
     assert info.call_args.kwargs["actor_id"] == 42
@@ -320,12 +403,40 @@ async def test_all_maintenance_runs_each_exact_worker_once() -> None:
     assert [item.action for item in result.passes] == [
         OperatorMaintenanceAction.HISTORY,
         OperatorMaintenanceAction.SUBSCRIPTIONS,
+        OperatorMaintenanceAction.PAYMENTS,
         OperatorMaintenanceAction.OPERATIONS,
         OperatorMaintenanceAction.DELIVERIES,
         OperatorMaintenanceAction.APPROVALS,
         OperatorMaintenanceAction.INFERENCE,
     ]
     assert all(sweep.await_count == 1 for sweep in sweeps.values())
+    sweeps[OperatorMaintenanceAction.SUBSCRIPTIONS].renewal.assert_awaited_once()
+    sweeps[OperatorMaintenanceAction.PAYMENTS].refund.assert_awaited_once()
+
+
+async def test_payment_maintenance_exposes_both_bounded_recovery_passes() -> None:
+    service, sweeps = build_service()
+
+    with patch("derp.operator.service.logfire.info"):
+        result = await service.run_maintenance(
+            OperatorMaintenanceAction.PAYMENTS,
+            actor_id=42,
+        )
+
+    assert {item.name: item.count for item in result.passes[0].counts} == {
+        "payment_update_claimed_count": 6,
+        "payment_update_settled_count": 4,
+        "payment_update_attention_count": 1,
+        "payment_update_retry_scheduled_count": 1,
+        "payment_reply_sent_count": 3,
+        "payment_reply_failed_count": 1,
+        "payment_reply_skipped_count": 1,
+        "debug_refund_processed_count": 3,
+        "debug_refund_reconciled_count": 2,
+        "debug_refund_pending_review_count": 1,
+    }
+    sweeps[OperatorMaintenanceAction.PAYMENTS].assert_awaited_once()
+    sweeps[OperatorMaintenanceAction.PAYMENTS].refund.assert_awaited_once()
 
 
 async def test_inference_maintenance_exposes_bounded_reconciliation_counts() -> None:
@@ -405,12 +516,14 @@ async def test_snapshot_reads_real_aggregate_columns_only(
     baseline_messages = baseline.database.retained_messages
     baseline_wallet = baseline.database.wallet
     baseline_subscriptions = baseline.database.subscriptions
+    baseline_support = baseline.database.support
     baseline_inference = baseline.database.inference_usage
     assert baseline_users is not None
     assert baseline_chats is not None
     assert baseline_messages is not None
     assert baseline_wallet is not None
     assert baseline_subscriptions is not None
+    assert baseline_support is not None
     assert baseline_inference is not None
 
     recent_user = await user_factory(telegram_id=71)
@@ -421,24 +534,35 @@ async def test_snapshot_reads_real_aggregate_columns_only(
     old_chat.updated_at = now - timedelta(days=2)
     recent_user.updated_at = now
     recent_chat.updated_at = now
+    active_subscription = Subscription(
+        user_id=recent_user.id,
+        plan_id="operator-test",
+        plan_version="v1",
+        status="active",
+        renewal_enabled=True,
+        current_period_end=now + timedelta(days=10),
+    )
+    canceled_subscription = Subscription(
+        user_id=old_user.id,
+        plan_id="operator-test",
+        plan_version="v1",
+        status="canceled",
+        renewal_enabled=False,
+        current_period_end=now + timedelta(days=5),
+        canceled_at=now,
+    )
     db_session.add_all(
         [
-            Subscription(
-                user_id=recent_user.id,
-                plan_id="operator-test",
-                plan_version="v1",
-                status="active",
-                renewal_enabled=True,
-                current_period_end=now + timedelta(days=10),
-            ),
-            Subscription(
-                user_id=old_user.id,
-                plan_id="operator-test",
-                plan_version="v1",
-                status="canceled",
-                renewal_enabled=False,
-                current_period_end=now + timedelta(days=5),
-                canceled_at=now,
+            active_subscription,
+            canceled_subscription,
+            SupportRequest(
+                reference="OPERATORS1",
+                requester_user_id=recent_user.id,
+                kind="payment",
+                source="paysupport",
+                status="open",
+                created_at=now,
+                updated_at=now,
             ),
             MessageModel(
                 chat_id=recent_chat.id,
@@ -517,6 +641,32 @@ async def test_snapshot_reads_real_aggregate_columns_only(
             ),
         ]
     )
+    await db_session.flush()
+    db_session.add_all(
+        [
+            SubscriptionRenewalCommandRecord(
+                subscription_id=active_subscription.id,
+                payer_telegram_id=recent_user.telegram_id,
+                telegram_charge_id="operator-attention-charge",
+                desired_enabled=False,
+                status="attention",
+                attempt_count=8,
+                next_attempt_at=now,
+                last_failure_code="provider_call_failed",
+            ),
+            SubscriptionRenewalCommandRecord(
+                subscription_id=canceled_subscription.id,
+                payer_telegram_id=old_user.telegram_id,
+                telegram_charge_id="operator-expired-lease-charge",
+                desired_enabled=True,
+                status="processing",
+                attempt_count=1,
+                next_attempt_at=now,
+                lease_token=uuid4(),
+                lease_expires_at=now - timedelta(days=1),
+            ),
+        ]
+    )
     wallet = Wallet(user_id=recent_user.id, debt_credits=7)
     db_session.add(wallet)
     await db_session.flush()
@@ -564,6 +714,15 @@ async def test_snapshot_reads_real_aggregate_columns_only(
         status_active=baseline_subscriptions.status_active + 1,
         entitled=baseline_subscriptions.entitled + 2,
         auto_renewing=baseline_subscriptions.auto_renewing + 1,
+        renewal_pending=baseline_subscriptions.renewal_pending,
+        renewal_processing=baseline_subscriptions.renewal_processing + 1,
+        renewal_attention=baseline_subscriptions.renewal_attention + 1,
+        renewal_due=baseline_subscriptions.renewal_due + 1,
+    )
+    assert snapshot.database.support == OperatorSupportTotals(
+        open=baseline_support.open + 1,
+        payment_open=baseline_support.payment_open + 1,
+        resolved=baseline_support.resolved,
     )
     assert snapshot.database.inference_usage is not None
     inference = snapshot.database.inference_usage

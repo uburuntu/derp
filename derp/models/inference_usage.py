@@ -55,6 +55,15 @@ class InferenceUsage(TimestampMixin, Base):
             name="inference_usage_generation_id_not_blank",
         ),
         CheckConstraint(
+            "actual_model_id IS NULL OR length(btrim(actual_model_id::text)) > 0",
+            name="inference_usage_actual_model_not_blank",
+        ),
+        CheckConstraint(
+            "downstream_provider IS NULL "
+            "OR length(btrim(downstream_provider::text)) > 0",
+            name="inference_usage_downstream_provider_not_blank",
+        ),
+        CheckConstraint(
             "input_tokens >= 0 AND output_tokens >= 0 "
             "AND cache_read_tokens >= 0 AND cache_write_tokens >= 0 "
             "AND reasoning_tokens >= 0 AND audio_input_tokens >= 0 "
@@ -197,6 +206,11 @@ class InferenceUsage(TimestampMixin, Base):
     provider_response_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     provider_generation_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True
+    )
+    actual_model_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    downstream_provider: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    route_policy_matched: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
     )
     input_tokens: Mapped[int] = mapped_column(
         BigInteger, default=0, server_default=text("0")

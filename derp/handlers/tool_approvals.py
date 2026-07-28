@@ -23,7 +23,6 @@ from pydantic_ai import (
     ModelMessage,
     ModelResponse,
     ToolCallPart,
-    UsageLimits,
 )
 
 from derp.approvals import (
@@ -45,7 +44,6 @@ from derp.approvals.image_tools import (
     ImageToolApprovalCoordinator,
     ImageToolRunContext,
     MissingImageSourceError,
-    finishing_quote_from_history,
     load_persisted_image_source,
 )
 from derp.billing import CLOSED_COMMERCE_POLICY, CommercePolicy
@@ -68,9 +66,7 @@ from derp.features import (
     ImageRefunded,
 )
 from derp.history.capture import capture_outbound_history, suppress_outbound_history
-from derp.history.service import HISTORY_WINDOWS
 from derp.history.transcript import extract_tool_rounds, serialize_tool_rounds
-from derp.llm import AgentDeps, create_chat_agent, model_run_settings
 from derp.media import MediaReference, image_reference_from_telegram
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
@@ -84,7 +80,6 @@ from derp.tools.policy import (
     ChatToolPolicy,
     derive_chat_tool_access,
 )
-from derp.tools.toolsets import create_resumed_image_toolset
 
 router = Router(name="tool_approvals")
 
@@ -393,9 +388,6 @@ async def _resume_approved_image(
         raise RuntimeError("approved image chat is unavailable")
 
     run_input = lease.build_run_input()
-    plan, finishing_quote_input = finishing_quote_from_history(
-        run_input.message_history
-    )
     tool_access = await _current_tool_access(
         callback=callback,
         message=message,
@@ -425,19 +417,6 @@ async def _resume_approved_image(
         business_connection_id=message.business_connection_id,
         source=source,
         allow_personal_once=allow_personal_once,
-        finishing_quote_input=finishing_quote_input,
-    )
-    deps = AgentDeps(
-        message=None,
-        db=db,
-        bot=callback.bot,
-        user_model=user_model,
-        chat_model=chat_model,
-        model=plan.model,
-        history_window=HISTORY_WINDOWS[plan.model.key],
-        tool_access=tool_access,
-        image_operation_coordinator=image_operations,
-        image_tool_context=image_context,
     )
     tool_call = _persisted_tool_call(
         run_input.message_history,
@@ -454,36 +433,9 @@ async def _resume_approved_image(
         image_plan,
         deferred_call.request,
         allow_personal_once=allow_personal_once,
-        finishing_plan=plan,
-        finishing_quote_input=finishing_quote_input,
     )
     if isinstance(outcome, ImageAwaitingFunding):
         return ImageResumeResult("", outcome)
-    deps.image_operation_outcome = outcome
-    agent = create_chat_agent(plan)
-    with agent.parallel_tool_call_execution_mode("sequential"):
-        result = await agent.run(
-            message_history=run_input.message_history,
-            deferred_tool_results=run_input.deferred_tool_results,
-            deps=deps,
-            toolsets=[create_resumed_image_toolset(lease.snapshot.tool_name)],
-            usage_limits=UsageLimits(
-                request_limit=3,
-                tool_calls_limit=1,
-                input_tokens_limit=plan.model.input_token_limit,
-                output_tokens_limit=plan.model.output_token_limit,
-            ),
-            model_settings=model_run_settings(plan.model, user_id=user_model.id),
-        )
-    if isinstance(result.output, DeferredToolRequests):
-        raise RuntimeError("approved resume attempted another deferred tool call")
-    await _store_resumed_transcript(
-        db,
-        chat_telegram_id=lease.snapshot.chat_telegram_id,
-        message_id=lease.snapshot.message_id,
-        history=result.all_messages(),
-    )
-    outcome = deps.image_operation_outcome
     if not isinstance(
         outcome,
         (
@@ -496,7 +448,7 @@ async def _resume_approved_image(
         ),
     ):
         raise RuntimeError("approved image tool produced no durable outcome")
-    return ImageResumeResult(result.output.strip(), outcome)
+    return ImageResumeResult("", outcome)
 
 
 def _persisted_tool_call(

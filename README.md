@@ -14,7 +14,7 @@ console.
 - Docker (for PostgreSQL)
 - Telegram bot token ([@BotFather](https://t.me/BotFather))
 - OpenRouter API key
-- Google API key for TTS and explicit rollback
+- Google API key for TTS
 
 ## Setup
 
@@ -37,8 +37,8 @@ Key environment variables in `.env`:
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
 | `DATABASE_URL` | PostgreSQL connection string |
 | `OPENROUTER_API_KEY` | Primary text and image inference key |
-| `OPENROUTER_ENABLED_FEATURES` | Features routed through OpenRouter; `[]` uses supported Google rollback paths and disables free inline inference |
-| `GOOGLE_API_PAID_KEY` | Google TTS and rollback key |
+| `OPENROUTER_ENABLED_FEATURES` | Reviewed OpenRouter feature set; production startup rejects route downgrades |
+| `GOOGLE_API_PAID_KEY` | Google TTS key |
 | `LOGFIRE_TOKEN` | Logfire observability token |
 | `LOGFIRE_CAPTURE_AI_CONTENT` | Local-only opt-in for Pydantic AI text capture (default `false`) |
 | `OPERATOR_IDS` | Required production Telegram operator allowlist |

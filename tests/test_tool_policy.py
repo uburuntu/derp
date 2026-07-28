@@ -87,12 +87,10 @@ def test_member_gets_baseline_and_proposal_only_by_default() -> None:
     access = derive_chat_tool_access(ActorRole.MEMBER, policy())
 
     assert access.allowed_tools == {
-        ChatTool.WEB_SEARCH,
         ChatTool.PROPOSE_SHARED_FACT,
     }
     assert set(create_chat_toolset(access, shared_fact_tools=FactTools()).tools) == {
         "propose_shared_fact",
-        "web_search",
     }
 
 
@@ -107,7 +105,6 @@ def test_member_edit_enables_review_but_never_destructive_deletion() -> None:
     assert set(create_chat_toolset(access, shared_fact_tools=FactTools()).tools) == {
         "propose_shared_fact",
         "review_shared_fact",
-        "web_search",
     }
 
 
@@ -119,7 +116,6 @@ def test_owner_and_admin_get_review_and_deletion(actor_role: ActorRole) -> None:
         "delete_shared_fact",
         "propose_shared_fact",
         "review_shared_fact",
-        "web_search",
     }
 
 
@@ -132,7 +128,6 @@ def test_expensive_policy_exposes_only_migrated_generation_tools() -> None:
     assert set(create_chat_toolset(access).tools) == {
         "edit_image",
         "generate_image",
-        "web_search",
     }
     assert ChatTool.THINK_DEEP not in access.allowed_tools
     assert ChatTool.VIDEO_GENERATE not in access.allowed_tools
@@ -151,13 +146,13 @@ def test_manual_access_cannot_restore_suspended_premium_tools() -> None:
         shared_credit_spending_enabled=True,
     )
 
-    assert set(create_chat_toolset(access).tools) == {"web_search"}
+    assert not create_chat_toolset(access).tools
 
 
 def test_expensive_policy_removes_generation_reasoning_and_legacy_memory() -> None:
     access = derive_chat_tool_access(ActorRole.ADMIN, policy(expensive=False))
 
-    assert set(create_chat_toolset(access).tools) == {"web_search"}
+    assert not create_chat_toolset(access).tools
     assert "update_chat_memory" not in create_chat_toolset(access).tools
 
 

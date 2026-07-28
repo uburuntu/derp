@@ -20,6 +20,7 @@ from aiogram.utils.i18n import gettext as _
 from derp.billing import (
     SubscriptionManagementService,
     SubscriptionManagementSnapshot,
+    SubscriptionRenewalDisposition,
     SubscriptionStateError,
     SubscriptionStatus,
 )
@@ -199,11 +200,18 @@ async def set_subscription_renewal(
             level="warning",
             user_id=user_model.telegram_id,
         )
-    notice = (
-        _("Automatic renewal is on")
-        if result.renewal_enabled
-        else _("Automatic renewal is off. Your paid period stays active.")
-    )
+    if result.disposition is SubscriptionRenewalDisposition.PENDING:
+        notice = _("Telegram hasn't confirmed this yet. Derp will retry.")
+    elif result.disposition is SubscriptionRenewalDisposition.ATTENTION:
+        notice = _("Renewal still isn't confirmed. Use /paysupport.")
+    elif result.disposition is SubscriptionRenewalDisposition.SUPERSEDED:
+        notice = _("This plan changed. Open /plan again.")
+    else:
+        notice = (
+            _("Automatic renewal is on")
+            if result.renewal_enabled
+            else _("Automatic renewal is off. Your paid period stays active.")
+        )
     await callback.answer(notice)
 
 

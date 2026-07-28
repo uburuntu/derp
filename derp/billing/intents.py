@@ -24,7 +24,8 @@ from derp.billing.types import (
     PurchaseTargetKind,
     UnknownProductError,
 )
-from derp.models import Chat, PurchaseIntent, Subscription, User
+from derp.legal import TERMS_ACCEPTANCE_VERSION, TermsAcceptanceRequiredError
+from derp.models import Chat, LegalAcceptance, PurchaseIntent, Subscription, User
 
 type TransactionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
@@ -68,7 +69,12 @@ class PurchaseIntentService:
         product = self._catalog.current_top_ups.get(product_id)
         if product is None:
             raise UnknownProductError("Unknown current top-up product")
-        return await self._create_intent(payer_user_id, target, product)
+        return await self._create_intent(
+            payer_user_id,
+            target,
+            product,
+            require_terms=True,
+        )
 
     async def create_operator_debug_top_up_intent(
         self,
@@ -81,6 +87,7 @@ class PurchaseIntentService:
             payer_user_id,
             target,
             self._catalog.debug_top_up,
+            require_terms=False,
         )
 
     async def create_subscription_intent(
@@ -93,13 +100,21 @@ class PurchaseIntentService:
             payer_user_id,
             PurchaseTarget.user(payer_user_id),
             self._catalog.subscription_plan,
+            require_terms=True,
         )
 
     async def validate_pre_checkout(
         self,
         request: PreCheckoutRequest,
+        *,
+        public_intake_enabled: bool = True,
+        operator_debug_allowed: bool = False,
     ) -> PreCheckoutDecision:
         """Validate every captured commercial field before approving Telegram."""
+        if not isinstance(public_intake_enabled, bool):
+            raise TypeError("public_intake_enabled must be a bool")
+        if not isinstance(operator_debug_allowed, bool):
+            raise TypeError("operator_debug_allowed must be a bool")
         now = self._aware_now()
         token_hash = hash_invoice_payload(request.invoice_payload)
         async with self._transactions() as session:
@@ -136,6 +151,8 @@ class PurchaseIntentService:
                 payer,
                 request,
                 now,
+                public_intake_enabled=public_intake_enabled,
+                operator_debug_allowed=operator_debug_allowed,
             )
             if rejection is not None:
                 return PreCheckoutDecision(
@@ -150,6 +167,8 @@ class PurchaseIntentService:
         payer_user_id: uuid.UUID,
         target: PurchaseTarget,
         product: StarsProduct,
+        *,
+        require_terms: bool,
     ) -> PurchaseIntentHandle:
         now = self._aware_now()
         expires_at = now + self._intent_ttl
@@ -160,6 +179,17 @@ class PurchaseIntentService:
             )
             if payer is None:
                 raise LookupError("Purchase payer does not exist")
+            terms_acceptance = await session.scalar(
+                select(LegalAcceptance).where(
+                    LegalAcceptance.user_id == payer_user_id,
+                    LegalAcceptance.document == "terms",
+                    LegalAcceptance.version == TERMS_ACCEPTANCE_VERSION,
+                )
+            )
+            if require_terms and terms_acceptance is None:
+                raise TermsAcceptanceRequiredError(
+                    "current Terms must be accepted before purchase intent creation"
+                )
             await self._validate_target(session, payer_user_id, target, product.kind)
             if product.kind is ProductKind.SUBSCRIPTION:
                 await self._guard_subscription_intent(session, payer_user_id, now)
@@ -167,6 +197,9 @@ class PurchaseIntentService:
             intent = PurchaseIntent(
                 token_hash=hash_invoice_payload(payload),
                 payer_user_id=payer_user_id,
+                terms_acceptance_id=(
+                    terms_acceptance.id if terms_acceptance is not None else None
+                ),
                 target_user_id=(
                     target.id if target.kind is PurchaseTargetKind.USER else None
                 ),
@@ -208,6 +241,9 @@ class PurchaseIntentService:
         payer: User | None,
         request: PreCheckoutRequest,
         now: datetime,
+        *,
+        public_intake_enabled: bool,
+        operator_debug_allowed: bool,
     ) -> PreCheckoutRejection | None:
         if intent.status not in {"pending", "prechecked"}:
             return PreCheckoutRejection.INVALID_STATUS
@@ -231,6 +267,16 @@ class PurchaseIntentService:
             return PreCheckoutRejection.PRODUCT_MISMATCH
         if not self._product_matches(intent, product):
             return PreCheckoutRejection.PRODUCT_MISMATCH
+        debug = self._catalog.debug_top_up
+        is_operator_debug = (
+            kind is ProductKind.TOP_UP
+            and product.id == debug.id
+            and product.version == debug.version
+        )
+        if not public_intake_enabled and not (
+            operator_debug_allowed and is_operator_debug
+        ):
+            return PreCheckoutRejection.INTAKE_CLOSED
         if not await self._stored_target_is_valid(session, intent, kind):
             return PreCheckoutRejection.TARGET_MISMATCH
         if kind is ProductKind.SUBSCRIPTION:

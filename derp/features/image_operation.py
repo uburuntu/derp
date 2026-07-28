@@ -394,10 +394,21 @@ class ImageOperationCoordinator:
             if not isinstance(provider_outcome, Succeeded):
                 raise RuntimeError("image service returned an unsupported outcome")
 
-            await self._record_inference_success(
+            if not await self._record_inference_success(
                 inference_attempt,
                 provider_outcome.value.reports,
-            )
+            ):
+                await self._ledger.release(
+                    invocation.operation_id,
+                    reason="image_inference_accounting_unavailable",
+                )
+                return self._record_outcome(
+                    span,
+                    ImageNotCharged(
+                        invocation.operation_id,
+                        ImageNotChargedReason.PROVIDER_FAILURE,
+                    ),
+                )
 
             try:
                 prepared = await self._delivery_service.persist_result(
@@ -605,9 +616,9 @@ class ImageOperationCoordinator:
         self,
         attempt: InferenceAttempt | None,
         reports: tuple[InferenceReport, ...],
-    ) -> None:
+    ) -> bool:
         if self._inference_recorder is None or attempt is None:
-            return
+            return True
         try:
             await self._inference_recorder.succeed_reports(attempt, reports)
         except Exception as exc:
@@ -617,6 +628,8 @@ class ImageOperationCoordinator:
                 level="warning",
                 inference_usage_id=str(attempt.id),
             )
+            return False
+        return True
 
     async def _record_inference_failure(
         self,

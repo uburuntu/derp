@@ -47,6 +47,7 @@ from derp.db import (
     tombstone_user_messages,
 )
 from derp.db.inference_privacy import InferencePrivacyRevisionConflictError
+from derp.handlers.legal_support import SUPPORT_MENU_CALLBACK
 from derp.history.policy import CONTEXT_NOTICE_VERSION, ChatPolicyFlag
 from derp.inference import (
     FREE_INFERENCE_PRIVACY_URL,
@@ -601,6 +602,14 @@ def build_privacy_panel(
     rows.append(
         [
             InlineKeyboardButton(
+                text=_("Contact support"),
+                callback_data=SUPPORT_MENU_CALLBACK,
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
                 text=_("Back"),
                 callback_data=ContextCallback(action=ContextAction.MENU).pack(),
             )
@@ -689,8 +698,9 @@ def build_inference_privacy_review(
     text = _(
         "<b>Allow free models?</b>\n\n"
         "Free-model providers may store prompts and replies under their own "
-        "policies. By continuing, you agree to OpenRouter's Terms and Privacy "
-        "Policy.\n\n"
+        "policies. By continuing, you allow Derp to send prompts and replies to "
+        "OpenRouter and selected free-model providers under the linked Terms and "
+        "Privacy Policy.\n\n"
         "This applies only in private chat and inline mode. Groups stay private."
     )
     markup = InlineKeyboardMarkup(

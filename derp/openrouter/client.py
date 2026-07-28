@@ -25,6 +25,7 @@ from derp.openrouter.types import (
     GenerationMetadata,
     ImageGenerationRequest,
     ImageGenerationResult,
+    ImageModelEndpoints,
     ModelListQuery,
     ModelsPage,
     OpenRouterTimeouts,
@@ -35,6 +36,7 @@ from derp.openrouter.types import (
     VideoContent,
     VideoGenerationRequest,
     VideoJob,
+    ZdrEndpoints,
     _CreditsEnvelope,
     _CurrentKeyEnvelope,
     _GenerationEnvelope,
@@ -160,6 +162,37 @@ class OpenRouterClient:
             _GenerationEnvelope,
             endpoint="/generation",
         ).data
+
+    async def get_image_model_endpoints(self, model: str) -> ImageModelEndpoints:
+        """Return definitive live endpoints for one dedicated image model."""
+        author, separator, slug = model.partition("/")
+        if not separator or not author or not slug or "/" in slug:
+            raise ValueError("image model must use author/slug form")
+        endpoint = (
+            f"/images/models/{quote(author, safe='')}/{quote(slug, safe='')}/endpoints"
+        )
+        response = await self._request(
+            "GET",
+            endpoint,
+            expected_status=200,
+            timeout=self._timeouts.metadata,
+            accept="application/json",
+            max_response_bytes=_MAX_METADATA_RESPONSE_BYTES,
+        )
+        return _parse_json_model(response, ImageModelEndpoints, endpoint=endpoint)
+
+    async def list_zdr_endpoints(self) -> ZdrEndpoints:
+        """Return endpoints admitted by the authenticated account's ZDR policy."""
+        endpoint = "/endpoints/zdr"
+        response = await self._request(
+            "GET",
+            endpoint,
+            expected_status=200,
+            timeout=self._timeouts.metadata,
+            accept="application/json",
+            max_response_bytes=_MAX_METADATA_RESPONSE_BYTES,
+        )
+        return _parse_json_model(response, ZdrEndpoints, endpoint=endpoint)
 
     async def generate_image(
         self,

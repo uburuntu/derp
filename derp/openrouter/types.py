@@ -234,6 +234,66 @@ class ProviderRouting(_RequestModel):
             raise ValueError(f"{surface} documents provider options only")
 
 
+class ImageEndpointParameter(_ResponseModel):
+    """One typed capability in the dedicated image endpoint catalog."""
+
+    type: str
+    values: tuple[str, ...] = ()
+    min: NonNegativeInt | None = None
+    max: NonNegativeInt | None = None
+
+
+class ImageEndpointPrice(_ResponseModel):
+    """One unit price exposed by a dedicated image endpoint."""
+
+    billable: str
+    unit: str
+    cost_usd: NonNegativeDecimal
+
+
+class ImageModelEndpoint(_ResponseModel):
+    """Definitive capabilities and price for one image provider route."""
+
+    provider_name: str
+    provider_slug: str
+    provider_tag: str
+    supported_parameters: dict[str, ImageEndpointParameter]
+    allowed_passthrough_parameters: tuple[str, ...] = ()
+    supports_streaming: bool = False
+    pricing: tuple[ImageEndpointPrice, ...]
+
+
+class ImageModelEndpoints(_ResponseModel):
+    """Live dedicated-image endpoints for one exact model."""
+
+    id: str
+    endpoints: tuple[ImageModelEndpoint, ...]
+
+
+class ZdrEndpointPricing(_ResponseModel):
+    """Relevant per-token prices from OpenRouter's live ZDR projection."""
+
+    prompt: NonNegativeDecimal | None = None
+    completion: NonNegativeDecimal | None = None
+    image_output: NonNegativeDecimal | None = None
+
+
+class ZdrEndpoint(_ResponseModel):
+    """One provider endpoint currently admitted by account-level ZDR."""
+
+    model_id: str
+    provider_name: str
+    tag: str
+    status: int
+    pricing: ZdrEndpointPricing
+
+
+class ZdrEndpoints(_ResponseModel):
+    """Account-visible endpoints after OpenRouter applies ZDR policy."""
+
+    data: tuple[ZdrEndpoint, ...]
+
+
 class MediaReference(_RequestModel):
     """One HTTPS or image-data reference sent to a media provider."""
 
@@ -882,6 +942,10 @@ __all__ = [
     "ImageBackground",
     "ImageGenerationRequest",
     "ImageGenerationResult",
+    "ImageEndpointParameter",
+    "ImageEndpointPrice",
+    "ImageModelEndpoint",
+    "ImageModelEndpoints",
     "ImageOutputFormat",
     "ImageQuality",
     "ImageUsage",
@@ -913,4 +977,7 @@ __all__ = [
     "VideoJob",
     "VideoJobStatus",
     "VideoUsage",
+    "ZdrEndpoint",
+    "ZdrEndpointPricing",
+    "ZdrEndpoints",
 ]

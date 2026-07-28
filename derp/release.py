@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 from sqlalchemy.pool import NullPool
 
-MINIMUM_POSTGRES_MAJOR = 14
+MINIMUM_POSTGRES_MAJOR = 18
 
 LEGACY_SCHEMA = {
     "users": frozenset({"id", "credits"}),
@@ -54,16 +54,89 @@ CORE_SCHEMA = {
             "available_credits",
             "reserved_credits",
             "consumed_credits",
+            "debt_offset_credits",
+        }
+    ),
+    "wallet_debt_sources": frozenset(
+        {
+            "id",
+            "wallet_id",
+            "source_wallet_lot_id",
+            "incurred_credits",
+            "outstanding_credits",
+            "recovered_credits",
+        }
+    ),
+    "wallet_debt_repayment_allocations": frozenset(
+        {
+            "debt_source_id",
+            "repayment_wallet_lot_id",
+            "wallet_id",
+            "allocated_credits",
+            "restored_credits",
+            "revoked_credits",
         }
     ),
     "wallet_ledger_entries": frozenset(
         {"wallet_id", "wallet_lot_id", "event_type", "amount_credits"}
     ),
     "purchase_intents": frozenset(
-        {"payer_user_id", "product_id", "product_version", "stars", "status"}
+        {
+            "payer_user_id",
+            "terms_acceptance_id",
+            "product_id",
+            "product_version",
+            "stars",
+            "status",
+        }
     ),
     "payment_receipts": frozenset(
         {"purchase_intent_id", "telegram_charge_id", "total_amount", "status"}
+    ),
+    "payment_update_inbox": frozenset(
+        {
+            "telegram_update_id",
+            "status",
+            "next_attempt_at",
+            "lease_expires_at",
+            "settled_at",
+            "attention_reason",
+            "reply_attempt_count",
+            "reply_status",
+        }
+    ),
+    "payment_refund_requests": frozenset(
+        {
+            "payment_receipt_id",
+            "status",
+            "submitted_at",
+            "accepted_at",
+            "reconciled_at",
+        }
+    ),
+    "subscription_renewal_commands": frozenset(
+        {
+            "subscription_id",
+            "status",
+            "next_attempt_at",
+            "lease_expires_at",
+            "completed_at",
+            "last_failure_code",
+        }
+    ),
+    "legal_acceptances": frozenset(
+        {"id", "user_id", "document", "version", "accepted_at"}
+    ),
+    "support_requests": frozenset({"id", "requester_user_id", "kind", "status"}),
+    "inference_usage_records": frozenset(
+        {
+            "provider",
+            "provider_model_id",
+            "actual_model_id",
+            "downstream_provider",
+            "route_policy_matched",
+            "status",
+        }
     ),
     "artifacts": frozenset({"operation_id", "storage_key", "expires_at"}),
     "delivery_intents": frozenset(
@@ -134,12 +207,23 @@ async def run_release_checks(
     database_url: str,
     *,
     config_path: Path | None = None,
+    expected_legacy_group_history_purge_count: int | None = None,
 ) -> ReleaseReport:
     """Run one release phase inside a read-only database transaction."""
     if not isinstance(mode, ReleaseMode):
         raise TypeError("mode must be a ReleaseMode")
     if not database_url:
         raise ValueError("database_url is required")
+    if (
+        mode is ReleaseMode.PREFLIGHT
+        and expected_legacy_group_history_purge_count is None
+    ):
+        raise ValueError("preflight requires the reviewed purge count")
+    if expected_legacy_group_history_purge_count is not None and (
+        isinstance(expected_legacy_group_history_purge_count, bool)
+        or expected_legacy_group_history_purge_count < 0
+    ):
+        raise ValueError("expected purge count must be non-negative")
 
     graph = load_migration_graph(config_path)
     engine = create_async_engine(database_url, poolclass=NullPool)
@@ -147,7 +231,14 @@ async def run_release_checks(
         async with engine.connect() as connection:
             async with connection.begin():
                 await connection.execute(text("SET TRANSACTION READ ONLY"))
-                return await _collect_report(connection, mode, graph)
+                return await _collect_report(
+                    connection,
+                    mode,
+                    graph,
+                    expected_legacy_group_history_purge_count=(
+                        expected_legacy_group_history_purge_count
+                    ),
+                )
     finally:
         await engine.dispose()
 
@@ -156,6 +247,8 @@ async def _collect_report(
     connection: AsyncConnection,
     mode: ReleaseMode,
     graph: MigrationGraph,
+    *,
+    expected_legacy_group_history_purge_count: int | None,
 ) -> ReleaseReport:
     columns = await _schema_columns(connection)
     postgres_version = int(
@@ -212,8 +305,16 @@ async def _collect_report(
     checks.append(
         ReleaseCheck(
             name="legacy_group_history_purge_count",
-            passed=(purge_count is not None)
-            and (mode is ReleaseMode.PREFLIGHT or purge_count == 0),
+            passed=(
+                purge_count is not None
+                and (
+                    (mode is ReleaseMode.VERIFY and purge_count == 0)
+                    or (
+                        mode is ReleaseMode.PREFLIGHT
+                        and purge_count == expected_legacy_group_history_purge_count
+                    )
+                )
+            ),
             value=purge_count,
         )
     )
@@ -226,6 +327,48 @@ async def _collect_report(
                 passed=shortfall_count == 0,
                 value=shortfall_count,
             )
+        )
+        zero_count_checks = (
+            (
+                "payment_update_attention_count",
+                await _payment_update_attention_count(connection, columns),
+            ),
+            (
+                "payment_update_due_count",
+                await _payment_update_due_count(connection, columns),
+            ),
+            (
+                "payment_update_reply_failure_count",
+                await _payment_update_reply_failure_count(connection, columns),
+            ),
+            (
+                "refund_request_attention_count",
+                await _refund_request_attention_count(connection, columns),
+            ),
+            (
+                "refund_request_inflight_count",
+                await _refund_request_inflight_count(connection, columns),
+            ),
+            (
+                "subscription_renewal_attention_count",
+                await _subscription_renewal_attention_count(connection, columns),
+            ),
+            (
+                "subscription_renewal_due_count",
+                await _subscription_renewal_due_count(connection, columns),
+            ),
+            (
+                "inference_route_policy_violation_count",
+                await _inference_route_policy_violation_count(connection, columns),
+            ),
+            (
+                "wallet_debt_provenance_inconsistency_count",
+                await _wallet_debt_provenance_inconsistency_count(connection, columns),
+            ),
+        )
+        checks.extend(
+            ReleaseCheck(name=name, passed=value == 0, value=value)
+            for name, value in zero_count_checks
         )
 
     return ReleaseReport(mode=mode, checks=tuple(checks))
@@ -271,6 +414,17 @@ def _missing_schema_items(
         len(columns - actual.get(table, frozenset()))
         for table, columns in required.items()
     )
+
+
+async def _guarded_aggregate_count(
+    connection: AsyncConnection,
+    columns: Mapping[str, frozenset[str]],
+    required: Mapping[str, frozenset[str]],
+    statement: str,
+) -> int | None:
+    if _missing_schema_items(columns, required):
+        return None
+    return int(await connection.scalar(text(statement)) or 0)
 
 
 async def _negative_legacy_balances(
@@ -369,6 +523,243 @@ async def _wallet_backfill_shortfall_count(
     )
 
 
+async def _payment_update_attention_count(
+    connection: AsyncConnection,
+    columns: Mapping[str, frozenset[str]],
+) -> int | None:
+    required = {"payment_update_inbox": frozenset({"status", "attention_reason"})}
+    return await _guarded_aggregate_count(
+        connection,
+        columns,
+        required,
+        """
+        SELECT count(*)
+        FROM payment_update_inbox
+        WHERE status = 'attention'
+           OR attention_reason IS NOT NULL
+        """,
+    )
+
+
+async def _payment_update_due_count(
+    connection: AsyncConnection,
+    columns: Mapping[str, frozenset[str]],
+) -> int | None:
+    required = {
+        "payment_update_inbox": frozenset(
+            {"status", "next_attempt_at", "lease_expires_at"}
+        )
+    }
+    return await _guarded_aggregate_count(
+        connection,
+        columns,
+        required,
+        """
+        SELECT count(*)
+        FROM payment_update_inbox
+        WHERE status = 'pending' AND next_attempt_at <= CURRENT_TIMESTAMP
+           OR status = 'processing' AND lease_expires_at <= CURRENT_TIMESTAMP
+        """,
+    )
+
+
+async def _payment_update_reply_failure_count(
+    connection: AsyncConnection,
+    columns: Mapping[str, frozenset[str]],
+) -> int | None:
+    required = {"payment_update_inbox": frozenset({"reply_status"})}
+    return await _guarded_aggregate_count(
+        connection,
+        columns,
+        required,
+        """
+        SELECT count(*)
+        FROM payment_update_inbox
+        WHERE reply_status IN ('failed', 'skipped')
+        """,
+    )
+
+
+async def _refund_request_attention_count(
+    connection: AsyncConnection,
+    columns: Mapping[str, frozenset[str]],
+) -> int | None:
+    required = {"payment_refund_requests": frozenset({"status"})}
+    return await _guarded_aggregate_count(
+        connection,
+        columns,
+        required,
+        """
+        SELECT count(*)
+        FROM payment_refund_requests
+        WHERE status = 'needs_review'
+        """,
+    )
+
+
+async def _refund_request_inflight_count(
+    connection: AsyncConnection,
+    columns: Mapping[str, frozenset[str]],
+) -> int | None:
+    required = {"payment_refund_requests": frozenset({"status"})}
+    return await _guarded_aggregate_count(
+        connection,
+        columns,
+        required,
+        """
+        SELECT count(*)
+        FROM payment_refund_requests
+        WHERE status IN ('submitting', 'accepted')
+        """,
+    )
+
+
+async def _subscription_renewal_attention_count(
+    connection: AsyncConnection,
+    columns: Mapping[str, frozenset[str]],
+) -> int | None:
+    required = {"subscription_renewal_commands": frozenset({"status"})}
+    return await _guarded_aggregate_count(
+        connection,
+        columns,
+        required,
+        """
+        SELECT count(*)
+        FROM subscription_renewal_commands
+        WHERE status = 'attention'
+        """,
+    )
+
+
+async def _subscription_renewal_due_count(
+    connection: AsyncConnection,
+    columns: Mapping[str, frozenset[str]],
+) -> int | None:
+    required = {
+        "subscription_renewal_commands": frozenset(
+            {"status", "next_attempt_at", "lease_expires_at"}
+        )
+    }
+    return await _guarded_aggregate_count(
+        connection,
+        columns,
+        required,
+        """
+        SELECT count(*)
+        FROM subscription_renewal_commands
+        WHERE status = 'pending' AND next_attempt_at <= CURRENT_TIMESTAMP
+           OR status = 'processing' AND lease_expires_at <= CURRENT_TIMESTAMP
+        """,
+    )
+
+
+async def _inference_route_policy_violation_count(
+    connection: AsyncConnection,
+    columns: Mapping[str, frozenset[str]],
+) -> int | None:
+    required = {"inference_usage_records": frozenset({"route_policy_matched"})}
+    return await _guarded_aggregate_count(
+        connection,
+        columns,
+        required,
+        """
+        SELECT count(*)
+        FROM inference_usage_records
+        WHERE NOT route_policy_matched
+        """,
+    )
+
+
+async def _wallet_debt_provenance_inconsistency_count(
+    connection: AsyncConnection,
+    columns: Mapping[str, frozenset[str]],
+) -> int | None:
+    required = {
+        "wallets": frozenset({"id", "debt_credits"}),
+        "wallet_lots": frozenset({"id", "wallet_id", "debt_offset_credits"}),
+        "wallet_debt_sources": frozenset(
+            {
+                "id",
+                "wallet_id",
+                "incurred_credits",
+                "outstanding_credits",
+                "recovered_credits",
+            }
+        ),
+        "wallet_debt_repayment_allocations": frozenset(
+            {
+                "debt_source_id",
+                "repayment_wallet_lot_id",
+                "allocated_credits",
+                "restored_credits",
+                "revoked_credits",
+            }
+        ),
+    }
+    return await _guarded_aggregate_count(
+        connection,
+        columns,
+        required,
+        """
+                WITH source_active_repayments AS (
+                    SELECT
+                        debt_source_id,
+                        sum(
+                            allocated_credits - restored_credits - revoked_credits
+                        ) AS active_credits
+                    FROM wallet_debt_repayment_allocations
+                    GROUP BY debt_source_id
+                ),
+                lot_active_repayments AS (
+                    SELECT
+                        repayment_wallet_lot_id,
+                        sum(
+                            allocated_credits - restored_credits - revoked_credits
+                        ) AS active_credits
+                    FROM wallet_debt_repayment_allocations
+                    GROUP BY repayment_wallet_lot_id
+                ),
+                wallet_open_debt AS (
+                    SELECT wallet_id, sum(outstanding_credits) AS outstanding_credits
+                    FROM wallet_debt_sources
+                    GROUP BY wallet_id
+                )
+                SELECT
+                    (
+                        SELECT count(*)
+                        FROM wallets
+                        LEFT JOIN wallet_open_debt
+                          ON wallet_open_debt.wallet_id = wallets.id
+                        WHERE wallets.debt_credits
+                            <> coalesce(wallet_open_debt.outstanding_credits, 0)
+                    )
+                    + (
+                        SELECT count(*)
+                        FROM wallet_debt_sources
+                        LEFT JOIN source_active_repayments
+                          ON source_active_repayments.debt_source_id
+                             = wallet_debt_sources.id
+                        WHERE wallet_debt_sources.incurred_credits
+                            <> wallet_debt_sources.outstanding_credits
+                               + wallet_debt_sources.recovered_credits
+                               + coalesce(
+                                   source_active_repayments.active_credits,
+                                   0
+                               )
+                    )
+                    + (
+                        SELECT count(*)
+                        FROM wallet_lots
+                        LEFT JOIN lot_active_repayments
+                          ON lot_active_repayments.repayment_wallet_lot_id
+                             = wallet_lots.id
+                        WHERE wallet_lots.debt_offset_credits
+                            <> coalesce(lot_active_repayments.active_credits, 0)
+                    )
+        """,
+    )
+
+
 def _failure_json(mode: ReleaseMode) -> str:
     return json.dumps(
         {"mode": mode.value, "ok": False, "error": "release_check_failed"},
@@ -386,6 +777,10 @@ def main(
     """Run a release gate while keeping every failure content-free."""
     parser = argparse.ArgumentParser(prog="python -m derp.release")
     parser.add_argument("mode", choices=tuple(ReleaseMode), type=ReleaseMode)
+    parser.add_argument(
+        "--expected-legacy-group-history-purge-count",
+        type=int,
+    )
     args = parser.parse_args(argv)
     mode: ReleaseMode = args.mode
     output = stdout or sys.stdout
@@ -393,7 +788,15 @@ def main(
 
     try:
         database_url = environment["DATABASE_URL"]
-        report = asyncio.run(run_release_checks(mode, database_url))
+        report = asyncio.run(
+            run_release_checks(
+                mode,
+                database_url,
+                expected_legacy_group_history_purge_count=(
+                    args.expected_legacy_group_history_purge_count
+                ),
+            )
+        )
     except Exception:
         output.write(f"{_failure_json(mode)}\n")
         return 1

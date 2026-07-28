@@ -81,6 +81,44 @@ def test_production_requires_an_explicit_operator() -> None:
         _settings(environment="prod")
 
 
+def test_production_requires_openrouter_credentials() -> None:
+    with pytest.raises(ValidationError, match="OPENROUTER_API_KEY"):
+        _settings(environment="prod", operator_ids=[42])
+
+
+@pytest.mark.parametrize(
+    "features",
+    [[], ["chat"], ["chat", "inline_chat", "image_generate"]],
+)
+def test_production_rejects_inference_route_downgrades(
+    features: list[str],
+) -> None:
+    with pytest.raises(ValidationError, match="reviewed production surface"):
+        _settings(
+            environment="prod",
+            operator_ids=[42],
+            openrouter_api_key="test-openrouter-key",
+            openrouter_enabled_features=features,
+        )
+
+
+def test_production_accepts_the_reviewed_openrouter_surface() -> None:
+    configured = _settings(
+        environment="prod",
+        operator_ids=[42],
+        openrouter_api_key="test-openrouter-key",
+    )
+
+    assert configured.openrouter_enabled_features == frozenset(
+        {
+            Feature.CHAT,
+            Feature.INLINE_CHAT,
+            Feature.IMAGE_GENERATE,
+            Feature.IMAGE_EDIT,
+        }
+    )
+
+
 @pytest.mark.parametrize("raw", ["0", "-1", "not-an-id", [True], {1.5}])
 def test_operator_ids_reject_invalid_values(raw: object) -> None:
     with pytest.raises(ValidationError, match="OPERATOR_IDS"):

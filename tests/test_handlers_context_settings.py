@@ -180,6 +180,7 @@ def test_privacy_panel_exposes_personal_deletion_to_non_admin(
     labels = [button.text for row in markup.inline_keyboard for button in row]
     assert "Delete my messages" in labels
     assert "Clear this chat" not in labels
+    assert "Contact support" in labels
     urls = {
         button.text: button.url
         for row in markup.inline_keyboard

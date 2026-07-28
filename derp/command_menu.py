@@ -83,6 +83,9 @@ def command_specs_for(
             CommandSpec("help", _("See what Derp can do")),
             CommandSpec("settings", _("Manage privacy and history")),
             CommandSpec("privacy", _("Open privacy and deletion controls")),
+            CommandSpec("terms", _("Review terms for purchases")),
+            CommandSpec("support", _("Contact in-bot support")),
+            CommandSpec("paysupport", _("Get purchase and refund support")),
             *creation,
             CommandSpec("credits", _("See credits and recent charges")),
         ]
@@ -92,7 +95,6 @@ def command_specs_for(
             (
                 CommandSpec("plan", _("Manage your monthly plan")),
                 CommandSpec("forget", _("Forget a message you reply to")),
-                CommandSpec("donate", _("Support Derp with Stars")),
             )
         )
         if audience is CommandAudience.OPERATOR:
@@ -114,12 +116,7 @@ def command_specs_for(
     ]
     if public_purchases_enabled:
         commands.append(CommandSpec("buy_chat", _("Buy credits for this chat")))
-    commands.extend(
-        (
-            CommandSpec("forget", _("Forget a message you reply to")),
-            CommandSpec("donate", _("Support Derp with Stars")),
-        )
-    )
+    commands.extend((CommandSpec("forget", _("Forget a message you reply to")),))
     return tuple(commands)
 
 

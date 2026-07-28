@@ -39,6 +39,7 @@ from derp.operations import (
     QuotePolicy,
     TtsQuoteInput,
     VideoGenerateQuoteInput,
+    chat_execution_budget,
 )
 
 NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
@@ -71,9 +72,9 @@ def _quote(
             Feature.CHAT,
             GoogleModelKey.CHAT_STANDARD,
             ChatQuoteInput(input_tokens=1),
-            Decimal("0.03648"),
-            53,
-            "default",
+            Decimal("0.081152"),
+            116,
+            "budget=v1",
         ),
         (
             Feature.INLINE_CHAT,
@@ -472,9 +473,36 @@ def test_policy_controls_margin_credit_value_version_and_expiry() -> None:
     )
 
     assert policy.credits_for(Decimal("0.0101")) == 3
-    assert quote.credits == 8
+    assert quote.credits == 17
     assert quote.pricing_version == "launch-v2"
     assert quote.expires_at == NOW + timedelta(minutes=3)
+
+
+def test_chat_runtime_budget_is_the_exact_quoted_token_envelope() -> None:
+    plan = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_STANDARD)
+    quote = _quote(
+        Feature.CHAT,
+        GoogleModelKey.CHAT_STANDARD,
+        ChatQuoteInput(input_tokens=1),
+    )
+
+    budget = chat_execution_budget(
+        plan=plan,
+        context_band=quote.key.context_band,
+    )
+
+    assert budget.request_limit == 2
+    assert budget.tool_calls_limit == 3
+    assert budget.input_tokens_limit == 20_096
+    assert budget.output_tokens_limit == 4_096
+    assert budget.max_output_tokens_per_request == 2_048
+    assert (
+        plan.model.pricing.estimate_usd(  # type: ignore[union-attr]
+            input_tokens=budget.input_tokens_limit,
+            output_tokens=budget.output_tokens_limit,
+        )
+        == quote.estimated_provider_cost_usd
+    )
 
 
 def test_policy_and_inputs_enforce_invariants() -> None:

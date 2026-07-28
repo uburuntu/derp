@@ -40,11 +40,13 @@ class TelegramSubscriptionRenewalProvider:
 
     async def set_renewal(self, command: SubscriptionRenewalCommand) -> None:
         """Cancel or re-enable extension without shortening the paid period."""
-        await self._bot.edit_user_star_subscription(
+        confirmed = await self._bot.edit_user_star_subscription(
             user_id=command.payer_telegram_id,
             telegram_payment_charge_id=command.telegram_payment_charge_id,
             is_canceled=not command.enabled,
         )
+        if confirmed is not True:
+            raise RuntimeError("Telegram did not confirm the renewal change")
 
 
 def _credit_count(count: int) -> str:

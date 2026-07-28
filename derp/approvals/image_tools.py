@@ -212,9 +212,6 @@ class ImageToolApprovalCoordinator:
         """Quote and persist one framework-validated tool call without executing it."""
         call = DeferredImageCall.parse(tool_call, source=context.source)
         invocation = call.invocation(context)
-        finishing_plan, finishing_quote_input = finishing_quote_from_history(
-            original_history
-        )
         quote = await self._image_operations.ensure_quote(
             invocation,
             plan_execution(
@@ -223,8 +220,6 @@ class ImageToolApprovalCoordinator:
                 provider=settings.inference_provider(call.feature),
             ),
             call.request,
-            finishing_plan=finishing_plan,
-            finishing_quote_input=finishing_quote_input,
         )
         handle = await self._approvals.create_request(
             operation_id=invocation.operation_id,

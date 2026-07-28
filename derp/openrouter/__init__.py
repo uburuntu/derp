@@ -22,6 +22,12 @@ from derp.openrouter.image_executor import (
     OPENROUTER_IMAGE_VERTEX_ENDPOINT,
     OpenRouterImageClient,
     OpenRouterImageExecutor,
+    OpenRouterImageRoutePolicy,
+)
+from derp.openrouter.image_policy import (
+    DEFAULT_IMAGE_ATTESTATION_TTL,
+    ImageRoutePolicyClient,
+    OpenRouterImageRouteGuard,
 )
 from derp.openrouter.types import (
     CreditBalance,
@@ -32,6 +38,8 @@ from derp.openrouter.types import (
     ImageBackground,
     ImageGenerationRequest,
     ImageGenerationResult,
+    ImageModelEndpoint,
+    ImageModelEndpoints,
     ImageOutputFormat,
     ImageQuality,
     ImageUsage,
@@ -63,6 +71,8 @@ from derp.openrouter.types import (
     VideoJob,
     VideoJobStatus,
     VideoUsage,
+    ZdrEndpoint,
+    ZdrEndpoints,
 )
 
 __all__ = [
@@ -74,11 +84,15 @@ __all__ = [
     "CreditBalance",
     "CurrentKeyInfo",
     "DataCollectionPolicy",
+    "DEFAULT_IMAGE_ATTESTATION_TTL",
     "GeneratedImage",
     "GenerationMetadata",
     "ImageBackground",
     "ImageGenerationRequest",
     "ImageGenerationResult",
+    "ImageModelEndpoint",
+    "ImageModelEndpoints",
+    "ImageRoutePolicyClient",
     "ImageOutputFormat",
     "ImageQuality",
     "ImageUsage",
@@ -93,6 +107,8 @@ __all__ = [
     "OpenRouterHTTPError",
     "OpenRouterImageClient",
     "OpenRouterImageExecutor",
+    "OpenRouterImageRouteGuard",
+    "OpenRouterImageRoutePolicy",
     "OpenRouterJobError",
     "OpenRouterModel",
     "OpenRouterResponseError",
@@ -122,4 +138,6 @@ __all__ = [
     "VideoJob",
     "VideoJobStatus",
     "VideoUsage",
+    "ZdrEndpoint",
+    "ZdrEndpoints",
 ]

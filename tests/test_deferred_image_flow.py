@@ -182,16 +182,7 @@ async def test_quote_is_persisted_before_the_approval_request() -> None:
     assert plan.feature is Feature.IMAGE_GENERATE
     assert request == ImageGenerateRequest("a lighthouse")
     assert approvals.create_request.await_args.kwargs["quote_id"] == quote.id
-    assert (
-        image_operations.ensure_quote.await_args.kwargs["finishing_plan"].model.key
-        is GoogleModelKey.CHAT_ECONOMY
-    )
-    assert (
-        image_operations.ensure_quote.await_args.kwargs[
-            "finishing_quote_input"
-        ].model_key
-        is GoogleModelKey.CHAT_ECONOMY
-    )
+    assert not image_operations.ensure_quote.await_args.kwargs
 
 
 @pytest.mark.asyncio

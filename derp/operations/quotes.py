@@ -24,9 +24,10 @@ from derp.catalog import (
 from derp.execution import ExecutionPlan, Feature
 from derp.operations.types import ContextBand, OperationId, Quote, QuoteId, QuoteKey
 
-PRICING_VERSION: Final = f"openrouter-{OPENROUTER_CATALOG_VERIFIED_ON.isoformat()}-v1"
+PRICING_VERSION: Final = f"openrouter-{OPENROUTER_CATALOG_VERIFIED_ON.isoformat()}-v2"
 IMAGE_FINISHING_ALLOWANCE_VERSION: Final = "v1"
 IMAGE_FINISHING_OUTPUT_TOKENS: Final = 2_048
+CHAT_EXECUTION_ALLOWANCE_VERSION: Final = "v1"
 
 
 def _validate_token_count(value: int, name: str = "input_tokens") -> None:
@@ -50,6 +51,70 @@ class ChatQuoteInput:
 
     def __post_init__(self) -> None:
         _validate_token_count(self.input_tokens)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentExecutionBudget:
+    """Exact provider-call and token limits shared by quoting and execution."""
+
+    version: str
+    request_limit: int
+    tool_calls_limit: int
+    input_tokens_limit: int
+    output_tokens_limit: int
+    max_output_tokens_per_request: int
+
+    def __post_init__(self) -> None:
+        if not self.version or not self.version.isascii() or len(self.version) > 16:
+            raise ValueError("execution budget version must be short ASCII text")
+        for name in (
+            "request_limit",
+            "input_tokens_limit",
+            "output_tokens_limit",
+            "max_output_tokens_per_request",
+        ):
+            _validate_positive_int(getattr(self, name), name)
+        _validate_token_count(self.tool_calls_limit, "tool_calls_limit")
+        if self.max_output_tokens_per_request > self.output_tokens_limit:
+            raise ValueError("per-request output cannot exceed aggregate output")
+
+
+@dataclass(frozen=True, slots=True)
+class ChatExecutionAllowance:
+    """Versioned bounds for one quoted multi-round chat execution."""
+
+    version: str = CHAT_EXECUTION_ALLOWANCE_VERSION
+    request_limit: int = 2
+    tool_calls_limit: int = 3
+    output_tokens: int = 2_048
+    tool_result_tokens: int = 2_048
+
+    def __post_init__(self) -> None:
+        if not self.version or not self.version.isascii() or len(self.version) > 16:
+            raise ValueError("chat allowance version must be short ASCII text")
+        _validate_positive_int(self.request_limit, "request_limit")
+        _validate_token_count(self.tool_calls_limit, "tool_calls_limit")
+        _validate_positive_int(self.output_tokens, "output_tokens")
+        _validate_token_count(self.tool_result_tokens, "tool_result_tokens")
+
+    def budget(self, *, input_envelope_tokens: int) -> AgentExecutionBudget:
+        """Expand a context band into the exact aggregate billable envelope."""
+        _validate_positive_int(input_envelope_tokens, "input_envelope_tokens")
+        follow_up_growth = self.output_tokens + self.tool_result_tokens
+        return AgentExecutionBudget(
+            version=self.version,
+            request_limit=self.request_limit,
+            tool_calls_limit=self.tool_calls_limit,
+            input_tokens_limit=(
+                input_envelope_tokens * self.request_limit
+                + follow_up_growth * (self.request_limit - 1)
+            ),
+            output_tokens_limit=self.output_tokens * self.request_limit,
+            max_output_tokens_per_request=self.output_tokens,
+        )
+
+
+DEFAULT_CHAT_EXECUTION_ALLOWANCE: Final = ChatExecutionAllowance()
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +199,8 @@ class ImageFinishingAllowance:
 
     version: str = IMAGE_FINISHING_ALLOWANCE_VERSION
     output_tokens: int = IMAGE_FINISHING_OUTPUT_TOKENS
+    request_limit: int = 1
+    tool_calls_limit: int = 1
 
     def __post_init__(self) -> None:
         if (
@@ -149,6 +216,21 @@ class ImageFinishingAllowance:
                 "finishing allowance version must be 1-8 ASCII letters, digits, '-' or '_'"
             )
         _validate_positive_int(self.output_tokens, "finishing_output_tokens")
+        if self.request_limit != 1:
+            raise ValueError("image finishing must use exactly one provider request")
+        if self.tool_calls_limit != 1:
+            raise ValueError("image finishing allows only the resumed tool result")
+
+    def budget(self, *, input_envelope_tokens: int) -> AgentExecutionBudget:
+        _validate_positive_int(input_envelope_tokens, "input_envelope_tokens")
+        return AgentExecutionBudget(
+            version=self.version,
+            request_limit=self.request_limit,
+            tool_calls_limit=self.tool_calls_limit,
+            input_tokens_limit=input_envelope_tokens,
+            output_tokens_limit=self.output_tokens,
+            max_output_tokens_per_request=self.output_tokens,
+        )
 
 
 DEFAULT_IMAGE_FINISHING_ALLOWANCE: Final = ImageFinishingAllowance()
@@ -203,7 +285,7 @@ class QuotePolicy:
     ttl: timedelta = timedelta(minutes=10)
     credit_value_usd: Decimal = CREDIT_BASE_USD
     margin: Decimal = DEFAULT_MARGIN
-    chat_output_tokens: int = 2_048
+    chat_execution: ChatExecutionAllowance = DEFAULT_CHAT_EXECUTION_ALLOWANCE
     inline_output_tokens: int = 1_024
     deep_think_output_tokens: int = 8_192
     image_text_output_tokens: int = 0
@@ -219,11 +301,12 @@ class QuotePolicy:
         if not self.margin.is_finite() or not Decimal(0) <= self.margin < Decimal(1):
             raise ValueError("margin must be finite, non-negative, and less than one")
         for name in (
-            "chat_output_tokens",
             "inline_output_tokens",
             "deep_think_output_tokens",
         ):
             _validate_positive_int(getattr(self, name), name)
+        if not isinstance(self.chat_execution, ChatExecutionAllowance):
+            raise TypeError("chat_execution must be a ChatExecutionAllowance")
         _validate_token_count(
             self.image_text_output_tokens,
             "image_text_output_tokens",
@@ -308,13 +391,16 @@ def _estimate_provider_cost(
     if isinstance(quote_input, ChatQuoteInput):
         if not isinstance(pricing, TokenPricing):
             raise ValueError("chat quotes require token pricing")
-        _validate_model_output(plan, policy.chat_output_tokens)
+        budget = policy.chat_execution.budget(
+            input_envelope_tokens=input_envelope_tokens
+        )
+        _validate_model_output(plan, budget.max_output_tokens_per_request)
         return (
             pricing.estimate_usd(
-                input_tokens=input_envelope_tokens,
-                output_tokens=policy.chat_output_tokens,
+                input_tokens=budget.input_tokens_limit,
+                output_tokens=budget.output_tokens_limit,
             ),
-            "default",
+            f"budget={budget.version}",
         )
     if isinstance(quote_input, InlineChatQuoteInput):
         if not isinstance(pricing, TokenPricing):
@@ -402,15 +488,16 @@ def _estimate_finishing_cost(
         raise ValueError("image finishing requires token pricing")
 
     band = _validate_model_input(plan, quote_input.input_tokens)
-    _validate_model_output(plan, policy.image_finishing.output_tokens)
     envelope = _context_envelope_tokens(
         band=band,
         model_input_limit=plan.model.input_token_limit,
     )
+    budget = policy.image_finishing.budget(input_envelope_tokens=envelope)
+    _validate_model_output(plan, budget.max_output_tokens_per_request)
     return (
         plan.model.pricing.estimate_usd(
-            input_tokens=envelope,
-            output_tokens=policy.image_finishing.output_tokens,
+            input_tokens=budget.input_tokens_limit,
+            output_tokens=budget.output_tokens_limit,
         ),
         band,
     )
@@ -554,11 +641,48 @@ class QuoteEngine:
         )
 
 
+def chat_execution_budget(
+    *,
+    plan: ExecutionPlan,
+    context_band: ContextBand,
+    policy: QuotePolicy = DEFAULT_QUOTE_POLICY,
+) -> AgentExecutionBudget:
+    """Rebuild the runtime budget encoded by a chat quote's context band."""
+    if plan.feature is not Feature.CHAT:
+        raise ValueError("chat execution budget requires a chat plan")
+    envelope = _context_envelope_tokens(
+        band=context_band,
+        model_input_limit=plan.model.input_token_limit,
+    )
+    budget = policy.chat_execution.budget(input_envelope_tokens=envelope)
+    _validate_model_output(plan, budget.max_output_tokens_per_request)
+    return budget
+
+
+def image_finishing_execution_budget(
+    *,
+    plan: ExecutionPlan,
+    quote_input: FinishingChatQuoteInput,
+    policy: QuotePolicy = DEFAULT_QUOTE_POLICY,
+) -> AgentExecutionBudget:
+    """Rebuild the one-request budget included in a composite image quote."""
+    if plan.feature is not Feature.CHAT or plan.model.key is not quote_input.model_key:
+        raise ValueError("image finishing budget must match its chat plan")
+    band = _validate_model_input(plan, quote_input.input_tokens)
+    envelope = _context_envelope_tokens(
+        band=band,
+        model_input_limit=plan.model.input_token_limit,
+    )
+    budget = policy.image_finishing.budget(input_envelope_tokens=envelope)
+    _validate_model_output(plan, budget.max_output_tokens_per_request)
+    return budget
+
+
 def _pricing_version(plan: ExecutionPlan, policy: QuotePolicy) -> str:
     if policy.version != PRICING_VERSION:
         return policy.version
     return (
-        f"{plan.model.provider.value}-{plan.model.pricing_verified_on.isoformat()}-v1"
+        f"{plan.model.provider.value}-{plan.model.pricing_verified_on.isoformat()}-v2"
     )
 
 
@@ -584,6 +708,10 @@ def _composite_pricing_version(
 
 
 __all__ = [
+    "AgentExecutionBudget",
+    "CHAT_EXECUTION_ALLOWANCE_VERSION",
+    "ChatExecutionAllowance",
+    "DEFAULT_CHAT_EXECUTION_ALLOWANCE",
     "DEFAULT_IMAGE_FINISHING_ALLOWANCE",
     "DEFAULT_QUOTE_POLICY",
     "IMAGE_FINISHING_ALLOWANCE_VERSION",
@@ -603,4 +731,6 @@ __all__ = [
     "QuotePolicy",
     "TtsQuoteInput",
     "VideoGenerateQuoteInput",
+    "chat_execution_budget",
+    "image_finishing_execution_budget",
 ]

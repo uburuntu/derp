@@ -141,6 +141,10 @@ class InferenceUsageCompletion:
     tokens: InferenceTokenUsage | None = None
     provider_response_id: str | None = None
     provider_generation_id: str | None = None
+    actual_model_id: str | None = None
+    downstream_provider: str | None = None
+    actual_cost_usd: Decimal | None = None
+    route_policy_matched: bool = True
     cost_reconciliation_status: CostReconciliationStatus = (
         CostReconciliationStatus.PENDING
     )
@@ -156,14 +160,33 @@ class InferenceUsageCompletion:
             self.provider_response_id,
             MAX_PROVIDER_IDENTIFIER_LENGTH,
         )
-        if self.cost_reconciliation_status not in {
+        if not isinstance(self.route_policy_matched, bool):
+            raise TypeError("route_policy_matched must be a bool")
+        if self.actual_cost_usd is not None:
+            _require_actual_cost(self.actual_cost_usd)
+        if self.cost_reconciliation_status is CostReconciliationStatus.RECONCILED:
+            if self.actual_cost_usd is None:
+                raise ValueError("reconciled completion requires actual_cost_usd")
+        elif self.cost_reconciliation_status not in {
             CostReconciliationStatus.PENDING,
             CostReconciliationStatus.UNAVAILABLE,
         }:
-            raise ValueError("completed usage cost must be pending or unavailable")
+            raise ValueError("completed usage cost has an invalid state")
+        elif self.actual_cost_usd is not None:
+            raise ValueError("known actual cost must be atomically reconciled")
         _require_optional_identifier(
             "provider_generation_id",
             self.provider_generation_id,
+            MAX_PROVIDER_IDENTIFIER_LENGTH,
+        )
+        _require_optional_identifier(
+            "actual_model_id",
+            self.actual_model_id,
+            MAX_PROVIDER_IDENTIFIER_LENGTH,
+        )
+        _require_optional_identifier(
+            "downstream_provider",
+            self.downstream_provider,
             MAX_PROVIDER_IDENTIFIER_LENGTH,
         )
 
@@ -227,6 +250,9 @@ class InferenceUsageSnapshot:
     provider_model_id: str
     provider_response_id: str | None
     provider_generation_id: str | None
+    actual_model_id: str | None
+    downstream_provider: str | None
+    route_policy_matched: bool
     tokens: InferenceTokenUsage | None
     actual_cost_usd: Decimal | None
     status: InferenceStatus

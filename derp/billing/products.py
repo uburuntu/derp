@@ -11,6 +11,7 @@ from derp.billing.types import ProductKind, UnknownProductError
 
 TELEGRAM_SUBSCRIPTION_PERIOD_SECONDS: Final = 30 * 24 * 60 * 60
 PRODUCT_VERSION: Final = "2026-07-28-v1"
+LEGACY_PRODUCT_VERSION: Final = "2026-07-20-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,10 +73,16 @@ class ProductCatalog:
     top_ups: tuple[TopUpProduct, ...]
     subscription_plan: SubscriptionPlan
     debug_top_up: TopUpProduct
+    retired_products: tuple[StarsProduct, ...] = ()
     economics: StarEconomics = DEFAULT_STAR_ECONOMICS
 
     def __post_init__(self) -> None:
-        products = (*self.top_ups, self.subscription_plan, self.debug_top_up)
+        products = (
+            *self.top_ups,
+            self.subscription_plan,
+            self.debug_top_up,
+            *self.retired_products,
+        )
         keys = [(item.kind, item.id, item.version) for item in products]
         if not self.top_ups or len(keys) != len(set(keys)):
             raise ValueError("product versions must be present and unique")
@@ -100,6 +107,12 @@ class ProductCatalog:
             for product in (*self.top_ups, self.debug_top_up):
                 if (product.id, product.version) == (product_id, version):
                     return product
+        for product in self.retired_products:
+            if product.kind is kind and (product.id, product.version) == (
+                product_id,
+                version,
+            ):
+                return product
         raise UnknownProductError(f"Unknown {kind.value} product version")
 
     @property
@@ -145,11 +158,32 @@ DEFAULT_PRODUCT_CATALOG: Final = ProductCatalog(
         stars=1,
         credits=10,
     ),
+    retired_products=(
+        TopUpProduct("starter", LEGACY_PRODUCT_VERSION, "Starter", 50, 50),
+        TopUpProduct("basic", LEGACY_PRODUCT_VERSION, "Basic", 150, 165),
+        TopUpProduct("standard", LEGACY_PRODUCT_VERSION, "Standard", 500, 600),
+        TopUpProduct("bulk", LEGACY_PRODUCT_VERSION, "Bulk", 1_500, 2_000),
+        SubscriptionPlan(
+            id="personal_monthly",
+            version=LEGACY_PRODUCT_VERSION,
+            name="Derp Personal",
+            stars=500,
+            allowance_credits=1_000,
+        ),
+        TopUpProduct(
+            id="admin_debug",
+            version=LEGACY_PRODUCT_VERSION,
+            name="Operator Debug",
+            stars=1,
+            credits=10,
+        ),
+    ),
 )
 
 
 __all__ = [
     "DEFAULT_PRODUCT_CATALOG",
+    "LEGACY_PRODUCT_VERSION",
     "PRODUCT_VERSION",
     "TELEGRAM_SUBSCRIPTION_PERIOD_SECONDS",
     "ProductCatalog",

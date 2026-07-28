@@ -11,6 +11,12 @@ from derp.operator.confirmations import (
     OperatorConfirmationCapacityError,
     OperatorConfirmationStore,
 )
+from derp.operator.debug_refund import (
+    OperatorDebugRefundResult,
+    OperatorDebugRefundService,
+    OperatorDebugRefundSweep,
+    OperatorDebugRefundWorker,
+)
 from derp.operator.service import OperatorConsoleService
 from derp.operator.types import (
     OperatorActivityTotals,
@@ -29,11 +35,13 @@ from derp.operator.types import (
     OperatorMaintenancePass,
     OperatorMaintenanceResult,
     OperatorNamedCount,
+    OperatorPaymentUpdateTotals,
     OperatorPoolSnapshot,
     OperatorProbeStatus,
     OperatorRuntimeSnapshot,
     OperatorStarsTotals,
     OperatorSubscriptionTotals,
+    OperatorSupportTotals,
     OperatorWalletTotals,
     OperatorWorkerStatus,
 )
@@ -54,6 +62,10 @@ __all__ = [
     "OperatorConsoleSnapshot",
     "OperatorDatabaseSnapshot",
     "OperatorDatabaseStatus",
+    "OperatorDebugRefundResult",
+    "OperatorDebugRefundService",
+    "OperatorDebugRefundSweep",
+    "OperatorDebugRefundWorker",
     "OperatorInferenceAttemptTotals",
     "OperatorInferenceCatalogSnapshot",
     "OperatorInferenceConnectivitySnapshot",
@@ -67,9 +79,11 @@ __all__ = [
     "OperatorNamedCount",
     "OperatorOnlyFilter",
     "OperatorPoolSnapshot",
+    "OperatorPaymentUpdateTotals",
     "OperatorProbeStatus",
     "OperatorRuntimeSnapshot",
     "OperatorStarsTotals",
+    "OperatorSupportTotals",
     "OperatorSubscriptionTotals",
     "OperatorWalletTotals",
     "OperatorWorkerStatus",

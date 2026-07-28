@@ -15,6 +15,8 @@ from derp.models import (
     Subscription,
     SubscriptionCycle,
     Wallet,
+    WalletDebtRepaymentAllocation,
+    WalletDebtSource,
     WalletLedgerEntry,
     WalletLot,
 )
@@ -162,6 +164,125 @@ async def test_wallet_owner_is_unique(
 async def test_wallet_debt_cannot_be_negative(db_session, user_factory) -> None:
     user = await user_factory(telegram_id=9_300_005)
     db_session.add(Wallet(user_id=user.id, debt_credits=-1))
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+async def test_wallet_debt_provenance_cannot_cross_wallets(
+    db_session, user_factory
+) -> None:
+    owner = await user_factory(telegram_id=9_330_003)
+    other_owner = await user_factory(telegram_id=9_330_004)
+    wallet = await _create_wallet(db_session, user_id=owner.id)
+    other_wallet = await _create_wallet(db_session, user_id=other_owner.id)
+    source_lot = WalletLot(
+        wallet_id=wallet.id,
+        kind="purchased",
+        granted_credits=10,
+        available_credits=0,
+        consumed_credits=10,
+    )
+    db_session.add(source_lot)
+    await db_session.flush()
+    db_session.add(
+        WalletDebtSource(
+            wallet_id=other_wallet.id,
+            source_wallet_lot_id=source_lot.id,
+            incurred_credits=10,
+            outstanding_credits=10,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+@pytest.mark.parametrize(
+    ("incurred", "outstanding", "recovered"),
+    [(0, 0, 0), (10, -1, 0), (10, 6, 5)],
+    ids=["zero-incurred", "negative-outstanding", "over-reconciled"],
+)
+async def test_wallet_debt_source_counters_are_bounded(
+    db_session,
+    user_factory,
+    incurred,
+    outstanding,
+    recovered,
+) -> None:
+    user = await user_factory(telegram_id=9_330_001)
+    wallet = await _create_wallet(db_session, user_id=user.id)
+    lot = WalletLot(
+        wallet_id=wallet.id,
+        kind="purchased",
+        granted_credits=10,
+        available_credits=0,
+        consumed_credits=10,
+    )
+    db_session.add(lot)
+    await db_session.flush()
+    db_session.add(
+        WalletDebtSource(
+            wallet_id=wallet.id,
+            source_wallet_lot_id=lot.id,
+            incurred_credits=incurred,
+            outstanding_credits=outstanding,
+            recovered_credits=recovered,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+@pytest.mark.parametrize(
+    ("allocated", "restored", "revoked"),
+    [(0, 0, 0), (10, -1, 0), (10, 7, 4)],
+    ids=["zero-allocated", "negative-restored", "over-reconciled"],
+)
+async def test_wallet_debt_repayment_counters_are_bounded(
+    db_session,
+    user_factory,
+    allocated,
+    restored,
+    revoked,
+) -> None:
+    user = await user_factory(telegram_id=9_330_002)
+    wallet = await _create_wallet(db_session, user_id=user.id)
+    source_lot = WalletLot(
+        wallet_id=wallet.id,
+        kind="purchased",
+        granted_credits=10,
+        available_credits=0,
+        consumed_credits=10,
+    )
+    repayment_lot = WalletLot(
+        wallet_id=wallet.id,
+        kind="purchased",
+        granted_credits=10,
+        available_credits=0,
+        debt_offset_credits=10,
+    )
+    db_session.add_all([source_lot, repayment_lot])
+    await db_session.flush()
+    source = WalletDebtSource(
+        wallet_id=wallet.id,
+        source_wallet_lot_id=source_lot.id,
+        incurred_credits=10,
+        outstanding_credits=0,
+    )
+    db_session.add(source)
+    await db_session.flush()
+    db_session.add(
+        WalletDebtRepaymentAllocation(
+            debt_source_id=source.id,
+            repayment_wallet_lot_id=repayment_lot.id,
+            wallet_id=wallet.id,
+            allocated_credits=allocated,
+            restored_credits=restored,
+            revoked_credits=revoked,
+        )
+    )
 
     with pytest.raises(IntegrityError):
         await db_session.flush()

@@ -17,7 +17,11 @@ from derp.inference.privacy import (
     decide_non_zdr_free_inference,
     project_inference_privacy,
 )
-from derp.inference.recorder import InferenceAttempt, InferenceRecorder
+from derp.inference.recorder import (
+    InferenceAttempt,
+    InferenceRecorder,
+    InferenceRoutePolicyError,
+)
 from derp.inference.report import (
     InferenceReport,
     aggregate_reports,
@@ -70,6 +74,7 @@ __all__ = [
     "project_inference_privacy",
     "InferenceAttempt",
     "InferenceRecorder",
+    "InferenceRoutePolicyError",
     "DEFAULT_RECONCILIATION_CONCURRENCY",
     "DEFAULT_RECONCILIATION_LEASE",
     "DEFAULT_STALE_INFERENCE_AGE",

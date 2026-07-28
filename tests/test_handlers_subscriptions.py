@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery
 
 from derp.billing import (
     SubscriptionManagementSnapshot,
+    SubscriptionRenewalDisposition,
     SubscriptionStateError,
     SubscriptionStateResult,
     SubscriptionStatus,
@@ -53,7 +54,7 @@ def _management(snapshot: SubscriptionManagementSnapshot) -> MagicMock:
             snapshot.subscription_id,
             snapshot.renewal_enabled,
             snapshot.current_period_end,
-            True,
+            SubscriptionRenewalDisposition.APPLIED,
         )
     )
     return service
@@ -219,6 +220,40 @@ async def test_cancel_callback_uses_context_actor_and_refreshes_panel(
     callback.message.edit_text.assert_awaited_once()
     callback.answer.assert_awaited_once_with(
         "Automatic renewal is off. Your paid period stays active."
+    )
+
+
+@pytest.mark.asyncio
+async def test_callback_reports_durable_pending_provider_change(
+    make_message,
+    make_user,
+    mock_user_model,
+) -> None:
+    callback = MagicMock(spec=CallbackQuery)
+    callback.message = make_message(text="plan", chat_type="private", chat_id=12345)
+    callback.message.edit_text = AsyncMock()
+    callback.from_user = make_user(id=12345)
+    callback.bot = MagicMock()
+    callback.answer = AsyncMock()
+    user = mock_user_model(user_id=UUID(int=2), telegram_id=12345)
+    snapshot = _snapshot()
+    service = _management(snapshot)
+    service.set_renewal.return_value = SubscriptionStateResult(
+        snapshot.subscription_id,
+        snapshot.renewal_enabled,
+        snapshot.current_period_end,
+        SubscriptionRenewalDisposition.PENDING,
+    )
+
+    await set_subscription_renewal(
+        callback,
+        SubscriptionCallback(action=SubscriptionAction.CANCEL),
+        service,
+        user,
+    )
+
+    callback.answer.assert_awaited_once_with(
+        "Telegram hasn't confirmed this yet. Derp will retry."
     )
 
 

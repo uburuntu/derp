@@ -16,7 +16,12 @@ from sqlalchemy.orm import InstrumentedAttribute
 
 from derp.approvals.maintenance import DeferredApprovalExpiryWorker
 from derp.approvals.types import DeferredToolStatus
-from derp.billing import SubscriptionExpiryWorker
+from derp.billing import (
+    PaymentUpdateReplayReport,
+    PaymentUpdateReplayWorker,
+    SubscriptionExpiryWorker,
+    SubscriptionRenewalWorker,
+)
 from derp.billing.types import SubscriptionStatus
 from derp.catalog import (
     OPENROUTER_CATALOG_VERIFIED_ON,
@@ -44,8 +49,12 @@ from derp.models import (
     Message,
     PaidOperation,
     PaymentReceipt,
+    PaymentRefundRequest,
+    PaymentUpdateInbox,
     PurchaseIntent,
     Subscription,
+    SubscriptionRenewalCommandRecord,
+    SupportRequest,
     User,
     Wallet,
     WalletLot,
@@ -57,6 +66,10 @@ from derp.operations import (
     OperationReconciliationReport,
     OperationReconciliationWorker,
     OperationState,
+)
+from derp.operator.debug_refund import (
+    OperatorDebugRefundSweep,
+    OperatorDebugRefundWorker,
 )
 from derp.operator.types import (
     OperatorActivityTotals,
@@ -74,11 +87,13 @@ from derp.operator.types import (
     OperatorMaintenancePass,
     OperatorMaintenanceResult,
     OperatorNamedCount,
+    OperatorPaymentUpdateTotals,
     OperatorPoolSnapshot,
     OperatorProbeStatus,
     OperatorRuntimeSnapshot,
     OperatorStarsTotals,
     OperatorSubscriptionTotals,
+    OperatorSupportTotals,
     OperatorWalletTotals,
     OperatorWorkerStatus,
 )
@@ -110,12 +125,22 @@ _INTENT_STATES: Final = (
 _RECEIPT_STATES: Final = (
     "received",
     "fulfilled",
+    "refund_requested",
     "clawed_back",
     "needs_review",
+)
+_REFUND_REQUEST_STATES: Final = (
+    "pending",
+    "submitting",
+    "accepted",
+    "rejected",
+    "needs_review",
+    "reconciled",
 )
 _WORKER_ACTIONS: Final = (
     OperatorMaintenanceAction.HISTORY,
     OperatorMaintenanceAction.SUBSCRIPTIONS,
+    OperatorMaintenanceAction.PAYMENTS,
     OperatorMaintenanceAction.OPERATIONS,
     OperatorMaintenanceAction.DELIVERIES,
     OperatorMaintenanceAction.APPROVALS,
@@ -137,6 +162,9 @@ class OperatorConsoleService:
         *,
         history_retention: HistoryRetentionWorker,
         subscription_expiry: SubscriptionExpiryWorker,
+        subscription_renewal: SubscriptionRenewalWorker,
+        payment_update_replay: PaymentUpdateReplayWorker,
+        debug_refund_reconciliation: OperatorDebugRefundWorker,
         operation_reconciliation: OperationReconciliationWorker,
         delivery_maintenance: DeliveryMaintenanceWorker,
         approval_expiry: DeferredApprovalExpiryWorker,
@@ -151,6 +179,9 @@ class OperatorConsoleService:
         self._db = db
         self._history_retention = history_retention
         self._subscription_expiry = subscription_expiry
+        self._subscription_renewal = subscription_renewal
+        self._payment_update_replay = payment_update_replay
+        self._debug_refund_reconciliation = debug_refund_reconciliation
         self._operation_reconciliation = operation_reconciliation
         self._delivery_maintenance = delivery_maintenance
         self._approval_expiry = approval_expiry
@@ -321,7 +352,13 @@ class OperatorConsoleService:
                 ),
                 OperatorWorkerStatus(
                     OperatorMaintenanceAction.SUBSCRIPTIONS,
-                    self._subscription_expiry.is_running,
+                    self._subscription_expiry.is_running
+                    and self._subscription_renewal.is_running,
+                ),
+                OperatorWorkerStatus(
+                    OperatorMaintenanceAction.PAYMENTS,
+                    self._payment_update_replay.is_running
+                    and self._debug_refund_reconciliation.is_running,
                 ),
                 OperatorWorkerStatus(
                     OperatorMaintenanceAction.OPERATIONS,
@@ -402,6 +439,65 @@ class OperatorConsoleService:
                 _RECEIPT_STATES,
             )
             stars = await self._stars_totals(session)
+            support_row = (
+                await session.execute(
+                    select(
+                        func.count().filter(SupportRequest.status == "open"),
+                        func.count().filter(
+                            SupportRequest.status == "open",
+                            SupportRequest.kind.in_(("payment", "refund")),
+                        ),
+                        func.count().filter(SupportRequest.status == "resolved"),
+                    ).select_from(SupportRequest)
+                )
+            ).one()
+            support = OperatorSupportTotals(
+                open=int(support_row[0]),
+                payment_open=int(support_row[1]),
+                resolved=int(support_row[2]),
+            )
+            payment_update_row = (
+                await session.execute(
+                    select(
+                        func.count().filter(PaymentUpdateInbox.status == "pending"),
+                        func.count().filter(PaymentUpdateInbox.status == "processing"),
+                        func.count().filter(PaymentUpdateInbox.status == "completed"),
+                        func.count().filter(PaymentUpdateInbox.status == "attention"),
+                        func.count().filter(
+                            (
+                                (PaymentUpdateInbox.status == "pending")
+                                & (PaymentUpdateInbox.next_attempt_at <= now)
+                            )
+                            | (
+                                (PaymentUpdateInbox.status == "processing")
+                                & (PaymentUpdateInbox.lease_expires_at <= now)
+                            )
+                        ),
+                        func.count().filter(
+                            PaymentUpdateInbox.reply_status == "failed"
+                        ),
+                        func.count().filter(
+                            PaymentUpdateInbox.reply_status == "skipped"
+                        ),
+                    ).select_from(PaymentUpdateInbox)
+                )
+            ).one()
+            payment_updates = OperatorPaymentUpdateTotals(
+                pending=int(payment_update_row[0]),
+                processing=int(payment_update_row[1]),
+                completed=int(payment_update_row[2]),
+                attention=int(payment_update_row[3]),
+                due=int(payment_update_row[4]),
+                reply_failed=int(payment_update_row[5]),
+                reply_skipped=int(payment_update_row[6]),
+            )
+            refund_request_states = await self._grouped_counts(
+                session,
+                select(PaymentRefundRequest.status, func.count()).group_by(
+                    PaymentRefundRequest.status
+                ),
+                _REFUND_REQUEST_STATES,
+            )
             subscription_row = (
                 await session.execute(
                     select(
@@ -425,10 +521,48 @@ class OperatorConsoleService:
                     ).select_from(Subscription)
                 )
             ).one()
+            renewal_row = (
+                await session.execute(
+                    select(
+                        func.count().filter(
+                            SubscriptionRenewalCommandRecord.status == "pending"
+                        ),
+                        func.count().filter(
+                            SubscriptionRenewalCommandRecord.status == "processing"
+                        ),
+                        func.count().filter(
+                            SubscriptionRenewalCommandRecord.status == "attention"
+                        ),
+                        func.count().filter(
+                            (
+                                (SubscriptionRenewalCommandRecord.status == "pending")
+                                & (
+                                    SubscriptionRenewalCommandRecord.next_attempt_at
+                                    <= now
+                                )
+                            )
+                            | (
+                                (
+                                    SubscriptionRenewalCommandRecord.status
+                                    == "processing"
+                                )
+                                & (
+                                    SubscriptionRenewalCommandRecord.lease_expires_at
+                                    <= now
+                                )
+                            )
+                        ),
+                    ).select_from(SubscriptionRenewalCommandRecord)
+                )
+            ).one()
             subscriptions = OperatorSubscriptionTotals(
                 status_active=int(subscription_row[0]),
                 entitled=int(subscription_row[1]),
                 auto_renewing=int(subscription_row[2]),
+                renewal_pending=int(renewal_row[0]),
+                renewal_processing=int(renewal_row[1]),
+                renewal_attention=int(renewal_row[2]),
+                renewal_due=int(renewal_row[3]),
             )
             artifact_row = (
                 await session.execute(
@@ -459,6 +593,9 @@ class OperatorConsoleService:
             intent_states=intent_states,
             receipt_states=receipt_states,
             stars=stars,
+            support=support,
+            payment_updates=payment_updates,
+            refund_request_states=refund_request_states,
             subscriptions=subscriptions,
             artifacts=artifacts,
             inference_usage=inference_usage,
@@ -500,6 +637,7 @@ class OperatorConsoleService:
                         InferenceUsage.reconciliation_status
                         == CostReconciliationStatus.UNAVAILABLE.value
                     ),
+                    func.count().filter(InferenceUsage.route_policy_matched.is_(False)),
                     func.coalesce(
                         func.sum(InferenceUsage.actual_cost_usd).filter(
                             InferenceUsage.reconciliation_status
@@ -533,7 +671,8 @@ class OperatorConsoleService:
             ),
             pending_cost_reconciliation=int(row[16]),
             unavailable_cost_count=int(row[17]),
-            reconciled_cost_usd=Decimal(str(row[18])),
+            route_policy_violation_count=int(row[18]),
+            reconciled_cost_usd=Decimal(str(row[19])),
         )
 
     def _build_inference_catalog(
@@ -659,8 +798,20 @@ class OperatorConsoleService:
             count = await self._history_retention.sweep()
             counts = self._counts(purged_message_count=count)
         elif action is OperatorMaintenanceAction.SUBSCRIPTIONS:
-            count = await self._subscription_expiry.sweep()
-            counts = self._counts(expired_cycle_count=count)
+            expired = await self._subscription_expiry.sweep()
+            renewal = await self._subscription_renewal.sweep()
+            counts = self._counts(
+                expired_cycle_count=expired,
+                renewal_claimed_count=renewal.claimed_count,
+                renewal_applied_count=renewal.applied_count,
+                renewal_retry_scheduled_count=renewal.retry_scheduled_count,
+                renewal_attention_count=renewal.attention_count,
+                renewal_superseded_count=renewal.superseded_count,
+            )
+        elif action is OperatorMaintenanceAction.PAYMENTS:
+            payment_updates = await self._payment_update_replay.sweep()
+            debug_refunds = await self._debug_refund_reconciliation.sweep()
+            counts = self._payment_counts(payment_updates, debug_refunds)
         elif action is OperatorMaintenanceAction.OPERATIONS:
             counts = self._operation_counts(
                 await self._operation_reconciliation.sweep()
@@ -680,6 +831,27 @@ class OperatorConsoleService:
         else:
             raise ValueError("all cannot be dispatched as an individual pass")
         return OperatorMaintenancePass(action=action, counts=counts)
+
+    @classmethod
+    def _payment_counts(
+        cls,
+        payment_updates: PaymentUpdateReplayReport,
+        debug_refunds: OperatorDebugRefundSweep,
+    ) -> tuple[OperatorNamedCount, ...]:
+        return cls._counts(
+            payment_update_claimed_count=payment_updates.claimed_count,
+            payment_update_settled_count=payment_updates.settled_count,
+            payment_update_attention_count=payment_updates.attention_count,
+            payment_update_retry_scheduled_count=(
+                payment_updates.retry_scheduled_count
+            ),
+            payment_reply_sent_count=payment_updates.reply_sent_count,
+            payment_reply_failed_count=payment_updates.reply_failed_count,
+            payment_reply_skipped_count=payment_updates.reply_skipped_count,
+            debug_refund_processed_count=debug_refunds.processed,
+            debug_refund_reconciled_count=debug_refunds.reconciled,
+            debug_refund_pending_review_count=debug_refunds.pending_review,
+        )
 
     @classmethod
     def _operation_counts(

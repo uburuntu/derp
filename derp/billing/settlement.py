@@ -28,6 +28,9 @@ from derp.billing.types import (
     PaymentConflictError,
     ProductKind,
     RefundedPaymentCommand,
+    StoredCapturedPayment,
+    StoredRefundedPayment,
+    SubscriptionRenewalDisposition,
     SubscriptionStateError,
     SubscriptionStateResult,
     UnknownProductError,
@@ -38,11 +41,13 @@ from derp.models import (
     PurchaseIntent,
     Subscription,
     SubscriptionCycle,
+    SubscriptionRenewalCommandRecord,
     User,
     Wallet,
     WalletLedgerEntry,
     WalletLot,
 )
+from derp.operations.debt import DebtRepayment, WalletDebtProvenance
 
 type TransactionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
@@ -73,12 +78,15 @@ class PaymentSettlementService:
         self._catalog = catalog
         self._clock = clock
 
-    async def fulfill(self, payment: CapturedPayment) -> FulfillmentResult:
+    async def fulfill(
+        self,
+        payment: CapturedPayment | StoredCapturedPayment,
+    ) -> FulfillmentResult:
         """Persist a charge once and fulfill only fully matching intent terms."""
         if payment.currency != "XTR":
             raise ValueError("Stars fulfillment requires XTR")
         now = self._aware_now()
-        payload_hash = hash_invoice_payload(payment.invoice_payload)
+        payload_hash = self._payload_hash(payment)
         async with self._transactions() as session:
             existing = await session.scalar(
                 select(PaymentReceipt)
@@ -220,7 +228,10 @@ class PaymentSettlementService:
             )
             if subscription is None:
                 raise SubscriptionStateError("User has no subscription")
-            if subscription.current_period_end <= now:
+            if (
+                subscription.status == "expired"
+                or subscription.current_period_end <= now
+            ):
                 raise SubscriptionStateError("Subscription cycle has expired")
 
             changed = subscription.renewal_enabled is not enabled
@@ -236,8 +247,95 @@ class PaymentSettlementService:
                 subscription.id,
                 subscription.renewal_enabled,
                 subscription.current_period_end,
-                changed,
+                (
+                    SubscriptionRenewalDisposition.APPLIED
+                    if changed
+                    else SubscriptionRenewalDisposition.UNCHANGED
+                ),
             )
+
+    @staticmethod
+    async def _revoke_refunded_subscription(
+        session: AsyncSession,
+        cycle: SubscriptionCycle,
+        now: datetime,
+    ) -> None:
+        subscription = await session.scalar(
+            select(Subscription)
+            .where(Subscription.id == cycle.subscription_id)
+            .with_for_update()
+        )
+        if subscription is None or subscription.current_period_end != cycle.period_end:
+            return
+        subscription.status = "expired"
+
+        active = await session.scalar(
+            select(SubscriptionRenewalCommandRecord)
+            .where(
+                SubscriptionRenewalCommandRecord.subscription_id == subscription.id,
+                SubscriptionRenewalCommandRecord.status.in_(
+                    ("pending", "processing", "attention")
+                ),
+            )
+            .with_for_update()
+        )
+        if active is not None:
+            if not active.desired_enabled:
+                active.attempt_count = 0
+                active.last_failure_code = None
+                if active.status != "processing":
+                    active.status = "pending"
+                    active.next_attempt_at = now
+                return
+            if active.status == "processing":
+                active.desired_enabled = False
+                active.attempt_count = 0
+                active.last_failure_code = None
+                return
+            active.status = "superseded"
+            active.completed_at = now
+            active.last_failure_code = None
+            await session.flush()
+        elif not subscription.renewal_enabled:
+            return
+
+        provider_identity = (
+            await session.execute(
+                select(User.telegram_id, PaymentReceipt.telegram_charge_id)
+                .join(Subscription, Subscription.user_id == User.id)
+                .join(
+                    SubscriptionCycle,
+                    SubscriptionCycle.subscription_id == Subscription.id,
+                )
+                .join(
+                    PaymentReceipt,
+                    PaymentReceipt.id == SubscriptionCycle.payment_receipt_id,
+                )
+                .where(
+                    Subscription.id == subscription.id,
+                    PaymentReceipt.is_first_recurring.is_(True),
+                )
+                .order_by(
+                    SubscriptionCycle.period_start.desc(),
+                    SubscriptionCycle.id.desc(),
+                )
+                .limit(1)
+            )
+        ).one_or_none()
+        if provider_identity is None:
+            raise RuntimeError("Subscription provider identity disappeared")
+        payer_telegram_id, telegram_charge_id = provider_identity
+        session.add(
+            SubscriptionRenewalCommandRecord(
+                subscription_id=subscription.id,
+                payer_telegram_id=payer_telegram_id,
+                telegram_charge_id=telegram_charge_id,
+                desired_enabled=False,
+                status="pending",
+                attempt_count=0,
+                next_attempt_at=now,
+            )
+        )
 
     async def expire_due_cycles(self, *, limit: int = 100) -> int:
         """Expire non-rolling allowance while leaving reservations settleable."""
@@ -297,12 +395,12 @@ class PaymentSettlementService:
 
     async def clawback(
         self,
-        refund: RefundedPaymentCommand | str,
+        refund: RefundedPaymentCommand | StoredRefundedPayment | str,
     ) -> ClawbackResult:
         """Validate a provider refund, then revoke only its charged source."""
         telegram_charge_id = (
             refund.telegram_charge_id
-            if isinstance(refund, RefundedPaymentCommand)
+            if isinstance(refund, RefundedPaymentCommand | StoredRefundedPayment)
             else refund
         )
         if not telegram_charge_id.strip():
@@ -316,7 +414,7 @@ class PaymentSettlementService:
             )
             if receipt is None:
                 raise LookupError("Payment receipt does not exist")
-            if isinstance(refund, RefundedPaymentCommand):
+            if isinstance(refund, RefundedPaymentCommand | StoredRefundedPayment):
                 self._assert_refund_matches(receipt, refund)
             if receipt.status == "clawed_back":
                 existing = await self._clawback_result(session, receipt)
@@ -346,15 +444,28 @@ class PaymentSettlementService:
             receipt.clawed_back_at = now
             if cycle is not None:
                 cycle.status = "clawed_back"
+                await self._revoke_refunded_subscription(session, cycle, now)
             if source is None:
                 return ClawbackResult(receipt.id, None, 0, 0, False)
 
             wallet, lot = source
+            reopened = await WalletDebtProvenance.reopen_repayments(
+                session,
+                wallet,
+                lot,
+            )
             removed = lot.available_credits
-            debt = lot.reserved_credits + lot.consumed_credits + lot.debt_offset_credits
+            newly_incurred = (
+                lot.reserved_credits + lot.consumed_credits + lot.debt_offset_credits
+            )
             lot.available_credits = 0
             lot.clawed_back_credits += removed
-            wallet.debt_credits += debt
+            await WalletDebtProvenance.incur(
+                session,
+                wallet,
+                lot,
+                newly_incurred,
+            )
             if removed:
                 self._record_event(
                     session,
@@ -364,22 +475,38 @@ class PaymentSettlementService:
                     "clawback",
                     removed,
                 )
-            if debt:
+            for repayment in reopened:
+                self._record_debt_repayment_event(
+                    session,
+                    wallet,
+                    lot,
+                    receipt,
+                    "debt_reopened",
+                    repayment,
+                )
+            if newly_incurred:
                 self._record_event(
                     session,
                     wallet,
                     lot,
                     receipt,
                     "debt_incurred",
-                    debt,
+                    newly_incurred,
                 )
-            return ClawbackResult(receipt.id, wallet.id, removed, debt, False)
+            debt_created = newly_incurred + sum(item.credits for item in reopened)
+            return ClawbackResult(
+                receipt.id,
+                wallet.id,
+                removed,
+                debt_created,
+                False,
+            )
 
     async def _review_reason(
         self,
         session: AsyncSession,
         intent: PurchaseIntent,
-        payment: CapturedPayment,
+        payment: CapturedPayment | StoredCapturedPayment,
         now: datetime,
     ) -> str | None:
         payer_id = await session.scalar(
@@ -466,7 +593,7 @@ class PaymentSettlementService:
         intent: PurchaseIntent,
         receipt: PaymentReceipt,
         product: StarsProduct,
-        payment: CapturedPayment,
+        payment: CapturedPayment | StoredCapturedPayment,
         now: datetime,
     ) -> FulfillmentResult:
         if not isinstance(product, SubscriptionPlan):
@@ -580,20 +707,24 @@ class PaymentSettlementService:
         cycle: SubscriptionCycle | None = None,
     ) -> tuple[Wallet, WalletLot]:
         wallet = await self._locked_target_wallet(session, intent)
-        debt_offset = min(wallet.debt_credits, credit_count)
-        wallet.debt_credits -= debt_offset
         lot = WalletLot(
             wallet_id=wallet.id,
             kind=kind,
             payment_receipt_id=receipt.id if cycle is None else None,
             subscription_cycle_id=cycle and cycle.id,
             granted_credits=credit_count,
-            available_credits=credit_count - debt_offset,
-            debt_offset_credits=debt_offset,
+            available_credits=credit_count,
             expires_at=cycle and cycle.period_end,
         )
         session.add(lot)
         await session.flush()
+        repayments = await WalletDebtProvenance.repay(
+            session,
+            wallet,
+            lot,
+            credit_count,
+        )
+        debt_offset = sum(item.credits for item in repayments)
         self._record_event(session, wallet, lot, receipt, "grant", credit_count)
         if debt_offset:
             self._record_event(
@@ -793,7 +924,7 @@ class PaymentSettlementService:
     @staticmethod
     def _assert_receipt_matches(
         receipt: PaymentReceipt,
-        payment: CapturedPayment,
+        payment: CapturedPayment | StoredCapturedPayment,
         payload_hash: str,
     ) -> None:
         expected = (
@@ -824,12 +955,12 @@ class PaymentSettlementService:
     @staticmethod
     def _assert_refund_matches(
         receipt: PaymentReceipt,
-        refund: RefundedPaymentCommand,
+        refund: RefundedPaymentCommand | StoredRefundedPayment,
     ) -> None:
         expected = (
             refund.currency,
             refund.total_amount,
-            hash_invoice_payload(refund.invoice_payload),
+            PaymentSettlementService._payload_hash(refund),
         )
         actual = (
             receipt.currency,
@@ -846,6 +977,17 @@ class PaymentSettlementService:
             )
 
     @staticmethod
+    def _payload_hash(
+        payment: CapturedPayment
+        | StoredCapturedPayment
+        | RefundedPaymentCommand
+        | StoredRefundedPayment,
+    ) -> str:
+        if isinstance(payment, StoredCapturedPayment | StoredRefundedPayment):
+            return payment.payload_token_hash
+        return hash_invoice_payload(payment.invoice_payload)
+
+    @staticmethod
     def _record_event(
         session: AsyncSession,
         wallet: Wallet,
@@ -853,7 +995,11 @@ class PaymentSettlementService:
         receipt: PaymentReceipt,
         event_type: str,
         amount: int,
+        *,
+        key_suffix: str = "",
+        metadata: dict[str, object] | None = None,
     ) -> None:
+        suffix = f":{key_suffix}" if key_suffix else ""
         session.add(
             WalletLedgerEntry(
                 wallet_id=wallet.id,
@@ -865,8 +1011,36 @@ class PaymentSettlementService:
                 reserved_after=lot.reserved_credits,
                 consumed_after=lot.consumed_credits,
                 wallet_debt_after=wallet.debt_credits,
-                idempotency_key=f"commerce:{event_type}:{receipt.id}:{lot.id}",
+                idempotency_key=(
+                    f"commerce:{event_type}:{receipt.id}:{lot.id}{suffix}"
+                ),
+                metadata_=metadata or {},
             )
+        )
+
+    @classmethod
+    def _record_debt_repayment_event(
+        cls,
+        session: AsyncSession,
+        wallet: Wallet,
+        lot: WalletLot,
+        receipt: PaymentReceipt,
+        event_type: str,
+        repayment: DebtRepayment,
+    ) -> None:
+        cls._record_event(
+            session,
+            wallet,
+            lot,
+            receipt,
+            event_type,
+            repayment.credits,
+            key_suffix=str(repayment.debt_source_id),
+            metadata={
+                "debt_source_id": str(repayment.debt_source_id),
+                "source_wallet_lot_id": str(repayment.source_wallet_lot_id),
+                "repayment_wallet_lot_id": str(repayment.repayment_wallet_lot_id),
+            },
         )
 
     def _aware_now(self) -> datetime:

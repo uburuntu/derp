@@ -9,9 +9,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
+from enum import StrEnum
 from typing import Final
-
-from derp.operator.types import OperatorMaintenanceAction
 
 DEFAULT_CONFIRMATION_TTL: Final = timedelta(minutes=2)
 DEFAULT_MAX_CONFIRMATIONS: Final = 1_024
@@ -33,7 +32,8 @@ class OperatorConfirmationCapacityError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class _PendingConfirmation:
     actor_id: int
-    action: OperatorMaintenanceAction
+    action_key: str
+    resource_key: str | None
     expires_at: float
 
 
@@ -70,10 +70,17 @@ class OperatorConfirmationStore:
         if not callable(self.clock) or not callable(self.token_factory):
             raise TypeError("clock and token_factory must be callable")
 
-    def issue(self, *, actor_id: int, action: OperatorMaintenanceAction) -> str:
+    def issue(
+        self,
+        *,
+        actor_id: int,
+        action: StrEnum,
+        resource_key: str | None = None,
+    ) -> str:
         """Issue one opaque confirmation token within the configured bounds."""
         self._require_actor(actor_id)
-        self._require_action(action)
+        action_key = self._require_action(action)
+        self._require_resource_key(resource_key)
         now = self._now()
         self._prune(now)
         if len(self._entries) >= self.max_entries:
@@ -87,7 +94,8 @@ class OperatorConfirmationStore:
             if token not in self._entries:
                 self._entries[token] = _PendingConfirmation(
                     actor_id=actor_id,
-                    action=action,
+                    action_key=action_key,
+                    resource_key=resource_key,
                     expires_at=now + self._ttl_seconds,
                 )
                 return token
@@ -100,12 +108,11 @@ class OperatorConfirmationStore:
         token: str,
         *,
         actor_id: int,
-        action: OperatorMaintenanceAction,
+        action: StrEnum,
     ) -> bool:
         """Consume an exact live capability once, failing closed on mismatch."""
-        if not self._valid_actor(actor_id) or not isinstance(
-            action, OperatorMaintenanceAction
-        ):
+        action_key = self._action_key(action)
+        if not self._valid_actor(actor_id) or action_key is None:
             return False
         if not self._valid_token(token):
             return False
@@ -115,10 +122,37 @@ class OperatorConfirmationStore:
         pending = self._entries.get(token)
         if pending is None:
             return False
-        if pending.actor_id != actor_id or pending.action is not action:
+        if pending.actor_id != actor_id or pending.action_key != action_key:
             return False
         del self._entries[token]
         return True
+
+    def consume_resource(
+        self,
+        token: str,
+        *,
+        actor_id: int,
+        action: StrEnum,
+    ) -> str | None:
+        """Consume a capability and return its server-bound resource identity."""
+        action_key = self._action_key(action)
+        if not self._valid_actor(actor_id) or action_key is None:
+            return None
+        if not self._valid_token(token):
+            return None
+
+        now = self._now()
+        self._prune(now)
+        pending = self._entries.get(token)
+        if (
+            pending is None
+            or pending.actor_id != actor_id
+            or pending.action_key != action_key
+            or pending.resource_key is None
+        ):
+            return None
+        del self._entries[token]
+        return pending.resource_key
 
     def prune(self) -> int:
         """Remove expired capabilities and return the number discarded."""
@@ -161,10 +195,31 @@ class OperatorConfirmationStore:
         if not cls._valid_actor(actor_id):
             raise ValueError("actor_id must be a positive integer")
 
+    @classmethod
+    def _require_action(cls, action: object) -> str:
+        if (action_key := cls._action_key(action)) is None:
+            raise TypeError("action must be a StrEnum")
+        return action_key
+
     @staticmethod
-    def _require_action(action: object) -> None:
-        if not isinstance(action, OperatorMaintenanceAction):
-            raise TypeError("action must be an OperatorMaintenanceAction")
+    def _require_resource_key(resource_key: object) -> None:
+        if resource_key is None:
+            return
+        if (
+            not isinstance(resource_key, str)
+            or not 1 <= len(resource_key) <= 64
+            or not resource_key.isascii()
+            or any(character.isspace() for character in resource_key)
+        ):
+            raise ValueError(
+                "resource_key must be 1-64 non-whitespace ASCII characters"
+            )
+
+    @staticmethod
+    def _action_key(action: object) -> str | None:
+        if not isinstance(action, StrEnum):
+            return None
+        return f"{type(action).__module__}.{type(action).__qualname__}:{action.value}"
 
     @classmethod
     def _valid_token(cls, token: object) -> bool:

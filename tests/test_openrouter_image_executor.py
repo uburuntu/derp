@@ -60,11 +60,13 @@ def _result(
 
 def _executor(result: ImageGenerationResult | Exception):
     client = SimpleNamespace(generate_image=AsyncMock())
+    route_policy = SimpleNamespace(allows=AsyncMock(return_value=True))
     if isinstance(result, Exception):
         client.generate_image.side_effect = result
     else:
         client.generate_image.return_value = result
-    return OpenRouterImageExecutor(client), client
+    client.route_policy = route_policy
+    return OpenRouterImageExecutor(client, route_policy), client
 
 
 @pytest.mark.asyncio
@@ -82,6 +84,11 @@ async def test_generate_pins_exact_vertex_endpoint_and_model_version() -> None:
     )
 
     assert isinstance(outcome, Succeeded)
+    client.route_policy.allows.assert_awaited_once_with(
+        plan,
+        resolution=ImageResolution.TWO_K,
+        input_reference_count=0,
+    )
     assert outcome.value.images[0].data == b"image-bytes"
     assert outcome.value.images[0].mime_type == "image/webp"
     request = client.generate_image.await_args.args[0]
@@ -121,6 +128,11 @@ async def test_edit_sends_one_private_data_reference_and_maps_half_k() -> None:
     )
 
     assert isinstance(outcome, Succeeded)
+    client.route_policy.allows.assert_awaited_once_with(
+        plan,
+        resolution=ImageResolution.HALF_K,
+        input_reference_count=1,
+    )
     assert outcome.value.images[0].mime_type == "image/png"
     request = client.generate_image.await_args.args[0]
     assert request.resolution == "512"
@@ -161,6 +173,20 @@ async def test_unavailable_or_unreviewed_plan_fails_closed_without_io(model) -> 
     outcome = await executor.generate(
         plan,
         ImageGenerateRequest(prompt="a lighthouse"),
+    )
+
+    assert outcome == Rejected(RejectionReason.POLICY)
+    client.generate_image.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_live_route_attestation_fails_closed_before_content_io() -> None:
+    executor, client = _executor(_result())
+    client.route_policy.allows.return_value = False
+
+    outcome = await executor.generate(
+        plan_execution(Feature.IMAGE_GENERATE, ModelRole.IMAGE),
+        ImageGenerateRequest(prompt="private sentinel"),
     )
 
     assert outcome == Rejected(RejectionReason.POLICY)

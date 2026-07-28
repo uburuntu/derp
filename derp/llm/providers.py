@@ -213,12 +213,23 @@ def model_run_settings(
     model: ModelSpec,
     *,
     user_id: UUID | None = None,
+    max_tokens: int | None = None,
 ) -> ModelSettings:
     """Return provider-correct settings for a single model request."""
+    if max_tokens is not None and (
+        isinstance(max_tokens, bool)
+        or not isinstance(max_tokens, int)
+        or max_tokens <= 0
+    ):
+        raise ValueError("max_tokens must be a positive integer")
     if model.provider is InferenceProvider.GOOGLE:
-        return GOOGLE_RELAXED_SAFETY_SETTINGS
-    pseudonym = pseudonymous_inference_user(user_id) if user_id else None
-    return openrouter_settings(model, pseudonymous_user=pseudonym)
+        result: ModelSettings = dict(GOOGLE_RELAXED_SAFETY_SETTINGS)
+    else:
+        pseudonym = pseudonymous_inference_user(user_id) if user_id else None
+        result = dict(openrouter_settings(model, pseudonymous_user=pseudonym))
+    if max_tokens is not None:
+        result["max_tokens"] = max_tokens
+    return result
 
 
 # Compatibility export while call sites migrate to provider-aware settings.

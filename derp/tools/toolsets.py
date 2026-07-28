@@ -11,7 +11,6 @@ from derp.approvals.image_tools import EDIT_IMAGE_TOOL, GENERATE_IMAGE_TOOL
 from derp.llm.deps import AgentDeps
 from derp.tools.gemini_image import edit_image, generate_image
 from derp.tools.policy import ChatTool, ChatToolAccess
-from derp.tools.web_search import web_search
 
 
 class SharedFactToolProvider(Protocol):
@@ -44,9 +43,8 @@ def create_chat_toolset(
     """
     toolset: FunctionToolset[AgentDeps] = FunctionToolset()
 
-    if not access.allows(ChatTool.WEB_SEARCH):
-        raise ValueError("governed chat toolsets require the web-search baseline")
-    toolset.tool(web_search)
+    # Search stays hidden until a single disclosed provider, deadline, and
+    # response-byte budget are enforced by a governed adapter.
 
     if access.allows(ChatTool.GENERATE_IMAGE):
         toolset.tool(generate_image, requires_approval=True)

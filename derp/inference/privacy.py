@@ -8,13 +8,15 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Final, Protocol, Self
 
+from derp.legal import PRIVACY_POLICY_URL, TERMS_OF_USE_URL
+
 FREE_INFERENCE_LEGAL_VERSION_MAX_LENGTH: Final = 64
-FREE_INFERENCE_TOS_URL: Final = "https://openrouter.ai/terms"
-FREE_INFERENCE_PRIVACY_URL: Final = "https://openrouter.ai/privacy"
+FREE_INFERENCE_TOS_URL: Final = TERMS_OF_USE_URL
+FREE_INFERENCE_PRIVACY_URL: Final = PRIVACY_POLICY_URL
 # Keep legal labels compact enough to share Telegram callback space with the
 # preference revision that prevents stale consent controls from being replayed.
-FREE_INFERENCE_TOS_VERSION: Final = "or-tos-20260721"
-FREE_INFERENCE_PRIVACY_VERSION: Final = "or-privacy-20260721"
+FREE_INFERENCE_TOS_VERSION: Final = "derp-terms-20260728"
+FREE_INFERENCE_PRIVACY_VERSION: Final = "derp-privacy-20260728"
 _LEGAL_VERSION = re.compile(
     rf"^[A-Za-z0-9._-]{{1,{FREE_INFERENCE_LEGAL_VERSION_MAX_LENGTH}}}$"
 )

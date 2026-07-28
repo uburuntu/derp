@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -12,16 +12,27 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.i18n import I18n
 
 from derp.handlers.operator import (
+    OperatorDebugRefundConfirmCallback,
     OperatorMaintenanceCallback,
     OperatorMaintenanceConfirmCallback,
+    OperatorSupportAction,
+    OperatorSupportResolveCallback,
+    OperatorSupportResolveConfirmCallback,
     OperatorView,
     build_maintenance_result_panel,
     build_operator_panel,
+    build_operator_support_queue,
     check_operator_inference,
     request_operator_maintenance,
+    request_operator_support_resolution,
+    request_operator_test_refund,
+    resolve_operator_support_case,
     run_operator_maintenance,
+    run_operator_test_refund,
     show_operator_console,
+    show_operator_support_queue,
 )
+from derp.history.capture import capture_outbound_history, should_capture_outbound
 from derp.operator import (
     MAX_CONFIRMATION_TOKEN_LENGTH,
     OperatorActivityTotals,
@@ -31,6 +42,7 @@ from derp.operator import (
     OperatorControlConfig,
     OperatorDatabaseSnapshot,
     OperatorDatabaseStatus,
+    OperatorDebugRefundResult,
     OperatorInferenceAttemptTotals,
     OperatorInferenceCatalogSnapshot,
     OperatorInferenceConnectivitySnapshot,
@@ -41,13 +53,20 @@ from derp.operator import (
     OperatorMaintenancePass,
     OperatorMaintenanceResult,
     OperatorNamedCount,
+    OperatorPaymentUpdateTotals,
     OperatorPoolSnapshot,
     OperatorProbeStatus,
     OperatorRuntimeSnapshot,
     OperatorStarsTotals,
     OperatorSubscriptionTotals,
+    OperatorSupportTotals,
     OperatorWalletTotals,
     OperatorWorkerStatus,
+)
+from derp.support import (
+    OperatorSupportCase,
+    ResolveSupportResult,
+    SupportKind,
 )
 
 
@@ -152,10 +171,33 @@ def _snapshot(*, degraded: bool = False) -> OperatorConsoleSnapshot:
                 nonzero={"fulfilled": 12},
             ),
             stars=OperatorStarsTotals(fulfilled=120, clawed_back=2),
+            support=OperatorSupportTotals(open=2, payment_open=1, resolved=4),
+            payment_updates=OperatorPaymentUpdateTotals(
+                pending=0,
+                processing=0,
+                completed=12,
+                attention=0,
+                due=0,
+                reply_failed=0,
+                reply_skipped=0,
+            ),
+            refund_request_states=_counts(
+                "pending",
+                "submitting",
+                "accepted",
+                "rejected",
+                "needs_review",
+                "reconciled",
+                nonzero={"reconciled": 1},
+            ),
             subscriptions=OperatorSubscriptionTotals(
                 status_active=8,
                 entitled=10,
                 auto_renewing=7,
+                renewal_pending=2,
+                renewal_processing=1,
+                renewal_attention=1,
+                renewal_due=1,
             ),
             artifacts=OperatorArtifactTotals(count=14, bytes=2_048),
         )
@@ -199,6 +241,7 @@ def _snapshot(*, degraded: bool = False) -> OperatorConsoleSnapshot:
             ),
             pending_cost_reconciliation=2,
             unavailable_cost_count=1,
+            route_policy_violation_count=0,
             reconciled_cost_usd=Decimal("1.234567"),
         ),
     )
@@ -230,6 +273,32 @@ def test_every_operator_view_is_bounded_and_uses_valid_callback_data() -> None:
                 assert len(button.callback_data.encode()) <= 64
 
 
+def test_support_queue_is_bounded_and_exposes_only_required_case_fields() -> None:
+    case = OperatorSupportCase(
+        reference="CASE123456",
+        kind=SupportKind.PRIVACY,
+        created_at=datetime(2026, 7, 28, 12, tzinfo=UTC),
+        requester_telegram_id=123_456,
+    )
+
+    text, markup = build_operator_support_queue((case,))
+
+    assert "CASE123456" in text
+    assert "Privacy or data" in text
+    assert "2026-07-28 12:00 UTC" in text
+    assert "123456" in text
+    resolve = OperatorSupportResolveCallback.unpack(
+        markup.inline_keyboard[0][0].callback_data
+    )
+    assert resolve.reference == case.reference
+    assert all(
+        len(button.callback_data.encode()) <= 64
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    )
+
+
 @pytest.mark.parametrize(
     "view",
     [OperatorView.USAGE, OperatorView.COMMERCE, OperatorView.OPERATIONS],
@@ -247,7 +316,7 @@ def test_overview_surfaces_aggregate_attention_without_identifiers() -> None:
     text, _ = build_operator_panel(OperatorView.OVERVIEW, _snapshot(), _config())
 
     assert "prod · up 1d 1h" in text
-    assert "Attention: 5 signals" in text
+    assert "Attention: 9 signals" in text
     assert "12345" not in text
 
 
@@ -269,6 +338,17 @@ def test_inference_view_shows_accounting_and_read_only_connectivity() -> None:
     assert "OpenRouter catalog: 321 models · 2/3 enabled visible" in text
     assert "reviewed-model" not in text
     assert markup.inline_keyboard[0][0].text == "Run read-only check"
+
+
+def test_commerce_view_shows_conservative_project_economics() -> None:
+    text, _ = build_operator_panel(OperatorView.COMMERCE, _snapshot(), _config())
+
+    assert (
+        "Economics floor: $1.2 revenue · $1.234567 reconciled AI cost · "
+        "margin incomplete (2 pending, 1 unavailable)"
+    ) in text
+    assert "Support: 2 open · 1 payment · 4 resolved" in text
+    assert "Renewal queue: 2 pending · 1 processing · 1 attention · 1 due" in text
 
 
 def test_russian_operator_views_are_concise_and_use_derp_persona(
@@ -311,6 +391,41 @@ def test_maintenance_result_is_conservative_and_compact() -> None:
     assert "Expired quotes" not in text
     assert "succeeded" not in text.lower()
     assert markup.inline_keyboard
+
+
+def test_payment_maintenance_has_a_control_and_clear_recovery_counts() -> None:
+    _, markup = build_operator_panel(
+        OperatorView.MAINTENANCE,
+        _snapshot(),
+        _config(),
+    )
+    actions = {
+        OperatorMaintenanceCallback.unpack(button.callback_data).action
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data and button.callback_data.startswith("opm:")
+    }
+    result = OperatorMaintenanceResult(
+        requested_action=OperatorMaintenanceAction.PAYMENTS,
+        passes=(
+            OperatorMaintenancePass(
+                action=OperatorMaintenanceAction.PAYMENTS,
+                counts=(
+                    OperatorNamedCount("payment_update_settled_count", 2),
+                    OperatorNamedCount("debug_refund_reconciled_count", 1),
+                    OperatorNamedCount("debug_refund_pending_review_count", 1),
+                ),
+            ),
+        ),
+        duration_ms=8.0,
+    )
+
+    text, _ = build_maintenance_result_panel(result)
+
+    assert OperatorMaintenanceAction.PAYMENTS in actions
+    assert "Payment updates settled: 2" in text
+    assert "Test refunds reconciled: 1" in text
+    assert "Test refunds needing review: 1" in text
 
 
 def test_longest_confirmation_capability_fits_telegram_callback_limit() -> None:
@@ -421,6 +536,183 @@ async def test_maintenance_confirmation_is_bound_then_consumed_once(
         show_alert=True,
     )
     assert console.run_maintenance.await_count == 1
+
+
+async def test_debug_refund_is_fixed_actor_bound_and_single_use(make_message) -> None:
+    message = make_message(text="operator", chat_id=42, chat_type="private")
+    message.edit_text = AsyncMock()
+    callback = _callback(message)
+    store = OperatorConfirmationStore(token_factory=lambda: "fixed_refund_token")
+
+    await request_operator_test_refund(callback, store)
+
+    markup = message.edit_text.await_args.kwargs["reply_markup"]
+    packed = markup.inline_keyboard[0][0].callback_data
+    confirm = OperatorDebugRefundConfirmCallback.unpack(packed)
+    assert confirm.token == "fixed_refund_token"
+
+    refunds = MagicMock()
+    refunds.refund_latest = AsyncMock(return_value=OperatorDebugRefundResult.REQUESTED)
+    message.edit_text.reset_mock()
+    callback.answer.reset_mock()
+
+    await run_operator_test_refund(callback, confirm, store, refunds)
+
+    callback.answer.assert_awaited_once_with("Requesting refund")
+    refunds.refund_latest.assert_awaited_once_with(42)
+    assert "test credits were reconciled" in message.edit_text.await_args.args[0]
+
+    callback.answer.reset_mock()
+    await run_operator_test_refund(callback, confirm, store, refunds)
+    callback.answer.assert_awaited_once_with(
+        "This confirmation expired. Choose the action again.",
+        show_alert=True,
+    )
+    assert refunds.refund_latest.await_count == 1
+
+
+async def test_support_queue_refresh_reads_durable_service(make_message) -> None:
+    message = make_message(text="operator", chat_id=42, chat_type="private")
+    capture_states: list[bool] = []
+
+    async def render(*args, **kwargs) -> None:
+        capture_states.append(should_capture_outbound())
+
+    message.edit_text = AsyncMock(side_effect=render)
+    callback = _callback(message)
+    case = OperatorSupportCase(
+        reference="CASE123456",
+        kind=SupportKind.PAYMENT,
+        created_at=datetime(2026, 7, 28, 12, tzinfo=UTC),
+        requester_telegram_id=77,
+    )
+    support = MagicMock()
+    support.list_operator_open = AsyncMock(return_value=(case,))
+
+    with capture_outbound_history():
+        await show_operator_support_queue(callback, support)
+        assert should_capture_outbound()
+
+    support.list_operator_open.assert_awaited_once_with()
+    assert "CASE123456" in message.edit_text.await_args.args[0]
+    assert "user <code>77</code>" in message.edit_text.await_args.args[0]
+    assert capture_states == [False]
+
+
+async def test_support_resolution_is_case_bound_single_use_and_notifies_requester(
+    make_message,
+) -> None:
+    message = make_message(text="operator", chat_id=42, chat_type="private")
+    message.edit_text = AsyncMock()
+    callback = _callback(message)
+    case = OperatorSupportCase(
+        reference="CASE123456",
+        kind=SupportKind.REFUND,
+        created_at=datetime(2026, 7, 28, 12, tzinfo=UTC),
+        requester_telegram_id=77,
+    )
+    support = MagicMock()
+    support.get_operator_open = AsyncMock(return_value=case)
+    effects: list[str] = []
+
+    async def resolve(reference: str) -> ResolveSupportResult:
+        effects.append(f"resolve:{reference}")
+        return ResolveSupportResult(
+            case=case,
+            resolved_at=datetime(2026, 7, 28, 12, 5, tzinfo=UTC),
+            changed=True,
+        )
+
+    async def notify(*args, **kwargs) -> None:
+        effects.append("notify")
+
+    support.resolve_operator = AsyncMock(side_effect=resolve)
+    support.list_operator_open = AsyncMock(return_value=())
+    store = OperatorConfirmationStore(token_factory=lambda: "fixed_support_token")
+
+    await request_operator_support_resolution(
+        callback,
+        OperatorSupportResolveCallback(reference=case.reference),
+        support,
+        store,
+    )
+
+    markup = message.edit_text.await_args.kwargs["reply_markup"]
+    packed = markup.inline_keyboard[0][0].callback_data
+    assert case.reference not in packed
+    confirm = OperatorSupportResolveConfirmCallback.unpack(packed)
+    bot = MagicMock()
+    bot.send_message = AsyncMock(side_effect=notify)
+    message.edit_text.reset_mock()
+    callback.answer.reset_mock()
+
+    await resolve_operator_support_case(
+        callback,
+        confirm,
+        support,
+        store,
+        bot,
+    )
+
+    callback.answer.assert_awaited_once_with("Resolving case")
+    support.resolve_operator.assert_awaited_once_with(case.reference)
+    bot.send_message.assert_awaited_once()
+    assert bot.send_message.await_args.args[0] == 77
+    assert case.reference in bot.send_message.await_args.args[1]
+    assert effects == ["notify", f"resolve:{case.reference}"]
+    assert "requester was notified" in message.edit_text.await_args.args[0]
+    assert "No open cases" in message.edit_text.await_args.args[0]
+
+    callback.answer.reset_mock()
+    await resolve_operator_support_case(
+        callback,
+        confirm,
+        support,
+        store,
+        bot,
+    )
+    callback.answer.assert_awaited_once_with(
+        "This confirmation expired. Choose the action again.",
+        show_alert=True,
+    )
+    assert support.resolve_operator.await_count == 1
+
+
+async def test_support_notification_failure_keeps_case_open(make_message) -> None:
+    message = make_message(text="operator", chat_id=42, chat_type="private")
+    message.edit_text = AsyncMock()
+    callback = _callback(message)
+    case = OperatorSupportCase(
+        reference="CASE654321",
+        kind=SupportKind.ACCESS,
+        created_at=datetime(2026, 7, 28, 12, tzinfo=UTC),
+        requester_telegram_id=88,
+    )
+    support = MagicMock()
+    support.get_operator_open = AsyncMock(return_value=case)
+    support.resolve_operator = AsyncMock()
+    support.list_operator_open = AsyncMock(return_value=(case,))
+    store = OperatorConfirmationStore(token_factory=lambda: "failed_notice_token")
+    token = store.issue(
+        actor_id=42,
+        action=OperatorSupportAction.RESOLVE,
+        resource_key=case.reference,
+    )
+    bot = MagicMock()
+    bot.send_message = AsyncMock(side_effect=RuntimeError("Telegram unavailable"))
+
+    await resolve_operator_support_case(
+        callback,
+        OperatorSupportResolveConfirmCallback(token=token),
+        support,
+        store,
+        bot,
+    )
+
+    support.resolve_operator.assert_not_awaited()
+    support.list_operator_open.assert_awaited_once_with()
+    assert "remains open" in message.edit_text.await_args.args[0]
+    assert case.reference in message.edit_text.await_args.args[0]
 
 
 @pytest.mark.parametrize(

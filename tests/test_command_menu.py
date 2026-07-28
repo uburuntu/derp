@@ -30,13 +30,15 @@ _PRIVATE_COMMANDS = (
     "help",
     "settings",
     "privacy",
+    "terms",
+    "support",
+    "paysupport",
     "imagine",
     "edit",
     "tts",
     "credits",
     "plan",
     "forget",
-    "donate",
 )
 _OPERATOR_COMMANDS = ("operator", *_PRIVATE_COMMANDS)
 _GROUP_COMMANDS = (
@@ -49,7 +51,6 @@ _GROUP_COMMANDS = (
     "tts",
     "credits",
     "forget",
-    "donate",
 )
 
 
@@ -93,10 +94,23 @@ def test_command_scopes_expose_only_canonical_live_paths(
             "img",
             "say",
             "subscription",
-            "support",
             "voice",
+            "donate",
         }
     )
+
+
+def test_support_is_private_and_donations_are_suspended() -> None:
+    private = _command_names(CommandAudience.PRIVATE)
+    group = _command_names(CommandAudience.GROUP)
+
+    assert ("support", "paysupport") == (
+        private[private.index("support")],
+        private[private.index("paysupport")],
+    )
+    assert "support" not in group
+    assert "paysupport" not in group
+    assert all("donate" not in _command_names(audience) for audience in CommandAudience)
 
 
 def test_purchase_commands_follow_public_intake_and_chat_scope() -> None:

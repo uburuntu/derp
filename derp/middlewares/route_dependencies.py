@@ -56,6 +56,8 @@ ROUTE_DEPENDENCY_PLANS: Final[Mapping[RouteDependencyKey, RouteDependencyPlan]] 
             RouteDependencyKey(RouteEvent.MESSAGE, "context_settings"): _MODELS,
             RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "context_settings"): _MODELS,
             RouteDependencyKey(RouteEvent.MY_CHAT_MEMBER, "context_settings"): _MODELS,
+            RouteDependencyKey(RouteEvent.MESSAGE, "legal_support"): _MODELS,
+            RouteDependencyKey(RouteEvent.CALLBACK_QUERY, "legal_support"): _MODELS,
             RouteDependencyKey(RouteEvent.MESSAGE, "credit_cmds"): _MODELS,
             RouteDependencyKey(
                 RouteEvent.CALLBACK_QUERY, "credit_purchase_intake"

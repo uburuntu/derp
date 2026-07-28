@@ -11,7 +11,8 @@ Version and effective date: 28 July 2026
 Derp is an independently operated Telegram bot. This policy describes the
 production bot and the data its operator controls. The only public contact and
 privacy-control channel is the bot itself: open a private chat with Derp and use
-`/privacy`. There is no separate email support channel.
+`/privacy` or `/support`. Purchase and refund support is available through
+`/paysupport`. There is no separate email support channel.
 
 Telegram and the inference providers described below process data under their
 own terms and privacy policies.
@@ -34,6 +35,9 @@ privacy, and abuse-prevention features:
 - Stars purchase terms, hashed invoice capabilities, Telegram charge IDs,
   subscription state, wallet entries, charges, reversals, refunds, and debt.
   Derp does not receive card details; Telegram handles Stars payments.
+- Legal acceptance records and support cases. A support case stores only its
+  opaque reference, category, state, and requester relation; it does not store a
+  free-form support message.
 - Generated image or audio files held temporarily when delivery or retry needs
   them.
 
@@ -60,9 +64,8 @@ prompts and replies under their own policies. Free non-ZDR models never run for
 groups. Consent can be withdrawn from `Model privacy` in Derp's private
 settings; withdrawal affects future requests.
 
-Google may process requests for direct services such as text-to-speech and when
-the operator activates the documented provider rollback. Telegram processes
-bot messages, files, and Stars payments. Production Logfire telemetry receives
+Google processes direct services such as text-to-speech. Telegram processes bot
+messages, files, and Stars payments. Production Logfire telemetry receives
 operational identifiers, timings, counts, model/cost facts, and sanitized error
 locations, but not message, prompt, response, tool-argument, payment-payload, or
 binary content.
@@ -108,6 +111,11 @@ remove Telegram messages, copies made by other people, unattributed text quoted
 in another message, provider-controlled logs or caches, or accounting facts
 that must remain for a purchase, refund, security, or legal record.
 
+For a privacy or data request, open Derp privately and use `/support`, then
+choose `Privacy or data`. For a purchase, charge, or refund issue, use
+`/paysupport`. Telegram and `@BotSupport` cannot resolve a purchase made from an
+independently operated bot; the in-bot case is the operator's support channel.
+
 ### 7. Security and changes
 
 Derp limits stored fields, uses private generated-artifact storage, hashes
@@ -122,7 +130,8 @@ changed free-model terms is requested again before that mode can run.
 Дерп - независимо управляемый Telegram-бот. Эта политика описывает боевого
 бота и данные под контролем его оператора. Единственный публичный канал связи и
 управления приватностью - сам бот: откройте личный чат с Дерпом и отправьте
-`/privacy`. Отдельной почты поддержки нет.
+`/privacy` или `/support`. Для покупок и возвратов есть `/paysupport`. Отдельной
+почты поддержки нет.
 
 Telegram и указанные ниже провайдеры ИИ обрабатывают данные по собственным
 условиям и политикам.
@@ -144,6 +153,9 @@ Telegram и указанные ниже провайдеры ИИ обрабат
 - условия покупок Stars, хеши возможностей счёта, charge ID Telegram,
   подписки, движения кредитов, списания, возвраты и долг. Дерп не получает
   данные банковской карты: Stars обрабатывает Telegram;
+- записи принятия юридических условий и обращения в поддержку. В обращении
+  хранятся только непрозрачный номер, категория, состояние и связь с автором;
+  произвольный текст обращения не сохраняется;
 - созданные изображения и аудио, временно нужные для доставки или повтора.
 
 Паспортные, авторизационные, контактные, географические, платёжные и web-app
@@ -216,6 +228,11 @@ payload и бинарных данных.
 сообщения Telegram, чужие копии, текст в сообщениях других людей, логи и кеши
 провайдеров и учётные факты, нужные для оплаты, возврата, безопасности или
 закона.
+
+Для запроса о данных откройте личный чат с Дерпом, отправьте `/support` и
+выберите `Приватность или данные`. По покупке, списанию или возврату отправьте
+`/paysupport`. Telegram и `@BotSupport` не решают вопросы покупок у независимо
+управляемого бота; канал оператора - обращение внутри Дерпа.
 
 ### 7. Безопасность и изменения
 

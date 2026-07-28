@@ -486,6 +486,11 @@ async def test_m1_dispatch_journey_matrix(
         inference_reconciliation=None,
         deferred_tool_approval_service=MagicMock(),
         operator_console=MagicMock(),
+        operator_debug_refunds=MagicMock(),
+        payment_update_inbox=MagicMock(),
+        payment_update_replay=MagicMock(),
+        operator_debug_refund_replay=MagicMock(),
+        subscription_renewal_replay=MagicMock(),
     )
     dispatcher = create_dispatcher(
         runtime,

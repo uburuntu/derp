@@ -13,6 +13,7 @@ from pydantic_ai import ModelResponse, RequestUsage, TextPart
 from derp.catalog import ModelRole, get_openrouter_model
 from derp.inference import (
     InferenceRecorder,
+    InferenceRoutePolicyError,
     aggregate_reports,
     report_from_response,
     reports_from_messages,
@@ -30,9 +31,11 @@ def _response(
     cost: float | None = 0.0012345678914,
     generation_detail: bool = True,
     response_id: str = "response-1",
+    model_name: str = "anthropic/claude-sonnet-5",
+    downstream_provider: str = "anthropic",
 ) -> ModelResponse:
     details: dict[str, object] = {
-        "downstream_provider": "anthropic",
+        "downstream_provider": downstream_provider,
     }
     if generation_detail:
         details["generation_id"] = "gen-1"
@@ -49,7 +52,7 @@ def _response(
             output_audio_tokens=3,
             details={"reasoning_tokens": 9},
         ),
-        model_name="anthropic/claude-sonnet-5",
+        model_name=model_name,
         timestamp=NOW,
         provider_name="openrouter",
         provider_details=details,
@@ -195,14 +198,15 @@ async def test_recorder_registers_before_completion_and_reconciles_reported_cost
 
     start = repository.register.await_args.args[0]
     completion = repository.complete.await_args.args[1]
-    reconciliation = repository.reconcile_cost.await_args.args[1]
     assert start.id == attempt.id
     assert start.user_id == UUID(int=1)
     assert start.provider == "openrouter"
     assert completion.outcome is InferenceOutcome.SUCCEEDED
     assert completion.provider_response_id == "response-1"
     assert completion.provider_generation_id == "gen-1"
-    assert reconciliation.actual_cost_usd == reports[0].actual_cost_usd
+    assert completion.actual_cost_usd == reports[0].actual_cost_usd
+    assert completion.cost_reconciliation_status.value == "reconciled"
+    repository.reconcile_cost.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -271,7 +275,46 @@ async def test_free_catalog_run_reconciles_missing_upstream_zero_cost() -> None:
         started_at=NOW,
     )
 
-    await recorder.succeed(attempt, [_response(cost=None)], completed_at=NOW)
+    await recorder.succeed(
+        attempt,
+        [
+            _response(
+                cost=None,
+                model_name=attempt.model.provider_model_id,
+                downstream_provider="nvidia",
+            )
+        ],
+        completed_at=NOW,
+    )
 
-    reconciliation = repository.reconcile_cost.await_args.args[1]
-    assert reconciliation.actual_cost_usd == Decimal(0)
+    completion = repository.complete.await_args.args[1]
+    assert completion.actual_cost_usd == Decimal(0)
+    assert completion.cost_reconciliation_status.value == "reconciled"
+    repository.reconcile_cost.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recorder_persists_and_rejects_an_unreviewed_provider_route() -> None:
+    repository = MagicMock(spec=InferenceUsageRepository)
+    repository.register = AsyncMock()
+    repository.complete = AsyncMock()
+    recorder = InferenceRecorder(repository)
+    attempt = await recorder.start(
+        model=get_openrouter_model(ModelRole.CHAT_STANDARD),
+        user_id=UUID(int=1),
+        chat_id=None,
+        operation_id=None,
+        started_at=NOW,
+    )
+
+    with pytest.raises(InferenceRoutePolicyError):
+        await recorder.succeed(
+            attempt,
+            [_response(downstream_provider="unexpected-provider")],
+            completed_at=NOW,
+        )
+
+    completion = repository.complete.await_args.args[1]
+    assert completion.actual_model_id == "anthropic/claude-sonnet-5"
+    assert completion.downstream_provider == "unexpected-provider"
+    assert completion.route_policy_matched is False

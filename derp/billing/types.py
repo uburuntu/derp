@@ -8,6 +8,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Self
 
+from derp.billing.payloads import hash_invoice_payload
+
 
 def _require_aware(value: datetime, name: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
@@ -78,6 +80,7 @@ class PreCheckoutRejection(StrEnum):
     AMOUNT_MISMATCH = "amount_mismatch"
     PRODUCT_MISMATCH = "product_mismatch"
     ACTIVE_SUBSCRIPTION = "active_subscription"
+    INTAKE_CLOSED = "intake_closed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +142,61 @@ class CapturedPayment:
             if not self.is_recurring:
                 raise ValueError("subscription expiration requires a recurring payment")
 
+    def durable(self) -> StoredCapturedPayment:
+        """Drop the bearer payload before crossing a durable queue boundary."""
+        return StoredCapturedPayment(
+            payload_token_hash=hash_invoice_payload(self.invoice_payload),
+            telegram_charge_id=self.telegram_charge_id,
+            provider_charge_id=self.provider_charge_id,
+            payer_telegram_id=self.payer_telegram_id,
+            currency=self.currency,
+            total_amount=self.total_amount,
+            is_recurring=self.is_recurring,
+            is_first_recurring=self.is_first_recurring,
+            subscription_expiration_at=self.subscription_expiration_at,
+        )
+
+
+def _require_payload_hash(value: str) -> None:
+    if len(value) != 64 or any(
+        character not in "0123456789abcdef" for character in value
+    ):
+        raise ValueError("payload_token_hash must be a lowercase SHA-256 digest")
+
+
+@dataclass(frozen=True, slots=True)
+class StoredCapturedPayment:
+    """SuccessfulPayment fields safe to retain in a durable inbox."""
+
+    payload_token_hash: str
+    telegram_charge_id: str
+    provider_charge_id: str
+    payer_telegram_id: int
+    currency: str
+    total_amount: int
+    is_recurring: bool = False
+    is_first_recurring: bool = False
+    subscription_expiration_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _require_payload_hash(self.payload_token_hash)
+        for name in ("telegram_charge_id", "provider_charge_id", "currency"):
+            if not getattr(self, name).strip():
+                raise ValueError(f"{name} must not be blank")
+        if self.payer_telegram_id <= 0:
+            raise ValueError("payer_telegram_id must be positive")
+        if self.total_amount <= 0:
+            raise ValueError("total_amount must be positive")
+        if self.is_first_recurring and not self.is_recurring:
+            raise ValueError("a first recurring payment must be recurring")
+        if self.subscription_expiration_at is not None:
+            _require_aware(
+                self.subscription_expiration_at,
+                "subscription_expiration_at",
+            )
+            if not self.is_recurring:
+                raise ValueError("subscription expiration requires a recurring payment")
+
 
 @dataclass(frozen=True, slots=True)
 class RefundedPaymentCommand:
@@ -152,6 +210,37 @@ class RefundedPaymentCommand:
 
     def __post_init__(self) -> None:
         for name in ("invoice_payload", "telegram_charge_id", "currency"):
+            if not getattr(self, name).strip():
+                raise ValueError(f"{name} must not be blank")
+        if self.provider_charge_id is not None and not self.provider_charge_id.strip():
+            raise ValueError("provider_charge_id must not be blank when provided")
+        if self.total_amount <= 0:
+            raise ValueError("total_amount must be positive")
+
+    def durable(self) -> StoredRefundedPayment:
+        """Drop the bearer payload before crossing a durable queue boundary."""
+        return StoredRefundedPayment(
+            payload_token_hash=hash_invoice_payload(self.invoice_payload),
+            telegram_charge_id=self.telegram_charge_id,
+            provider_charge_id=self.provider_charge_id,
+            currency=self.currency,
+            total_amount=self.total_amount,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StoredRefundedPayment:
+    """RefundedPayment fields safe to retain in a durable inbox."""
+
+    payload_token_hash: str
+    telegram_charge_id: str
+    provider_charge_id: str | None
+    currency: str
+    total_amount: int
+
+    def __post_init__(self) -> None:
+        _require_payload_hash(self.payload_token_hash)
+        for name in ("telegram_charge_id", "currency"):
             if not getattr(self, name).strip():
                 raise ValueError(f"{name} must not be blank")
         if self.provider_charge_id is not None and not self.provider_charge_id.strip():
@@ -192,7 +281,21 @@ class SubscriptionStateResult:
     subscription_id: uuid.UUID
     renewal_enabled: bool
     current_period_end: datetime
-    changed: bool
+    disposition: SubscriptionRenewalDisposition
+
+    @property
+    def changed(self) -> bool:
+        return self.disposition is SubscriptionRenewalDisposition.APPLIED
+
+
+class SubscriptionRenewalDisposition(StrEnum):
+    """Durable outcome of one requested provider renewal-state change."""
+
+    UNCHANGED = "unchanged"
+    APPLIED = "applied"
+    PENDING = "pending"
+    ATTENTION = "attention"
+    SUPERSEDED = "superseded"
 
 
 class SubscriptionStatus(StrEnum):
@@ -239,6 +342,8 @@ class SubscriptionRenewalCommand:
             raise ValueError("payer_telegram_id must be positive")
         if not self.telegram_payment_charge_id.strip():
             raise ValueError("telegram_payment_charge_id must not be blank")
+        if not isinstance(self.enabled, bool):
+            raise TypeError("enabled must be a bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,8 +395,11 @@ __all__ = [
     "RefundedPaymentCommand",
     "SubscriptionManagementSnapshot",
     "SubscriptionRenewalCommand",
+    "SubscriptionRenewalDisposition",
     "SubscriptionStateError",
     "SubscriptionStateResult",
     "SubscriptionStatus",
+    "StoredCapturedPayment",
+    "StoredRefundedPayment",
     "UnknownProductError",
 ]

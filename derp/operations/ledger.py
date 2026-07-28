@@ -32,6 +32,7 @@ from derp.models import (
     WalletLedgerEntry,
     WalletLot,
 )
+from derp.operations.debt import DebtRecovery, WalletDebtProvenance
 from derp.operations.types import (
     ContextBand,
     DeliveryState,
@@ -542,8 +543,15 @@ class OperationLedger:
             if lot.reserved_credits < allocation.amount_credits:
                 raise OperationLedgerError("Reserved lot balance is inconsistent")
             lot.reserved_credits -= allocation.amount_credits
-            await self._return_to_source(
+            recovery = await self._return_to_source(
                 session, wallet, lot, allocation.amount_credits, now
+            )
+            await self._record_debt_restorations(
+                session,
+                wallet,
+                operation,
+                recovery,
+                reason=reason,
             )
             self._record_lot_event(
                 session,
@@ -615,8 +623,15 @@ class OperationLedger:
                 if lot.consumed_credits < allocation.amount_credits:
                     raise OperationLedgerError("Consumed lot balance is inconsistent")
                 lot.consumed_credits -= allocation.amount_credits
-                await self._return_to_source(
+                recovery = await self._return_to_source(
                     session, wallet, lot, allocation.amount_credits, now
+                )
+                await self._record_debt_restorations(
+                    session,
+                    wallet,
+                    operation,
+                    recovery,
+                    reason=reason,
                 )
                 self._record_lot_event(
                     session,
@@ -1037,16 +1052,54 @@ class OperationLedger:
         lot: WalletLot,
         amount: int,
         now: datetime,
-    ) -> None:
+    ) -> DebtRecovery | None:
         with session.no_autoflush:
             source_was_clawed_back = await self._source_was_clawed_back(session, lot)
         if source_was_clawed_back:
             lot.clawed_back_credits += amount
-            wallet.debt_credits = max(0, wallet.debt_credits - amount)
+            return await WalletDebtProvenance.recover(
+                session,
+                wallet,
+                lot,
+                amount,
+                now,
+            )
         elif lot.expires_at is not None and lot.expires_at <= now:
             lot.expired_credits += amount
         else:
             lot.available_credits += amount
+        return None
+
+    @staticmethod
+    async def _record_debt_restorations(
+        session: AsyncSession,
+        wallet: Wallet,
+        operation: PaidOperation,
+        recovery: DebtRecovery | None,
+        *,
+        reason: str,
+    ) -> None:
+        if recovery is None:
+            return
+        for restoration in recovery.restorations:
+            lot = await session.get(WalletLot, restoration.repayment_wallet_lot_id)
+            if lot is None:
+                raise OperationLedgerError("Debt repayment lot disappeared")
+            OperationLedger._record_lot_event(
+                session,
+                wallet,
+                lot,
+                operation,
+                "debt_restored",
+                restoration.credits,
+                reason=reason,
+                key_suffix=str(restoration.debt_source_id),
+                metadata={
+                    "debt_source_id": str(restoration.debt_source_id),
+                    "source_wallet_lot_id": str(restoration.source_wallet_lot_id),
+                    "repayment_wallet_lot_id": str(restoration.repayment_wallet_lot_id),
+                },
+            )
 
     @staticmethod
     async def _source_was_clawed_back(session: AsyncSession, lot: WalletLot) -> bool:
@@ -1098,8 +1151,11 @@ class OperationLedger:
         amount: int,
         *,
         reason: str | None = None,
+        key_suffix: str = "",
+        metadata: dict[str, object] | None = None,
     ) -> None:
         operation_key = str(operation.id) if operation is not None else "none"
+        suffix = f":{key_suffix}" if key_suffix else ""
         session.add(
             WalletLedgerEntry(
                 wallet_id=wallet.id,
@@ -1111,8 +1167,9 @@ class OperationLedger:
                 reserved_after=lot.reserved_credits,
                 consumed_after=lot.consumed_credits,
                 wallet_debt_after=wallet.debt_credits,
-                idempotency_key=f"{event_type}:{operation_key}:{lot.id}",
+                idempotency_key=f"{event_type}:{operation_key}:{lot.id}{suffix}",
                 reason=reason,
+                metadata_=metadata or {},
             )
         )
 

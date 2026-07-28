@@ -78,7 +78,6 @@ class ChatToolAccess:
 
 _BASELINE_TOOLS = frozenset(
     {
-        ChatTool.WEB_SEARCH,
         ChatTool.PROPOSE_SHARED_FACT,
     }
 )

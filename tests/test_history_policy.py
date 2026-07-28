@@ -35,9 +35,12 @@ def test_private_and_explicit_group_messages_are_captured(make_message) -> None:
         "/debug_refund sensitive-charge-id",
         "/debug_refund\nsensitive-charge-id",
         "/dcredits 100",
+        "/support",
+        "/paysupport@DerpRobot",
+        "/terms",
     ],
 )
-def test_operator_control_messages_are_never_conversation_history(
+def test_control_plane_commands_are_never_conversation_history(
     make_message,
     text: str,
 ) -> None:

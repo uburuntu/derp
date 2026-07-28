@@ -9,17 +9,27 @@ import pytest
 
 from derp.application import APPLICATION_ROUTERS, open_runtime
 from derp.catalog import InferenceProvider
-from derp.handlers import chat, debug, donations, operator, payments, premium_suspension
+from derp.handlers import (
+    chat,
+    debug,
+    legal_support,
+    operator,
+    payments,
+    premium_suspension,
+)
 
 
-def test_payment_router_order_preserves_donations_and_one_reconciliation_path() -> None:
-    assert APPLICATION_ROUTERS.index(donations.router) < APPLICATION_ROUTERS.index(
+def test_payment_router_order_preserves_legal_gate_and_one_reconciliation_path() -> (
+    None
+):
+    assert APPLICATION_ROUTERS.index(legal_support.router) < APPLICATION_ROUTERS.index(
         payments.router
     )
     assert APPLICATION_ROUTERS.index(debug.router) < APPLICATION_ROUTERS.index(
         payments.router
     )
     assert payments.reconciliation_router in payments.router.sub_routers
+    assert "donations" not in {router.name for router in APPLICATION_ROUTERS}
 
 
 def test_operator_controls_precede_rejections_and_conversation_routes() -> None:
@@ -54,6 +64,13 @@ class FakeBot:
 
     async def __aexit__(self, exc_type, exc_value, traceback) -> None:
         self.events.append("bot_close")
+
+    async def refund_star_payment(
+        self,
+        user_id: int,
+        telegram_payment_charge_id: str,
+    ) -> bool:
+        raise AssertionError("runtime assembly must not request a Stars refund")
 
 
 class FakeDatabase:
@@ -95,6 +112,42 @@ class FakeSubscriptionExpiryWorker:
 
     async def __aexit__(self, exc_type, exc_value, traceback) -> None:
         self.events.append("subscription_expiry_stop")
+
+
+class FakePaymentUpdateReplayWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("payment_replay_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("payment_replay_stop")
+
+
+class FakeSubscriptionRenewalWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("subscription_renewal_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("subscription_renewal_stop")
+
+
+class FakeOperatorDebugRefundWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("debug_refund_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("debug_refund_stop")
 
 
 class FakeOperationReconciliationWorker:
@@ -171,6 +224,18 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
             return_value=FakeSubscriptionExpiryWorker(events),
         ) as expiry_worker,
         patch(
+            "derp.application.PaymentUpdateReplayWorker",
+            return_value=FakePaymentUpdateReplayWorker(events),
+        ) as payment_replay_worker,
+        patch(
+            "derp.application.SubscriptionRenewalWorker",
+            return_value=FakeSubscriptionRenewalWorker(events),
+        ) as subscription_renewal_worker,
+        patch(
+            "derp.application.OperatorDebugRefundWorker",
+            return_value=FakeOperatorDebugRefundWorker(events),
+        ) as debug_refund_worker,
+        patch(
             "derp.application.OperationReconciliationWorker",
             return_value=FakeOperationReconciliationWorker(events),
         ) as reconciliation_worker,
@@ -218,6 +283,18 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
             assert runtime.tts_paid_media_adapter.service._executor is tts_executor
             assert runtime.openrouter_client is None
             assert runtime.inference_reconciliation is None
+            assert runtime.payment_update_replay is payment_replay_worker.return_value
+            assert (
+                runtime.operator_debug_refund_replay is debug_refund_worker.return_value
+            )
+            assert (
+                runtime.subscription_renewal_replay
+                is subscription_renewal_worker.return_value
+            )
+            assert (
+                runtime.payment_update_inbox._settlement
+                is expiry_worker.call_args.args[0]
+            )
             assert runtime.inline_chat_service._free_plan is None
             assert (
                 runtime.inline_chat_service._inference_recorder
@@ -242,6 +319,18 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
                 is expiry_worker.return_value
             )
             assert (
+                runtime.operator_console._subscription_renewal
+                is subscription_renewal_worker.return_value
+            )
+            assert (
+                runtime.operator_console._payment_update_replay
+                is payment_replay_worker.return_value
+            )
+            assert (
+                runtime.operator_console._debug_refund_reconciliation
+                is debug_refund_worker.return_value
+            )
+            assert (
                 runtime.operator_console._operation_reconciliation
                 is reconciliation_worker.return_value
             )
@@ -260,18 +349,24 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
     assert events == [
         "bot_enter",
         "db_connect",
+        "payment_replay_start",
+        "subscription_renewal_start",
         "retention_start",
         "subscription_expiry_start",
         "operation_reconciliation_start",
         "delivery_maintenance_start",
         "approval_expiry_start",
+        "debug_refund_start",
         "running",
+        "debug_refund_stop",
         "approval_expiry_stop",
         "delivery_maintenance_stop",
         "operation_reconciliation_stop",
         "subscription_expiry_stop",
         "retention_stop",
         "tts_close",
+        "subscription_renewal_stop",
+        "payment_replay_stop",
         "bot_close",
         "db_disconnect",
     ]

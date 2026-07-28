@@ -17,7 +17,6 @@ from derp.inference.report import (
 )
 from derp.inference_usage import (
     CostReconciliationStatus,
-    InferenceCostReconciliation,
     InferenceOutcome,
     InferenceUsageCompletion,
     InferenceUsageId,
@@ -32,6 +31,10 @@ class InferenceAttempt:
 
     id: InferenceUsageId
     model: ModelSpec
+
+
+class InferenceRoutePolicyError(RuntimeError):
+    """The provider response identified a route outside the reviewed policy."""
 
 
 class InferenceRecorder:
@@ -126,10 +129,15 @@ class InferenceRecorder:
             cost = Decimal(0)
         generation_id = last.generation_id if len(reports) == 1 else None
         cost_status = (
-            CostReconciliationStatus.PENDING
-            if cost is not None or generation_id is not None
-            else CostReconciliationStatus.UNAVAILABLE
+            CostReconciliationStatus.RECONCILED
+            if cost is not None
+            else (
+                CostReconciliationStatus.PENDING
+                if generation_id is not None
+                else CostReconciliationStatus.UNAVAILABLE
+            )
         )
+        route_policy_matched = _route_policy_matches(attempt.model, reports)
         await self._repository.complete(
             attempt.id,
             InferenceUsageCompletion(
@@ -138,16 +146,16 @@ class InferenceRecorder:
                 tokens=tokens,
                 provider_response_id=last and last.provider_response_id,
                 provider_generation_id=generation_id,
+                actual_model_id=last and last.actual_model,
+                downstream_provider=last and last.downstream_provider,
+                actual_cost_usd=cost,
+                route_policy_matched=route_policy_matched,
                 cost_reconciliation_status=cost_status,
             ),
         )
-        if cost is not None:
-            await self._repository.reconcile_cost(
-                attempt.id,
-                InferenceCostReconciliation(
-                    actual_cost_usd=cost,
-                    reconciled_at=timestamp,
-                ),
+        if not route_policy_matched:
+            raise InferenceRoutePolicyError(
+                "provider response did not match the reviewed inference route"
             )
 
 
@@ -159,4 +167,33 @@ def _has_zero_token_price(model: ModelSpec) -> bool:
     )
 
 
-__all__ = ["InferenceAttempt", "InferenceRecorder"]
+def _route_policy_matches(
+    model: ModelSpec,
+    reports: tuple[InferenceReport, ...],
+) -> bool:
+    accepted_models = {model.provider_model_id}
+    if model.canonical_model_id:
+        accepted_models.add(model.canonical_model_id)
+    expected_providers = (
+        {_normalize_identifier(provider) for provider in model.routing.provider_order}
+        if model.routing
+        else set()
+    )
+    for report in reports:
+        if report.actual_model not in accepted_models:
+            return False
+        if report.downstream_provider and expected_providers:
+            actual = _normalize_identifier(report.downstream_provider)
+            if not any(
+                actual == expected or actual.startswith(f"{expected}-")
+                for expected in expected_providers
+            ):
+                return False
+    return True
+
+
+def _normalize_identifier(value: str) -> str:
+    return "-".join(value.casefold().replace("/", "-").split())
+
+
+__all__ = ["InferenceAttempt", "InferenceRecorder", "InferenceRoutePolicyError"]

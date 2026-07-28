@@ -528,6 +528,38 @@ async def test_provider_failure_or_rejection_releases_without_capture(
 
 
 @pytest.mark.asyncio
+async def test_inference_completion_failure_releases_before_persisting_result(
+    env: Environment,
+) -> None:
+    recorder = MagicMock()
+    recorder.start = AsyncMock(return_value=MagicMock(id=uuid4()))
+    recorder.succeed_reports = AsyncMock(side_effect=RuntimeError("route mismatch"))
+    coordinator = ImageOperationCoordinator(
+        env.ledger,
+        QuoteEngine(),
+        env.image_service,
+        env.delivery_service,
+        OperationRequestBinder(b"image-operation-test-key".ljust(32, b"!")),
+        inference_recorder=recorder,
+        clock=lambda: NOW,
+        quote_id_factory=lambda: QuoteId(UUID("ee238d9a-b370-4c3e-80b8-5b8dcf8b2943")),
+    )
+
+    outcome = await coordinator.run(env.invocation, PLAN, REQUEST)
+
+    assert outcome == ImageNotCharged(
+        OPERATION_ID,
+        ImageNotChargedReason.PROVIDER_FAILURE,
+    )
+    env.ledger.release.assert_awaited_once_with(
+        OPERATION_ID,
+        reason="image_inference_accounting_unavailable",
+    )
+    env.delivery_service.persist_result.assert_not_awaited()
+    env.ledger.capture.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_existing_provider_claim_never_runs_provider_again(
     env: Environment,
 ) -> None:

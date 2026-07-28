@@ -118,7 +118,7 @@ from derp.media import MediaGateway
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
-from derp.operations import OperationId
+from derp.operations import OperationId, chat_execution_budget
 from derp.operator import OperatorOnlyFilter
 from derp.tools import create_chat_toolset
 from derp.tools.authorization import ActorRoleResolver
@@ -728,6 +728,10 @@ class ChatAgentHandler(MessageHandler):
                 raise RuntimeError("chat accounting returned an unsupported decision")
             plan = decision.plan
             history_window = HISTORY_WINDOWS[plan.model.key]
+            execution_budget = chat_execution_budget(
+                plan=plan,
+                context_band=decision.quote.key.context_band,
+            )
 
             image_tool_context = ImageToolRunContext(
                 requester_id=user_model.id,
@@ -847,14 +851,21 @@ class ChatAgentHandler(MessageHandler):
                                 deps=deps,
                                 toolsets=[toolset],
                                 usage_limits=UsageLimits(
-                                    request_limit=5,
-                                    tool_calls_limit=3,
-                                    input_tokens_limit=plan.model.input_token_limit,
-                                    output_tokens_limit=plan.model.output_token_limit,
+                                    request_limit=execution_budget.request_limit,
+                                    tool_calls_limit=execution_budget.tool_calls_limit,
+                                    input_tokens_limit=(
+                                        execution_budget.input_tokens_limit
+                                    ),
+                                    output_tokens_limit=(
+                                        execution_budget.output_tokens_limit
+                                    ),
                                 ),
                                 model_settings=model_run_settings(
                                     plan.model,
                                     user_id=user_model.id,
+                                    max_tokens=(
+                                        execution_budget.max_output_tokens_per_request
+                                    ),
                                 ),
                             )
                 except Exception:
