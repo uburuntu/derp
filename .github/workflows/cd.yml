@@ -92,9 +92,11 @@ jobs:
               ;;
           esac
 
-          echo "expected_sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
-          echo "release_mode=$RELEASE_MODE" >> "$GITHUB_OUTPUT"
-          echo "expected_purge_count=${EXPECTED_PURGE_COUNT:-0}" >> "$GITHUB_OUTPUT"
+          {
+            printf 'expected_sha=%s\n' "$EXPECTED_SHA"
+            printf 'release_mode=%s\n' "$RELEASE_MODE"
+            printf 'expected_purge_count=%s\n' "${EXPECTED_PURGE_COUNT:-0}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
