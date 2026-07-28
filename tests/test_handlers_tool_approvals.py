@@ -375,12 +375,12 @@ async def test_shared_funding_failure_keeps_approval_runnable_and_explicit(
 
 
 def test_chat_purchase_callback_uses_smallest_covering_pack() -> None:
-    callback = _chat_purchase_callback(51)
+    callback = _chat_purchase_callback(601)
 
     assert callback is not None
     purchase = PurchaseCallback.unpack(callback)
     assert purchase.target is PurchaseTargetCode.CHAT
-    assert purchase.product_id == "basic"
+    assert purchase.product_id == "standard"
 
 
 def test_chat_purchase_callback_omits_action_beyond_largest_pack() -> None:

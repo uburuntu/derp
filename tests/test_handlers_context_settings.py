@@ -27,10 +27,12 @@ from derp.handlers.context_settings import (
     save_admin_policy,
     show_creation_menu,
     show_credit_menu,
+    show_privacy_controls,
     toggle_context,
     toggle_personal_spend,
 )
 from derp.history.policy import ChatPolicyFlag
+from derp.legal import PRIVACY_POLICY_URL, TERMS_OF_USE_URL
 from derp.operations import (
     WalletActivity,
     WalletActivityKind,
@@ -178,6 +180,44 @@ def test_privacy_panel_exposes_personal_deletion_to_non_admin(
     labels = [button.text for row in markup.inline_keyboard for button in row]
     assert "Delete my messages" in labels
     assert "Clear this chat" not in labels
+    urls = {
+        button.text: button.url
+        for row in markup.inline_keyboard
+        for button in row
+        if button.url
+    }
+    assert urls == {
+        "Privacy policy": PRIVACY_POLICY_URL,
+        "Terms of use": TERMS_OF_USE_URL,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chat_type", ["private", "supergroup"])
+async def test_privacy_command_opens_scoped_controls_directly(
+    make_message,
+    mock_chat_model,
+    chat_type: str,
+) -> None:
+    message = make_message(text="/privacy", chat_type=chat_type)
+    message.reply = AsyncMock()
+    bot = MagicMock(spec=Bot)
+    bot.get_chat_administrators = AsyncMock(return_value=[])
+    chat = mock_chat_model(chat_type=chat_type)
+    can_manage = chat_type == "private"
+
+    with patch(
+        "derp.handlers.context_settings.actor_can_manage",
+        new=AsyncMock(return_value=can_manage),
+    ):
+        await show_privacy_controls(message, bot, chat)
+
+    text, markup = build_privacy_panel(
+        chat,
+        can_manage=can_manage,
+        thread_id=message.message_thread_id,
+    )
+    message.reply.assert_awaited_once_with(text, reply_markup=markup)
 
 
 def test_credit_panel_shows_inventories_debt_and_personal_preference() -> None:

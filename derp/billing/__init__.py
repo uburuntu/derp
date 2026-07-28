@@ -1,5 +1,14 @@
 """Durable Stars product, intent, settlement, and subscription API."""
 
+from derp.billing.economics import (
+    DEFAULT_STAR_ECONOMICS,
+    TELEGRAM_ECONOMICS_VERIFIED_ON,
+    TELEGRAM_PRIVATE_TOPICS_FEE_URL,
+    TELEGRAM_STARS_GUIDE_URL,
+    TELEGRAM_STARS_REWARDS_URL,
+    StarEconomics,
+    StarsProductEconomics,
+)
 from derp.billing.expiry import SubscriptionExpiryWorker
 from derp.billing.intents import PurchaseIntentService
 from derp.billing.policy import CLOSED_COMMERCE_POLICY, CommercePolicy
@@ -42,6 +51,7 @@ from derp.billing.types import (
 )
 
 __all__ = [
+    "DEFAULT_STAR_ECONOMICS",
     "DEFAULT_PRODUCT_CATALOG",
     "PRODUCT_VERSION",
     "TELEGRAM_SUBSCRIPTION_PERIOD_SECONDS",
@@ -65,7 +75,9 @@ __all__ = [
     "PurchaseTarget",
     "PurchaseTargetKind",
     "RefundedPaymentCommand",
+    "StarEconomics",
     "StarsProduct",
+    "StarsProductEconomics",
     "SubscriptionPlan",
     "SubscriptionExpiryWorker",
     "SubscriptionManagementService",
@@ -75,6 +87,10 @@ __all__ = [
     "SubscriptionStateError",
     "SubscriptionStateResult",
     "SubscriptionStatus",
+    "TELEGRAM_ECONOMICS_VERIFIED_ON",
+    "TELEGRAM_PRIVATE_TOPICS_FEE_URL",
+    "TELEGRAM_STARS_GUIDE_URL",
+    "TELEGRAM_STARS_REWARDS_URL",
     "TopUpProduct",
     "UnknownProductError",
 ]

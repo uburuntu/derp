@@ -58,6 +58,7 @@ from derp.inference import (
     NonZdrFreeInferenceReason,
     decide_non_zdr_free_inference,
 )
+from derp.legal import PRIVACY_POLICY_URL, TERMS_OF_USE_URL
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
@@ -593,6 +594,12 @@ def build_privacy_panel(
         )
     rows.append(
         [
+            InlineKeyboardButton(text=_("Privacy policy"), url=PRIVACY_POLICY_URL),
+            InlineKeyboardButton(text=_("Terms of use"), url=TERMS_OF_USE_URL),
+        ]
+    )
+    rows.append(
+        [
             InlineKeyboardButton(
                 text=_("Back"),
                 callback_data=ContextCallback(action=ContextAction.MENU).pack(),
@@ -824,6 +831,24 @@ async def show_context_menu(
         chat_model,
         ambient_available=available,
         can_manage=can_manage,
+    )
+    await message.reply(text, reply_markup=markup)
+
+
+@router.message(Command("privacy"))
+async def show_privacy_controls(
+    message: Message,
+    bot: Bot,
+    chat_model: ChatModel | None,
+) -> None:
+    """Open deletion controls and public policies without a settings detour."""
+    can_manage = bool(
+        message.from_user and await actor_can_manage(bot, message, message.from_user.id)
+    )
+    text, markup = build_privacy_panel(
+        chat_model,
+        can_manage=can_manage,
+        thread_id=message.message_thread_id,
     )
     await message.reply(text, reply_markup=markup)
 
@@ -1737,4 +1762,5 @@ __all__ = [
     "build_privacy_panel",
     "ensure_group_context_notice",
     "router",
+    "show_privacy_controls",
 ]

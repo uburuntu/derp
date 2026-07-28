@@ -82,6 +82,7 @@ def command_specs_for(
         commands = [
             CommandSpec("help", _("See what Derp can do")),
             CommandSpec("settings", _("Manage privacy and history")),
+            CommandSpec("privacy", _("Open privacy and deletion controls")),
             *creation,
             CommandSpec("credits", _("See credits and recent charges")),
         ]
@@ -107,6 +108,7 @@ def command_specs_for(
         CommandSpec("derp", _("Ask Derp")),
         CommandSpec("help", _("See what Derp can do")),
         CommandSpec("settings", settings_description),
+        CommandSpec("privacy", _("Open privacy and deletion controls")),
         *creation,
         CommandSpec("credits", _("See personal and chat credits")),
     ]

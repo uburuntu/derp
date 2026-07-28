@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+from derp.billing.economics import DEFAULT_STAR_ECONOMICS, StarEconomics
 from derp.billing.types import ProductKind, UnknownProductError
 
 TELEGRAM_SUBSCRIPTION_PERIOD_SECONDS: Final = 30 * 24 * 60 * 60
-PRODUCT_VERSION: Final = "2026-07-20-v1"
+PRODUCT_VERSION: Final = "2026-07-28-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,12 +72,24 @@ class ProductCatalog:
     top_ups: tuple[TopUpProduct, ...]
     subscription_plan: SubscriptionPlan
     debug_top_up: TopUpProduct
+    economics: StarEconomics = DEFAULT_STAR_ECONOMICS
 
     def __post_init__(self) -> None:
-        products = (*self.top_ups, self.debug_top_up)
+        products = (*self.top_ups, self.subscription_plan, self.debug_top_up)
         keys = [(item.kind, item.id, item.version) for item in products]
         if not self.top_ups or len(keys) != len(set(keys)):
-            raise ValueError("top-up product versions must be present and unique")
+            raise ValueError("product versions must be present and unique")
+        if not isinstance(self.economics, StarEconomics):
+            raise TypeError("economics must be StarEconomics")
+        if any(
+            self.economics.evaluate(
+                stars=product.stars,
+                credit_count=product.credits,
+            ).planning_margin
+            < 0
+            for product in products
+        ):
+            raise ValueError("product liability exceeds the planning revenue floor")
 
     def resolve(self, kind: ProductKind, product_id: str, version: str) -> StarsProduct:
         if kind is ProductKind.SUBSCRIPTION:
@@ -114,17 +127,16 @@ def _validate_product(
 
 DEFAULT_PRODUCT_CATALOG: Final = ProductCatalog(
     top_ups=(
-        TopUpProduct("starter", PRODUCT_VERSION, "Starter", 50, 50),
-        TopUpProduct("basic", PRODUCT_VERSION, "Basic", 150, 165),
-        TopUpProduct("standard", PRODUCT_VERSION, "Standard", 500, 600),
-        TopUpProduct("bulk", PRODUCT_VERSION, "Bulk", 1_500, 2_000),
+        TopUpProduct("starter", PRODUCT_VERSION, "Starter", 50, 600),
+        TopUpProduct("standard", PRODUCT_VERSION, "Standard", 250, 3_200),
+        TopUpProduct("bulk", PRODUCT_VERSION, "Bulk", 750, 9_900),
     ),
     subscription_plan=SubscriptionPlan(
         id="personal_monthly",
         version=PRODUCT_VERSION,
         name="Derp Personal",
         stars=500,
-        allowance_credits=1_000,
+        allowance_credits=6_750,
     ),
     debug_top_up=TopUpProduct(
         id="admin_debug",

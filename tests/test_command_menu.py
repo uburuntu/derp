@@ -29,6 +29,7 @@ from derp.handlers.premium_suspension import SUSPENDED_PREMIUM_COMMANDS
 _PRIVATE_COMMANDS = (
     "help",
     "settings",
+    "privacy",
     "imagine",
     "edit",
     "tts",
@@ -42,6 +43,7 @@ _GROUP_COMMANDS = (
     "derp",
     "help",
     "settings",
+    "privacy",
     "imagine",
     "edit",
     "tts",

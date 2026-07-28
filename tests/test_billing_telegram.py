@@ -67,7 +67,7 @@ def test_personal_panel_uses_typed_callbacks_for_current_catalog() -> None:
     assert all(callback.target is PurchaseTargetCode.USER for callback in callbacks)
     assert sum(callback.kind is ProductKind.SUBSCRIPTION for callback in callbacks) == 1
     labels = [button.text for row in markup.inline_keyboard for button in row]
-    assert "50 credits · 50 Stars" in labels
+    assert "600 credits · 50 Stars" in labels
     assert "Derp Personal · 500 Stars / 30 days" in labels
 
 
@@ -145,13 +145,13 @@ async def test_invoice_link_uses_exact_immutable_intent_terms(
     assert values["prices"][0].amount == handle.stars
     if kind is ProductKind.SUBSCRIPTION:
         assert values["description"] == (
-            "1000 credits every 30 days for 500 Stars. "
+            "6750 credits every 30 days for 500 Stars. "
             "Renews automatically until canceled. "
             "Telegram asks you to confirm the first charge."
         )
     else:
         assert values["description"] == (
-            "50 credits for your account. One-time price: 50 Stars. "
+            "600 credits for your account. One-time price: 50 Stars. "
             "Telegram charges you only after you confirm."
         )
 
@@ -178,7 +178,7 @@ async def test_chat_invoice_names_the_exact_credit_target() -> None:
     await create_stars_invoice_link(bot, handle)
 
     assert bot.create_invoice_link.await_args.kwargs["description"] == (
-        "50 credits for this chat. One-time price: 50 Stars. "
+        "600 credits for this chat. One-time price: 50 Stars. "
         "Telegram charges you only after you confirm."
     )
 
