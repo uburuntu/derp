@@ -1,13 +1,36 @@
 # Production deployment and recovery
 
-The CD workflow builds one Linux/AMD64 image, pushes it to GHCR, and deploys
-the exact manifest digest produced by the build. Tags such as `latest` are
-discovery aids only; they are never deployment identities.
+The CD workflow builds one Linux/AMD64 image, pushes it to GHCR, and attests
+the exact manifest digest produced by the build. A push to `main` stops there:
+it never deploys. Production deployment is an explicit `workflow_dispatch`
+request for the selected `main` commit. Tags such as `latest` are discovery
+aids only; they are never deployment identities.
+
+## Release request
+
+Open the **CD** workflow, select the `main` branch, and provide all inputs:
+
+- `mode=build_only` validates, builds, pushes, and attests without contacting
+  the production host.
+- `mode=deploy` performs the same immutable build and then enters the
+  `production` environment approval and deployment transaction.
+- `expected_sha` is the full lowercase 40-character SHA displayed for the
+  selected `main` commit. The workflow rejects a mismatch before checkout.
+- `backup_reference` is required and must be nonblank for `deploy`. Use the
+  completed provider snapshot ID or the protected dump/checksum reference.
+  The workflow confirms its presence but does not print it into job summaries.
+
+Use `build_only` for candidate evidence. Use `deploy` only after the candidate
+commit is merged to `main`, its backup is complete and restorable, and its exact
+SHA has been independently checked. The deployed container records both the
+commit SHA and immutable image digest as labels and final verification checks
+both values.
 
 ## Release invariants
 
-- The GitHub `production` environment is the approval boundary. Approve a
-  release only after verifying a current database backup.
+- The GitHub `production` environment is the approval boundary. Configure an
+  owner approval requirement in repository settings and approve a release only
+  after verifying the backup named by `backup_reference`.
 - `/opt/derp/.env.prod` must exist on the deployment host and remain readable
   by Docker. It is never copied into the image. Keep
   `ARTIFACT_STORE_PATH=/var/lib/derp/artifacts` in that file; CD also supplies
@@ -22,6 +45,10 @@ discovery aids only; they are never deployment identities.
   Alembic head.
 - A successful forward migration is not automatically reversible. The
   workflow never starts the previous image after migration begins.
+- `python -m derp.release preflight` and `verify` are read-only. Their JSON
+  output contains only schema versions, booleans, and aggregate counts; errors
+  use a fixed message and never include database URLs, exception text, row
+  identifiers, or message content.
 
 After the database connects and Telegram `getMe` succeeds, the runtime writes a
 private heartbeat that is refreshed by the application event loop. The Docker
@@ -32,10 +59,11 @@ provider is reachable.
 
 ## Backup gate
 
-Use the database provider's snapshot facility when available. Before approving
-the GitHub production environment, record the snapshot identifier and confirm
-that the provider reports it complete and restorable. Periodically restore a
-snapshot into an isolated database; completion alone is not a restore test.
+Use the database provider's snapshot facility when available. Before starting
+`mode=deploy`, record its identifier in `backup_reference` and confirm that the
+provider reports it complete and restorable. Recheck that same reference at the
+GitHub production approval boundary. Periodically restore a snapshot into an
+isolated database; completion alone is not a restore test.
 
 For self-managed PostgreSQL, create a custom-format dump from a trusted admin
 host. `LIBPQ_DATABASE_URL` must be a native `postgresql://` URL, not the
@@ -58,19 +86,29 @@ together outside the application host.
 
 ## Automated sequence
 
-1. CI passes and the image is built, pushed, and attested.
-2. The host pulls `ghcr.io/<owner>/<repo>@sha256:<digest>` and verifies that
+1. The request gate requires `main`, matches `expected_sha` to the selected
+   commit, validates the mode, and requires backup evidence for deployments.
+2. CI passes and the exact commit is built, pushed, and attested. `build_only`
+   and every `main` push finish here.
+3. After production approval, the host pulls
+   `ghcr.io/<owner>/<repo>@sha256:<digest>` and verifies that
    exact reference in Docker's `RepoDigests`.
-3. The candidate prepares and verifies the persistent private artifact mount.
-4. The candidate runs `alembic current` while the active bot is untouched. A
-   bad image, environment file, or database connection fails here.
-5. The active `derp-bot` is renamed to `derp-bot-previous` and fully stopped.
-6. The candidate runs `alembic upgrade head`, followed by
-   `alembic current --check-heads`.
-7. The exact candidate starts as `derp-bot` with the artifact bind mount. Its
-   digest is stored in Docker labels, and its event-loop heartbeat must become
-   healthy during the readiness window.
-8. When an active container existed, `derp-bot-previous` remains stopped. The
+4. The candidate prepares and verifies the persistent private artifact mount.
+5. The candidate runs `python -m derp.release preflight` while the active bot
+   is untouched. It requires PostgreSQL 14+, one known Alembic revision, the
+   upgradeable legacy schema, and zero negative user/chat balances. It also
+   reports `legacy_group_history_purge_count`, the exact aggregate number of
+   pre-consent group rows the migration is expected to delete. Record and
+   compare this count with the restored-backup rehearsal before continuing.
+6. The active `derp-bot` is renamed to `derp-bot-previous` and fully stopped.
+7. The candidate runs `alembic upgrade head`, followed by
+   `python -m derp.release verify`. Verification requires the image's sole
+   Alembic head, the complete core schema, no pending legacy-history purge, and
+   no shortfall between positive legacy balances and migrated wallet lots.
+8. The exact candidate starts as `derp-bot` with the artifact bind mount. Its
+   SHA and digest are stored in Docker labels, and its event-loop heartbeat
+   must become healthy during the readiness window.
+9. When an active container existed, `derp-bot-previous` remains stopped. The
    next successful deployment rotates it; routine image cleanup is
    intentionally outside the release transaction.
 
@@ -107,7 +145,7 @@ docker run --rm \
   --add-host host.docker.internal:host-gateway \
   --env-file /opt/derp/.env.prod \
   --env ARTIFACT_STORE_PATH=/var/lib/derp/artifacts \
-  "$IMAGE" alembic current
+  "$IMAGE" python -m derp.release preflight
 ```
 
 Choose exactly one recovery path below. Do not delete
@@ -137,7 +175,7 @@ docker run --rm \
   --add-host host.docker.internal:host-gateway \
   --env-file /opt/derp/.env.prod \
   --env ARTIFACT_STORE_PATH=/var/lib/derp/artifacts \
-  "$IMAGE" alembic current --check-heads
+  "$IMAGE" python -m derp.release verify
 docker rm -f derp-bot derp-bot-failed 2>/dev/null || true
 docker run -d \
   --name derp-bot \

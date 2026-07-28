@@ -5,25 +5,106 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      force_deploy:
-        description: 'Force deployment even if no changes'
+      mode:
+        description: 'Build only, or deploy the exact selected main commit'
+        required: true
+        default: build_only
+        type: choice
+        options:
+          - build_only
+          - deploy
+      expected_sha:
+        description: 'Full 40-character SHA of the selected main commit'
+        required: true
+        type: string
+      backup_reference:
+        description: 'Completed, restorable backup reference (required for deploy)'
         required: false
-        default: 'false'
+        type: string
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  gate:
+    name: Validate release request
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      expected_sha: ${{ steps.request.outputs.expected_sha }}
+      release_mode: ${{ steps.request.outputs.release_mode }}
+
+    steps:
+      - name: Validate immutable release inputs
+        id: request
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          REQUESTED_MODE: ${{ inputs.mode }}
+          REQUESTED_SHA: ${{ inputs.expected_sha }}
+          BACKUP_REFERENCE: ${{ inputs.backup_reference }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = "push" ]; then
+            RELEASE_MODE=build_only
+            EXPECTED_SHA=$EVENT_SHA
+          else
+            RELEASE_MODE=$REQUESTED_MODE
+            EXPECTED_SHA=$REQUESTED_SHA
+            test "$EVENT_REF" = "refs/heads/main" || {
+              echo "Manual release runs must select the main branch" >&2
+              exit 1
+            }
+            test "$EXPECTED_SHA" = "$EVENT_SHA" || {
+              echo "expected_sha must exactly match the selected main commit" >&2
+              exit 1
+            }
+          fi
+
+          printf '%s\n' "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "expected_sha must be a full lowercase commit SHA" >&2
+            exit 1
+          }
+          case "$RELEASE_MODE" in
+            build_only) ;;
+            deploy)
+              test -n "$(printf '%s' "$BACKUP_REFERENCE" | tr -d '[:space:]')" || {
+                echo "backup_reference is required for deployment" >&2
+                exit 1
+              }
+              ;;
+            *)
+              echo "Unsupported release mode" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "expected_sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+          echo "release_mode=$RELEASE_MODE" >> "$GITHUB_OUTPUT"
+
+      - name: Verify selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.request.outputs.expected_sha }}
+
+      - name: Confirm checkout identity
+        env:
+          EXPECTED_SHA: ${{ steps.request.outputs.expected_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
   # Run CI checks first
   ci:
+    needs: gate
     uses: ./.github/workflows/ci.yml
 
   # Build and push Docker image
   build:
     name: Build & Push
     runs-on: ubuntu-24.04
-    needs: ci
+    needs: [gate, ci]
     permissions:
       contents: read
       packages: write
@@ -36,6 +117,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.expected_sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -82,7 +165,8 @@ jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-24.04
-    needs: build
+    needs: [gate, build]
+    if: needs.gate.outputs.release_mode == 'deploy'
     environment: production
     timeout-minutes: 25
     concurrency:
@@ -95,8 +179,10 @@ jobs:
           {
             echo "### Deployment artifact"
             echo ""
+            echo "**Commit:** \`${{ needs.gate.outputs.expected_sha }}\`"
             echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}\`"
             echo "**Digest:** \`${{ needs.build.outputs.image_digest }}\`"
+            echo "**Backup gate:** confirmed"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Deploy to server
@@ -104,6 +190,7 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}
           IMAGE_DIGEST: ${{ needs.build.outputs.image_digest }}
+          EXPECTED_SHA: ${{ needs.gate.outputs.expected_sha }}
           DEPLOYMENT_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           DEPLOY_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.DEPLOY_GHCR_TOKEN }}
@@ -113,7 +200,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           version: "1.8.4"
-          envs: IMAGE,IMAGE_DIGEST,DEPLOYMENT_ID,DEPLOY_ACTOR,GITHUB_TOKEN
+          envs: IMAGE,IMAGE_DIGEST,EXPECTED_SHA,DEPLOYMENT_ID,DEPLOY_ACTOR,GITHUB_TOKEN
           command_timeout: 18m
           script: |
             set -eu
@@ -177,6 +264,11 @@ jobs:
               echo "Invalid image digest: $IMAGE_DIGEST" >&2
               exit 1
             fi
+            if ! printf '%s\n' "$EXPECTED_SHA" \
+              | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "Invalid expected commit SHA" >&2
+              exit 1
+            fi
 
             echo "=== Deployment $DEPLOYMENT_ID starting ==="
             echo "Image: $IMAGE"
@@ -217,7 +309,7 @@ jobs:
               --env-file /opt/derp/.env.prod \
               --env ARTIFACT_STORE_PATH=/var/lib/derp/artifacts \
               "$IMAGE" \
-              alembic current
+              python -m derp.release preflight
 
             PHASE=stop-current-container
             if docker container inspect derp-bot >/dev/null 2>&1; then
@@ -261,7 +353,7 @@ jobs:
               --env-file /opt/derp/.env.prod \
               --env ARTIFACT_STORE_PATH=/var/lib/derp/artifacts \
               "$IMAGE" \
-              alembic current --check-heads
+              python -m derp.release verify
 
             PHASE=start-candidate
             echo "=== Starting immutable candidate ==="
@@ -270,6 +362,7 @@ jobs:
               --restart unless-stopped \
               --label "io.derp.deployment=$DEPLOYMENT_ID" \
               --label "io.derp.image-digest=$IMAGE_DIGEST" \
+              --label "io.derp.commit=$EXPECTED_SHA" \
               --add-host host.docker.internal:host-gateway \
               --env-file /opt/derp/.env.prod \
               --env ARTIFACT_STORE_PATH=/var/lib/derp/artifacts \
@@ -323,10 +416,14 @@ jobs:
             ACTIVE_IMAGE=$(docker inspect --format '{{.Config.Image}}' derp-bot)
             ACTIVE_DIGEST=$(docker inspect \
               --format '{{index .Config.Labels "io.derp.image-digest"}}' derp-bot)
+            ACTIVE_COMMIT=$(docker inspect \
+              --format '{{index .Config.Labels "io.derp.commit"}}' derp-bot)
             ACTIVE_ARTIFACT_SOURCE=$(docker inspect \
               --format '{{range .Mounts}}{{if eq .Destination "/var/lib/derp/artifacts"}}{{.Source}}{{end}}{{end}}' \
               derp-bot)
-            if [ "$ACTIVE_IMAGE" != "$IMAGE" ] || [ "$ACTIVE_DIGEST" != "$IMAGE_DIGEST" ]; then
+            if [ "$ACTIVE_IMAGE" != "$IMAGE" ] \
+              || [ "$ACTIVE_DIGEST" != "$IMAGE_DIGEST" ] \
+              || [ "$ACTIVE_COMMIT" != "$EXPECTED_SHA" ]; then
               echo "Active container identity does not match the built artifact" >&2
               quarantine_candidate
               exit 1
@@ -355,12 +452,13 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}
           IMAGE_DIGEST: ${{ needs.build.outputs.image_digest }}
+          EXPECTED_SHA: ${{ needs.gate.outputs.expected_sha }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           version: "1.8.4"
-          envs: IMAGE,IMAGE_DIGEST
+          envs: IMAGE,IMAGE_DIGEST,EXPECTED_SHA
           command_timeout: 2m
           script: |
             set -eu
@@ -369,12 +467,15 @@ jobs:
             ACTIVE_IMAGE=$(timeout -k 2s 10s docker inspect --format '{{.Config.Image}}' derp-bot)
             ACTIVE_DIGEST=$(timeout -k 2s 10s docker inspect \
               --format '{{index .Config.Labels "io.derp.image-digest"}}' derp-bot)
+            ACTIVE_COMMIT=$(timeout -k 2s 10s docker inspect \
+              --format '{{index .Config.Labels "io.derp.commit"}}' derp-bot)
             ACTIVE_ARTIFACT_SOURCE=$(timeout -k 2s 10s docker inspect \
               --format '{{range .Mounts}}{{if eq .Destination "/var/lib/derp/artifacts"}}{{.Source}}{{end}}{{end}}' \
               derp-bot)
             STATE=$(timeout -k 2s 10s docker inspect --format '{{.State.Status}}' derp-bot)
             test "$ACTIVE_IMAGE" = "$IMAGE"
             test "$ACTIVE_DIGEST" = "$IMAGE_DIGEST"
+            test "$ACTIVE_COMMIT" = "$EXPECTED_SHA"
             test "$ACTIVE_ARTIFACT_SOURCE" = "/opt/derp/artifacts"
             test "$STATE" = "running"
             echo "Verified active digest: $ACTIVE_DIGEST"
@@ -384,6 +485,7 @@ jobs:
           {
             echo "### Deployment successful"
             echo ""
+            echo "**Commit:** \`${{ needs.gate.outputs.expected_sha }}\`"
             echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}\`"
             echo "**Digest:** \`${{ needs.build.outputs.image_digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
