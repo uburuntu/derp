@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: derp
       POSTGRES_PASSWORD: derp
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data-v18:/var/lib/postgresql
     healthcheck:
@@ -26,7 +26,7 @@ services:
       POSTGRES_USER: derp_test
       POSTGRES_PASSWORD: derp_test
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     tmpfs:
       - /var/lib/postgresql
     healthcheck:

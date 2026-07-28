@@ -10,13 +10,13 @@ external checks below even when the repository suite is green.
   routes require data-collection denial and ZDR. Zero-cost models require
   versioned consent, are non-ZDR, run only in private/inline contexts, and have
   no daily quota; per-request and accounting limits remain enforced.
-- Google provides TTS and the explicit inference rollback. Deep thinking, video
+- Google provides TTS. Deep thinking, video
   generation, and standalone transcription are hidden and fail closed.
 - Provider usage records include content-free token categories, downstream
   model/provider facts, actual cost when available, and bounded reconciliation.
 - Public Stars intake defaults off. Purchase intents, settlement, subscription
-  cycles, refunds, clawbacks, debt, approvals, and paid delivery are durable and
-  idempotent.
+  cycles and renewal commands, refunds, clawbacks, debt, approvals, and paid
+  delivery are durable and idempotent.
 - Production Logfire and OpenTelemetry export no prompt, message, media, tool
   argument, callback, payment payload, exception text, or secret content.
 
@@ -61,18 +61,24 @@ planning assumptions before issuing another product version.
   host disk capacity, firewall policy, and artifact directory mode `0700`.
 - [ ] Keep the production PostgreSQL major version unchanged for this release.
 - [ ] Populate `.env.prod` with operator IDs, OpenRouter metadata/key, Google TTS
-  key, callback signing secret, content-free Logfire, exposed feature list, and
-  `PUBLIC_PURCHASES_ENABLED=false`.
+  key, callback signing secret, content-free Logfire, the enforced feature list,
+  and `PUBLIC_PURCHASES_ENABLED=false`. Configure the reviewed SSH host
+  fingerprint as the protected `SSH_HOST_FINGERPRINT` environment secret.
 - [ ] Publish `PRIVACY.md` and `TERMS.md`, verify their public URLs, and register
   the privacy URL in BotFather.
+- [ ] Obtain the controller's legally required identity and jurisdictional
+  contact details, complete the privacy notice, and receive legal review. These
+  facts are not present in the repository and must not be invented; public
+  purchase activation is blocked until this item is complete.
 - [ ] Take and checksum a complete backup, restore it into an isolated database,
   run the candidate migration, and compare preflight/verification aggregates.
 
 ## Candidate deployment
 
 1. Merge to `main`; record the full SHA from the successful build-only CD run.
-2. Dispatch CD with `mode=deploy`, that exact `expected_sha`, and the completed
-   restorable `backup_reference`.
+2. Dispatch CD with `mode=deploy`, that exact `expected_sha`, the completed
+   restorable `backup_reference`, and the exact reviewed legacy group-history
+   purge count reported by preflight.
 3. At the production approval gate, verify SHA, backup, image attestation, and
    expected migration head before approval.
 4. Confirm CD's read-only preflight, migration, read-only verification, digest
@@ -88,7 +94,8 @@ planning assumptions before issuing another product version.
 - [ ] Paid private/group ZDR chat with text and media; image generation/edit
   approval and delivery; Google TTS and artifact cleanup.
 - [ ] Privacy/history inspection, personal deletion, ambient disable/purge, and
-  policy/terms links.
+  policy/terms links; current Terms acceptance before invoice creation;
+  `/support` and `/paysupport` intake plus operator notification.
 - [ ] Operator overview, inference usage, live read-only key/catalog check, all
   maintenance passes, and command-menu synchronization.
 - [ ] One real 1-Star operator checkout, exactly-once fulfillment and replay,
@@ -99,19 +106,21 @@ planning assumptions before issuing another product version.
 
 Any privacy leak, migration mismatch, payment mismatch, missing catalog/key,
 unexpected public capability, unexplained exception, or unreconciled cost is a
-no-go. Provider trouble uses `OPENROUTER_ENABLED_FEATURES=[]` for the explicit
-supported Google rollback and disables zero-cost/free-inline inference.
+no-go. Provider trouble pauses affected inference surfaces; production startup
+rejects an unreviewed provider downgrade.
 Commerce trouble keeps or restores
 `PUBLIC_PURCHASES_ENABLED=false`.
 
 ## Activation and follow-up
 
-1. Set `PUBLIC_PURCHASES_ENABLED=true` and redeploy the same `main` SHA through
+1. Tag the deployed candidate commit `v0.1.0`, publish the release, and verify
+   that the immutable Terms and Privacy URLs resolve.
+2. Set `PUBLIC_PURCHASES_ENABLED=true` and redeploy that same tagged `main` SHA through
    the production approval gate.
-2. Sync Telegram command scopes from the operator console and verify public
+3. Sync Telegram command scopes from the operator console and verify public
    invoices show `2026-07-28-v1` products.
-3. Tag the deployed commit `v0.1.0`; record the image digest, Alembic head,
-   backup reference, and validation evidence in the GitHub release.
-4. Review operator and Logfire status at one hour, 24 hours, and 48 hours.
-5. Preserve the verified backup and previous image until the release window is
+4. Record the image digest, Alembic head, backup reference, and validation
+   evidence in the GitHub release.
+5. Review operator and Logfire status at one hour, 24 hours, and 48 hours.
+6. Preserve the verified backup and previous image until the release window is
    closed; follow `docs/deployment.md` for recovery decisions.

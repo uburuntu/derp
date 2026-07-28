@@ -21,6 +21,10 @@ on:
         description: 'Completed, restorable backup reference (required for deploy)'
         required: false
         type: string
+      expected_legacy_group_history_purge_count:
+        description: 'Exact preflight count reviewed during backup rehearsal'
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -35,6 +39,7 @@ jobs:
     outputs:
       expected_sha: ${{ steps.request.outputs.expected_sha }}
       release_mode: ${{ steps.request.outputs.release_mode }}
+      expected_purge_count: ${{ steps.request.outputs.expected_purge_count }}
 
     steps:
       - name: Validate immutable release inputs
@@ -46,6 +51,7 @@ jobs:
           REQUESTED_MODE: ${{ inputs.mode }}
           REQUESTED_SHA: ${{ inputs.expected_sha }}
           BACKUP_REFERENCE: ${{ inputs.backup_reference }}
+          EXPECTED_PURGE_COUNT: ${{ inputs.expected_legacy_group_history_purge_count }}
         run: |
           set -eu
           if [ "$EVENT_NAME" = "push" ]; then
@@ -75,6 +81,10 @@ jobs:
                 echo "backup_reference is required for deployment" >&2
                 exit 1
               }
+              printf '%s\n' "$EXPECTED_PURGE_COUNT" | grep -Eq '^[0-9]+$' || {
+                echo "expected purge count must be a non-negative integer" >&2
+                exit 1
+              }
               ;;
             *)
               echo "Unsupported release mode" >&2
@@ -84,6 +94,7 @@ jobs:
 
           echo "expected_sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
           echo "release_mode=$RELEASE_MODE" >> "$GITHUB_OUTPUT"
+          echo "expected_purge_count=${EXPECTED_PURGE_COUNT:-0}" >> "$GITHUB_OUTPUT"
 
       - name: Verify selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -154,6 +165,16 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+      - name: Scan exact release image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
       - name: Generate artifact attestation
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
@@ -191,6 +212,7 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}
           IMAGE_DIGEST: ${{ needs.build.outputs.image_digest }}
           EXPECTED_SHA: ${{ needs.gate.outputs.expected_sha }}
+          EXPECTED_PURGE_COUNT: ${{ needs.gate.outputs.expected_purge_count }}
           DEPLOYMENT_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           DEPLOY_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.DEPLOY_GHCR_TOKEN }}
@@ -198,9 +220,10 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          fingerprint: ${{ secrets.SSH_HOST_FINGERPRINT }}
           port: 22
           version: "1.8.4"
-          envs: IMAGE,IMAGE_DIGEST,EXPECTED_SHA,DEPLOYMENT_ID,DEPLOY_ACTOR,GITHUB_TOKEN
+          envs: IMAGE,IMAGE_DIGEST,EXPECTED_SHA,EXPECTED_PURGE_COUNT,DEPLOYMENT_ID,DEPLOY_ACTOR,GITHUB_TOKEN
           command_timeout: 18m
           script: |
             set -eu
@@ -309,7 +332,8 @@ jobs:
               --env-file /opt/derp/.env.prod \
               --env ARTIFACT_STORE_PATH=/var/lib/derp/artifacts \
               "$IMAGE" \
-              python -m derp.release preflight
+              python -m derp.release preflight \
+                --expected-legacy-group-history-purge-count "$EXPECTED_PURGE_COUNT"
 
             PHASE=stop-current-container
             if docker container inspect derp-bot >/dev/null 2>&1; then
@@ -457,6 +481,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          fingerprint: ${{ secrets.SSH_HOST_FINGERPRINT }}
           version: "1.8.4"
           envs: IMAGE,IMAGE_DIGEST,EXPECTED_SHA
           command_timeout: 2m
