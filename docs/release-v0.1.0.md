@@ -87,6 +87,10 @@ planning assumptions before issuing another product version.
 
 ## Telegram and telemetry smoke matrix
 
+Execute the exact current-state walkthroughs in
+`docs/conversation-flows-v0.1.0.md` in both English and Russian. Resolve every
+listed blocker and explicitly accept or change each high-risk UX decision.
+
 - [ ] English and Russian private, group, and forum chat; mention/reply behavior;
   ambient disclosure; scoped command menus; protected financial replies.
 - [ ] Free-model review, consent, repeated unlimited calls, revocation, stale
