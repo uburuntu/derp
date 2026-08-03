@@ -33,9 +33,9 @@ from derp.inference_usage import InferenceUsageRepository
 from derp.llm.deps import AgentDeps
 from derp.llm.prompts import build_chat_system_prompt
 from derp.models import Chat as ChatModel
+from derp.models import ChatRunReceipt, Wallet, WalletLot
 from derp.models import Message as MessageModel
 from derp.models import User as UserModel
-from derp.models import Wallet, WalletLot
 from derp.operations import OperationLedger
 from derp.tools.authorization import ActorRoleResolver
 from tests.e2e.telegram_api import BotAPICall, TelegramBotAPIServer
@@ -420,6 +420,7 @@ class TelegramConversation:
         chat: TelegramChat,
         text: str,
         thread_id: int | None = None,
+        reply_to: Mapping[str, Any] | None = None,
         wait_persisted: bool = True,
     ) -> IncomingMessage:
         """Send text and wait for its transport acknowledgement and persistence."""
@@ -437,6 +438,10 @@ class TelegramConversation:
         if thread_id is not None:
             message["message_thread_id"] = thread_id
             message["is_topic_message"] = True
+        if reply_to is not None:
+            if int(reply_to["chat"]["id"]) != chat.id:
+                raise ValueError("reply target must belong to the same chat")
+            message["reply_to_message"] = dict(reply_to)
         self.server.register_message(message)
         after_sequence = len(self.server.calls)
         update_id = self._take_update_id()
@@ -538,13 +543,17 @@ class TelegramConversation:
         self,
         incoming: IncomingMessage,
         *,
+        text: str | None = None,
         wait_persisted: bool = False,
     ) -> Mapping[str, Any]:
         """Return the bot message that visibly replies to an incoming message."""
         await self.server.wait_for_call(
             "sendMessage",
             after_sequence=incoming.after_sequence,
-            predicate=lambda call: self._reply_target(call) == incoming.message_id,
+            predicate=lambda call: (
+                self._reply_target(call) == incoming.message_id
+                and (text is None or call.fields.get("text") == text)
+            ),
         )
         chat_id = int(incoming.message["chat"]["id"])
         reply = await self.server.wait_for_message(
@@ -553,6 +562,7 @@ class TelegramConversation:
                 int(message.get("from", {}).get("id", 0)) == self.settings.bot_id
                 and int(message.get("reply_to_message", {}).get("message_id", 0))
                 == incoming.message_id
+                and (text is None or message.get("text") == text)
             ),
         )
         if wait_persisted:
@@ -562,6 +572,69 @@ class TelegramConversation:
                 direction="out",
             )
         return reply
+
+    async def expect_message(
+        self,
+        incoming: IncomingMessage,
+        *,
+        text: str | None = None,
+        wait_persisted: bool = False,
+    ) -> Mapping[str, Any]:
+        """Return a bot message emitted for an update without requiring a reply."""
+        await self.server.wait_for_call(
+            "sendMessage",
+            after_sequence=incoming.after_sequence,
+            predicate=lambda call: (
+                int(call.fields.get("chat_id", 0))
+                == int(incoming.message["chat"]["id"])
+            ),
+        )
+        chat_id = int(incoming.message["chat"]["id"])
+        message = await self.server.wait_for_message(
+            chat_id=chat_id,
+            predicate=lambda candidate: (
+                int(candidate.get("from", {}).get("id", 0)) == self.settings.bot_id
+                and int(candidate.get("message_id", 0)) > incoming.message_id
+                and (text is None or candidate.get("text") == text)
+            ),
+        )
+        if wait_persisted:
+            await self._wait_message_persisted(
+                chat_id=chat_id,
+                message_id=int(message["message_id"]),
+                direction="out",
+            )
+        return message
+
+    async def wait_run_receipt(
+        self,
+        *,
+        chat_id: int,
+        response_message_id: int,
+        timeout: float = 5,
+    ) -> None:
+        """Wait until `/info` can resolve one delivered chat answer."""
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    async with self.database.read_session() as session:
+                        stored = await session.scalar(
+                            select(ChatRunReceipt.operation_id)
+                            .join(ChatModel, ChatModel.id == ChatRunReceipt.chat_id)
+                            .where(
+                                ChatModel.telegram_id == chat_id,
+                                ChatRunReceipt.response_message_ids.contains(
+                                    [response_message_id]
+                                ),
+                            )
+                        )
+                    if stored is not None:
+                        return
+                    await asyncio.sleep(0.01)
+        except TimeoutError as exc:
+            raise AssertionError(
+                f"run receipt for {(chat_id, response_message_id)} was not persisted"
+            ) from exc
 
     async def latest_call(
         self,

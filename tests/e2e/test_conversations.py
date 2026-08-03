@@ -13,6 +13,7 @@ from derp.models import (
 from derp.models import (
     InferenceUsage,
     PaymentUpdateInbox,
+    SupportRequest,
 )
 from derp.models import (
     Message as MessageModel,
@@ -85,6 +86,7 @@ async def test_private_conversation_survives_transport_retry_and_restart(
         )
         reply = await telegram_conversation.expect_reply(
             incoming,
+            text=expected_replies[index],
             wait_persisted=True,
         )
         visible_replies.append(str(reply["text"]))
@@ -117,6 +119,7 @@ async def test_private_conversation_survives_transport_retry_and_restart(
     )
     resumed_reply = await telegram_conversation.expect_reply(
         resumed,
+        text="Atlas launches Friday; Mira owns it; database capacity is the risk.",
         wait_persisted=True,
     )
 
@@ -198,6 +201,7 @@ async def test_forum_topics_keep_ambient_and_assistant_history_isolated(
     )
     topic_11_reply = await telegram_conversation.expect_reply(
         topic_11_question,
+        text="Topic 11 deploys the dashboard on Tuesday.",
         wait_persisted=True,
     )
     topic_22_question = await telegram_conversation.send_text(
@@ -208,6 +212,7 @@ async def test_forum_topics_keep_ambient_and_assistant_history_isolated(
     )
     topic_22_reply = await telegram_conversation.expect_reply(
         topic_22_question,
+        text="Topic 22 rotates the signing key on Thursday.",
         wait_persisted=True,
     )
 
@@ -267,6 +272,7 @@ async def test_settings_buttons_round_trip_through_rendered_callback_data(
         actor=actor,
         chat=chat,
         text="/settings",
+        wait_persisted=False,
     )
     panel = await telegram_conversation.expect_reply(command)
     assert str(panel["text"]).startswith("Derp\n")
@@ -335,3 +341,201 @@ async def test_unpersisted_payment_is_redelivered_after_process_crash(
             select(func.count()).select_from(PaymentUpdateInbox)
         )
     assert inbox_rows == 1
+
+
+async def test_paid_answer_has_reply_info_without_extra_inference(
+    telegram_conversation: TelegramConversation,
+) -> None:
+    actor = TelegramUser(id=7_705_001, first_name="Margaret", username="margaret")
+    chat = TelegramChat(id=actor.id, type="private", first_name=actor.first_name)
+    await telegram_conversation.seed_paid_scope(actor=actor, chat=chat)
+    model = DeterministicChatModel.from_responses("The release is ready for review.")
+    await telegram_conversation.start(model)
+
+    question = await telegram_conversation.send_text(
+        actor=actor,
+        chat=chat,
+        text="Summarize the release state.",
+    )
+    answer = await telegram_conversation.expect_reply(
+        question,
+        text="The release is ready for review.",
+        wait_persisted=True,
+    )
+    assert answer["text"] == "The release is ready for review."
+    await telegram_conversation.wait_run_receipt(
+        chat_id=chat.id,
+        response_message_id=int(answer["message_id"]),
+    )
+
+    command = await telegram_conversation.send_text(
+        actor=actor,
+        chat=chat,
+        text="/info",
+        reply_to=answer,
+        wait_persisted=False,
+    )
+    receipt = await telegram_conversation.expect_reply(command)
+
+    assert str(receipt["text"]).startswith("About this answer\n")
+    assert "Privacy: Private model" in str(receipt["text"])
+    assert "Charged:" in str(receipt["text"])
+    assert len(model.calls) == 1
+    model.assert_exhausted()
+
+
+async def test_support_reply_becomes_a_stable_case_not_chat_context(
+    telegram_conversation: TelegramConversation,
+) -> None:
+    actor = TelegramUser(id=7_706_001, first_name="Dorothy", username="dorothy")
+    chat = TelegramChat(id=actor.id, type="private", first_name=actor.first_name)
+    user_model, _chat_model = await telegram_conversation.seed_paid_scope(
+        actor=actor,
+        chat=chat,
+    )
+    model = DeterministicChatModel.expecting_no_calls()
+    await telegram_conversation.start(model)
+
+    command = await telegram_conversation.send_text(
+        actor=actor,
+        chat=chat,
+        text="/support",
+        wait_persisted=False,
+    )
+    panel = await telegram_conversation.expect_message(
+        command,
+        text="Support\nChoose a topic, then send one short message.",
+    )
+    await telegram_conversation.press_button(
+        actor=actor,
+        message=panel,
+        text="Privacy or data",
+        expect_edit=False,
+    )
+    prompt = await telegram_conversation.server.wait_for_message(
+        chat_id=chat.id,
+        predicate=lambda message: (
+            message.get("text") == "What happened? One message is enough."
+        ),
+    )
+    note = await telegram_conversation.send_text(
+        actor=actor,
+        chat=chat,
+        text="Please remove the stale profile detail from my account.",
+        reply_to=prompt,
+        wait_persisted=False,
+    )
+    case_message = await telegram_conversation.server.wait_for_message(
+        chat_id=chat.id,
+        predicate=lambda message: str(message.get("text", "")).startswith(
+            "Support case open\n"
+        ),
+    )
+
+    assert case_message["message_id"] == prompt["message_id"]
+    async with telegram_conversation.database.read_session() as session:
+        case = await session.scalar(
+            select(SupportRequest).where(
+                SupportRequest.requester_user_id == user_model.id
+            )
+        )
+        remembered_note = await session.scalar(
+            select(MessageModel.id).where(
+                MessageModel.telegram_message_id == note.message_id
+            )
+        )
+    assert case is not None
+    assert case.description == "Please remove the stale profile detail from my account."
+    assert remembered_note is None
+    assert not model.calls
+    model.assert_exhausted()
+
+
+async def test_group_admin_enables_free_fallback_and_mentions_work_anywhere(
+    telegram_conversation: TelegramConversation,
+) -> None:
+    actor = TelegramUser(id=7_707_001, first_name="Evelyn", username="evelyn")
+    group = TelegramChat(
+        id=-100_770_700,
+        type="supergroup",
+        title="Release room",
+    )
+    _user_model, chat_model = await telegram_conversation.seed_paid_scope(
+        actor=actor,
+        chat=group,
+        member_status="administrator",
+        credits=1,
+    )
+    model = DeterministicChatModel.from_responses(
+        "Free fallback is enabled for this chat."
+    )
+    await telegram_conversation.start(model)
+
+    command = await telegram_conversation.send_text(
+        actor=actor,
+        chat=group,
+        text="/settings",
+        wait_persisted=False,
+    )
+    panel = await telegram_conversation.expect_reply(command)
+    review = await telegram_conversation.press_button(
+        actor=actor,
+        message=panel,
+        text="Review free-model privacy",
+    )
+    await telegram_conversation.press_button(
+        actor=actor,
+        message=review,
+        text="Allow free models in this chat",
+    )
+
+    mention = await telegram_conversation.send_text(
+        actor=actor,
+        chat=group,
+        text="Could you confirm the fallback, derp, for everyone here?",
+    )
+    reply = await telegram_conversation.expect_reply(mention)
+
+    assert reply["text"] == "Free fallback is enabled for this chat."
+    assert len(model.calls) == 1
+    assert model.calls[0].model_key == "free_text"
+    async with telegram_conversation.database.read_session() as session:
+        stored_chat = await session.get(ChatModel, chat_model.id)
+    assert stored_chat is not None
+    assert stored_chat.free_inference_enabled is True
+    model.assert_exhausted()
+
+
+async def test_unknown_command_recovers_without_history_or_inference(
+    telegram_conversation: TelegramConversation,
+) -> None:
+    actor = TelegramUser(id=7_708_001, first_name="Joan", username="joan")
+    chat = TelegramChat(id=actor.id, type="private", first_name=actor.first_name)
+    await telegram_conversation.seed_paid_scope(actor=actor, chat=chat)
+    model = DeterministicChatModel.expecting_no_calls()
+    await telegram_conversation.start(model)
+
+    command = await telegram_conversation.send_text(
+        actor=actor,
+        chat=chat,
+        text="/settngs",
+        wait_persisted=False,
+    )
+    reply = await telegram_conversation.expect_reply(
+        command,
+        text="I don't know that command. Try /help.",
+    )
+
+    assert reply["text"] == "I don't know that command. Try /help."
+    async with telegram_conversation.database.read_session() as session:
+        stored = await session.scalar(
+            select(MessageModel.id)
+            .join(ChatModel, ChatModel.id == MessageModel.chat_id)
+            .where(
+                ChatModel.telegram_id == chat.id,
+                MessageModel.telegram_message_id == command.message_id,
+            )
+        )
+    assert stored is None
+    assert not model.calls
+    model.assert_exhausted()

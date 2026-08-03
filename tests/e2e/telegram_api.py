@@ -654,7 +654,10 @@ class TelegramBotAPIServer:
         if thread_id := fields.get("message_thread_id"):
             message["message_thread_id"] = int(thread_id)
             message["is_topic_message"] = True
-        if markup := fields.get("reply_markup"):
+        if (
+            isinstance(markup := fields.get("reply_markup"), Mapping)
+            and "inline_keyboard" in markup
+        ):
             message["reply_markup"] = markup
         reply_parameters = fields.get("reply_parameters")
         reply_message_id = (
