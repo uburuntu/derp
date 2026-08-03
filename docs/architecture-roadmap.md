@@ -235,10 +235,11 @@ product design or mutate issued products.
 - OpenRouter is the primary text and image inference plane. Reviewed immutable
   catalog entries bind routing/privacy policy, capabilities, limits, provider
   prices, and source evidence to execution and billing.
-- Paid and group OpenRouter requests require data-collection denial and ZDR
-  routing. Consented zero-cost models are explicitly non-ZDR, unlimited, and
-  available only in private and inline contexts; request, token, timeout, and
-  output bounds still apply and every call remains accounted for.
+- Paid OpenRouter requests require data-collection denial and ZDR routing.
+  Consented zero-cost models are explicitly non-ZDR and unlimited: users opt in
+  for private/inline use, while a current group admin decides per chat and Derp
+  posts a visible disclosure. Request, token, timeout, and output bounds still
+  apply and every call remains accounted for.
 - Google remains the direct TTS provider. Compatibility inference adapters stay
   available for local testing, but the production release rejects unreviewed
   OpenRouter route downgrades. Standalone transcription, deep thinking, and

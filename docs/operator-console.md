@@ -39,7 +39,7 @@ available.
 | Overview | Environment, process uptime, database readiness/latency, running workers, and an aggregate attention count |
 | Usage | User/chat totals and rows changed in 24 hours, retained-message totals, chat-type counts, and artifact count/bytes |
 | Commerce | Canonical available/reserved/consumed/debt credits, fulfilled/clawed-back Stars, entitlement counts, durable renewal/payment/refund queue health, purchase/receipt states, and content-free support totals |
-| Support | The oldest eight open category-only cases with reference, category, creation time, and requester Telegram ID |
+| Support | Paginated active cases with reference, category, creation time, requester Telegram ID, one bounded user note, and an optional exact payment receipt |
 | Operations | Paid-operation, delivery, and deferred-approval state counts |
 | Inference | Aggregate attempts and states, tokens by category, reconciled and pending OpenRouter cost, reviewed role availability, and cached live key/catalog status |
 | Runtime | Derp/Python/library versions, purchase and AI-content-export flags, database-pool gauges, worker state, and the verified model catalog |
@@ -50,27 +50,31 @@ operations, failed or uncertain deliveries, open support cases, wallet debt
 presence, unavailable database diagnostics, and stopped workers. It is a triage
 signal, not an alert history.
 
-Each new `/support` or `/paysupport` case also sends configured operators a
-best-effort protected notice containing only its category and opaque case
-reference. The durable Support page is authoritative and remains usable if that
-notice fails. It exposes the requester Telegram ID only to allowlisted operators
-and never stores or displays user-authored case text.
+Each new `/support` case also sends configured operators a best-effort protected
+notice containing only its category and opaque reference. The durable,
+eight-cases-per-page Support view is authoritative and remains usable if that
+notice fails. Opening a case reveals its bounded user note and, for payment or
+refund cases, the exact requester-owned receipt facts needed for a decision.
 
-Resolution requires a second actor-bound, case-bound confirmation. Derp reloads
-the exact open case, sends its predefined resolution notice to the requester,
-and only then marks the case resolved. If notification fails, the case remains
-open. A crash may therefore produce a duplicate resolution notice after retry,
-but cannot silently close the requester's only in-bot support channel.
+**Reply and close** and **Decline** collect one bounded operator message through
+a private ForceReply. Derp stores the exact status and reason, then edits the
+requester's original stable case message in place. **Refund** is available only
+when the case is bound to a receipt; it submits that exact receipt through the
+restart-safe refund service and edits the same message to the completed or
+provider-pending state. Superseded confirmation callbacks are inert.
+
+The user note and operator decision text are purged 30 days after closure. The
+reference, category, status, requester/payment relations, timestamps, and
+accounting records remain for idempotency and dispute handling.
 
 Diagnostic snapshots never expose message or prompt content, tool arguments,
-callback or payment payloads, row-level chat/payment identifiers, invoice
-or charge IDs, artifact paths or content bytes, signed URLs, tokens, secrets, raw
-environment variables, or arbitrary database queries. The support queue's
-requester Telegram ID is the sole intentional row-level user identifier. The
-console otherwise has no row drill-down, shell, direct balance mutation,
-arbitrary refund, or generic SQL control. Its only refund action selects the
-operator's latest fulfilled fixed
-1-Star test on the server and accepts no payment or user identifiers.
+callback or payment payloads, row-level chat/payment identifiers, invoice or
+charge IDs, artifact paths or content bytes, signed URLs, tokens, secrets, raw
+environment variables, or arbitrary database queries. The scoped Support detail
+view is the deliberate exception: allowlisted operators see the requester
+Telegram ID, one bounded note, and bounded facts for the receipt already selected
+by that requester. The console otherwise has no shell, direct balance mutation,
+operator-entered payment target, arbitrary refund, or generic SQL control.
 
 ## Maintenance
 
@@ -81,13 +85,14 @@ operator-supplied arguments.
 Runtime reports `Payments` as on only when both the durable payment-update
 replay worker and operator-test refund reconciler are running. A manual payment
 pass returns separate aggregate counters for update settlement, user replies,
-and test-refund recovery.
+and test-refund recovery. The same live refund worker also completes reconciled
+support refunds and purges closed-case note/reason text after 30 days.
 
 | Action | Live pass |
 | --- | --- |
 | History | Purge history past its retention boundary |
 | Subscriptions | Expire completed subscription cycles and replay durable renewal commands |
-| Payments | Replay durable Telegram payment updates and reconcile operator test refunds |
+| Payments | Replay durable Telegram payment updates, reconcile refunds, complete support refund states, and purge expired support text |
 | Operations | Reconcile quotes, reservations, executions, and durable delivery recovery |
 | Deliveries | Reconcile interrupted/retryable deliveries and expire artifacts |
 | Approvals | Expire deferred tool approvals |
@@ -116,7 +121,8 @@ compatibility; retired legacy debug commands redirect to `/operator`.
 selects only that operator's latest fulfilled debug product and calls Telegram's
 Stars refund API with its stored charge. Telegram's normal refund update then
 drives the existing idempotent receipt clawback; the control does not mutate a
-wallet directly and cannot target public products.
+wallet directly and cannot target public products. This diagnostic is separate
+from the Support view's requester-selected public-receipt refund action.
 
 `Run read-only check` on the inference page reads only OpenRouter key spending
 limits and the live model catalog. It sends no prompt and performs no inference.
@@ -137,7 +143,6 @@ Successful operator actions emit:
 - `operator.debug_purchase_intent_presented`
 - `operator.test_refund_requested`
 - `operator.inference_read_check_completed`
-- `operator.support_case_resolved`
 - `telegram.command_menu_configured`
 
 Degraded or failed boundaries use privacy-safe `report_exception()` events:
@@ -157,9 +162,10 @@ Degraded or failed boundaries use privacy-safe `report_exception()` events:
 - `operator.command_menu_sync_failed` and
   `operator.command_menu_result_render_failed`
 - `operator.support_case_read_failed`,
-  `operator.support_resolution_notification_failed`,
-  `operator.support_resolution_failed`, and
-  `operator.support_queue_refresh_failed`
+  `operator.support_confirmation_render_failed`,
+  `operator.support_status_edit_failed`,
+  `operator.support_queue_refresh_failed`, and
+  `operator.support_queue_render_failed`
 
 Telemetry may include bounded action/count/timing fields and correlation IDs.
 Never add console content, callbacks, confirmation tokens, payment payloads, or
@@ -201,10 +207,12 @@ inside the Telegram handler.
 Keep `operator.router` and `operator.rejection_router` before debug and chat
 routes. Add route-scoped dependencies only when a control requires them; the
 current operator callback plan loads database models solely for the 1-Star test.
-The refund service is a narrow runtime dependency that performs its own bounded
-server-side lookup. The checkout's subsequent purchase callback uses the
-separately scoped debug dependency plan. Keep callbacks actor-bound and
-private-chat-bound.
+The refund service is a narrow runtime dependency that performs bounded
+server-side lookups. Support callbacks carry only a case reference; the server
+derives and validates the requester-owned receipt. The 1-Star diagnostic still
+selects the latest eligible test purchase server-side. The checkout's subsequent
+purchase callback uses the separately scoped debug dependency plan. Keep
+callbacks actor-bound and private-chat-bound.
 
 When deleting or renaming a control, first remove it from the desired command
 menu and resync every scope. Retain a fail-closed rejection for stale commands

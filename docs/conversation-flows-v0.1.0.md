@@ -1,90 +1,37 @@
-# Derp v0.1.0 conversation-flow review
+# Derp v0.1.0 Conversation Validation
 
-This is a manual acceptance script for the Telegram behavior currently
-implemented on `chore/modernize-runtime-foundations`. It describes observed
-behavior, including awkward transitions; it is not an idealized design.
+Effective 3 August 2026. This is the normative manual acceptance script for
+the release candidate. It describes the intended user experience, not a ledger
+of old defects. A flow that differs from this document fails validation.
 
-Run every applicable flow once with an English Telegram account and once with a
-Russian account. Text marked `[generated answer]` is model output and should be
-reviewed for tone and relevance rather than exact wording.
+Run each applicable flow with English and Russian Telegram accounts. Russian
+must be shorter where possible, use `Дерп` for self-reference, and read as
+native copy rather than a literal translation.
 
-Telegram surfaces are named explicitly:
+Telegram surfaces:
 
-- **Message**: a new bot message in the chat.
-- **Edited message**: an existing panel or progress message changes in place.
-- **Toast**: the short callback acknowledgement at the bottom of Telegram.
-- **Alert**: a blocking Telegram callback dialog.
-- **Protected DM**: a private message sent with content protection enabled.
+- **Message**: a new bot message.
+- **Edited message**: one existing panel or status message changes in place.
+- **Toast**: a short callback acknowledgement.
+- **Alert**: a blocking callback dialog.
+- **Protected DM**: a private content-protected message.
 
-Dynamic examples use `{date}`, `{count}`, and `ABC123DEF0` as placeholders.
-Current default quotes are 102 credits for a 1K image, 33 credits for TTS's
-30-second ceiling, and 116/254/802 credits for small/medium/large paid chat
-context bands.
+Use `{count}`, `{date}`, and `ABC123DEF0` as dynamic examples. Generated answers
+are judged for relevance and the voice in `docs/message-style.md`, not exact
+wording.
 
-## 0. Candidate purchase gate
+## 1. Private free-model onboarding
 
-**Precondition:** `PUBLIC_PURCHASES_ENABLED=false`, as required during candidate
-deployment and burn-in.
+**Precondition:** private chat, no spendable credits, free models not allowed.
 
-1. User types `/buy` or `/buy_chat`.
-2. Derp sends a message with no buttons:
+1. The user asks `Summarize the difference between TCP and UDP.`
+2. Derp replies:
 
-   > Credit purchases are temporarily unavailable. You won't be charged. Your
-   > existing credits and free features still work.
+   > No credits left. Enable free models, or add credits with /buy.
 
-   Russian:
-
-   > Покупка кредитов временно недоступна. Telegram не спишет Stars. Имеющиеся
-   > кредиты и бесплатные функции по-прежнему доступны.
-
-3. No purchase intent or invoice is created. Existing credits, reconciliation,
-   and free inference remain available.
-
-**Pass:** no stale purchase button can reach Telegram checkout while intake is
-closed.
-
-Sources: `derp/handlers/credit_cmds.py`,
-`derp/credits/purchase_suspension.py`.
-
-## 1. New private user enables free models
-
-**Precondition:** private chat, no credits, no free-model consent.
-
-1. User types `/start`.
-2. Derp replies, with no buttons:
-
-   > Hi, Alex. Ask me anything here, or open /help for settings and tools.
-
-   Russian:
-
-   > Привет, Алекс. Здесь можно спросить о чём угодно. Для настроек и
-   > возможностей отправьте /help.
-
-3. User asks `Summarize the difference between TCP and UDP.`
-4. Derp replies, with no buttons:
-
-   > No free model is available here. Enable free models in a private chat, or
-   > add credits for private models.
-
-   Russian:
-
-   > Бесплатная модель здесь недоступна. Включите бесплатные модели в личном
-   > чате или пополните баланс для приватных.
-
-5. User types `/settings`, then taps **Model privacy**.
-6. The settings message is edited to:
-
-   > **Model privacy**  
-   > Mode: Private
-   >
-   > Derp uses zero-data-retention models. Free models are optional and may let
-   > providers store prompts and replies. They can run only in private chat and
-   > inline mode. Groups stay private.
-
-   Buttons: **Review free-model terms**, **Back**.
-
-7. User taps **Review free-model terms**.
-8. The message is edited to:
+   Button: **Enable free models**. The path is actionable in the same message;
+   the user is not sent through `/help` first.
+3. The user taps **Enable free models**. The message becomes:
 
    > **Allow free models?**
    >
@@ -93,434 +40,301 @@ Sources: `derp/handlers/credit_cmds.py`,
    > OpenRouter and selected free-model providers under the linked Terms and
    > Privacy Policy.
    >
-   > This applies only in private chat and inline mode. Groups stay private.
+   > This applies to your private chat and inline mode. Group admins make a
+   > separate choice for each chat.
 
    Buttons: **Terms**, **Privacy**, **I agree, allow free models**, **Back**.
+4. **Terms** and **Privacy** each open a protected, bounded in-bot reader. Legal
+   content is inside an expandable quote with **Previous**, **Next**, and
+   **Back** as applicable. Closing it leaves the consent panel intact.
+5. The user taps **I agree, allow free models**. Toast:
 
-9. User reviews both links and taps **I agree, allow free models**.
-10. The message returns to **Model privacy**, now showing `Mode: Free models
-    allowed`. The action is **Use private models only**. Toast:
-
-    > Free models are now allowed in private chat and inline mode.
-
-    Russian toast:
-
-    > Бесплатные модели разрешены в личном чате и инлайн-режиме.
-
-11. User repeats the TCP/UDP question. Telegram shows typing, then Derp replies
-    with `[generated answer]`; there are no buttons or charge message.
-
-**Durable effects:** versioned non-ZDR consent, inference usage, and the normal
-private history record. Free requests have no daily admission limit but remain
-bounded per request. The consent never authorizes group inference.
-
-Sources: `derp/handlers/basic.py`, `derp/handlers/context_settings.py`,
-`derp/handlers/chat.py`.
-
-## 2. Paid private chat and failure
-
-**Precondition:** private chat with enough personal credits.
-
-1. User sends `Read this PDF and give me the three main risks.` with a PDF.
-2. Telegram shows typing.
-3. Derp replies to the request with `[generated answer]`.
-4. No price, confirmation, buttons, remaining balance, or charge receipt is
-   shown in the conversation.
-5. User may type `/credits` to inspect the charge under **Recent activity**.
-
-Failure branch:
-
-1. If provider or delivery fails definitively, Derp replies:
-
-   > I couldn't answer that. You weren't charged. Try again.
+   > Free models are now allowed in private chat and inline mode.
 
    Russian:
 
-   > Не получилось ответить. Кредиты не списаны. Попробуйте ещё раз.
+   > Бесплатные модели разрешены в личном чате и инлайн-режиме.
+6. Repeating the question produces a generated answer with no quota or charge
+   message.
 
-**Durable effects:** the quote and reservation precede inference. Credits are
-captured only after Telegram acknowledges delivery; a definite failure releases
-the reservation.
+**Durable effects:** the accepted Terms and Privacy versions, preference
+revision, timestamp, zero-cost operation, inference usage, and delivery receipt.
+There is no daily free-request quota; every request remains individually
+bounded.
 
-Sources: `derp/handlers/chat.py`, `derp/features/chat_accounting.py`,
-`derp/operations/quotes.py`.
+## 2. Group invocation and free-model choice
 
-## 3. Group mention, history notice, and funding
+**Precondition:** group or forum with no spendable chat credits and free models
+off.
 
-**Precondition:** group or forum; run once with chat credits and once without.
+1. A member sends any of these ordinary messages:
 
-1. User types `Derp, summarize the decisions above.` The same handler is
-   triggered by `/derp`, `Дерп`, a reply to a Derp message, or any whole-word
-   `derp`/`дерп` in ordinary text.
-2. On the first handled interaction, Derp may first send the full settings
-   panel:
+   - `Could you check this, Derp?`
+   - `Как думаешь, Дерп?`
+   - `The answer, derp, is probably in the second paragraph.`
 
-   > **Derp**  
+   A case-insensitive whole-word `Derp` or `дерп` anywhere in text or a caption
+   invokes the bot. `derpish` and `антидерп` do not.
+2. On the first interaction after Derp joins, it posts the chat's current
+   context state before the answer or funding recovery:
+
+   > **Derp**
    > Message me privately, or mention or reply to me in a group.
    >
-   > Context: On · 30 days  
+   > Context: On
+   > Free models: Off
    > Recent messages help me answer follow-ups. Anyone can check this setting
-   > and delete their own saved messages.
+   > and delete their own saved messages from my memory.
 
-3. Derp then replies with `[generated answer]`.
-4. Funding order is chat credits first. Personal credits are considered only
-   after the user has enabled persistent consent for this chat.
-5. Typing `/credits` in the group produces only this public acknowledgement:
+   This notice appears once per chat. `Context: Off` is truthful when Telegram
+   does not expose ambient messages. It never gives Derp permission to speak
+   without an invocation.
+3. A non-admin sees:
 
-   > I sent your credit details in a private chat.
+   > This chat is out of credits. An admin can enable free models in /settings.
+   > Anyone can add chat credits with /buy.
 
-   The balance and activity arrive as a protected DM. In that DM the user can
-   tap **Use my credits without asking** or **Ask before using my credits**.
+   Button: **Open chat settings**.
+4. An admin sees:
 
-No-funding branch:
+   > This chat is out of credits. Enable free models, or add chat credits with
+   > /buy.
 
-1. Derp replies, with no recovery buttons:
+   Button: **Enable free models**.
+5. The admin taps it and sees:
 
-   > No free model is available here. Enable free models in a private chat, or
-   > add credits for private models.
+   > **Allow free models in this chat?**
+   >
+   > When chat credits are unavailable, Derp may send prompts and replies to
+   > OpenRouter and selected free-model providers. Those providers may store
+   > them under their own policies.
+   >
+   > Everyone in this chat will see a notice. Admins should also tell members
+   > who join later.
 
-2. Private free-model consent does not change this result: groups always use
-   reviewed private routes.
+   Buttons: **Terms**, **Privacy**, **Allow free models in this chat**, **Back**.
+6. Only a live chat admin can confirm. After confirmation, the settings panel
+   shows `Free models: On`, and Derp posts a new public message:
 
-**Durable effects:** explicit invocations are retained. Ambient group messages
-are retained only when context is enabled. The first-use notice records that it
-was shown.
+   > **Free models are on**
+   > When chat credits are unavailable, Derp may send prompts and replies to
+   > OpenRouter and selected free-model providers. Those providers may store
+   > them under their policies. Admins can change this in /settings.
 
-Sources: `derp/filters/derp_mention.py`, `derp/handlers/chat.py`,
-`derp/handlers/context_settings.py`, `derp/handlers/credit_cmds.py`.
+7. The original request can now be retried. If no free model supports its media,
+   Derp says to try without the attachment or use `/buy`; it does not claim that
+   free inference can handle the request.
 
-## 4. Image and voice approval
+**Durable effects:** chat-scoped policy revision, accepting admin, exact legal
+versions and timestamp. Disabling the setting affects future requests. Personal
+free-model consent neither enables nor disables a group.
 
-### Image
+## 3. Paid answer and `/info` receipt
 
-1. User types `/imagine a red bicycle in the rain`.
-2. Derp replies:
+**Precondition:** enough personal or chat credits for private inference.
 
-   > Create this image for 102 credits?
+1. On the user's first paid chat request, Derp sends this one-time notice:
 
-   Buttons: **Create image**, **Cancel**.
+   > Private models use credits. Reply to any answer with /info for the details.
 
-   Russian:
+2. Derp sends the generated answer without receipt spam.
+3. The user replies to that answer with `/info`.
+4. Derp replies with content-free facts:
 
-   > Создать это изображение за 102 кредита?
+   > **About this answer**
+   > **Model:** {model}
+   > **Privacy:** Private model
+   > **Tokens:** {input} in · {output} out
+   > **Context:** ~{tokens} tokens · {count} messages
+   > **Charged:** {count} credits
 
-   Buttons: **Создать изображение**, **Отмена**.
+   A free answer says `Free model`; unavailable provider token usage says `Not
+   reported`; an operation not yet final says `Still settling`.
+   In a group, anyone may inspect model, privacy, token, and context facts, but
+   another member sees `Charged: Only the requester can see this` instead of the
+   requester's charge.
+5. `/info` without replying to a Derp answer returns:
 
-3. User taps **Create image**. Toast: `Started`. The approval message is edited
-   to `Creating your image...`.
-4. On success, a Telegram photo replies to the original request and the approval
-   message is deleted.
+   > Reply to one of my answers with /info.
 
-Cancellation:
+**Durable effects:** a content-free mapping from the delivered Telegram answer
+to operation, model display name, privacy mode, context counts, usage, and final
+credit state. Prompts and answers are not copied into the receipt.
 
-> Canceled. You weren't charged.
+## 4. Contextual purchase and in-bot Terms
 
-Uncertain delivery:
+**Precondition:** purchases enabled and current Terms not accepted.
 
-> The image may already be in the chat. You won't be charged again. Check first,
-> then tap Send again if it's missing.
+1. In private, `/buy` opens personal top-ups and the personal plan.
+2. In a group, `/buy` first asks:
 
-Button: **Send again**. A resend cannot charge again.
+   > **Buy credits**
+   > Who are they for?
 
-Group funding branch:
+   Buttons: **For me**, **For this chat**. The menu is bound to the actor who
+   opened it. `/buy_chat` redirects to this contextual `/buy` flow.
+3. The user chooses a target and a product. If Terms are not current, Derp sends
+   a protected panel:
 
-> This chat can't cover the image. You weren't charged. Use your credits once
-> or add chat credits.
-
-Buttons: **Use my credits once**, **Always use my credits**, optionally
-**Buy chat credits**, and **Try again**.
-
-### Voice
-
-1. User types `/tts Read this aloud`.
-2. Derp replies:
-
-   > Create this voice message for 33 credits?
-
-   Buttons: **Create voice**, **Cancel**.
-
-   Russian:
-
-   > Создать это голосовое сообщение за 33 кредита?
-
-3. After approval, the same message cycles through `Preparing your voice
-   message...`, `Creating your voice message...`, and `Sending your voice
-   message...`.
-4. On success, a Telegram voice message replies to the command and the control
-   message is deleted.
-
-**Durable effects:** immutable quote, actor/chat-bound approval, reservation,
-inference usage, private artifact, delivery attempt, and capture or reversal.
-Definite terminal delivery failure returns credits.
-
-Sources: `derp/handlers/image.py`, `derp/handlers/tool_approvals.py`,
-`derp/handlers/tts.py`, `derp/handlers/paid_media_controls.py`.
-
-## 5. Terms, top-up, and payment recovery
-
-**Precondition:** private chat, purchases enabled, current Terms not accepted.
-
-1. User types `/buy`.
-2. Derp sends:
-
-   > **Buy personal credits**  
-   > Choose an option. Telegram asks you to confirm before charging.
-
-   Buttons:
-
-   - **600 credits · 50 Stars** | **3200 credits · 250 Stars**
-   - **9900 credits · 750 Stars**
-   - **Derp Personal · 500 Stars / 30 days**
-
-3. User taps **600 credits · 50 Stars**.
-4. Derp sends a protected message:
-
-   > **Terms and privacy**  
+   > **Terms and privacy**
    > Accept these terms before buying credits or a plan.
 
-   Buttons: **Terms of use**, **Privacy policy**, **Accept terms**. Alert:
+   Buttons: **Terms of use**, **Privacy policy**, **Accept terms**.
+4. Each legal button opens complete localized pages inside Telegram without
+   replacing the purchase panel.
+5. The user taps **Accept terms**. The panel says:
 
-   > Review and accept the current terms before buying.
+   > Terms accepted. Continuing your purchase…
 
-5. User taps **Accept terms**. The protected message edits to:
+   Derp resumes the exact product and personal/chat target. The user does not
+   reopen `/buy` or make the selection again.
+6. Derp presents the exact invoice summary and **Pay {price}**. Telegram's native
+   checkout performs the final confirmation.
+7. A successful payment reports the granted credits or active plan. A delayed
+   or review-required payment says not to pay again and links to `/support`.
 
-   > **Terms and privacy**  
-   > Accepted for purchases
+**Durable effects:** current legal acceptance, exact actor/target/product
+continuation, opaque purchase intent, pre-checkout decision, pre-ack payment
+update, receipt, wallet lot or plan cycle, and independent result-message retry.
 
-   The accept button disappears. Toast: `Terms accepted`.
-6. Current behavior does not resume checkout. User must type `/buy` and select
-   **600 credits · 50 Stars** again.
-7. Derp sends:
+## 5. One-message support and exact refunds
 
-   > **600 credits for you**  
-   > Telegram will ask you to confirm before charging 50 Stars.
+**Precondition:** user and operator each use their private chat with Derp.
 
-   Button: **Pay 50 Stars**. Toast: `Invoice ready`.
-8. The button opens Telegram's native Stars checkout. After confirmation, Derp
-   sends:
+1. `/support` shows:
 
-   > **Payment complete**  
-   > Purchased credits available: 600
+   > **Support**
+   > Choose a topic, then send one short message.
 
-Delayed settlement:
+   Buttons: **Payment or credits**, **Refund**, **Privacy or data**, **Access or
+   account**, **Terms of use**, **Privacy policy**.
+2. In a group, `/support` does not collect details publicly. It says:
 
-> Payment recorded. Credits are still processing. Don't pay again; check
-> /credits shortly.
+   > Support notes and payment details stay private.
 
-Review state:
+   Button: **Open support**, leading directly to private support.
+3. For **Payment or credits** or **Refund**, Derp first shows the user's recent
+   receipts as `{stars} Stars · {credits} · {date}`. The user selects the exact
+   payment. Payment support also offers **Something else**; refund does not
+   invent a refundable payment when none exists.
+4. Derp sends a protected ForceReply prompt:
 
-> Telegram charged this payment, but no credits were added because the details
-> need review. Don't pay again. Open /paysupport.
+   > What happened? One message is enough.
 
-Group variant:
+   The user replies once, up to 800 characters.
+5. That prompt edits in place to the stable receipt:
 
-- `/buy_chat` shows the same three top-ups, without the subscription.
-- The selector and invoice link are public in the group.
-- On success, exact balance details arrive by protected DM; the group sees only
-  `I sent the payment details in a private chat.`
-
-**Durable effects:** accepted legal version, opaque payer/target-bound intent,
-pre-checkout state, pre-ack update inbox, receipt, wallet lot, and independent
-reply recovery.
-
-Sources: `derp/billing/telegram.py`, `derp/handlers/legal_support.py`,
-`derp/handlers/payments.py`, `derp/billing/payment_updates.py`.
-
-## 6. Personal plan, cancellation, and refund
-
-**Precondition:** purchases enabled and Terms accepted.
-
-1. In `/buy`, user taps **Derp Personal · 500 Stars / 30 days** and completes
-   Telegram checkout.
-2. Derp sends:
-
-   > **Plan active**  
-   > 6750 monthly credits are available.
-
-3. User types `/plan`.
-4. Derp sends:
-
-   > **Derp Personal**  
-   > Active · renews automatically
+   > **Support case open**
+   > Refund: `ABC123DEF0`
    >
-   > Your current credits are available until {date}.
+   > I have your note. An operator will review it here.
 
-   Button: **Cancel automatic renewal**.
-5. User taps the button. The panel edits to:
+   Button: **Refresh**. It re-renders the same message from durable state if a
+   Telegram edit was missed.
 
-   > **Derp Personal**  
-   > Active · renewal off
-   >
-   > Your credits remain available until {date}.
+6. In `/operator` -> **Support**, the operator can page through cases, open one,
+   read the note and exact payment facts, then choose **Refund**, **Reply and
+   close**, or **Decline**.
+7. **Reply and close** and **Decline** require one short operator reason. The
+   user's stable case message edits to the final status and exact reason.
+8. **Refund** submits the selected receipt through the restart-safe refund path.
+   The same stable message becomes either `Refund complete` or `Refund requested.
+   Telegram is processing it.` A provider rejection leaves the case open.
 
-   Button: **Turn renewal back on**. Toast:
+**Durable effects:** one bounded user note, category, source, exact optional
+payment receipt, stable status-message coordinate, operator decision and reason,
+and exact refund request. Support notes are excluded from conversation history
+and inference. The user note and operator decision text are purged 30 days after
+closure; case status, reference, relationships, timestamps, and accounting facts
+remain.
 
-   > Automatic renewal is off. Your paid period stays active.
+## 6. Privacy deletion and context cleanup
 
-Provider-pending branch:
+1. `/privacy` shows the retention period and says:
 
-> Telegram hasn't confirmed this yet. Derp will retry.
+   > You can delete your own saved messages from my memory at any time.
 
-Russian:
+   Primary button: **Delete from my memory**.
+2. Tapping it requires a second step:
 
-> Telegram пока не подтвердил. Дерп повторит.
-
-Refund behavior:
-
-- `/support` → **Refund** only opens a support case; it does not initiate a
-  refund.
-- Balance changes begin when Telegram sends a refund update.
-- Derp then sends `Refund complete` with unused credits removed. If some value
-  was already spent, it also says `Payment debt added: {count} credits. Paid
-  features are paused.`
-- A refund of the current plan cycle expires the local entitlement and stages
-  cancellation of future renewal.
-
-**Durable effects:** non-rolling allowance cycle, leased absolute renewal
-command, exact-source clawback, debt provenance, and bounded replay.
-
-Sources: `derp/handlers/subscriptions.py`, `derp/billing/subscriptions.py`,
-`derp/billing/settlement.py`, `derp/handlers/payments.py`.
-
-## 7. Privacy deletion and group context
-
-1. User types `/privacy`.
-2. Derp sends:
-
-   > **Privacy and history**  
-   > Saved messages are deleted after 30 days.
-   >
-   > You can delete your own saved messages at any time. Chat admins can clear
-   > this chat or topic. Approved shared facts are kept separately.
-
-   Buttons for everyone: **Delete my messages**, **Privacy policy**, **Terms of
-   use**, **Contact support**, **Back**. Admins also see **Clear this chat/topic**
-   and **Forget shared facts**.
-
-3. User taps **Delete my messages**.
-4. The message is edited to:
-
-   > **Delete your saved messages from this chat?**  
+   > **Delete your saved messages from my memory?**
    > This deletes Derp's saved messages and media references. Telegram messages
    > and copies made by other people remain.
 
    Buttons: **Delete**, **Cancel**.
-5. User taps **Delete**. The privacy panel returns. Toast:
+3. Success returns to the privacy panel and reports:
 
-   > Deleted 12 saved messages
+   > Deleted {count} saved messages from my memory
 
-   Russian:
+4. `/forget`, sent as a reply to one of the user's own messages, removes that
+   one saved copy from Derp's memory.
+5. A group admin choosing **Turn context off** first sees:
 
-   > Удалено 12 сохранённых сообщений
+   > **Clean up my memory?**
+   > This turns context off and deletes ambient messages saved from this whole
+   > chat, including every topic, from my memory. Mentions and replies may still
+   > be saved. Telegram messages stay.
 
-Group-admin branch:
+   Buttons: **Clean up memory**, **Cancel**.
+6. Confirmation deletes ambient history across the whole group and reports the
+   count removed. Explicit mentions and replies remain eligible for retention.
 
-1. Admin opens `/settings` and taps **Turn context off**.
-2. There is no confirmation. The panel becomes `Context: Off · 30 days`. Toast:
+**Durable effects:** personal deletion anonymizes owned content and attachment
+references until its retention deadline; ambient cleanup hard-deletes ambient
+history and expires affected deferred work. Telegram content and separately
+retained billing, consent, support, and security records remain outside this
+conversation-history action.
 
-   > Context is off · 12 saved messages deleted
+## 7. Paid image approval
 
-3. Ambient history is deleted immediately. Explicit mentions and replies to
-   Derp can still be retained and handled.
+1. A generated image or edit is never started from an opaque yes/no question.
+   Before provider work, Derp replies with:
 
-**Durable effects:** personal deletion tombstones owned content and media
-references in the current chat. Admin context disable hard-deletes ambient chat
-history. `/forget` can target one replied-to message owned by the requester.
+   > **Generate image?**
+   > {count} credits · {model}
+   > Private · zero-data retention
+   > **Prompt:** {bounded preview}
+   > Style: Automatic
 
-Sources: `derp/handlers/context_settings.py`, `derp/db/history.py`,
-`derp/history/policy.py`.
+   Buttons: **Generate**, **Change style**, **Buy credits** when purchases are
+   available, and **Cancel**. An edit uses **Edit image?** and **Apply edit**.
+2. **Change style** edits the control to **Automatic**, **Photo**,
+   **Illustration**, and **Cinematic** choices. Choosing one creates a fresh
+   quote and returns to the approval with its updated price; it does not charge
+   or run the old request.
+3. Only the original requester in the original chat and topic can approve it.
+   Forwarded, stale, expired, or already-used controls fail closed.
+4. **Generate** runs once. A successful delivery captures the quoted credits;
+   cancellation or a pre-delivery failure releases them and states that no
+   charge was made.
 
-## 8. Support case and operator resolution
+**Durable effects:** authenticated approval capability, immutable quote,
+request binding, reservation/capture/release events, generated artifact, and
+delivery state. Prompts are not copied into pricing metadata.
 
-**Precondition:** user and operator are both in their private chats with Derp.
+## 8. Unknown command recovery
 
-1. User types `/support`.
-2. Derp sends a protected message:
+1. The user sends a typo such as `/settngs`.
+2. Derp replies without inference:
 
-   > **Support**  
-   > Choose the closest category. Derp stores the category and case reference,
-   > not a free-form support message.
+   > I don't know that command. Try /help.
 
-   Buttons: **Payment or credits**, **Refund**, **Privacy or data**, **Access or
-   account**, **Terms of use**, **Privacy policy**.
-3. User taps **Refund**. The panel gains:
+3. The typo and recovery message are excluded from conversation history.
+   Commands intentionally handled by chat, including `/derp`, keep their normal
+   conversational route.
 
-   > Open cases  
-   > Refund: `ABC123DEF0`
+## 9. Release pass criteria
 
-   Toast: `Case opened`. Repeating the action gives `Case already open`.
-4. Operators receive:
-
-   > **New support case**  
-   > Type: Refund  
-   > Reference: `ABC123DEF0`
-
-5. In `/operator` → **Support**, an operator sees the category, reference,
-   creation time, and requester Telegram ID. They tap **Resolve ABC123DEF0**.
-6. Confirmation panel:
-
-   > **Resolve support case?**  
-   > `ABC123DEF0` · Refund  
-   > {date} · user `123456789`
-
-   Buttons: **Resolve case**, **Cancel**.
-7. After confirmation, the user receives:
-
-   > **Support case resolved**  
-   > Refund: `ABC123DEF0`
-
-8. The operator queue shows `Case resolved. The requester was notified.` If the
-   user notification fails, the case remains open.
-
-**Durable effects:** category-only case and opaque reference, deduplication per
-category, operator-bound single-use confirmation, notify-before-close state.
-No user-authored explanation or operator resolution text is stored or sent.
-
-Sources: `derp/handlers/legal_support.py`, `derp/support/service.py`,
-`derp/handlers/operator.py`.
-
-## Findings before activation
-
-### Blockers
-
-1. **The legal links currently fail.** Terms, Privacy, and model-consent buttons
-   point to the GitHub tag `v0.1.0`, which does not exist locally or on the
-   remote. The release sequence also asks testers to verify these links before
-   creating that tag.
-2. **Support cannot carry enough information to resolve a real issue.** The
-   user can send only a category. The operator cannot request details, attach a
-   payment to the case, or send resolution text; the final user message repeats
-   only the category and reference.
-3. **Group purchase Terms acceptance is unusable in place.** A group purchase
-   posts the Terms panel in the group, but the accept button is private-only.
-   The user must discover private `/terms`, then return and restart
-   `/buy_chat`.
-
-### High-risk UX decisions
-
-1. Accepting Terms from the private purchase gate is a dead end. Checkout does
-   not resume, and the accepted panel has no **Continue purchase** or **Back to
-   shop** action.
-2. `/buy` is accepted in groups and publicly reveals a personal pack selection
-   and payer-bound invoice link. Only settlement details are private.
-3. Free onboarding invites the user to ask anything, then rejects the first
-   question without an **Enable free models** action.
-4. Group funding failure suggests enabling free models even though free models
-   can never serve a group. It provides no direct credit or consent button.
-5. Any whole-word `derp`/`дерп` in group conversation can invoke a paid request,
-   even without a Telegram mention or reply.
-6. Paid chat has no pre-run price or post-run receipt. A natural-language image
-   request may charge both the chat turn and the image while the approval shows
-   only the image quote.
-7. Image approval does not show the prompt/style being approved. Private image
-   insufficient-funds recovery says to add credits but offers only **Try again**,
-   not **Buy credits**.
-8. **Turn context off** has no confirmation and does not explain that explicit
-   mentions/replies may still be stored. In forums, clearing “this chat” outside
-   a topic does not clear every topic.
-9. **Contact support** has no **Back** action, the queue shows only the oldest
-   eight cases, and support-resolution delivery can duplicate after a crash
-   between notification and close.
-
-Do not mark the Telegram smoke matrix complete until the three blockers are
-resolved and each high-risk item is explicitly accepted or changed.
+- Every blocked state offers a valid action for that actor and chat.
+- English is concise and conversational. Russian is tighter, uses `Дерп`, and
+  contains no untranslated or fuzzy production entry.
+- Money messages state charge, refund, debt, or no-charge status before recovery.
+- Privacy choices are version-bound, admin/user scoped, and visibly disclosed.
+- Destructive actions require confirmation and name what remains in Telegram.
+- Legal pages are complete in Telegram; purchase acceptance resumes exactly once.
+- Support binds the intended payment, persists one note, and returns the exact
+  operator reason or refund state in the original case message.
+- `/info` reveals useful accounting facts without revealing content or internal
+  provider identifiers.
+- Stale or forwarded buttons fail closed without changing money, privacy, or
+  support state.

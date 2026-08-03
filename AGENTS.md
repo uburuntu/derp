@@ -296,8 +296,8 @@ output ceiling so execution cannot exceed its authorized budget.
 - **Models:** SQLAlchemy models cover users/chats, normalized history and policy,
   wallet lots/events/consent/debt provenance, quotes and paid operations,
   deferred approvals, artifacts and delivery attempts, legal acceptances,
-  support cases, purchase intents/receipts/payment updates/subscriptions, and
-  shared facts.
+  support cases/intakes, purchase intents/receipts/payment updates/subscriptions,
+  run receipts/notices, and shared facts.
 - **Migrations:** Alembic is authoritative. Generate migrations with
   `make db-revision MSG="..."`; parity tests must fail on model/schema drift.
 
@@ -316,7 +316,9 @@ The bot uses a credit-based monetization system with tiered access to features.
   capabilities, source links, routing policy, and current pricing used by both
   execution and billing.
 - **Free Tier:** Consented zero-cost OpenRouter models have no daily admission
-  quota; each request remains bounded by input, token, timeout, and output limits.
+  quota. Users opt in for private and inline use; a current group admin decides
+  per chat and Derp posts a visible retention disclosure. Each request remains
+  bounded by input, token, timeout, and output limits.
 - **Paid Tier:** Users/chats with credits unlock the standard chat role, longer
   context, and premium tools.
 
@@ -365,8 +367,9 @@ derp/billing/
   is an absolute desired-state command with a durable lease and bounded retry.
   Refunds claw back the exact purchase/cycle source; debt and later repayment
   allocations retain source provenance rather than making inventory negative.
-- Donation billing is suspended. `/support` and `/paysupport` create bounded,
-  content-free in-bot cases and notify the private operator surface.
+- Donation billing is suspended. `/support` collects one bounded note, binds
+  payment/refund cases to an exact receipt, and notifies the private operator
+  surface. Decisions and refund outcomes update one stable requester message.
 
 ### Tool Credit Integration
 

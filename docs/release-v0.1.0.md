@@ -6,9 +6,10 @@ external checks below even when the repository suite is green.
 
 ## Shipped release contract
 
-- OpenRouter is the primary text and image inference plane. Paid and group
-  routes require data-collection denial and ZDR. Zero-cost models require
-  versioned consent, are non-ZDR, run only in private/inline contexts, and have
+- OpenRouter is the primary text and image inference plane. Paid routes require
+  data-collection denial and ZDR. Zero-cost models are non-ZDR and require
+  versioned user consent in private/inline use or a versioned chat-admin choice
+  in a group. Enabling them in a group posts a public privacy notice. They have
   no daily quota; per-request and accounting limits remain enforced.
 - Google provides TTS. Deep thinking, video
   generation, and standalone transcription are hidden and fail closed.
@@ -88,18 +89,25 @@ planning assumptions before issuing another product version.
 ## Telegram and telemetry smoke matrix
 
 Execute the exact current-state walkthroughs in
-`docs/conversation-flows-v0.1.0.md` in both English and Russian. Resolve every
-listed blocker and explicitly accept or change each high-risk UX decision.
+`docs/conversation-flows-v0.1.0.md` in both English and Russian. Any behavior
+that differs from the normative walkthrough is a release blocker.
 
-- [ ] English and Russian private, group, and forum chat; mention/reply behavior;
-  ambient disclosure; scoped command menus; protected financial replies.
-- [ ] Free-model review, consent, repeated unlimited calls, revocation, stale
-  callback rejection, inline use, and group refusal of non-ZDR inference.
+- [ ] English and Russian private, group, and forum chat; mention/reply and
+  whole-word `Derp`/`дерп` invocation anywhere in text or captions; ambient
+  disclosure; scoped command menus; protected financial replies.
+- [ ] Private/inline free-model review, consent, repeated unlimited calls, and
+  revocation; group-admin review, enable/disable, public privacy notice,
+  non-admin rejection, and stale callback rejection.
 - [ ] Paid private/group ZDR chat with text and media; image generation/edit
-  approval and delivery; Google TTS and artifact cleanup.
-- [ ] Privacy/history inspection, personal deletion, ambient disable/purge, and
-  policy/terms links; current Terms acceptance before invoice creation;
-  `/support` and `/paysupport` intake plus operator notification.
+  approval and delivery; Google TTS and artifact cleanup; reply-based `/info`
+  receipts with truthful model, privacy, token, context, and charge state.
+- [ ] Privacy/history inspection, confirmed personal deletion, confirmed
+  whole-chat ambient cleanup, and complete in-bot policy/Terms pages; contextual
+  `/buy`, current Terms acceptance, and exact purchase continuation.
+- [ ] Private `/support` intake with one bounded note; exact payment selection;
+  paginated operator review; reply-and-close, decline reason, exact refund, and
+  stable requester-message edit; 30-day closed-case text purge with case and
+  accounting metadata retained.
 - [ ] Operator overview, inference usage, live read-only key/catalog check, all
   maintenance passes, and command-menu synchronization.
 - [ ] One real 1-Star operator checkout, exactly-once fulfillment and replay,
