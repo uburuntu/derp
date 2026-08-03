@@ -6,8 +6,11 @@ import asyncio
 import json
 from collections import defaultdict, deque
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from html.parser import HTMLParser
+from types import MappingProxyType
 from typing import Any
 
 from aiogram.methods import (
@@ -93,14 +96,22 @@ _METHOD_TYPES: dict[str, type[TelegramMethod[Any]]] = {
 
 _TRUE_METHODS = frozenset(
     {
-        AnswerCallbackQuery.__api_method__,
         DeleteMyCommands.__api_method__,
-        SendChatAction.__api_method__,
         SetChatMenuButton.__api_method__,
-        SetMessageReaction.__api_method__,
         SetMyCommands.__api_method__,
     }
 )
+
+
+class _TelegramHTMLTextParser(HTMLParser):
+    """Project Telegram's supported HTML input to returned message text."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
 
 
 class TelegramBotAPIServer:
@@ -127,11 +138,13 @@ class TelegramBotAPIServer:
         self._protocol_errors: list[str] = []
         self._failures: dict[str, deque[BotAPIFailure]] = defaultdict(deque)
         self._updates: list[JsonObject] = []
+        self._update_deliveries: dict[int, int] = defaultdict(int)
         self._confirmed_offset = 0
         self._chats: dict[int, JsonObject] = {}
         self._users: dict[int, JsonObject] = {int(self._bot_user["id"]): self._bot_user}
         self._member_statuses: dict[tuple[int, int], str] = {}
         self._messages: dict[tuple[int, int], JsonObject] = {}
+        self._outstanding_callbacks: set[str] = set()
         self._next_message_ids: dict[int, int] = defaultdict(int)
         self._files: dict[str, tuple[str, bytes]] = {}
 
@@ -155,7 +168,14 @@ class TelegramBotAPIServer:
     @property
     def messages(self) -> tuple[JsonObject, ...]:
         """Return all live messages ordered by chat and message ID."""
-        return tuple(dict(message) for _key, message in sorted(self._messages.items()))
+        return tuple(
+            deepcopy(message) for _key, message in sorted(self._messages.items())
+        )
+
+    @property
+    def confirmed_offset(self) -> int:
+        """Return the greatest getUpdates offset observed from the bot."""
+        return self._confirmed_offset
 
     async def __aenter__(self) -> TelegramBotAPIServer:
         await self.start()
@@ -216,7 +236,7 @@ class TelegramBotAPIServer:
 
     def register_message(self, message: Mapping[str, Any]) -> None:
         """Register a raw Telegram message for replies and callbacks."""
-        parsed = dict(message)
+        parsed = deepcopy(dict(message))
         chat_id = int(parsed["chat"]["id"])
         message_id = int(parsed["message_id"])
         self._messages[(chat_id, message_id)] = parsed
@@ -229,6 +249,44 @@ class TelegramBotAPIServer:
         self._required_chat(chat_id)
         self._next_message_ids[chat_id] += 1
         return self._next_message_ids[chat_id]
+
+    def message(self, *, chat_id: int, message_id: int) -> JsonObject:
+        """Return the current server-side message, rejecting stale targets."""
+        try:
+            return deepcopy(self._messages[(chat_id, message_id)])
+        except KeyError as exc:
+            raise AssertionError(
+                f"Telegram message {(chat_id, message_id)} is not live"
+            ) from exc
+
+    def register_callback_query(
+        self,
+        *,
+        callback_id: str,
+        chat_id: int,
+        message_id: int,
+        callback_data: str,
+    ) -> JsonObject:
+        """Register one callback only when its button is currently visible."""
+        if callback_id in self._outstanding_callbacks:
+            raise ValueError(f"duplicate callback query {callback_id!r}")
+        message = self.message(chat_id=chat_id, message_id=message_id)
+        markup = message.get("reply_markup")
+        rows = markup.get("inline_keyboard", []) if isinstance(markup, Mapping) else []
+        visible_data = {
+            button.get("callback_data")
+            for row in rows
+            for button in row
+            if button.get("callback_data")
+        }
+        if callback_data not in visible_data:
+            raise AssertionError("callback data is not present on the live message")
+        self._outstanding_callbacks.add(callback_id)
+        return message
+
+    def update_delivery_count(self, update_id: int) -> int:
+        """Return how many getUpdates responses contained this update."""
+        return self._update_deliveries[update_id]
 
     async def push_update(self, update: Mapping[str, Any]) -> int:
         """Validate and enqueue one Bot API-shaped update."""
@@ -327,10 +385,68 @@ class TelegramBotAPIServer:
                     f"{update_id}; offset={self._confirmed_offset}, pending={pending}"
                 ) from exc
 
+    async def wait_for_message(
+        self,
+        *,
+        chat_id: int,
+        predicate: Callable[[Mapping[str, Any]], bool],
+        timeout: float = 5,
+    ) -> JsonObject:
+        """Wait for a live message matching a user-visible predicate."""
+
+        def match() -> JsonObject | None:
+            return next(
+                (
+                    message
+                    for (candidate_chat_id, _message_id), message in reversed(
+                        self._messages.items()
+                    )
+                    if candidate_chat_id == chat_id and predicate(message)
+                ),
+                None,
+            )
+
+        async with self._condition:
+            try:
+                await asyncio.wait_for(
+                    self._condition.wait_for(lambda: match() is not None), timeout
+                )
+            except TimeoutError as exc:
+                raise AssertionError(
+                    f"timed out waiting for a message in chat {chat_id}"
+                ) from exc
+            message = match()
+            assert message is not None
+            return deepcopy(message)
+
+    async def wait_callback_answered(
+        self,
+        callback_id: str,
+        *,
+        timeout: float = 5,
+    ) -> None:
+        """Wait until Telegram has accepted an answer for one callback query."""
+        async with self._condition:
+            try:
+                await asyncio.wait_for(
+                    self._condition.wait_for(
+                        lambda: callback_id not in self._outstanding_callbacks
+                    ),
+                    timeout,
+                )
+            except TimeoutError as exc:
+                raise AssertionError(
+                    f"callback query {callback_id!r} was not answered"
+                ) from exc
+
     def assert_clean(self) -> None:
         """Fail teardown when the application crossed an unsupported API surface."""
         if self._protocol_errors:
             raise AssertionError("; ".join(self._protocol_errors))
+        if self._outstanding_callbacks:
+            raise AssertionError(
+                f"unanswered callback queries: {sorted(self._outstanding_callbacks)!r}"
+            )
 
     async def _handle_api(self, request: web.Request) -> web.Response:
         token = request.match_info["token"]
@@ -353,7 +469,7 @@ class TelegramBotAPIServer:
             call = BotAPICall(
                 sequence=len(self._calls) + 1,
                 method=method,
-                fields=fields,
+                fields=MappingProxyType(deepcopy(fields)),
                 attachments=attachments,
             )
             self._calls.append(call)
@@ -457,11 +573,21 @@ class TelegramBotAPIServer:
         if method == GetUpdates.__api_method__:
             return await self._get_updates(fields)
         if method == SendMessage.__api_method__:
-            return self._send_message(fields)
+            return await self._send_message(fields)
         if method == EditMessageText.__api_method__:
-            return self._edit_message_text(fields)
+            return await self._edit_message_text(fields)
         if method == DeleteMessage.__api_method__:
             return self._delete_message(fields)
+        if method == SendChatAction.__api_method__:
+            self._required_chat(int(fields["chat_id"]))
+            return True
+        if method == SetMessageReaction.__api_method__:
+            key = (int(fields["chat_id"]), int(fields["message_id"]))
+            if key not in self._messages:
+                raise ValueError(f"message {key} does not exist")
+            return True
+        if method == AnswerCallbackQuery.__api_method__:
+            return await self._answer_callback_query(fields)
         if method == GetChatMember.__api_method__:
             return self._get_chat_member(fields)
         if method == GetChatAdministrators.__api_method__:
@@ -509,9 +635,12 @@ class TelegramBotAPIServer:
                     )
                 except TimeoutError:
                     pass
-            return [dict(update) for update in available()]
+            batch = available()
+            for update in batch:
+                self._update_deliveries[int(update["update_id"])] += 1
+            return [dict(update) for update in batch]
 
-    def _send_message(self, fields: JsonObject) -> JsonObject:
+    async def _send_message(self, fields: JsonObject) -> JsonObject:
         chat_id = int(fields["chat_id"])
         chat = self._required_chat(chat_id)
         message_id = self.take_message_id(chat_id)
@@ -520,7 +649,7 @@ class TelegramBotAPIServer:
             "date": int(datetime.now(UTC).timestamp()),
             "chat": chat,
             "from": self._bot_user,
-            "text": str(fields["text"]),
+            "text": self._rendered_text(fields),
         }
         if thread_id := fields.get("message_thread_id"):
             message["message_thread_id"] = int(thread_id)
@@ -541,26 +670,42 @@ class TelegramBotAPIServer:
             replied = self._messages.get((chat_id, reply_message_id))
             if replied is not None:
                 message["reply_to_message"] = self._shallow_message(replied)
-        self.register_message(message)
+        async with self._condition:
+            self.register_message(message)
+            self._condition.notify_all()
         return message
 
-    def _edit_message_text(self, fields: JsonObject) -> JsonObject | bool:
+    async def _edit_message_text(self, fields: JsonObject) -> JsonObject:
         if fields.get("inline_message_id"):
-            return True
+            raise ValueError("inline message is not registered")
         key = (int(fields["chat_id"]), int(fields["message_id"]))
-        if key not in self._messages:
-            raise ValueError(f"message {key} does not exist")
-        message = self._messages[key]
-        message["text"] = str(fields["text"])
-        if markup := fields.get("reply_markup"):
-            message["reply_markup"] = markup
-        else:
-            message.pop("reply_markup", None)
-        return dict(message)
+        async with self._condition:
+            if key not in self._messages:
+                raise ValueError(f"message {key} does not exist")
+            message = self._messages[key]
+            message["text"] = self._rendered_text(fields)
+            if markup := fields.get("reply_markup"):
+                message["reply_markup"] = markup
+            else:
+                message.pop("reply_markup", None)
+            self._condition.notify_all()
+            return dict(message)
 
     def _delete_message(self, fields: JsonObject) -> bool:
         key = (int(fields["chat_id"]), int(fields["message_id"]))
-        return self._messages.pop(key, None) is not None
+        if key not in self._messages:
+            raise ValueError(f"message {key} does not exist")
+        del self._messages[key]
+        return True
+
+    async def _answer_callback_query(self, fields: JsonObject) -> bool:
+        callback_id = str(fields["callback_query_id"])
+        async with self._condition:
+            if callback_id not in self._outstanding_callbacks:
+                raise ValueError(f"callback query {callback_id!r} is not outstanding")
+            self._outstanding_callbacks.remove(callback_id)
+            self._condition.notify_all()
+            return True
 
     def _get_chat_member(self, fields: JsonObject) -> JsonObject:
         chat_id = int(fields["chat_id"])
@@ -629,6 +774,16 @@ class TelegramBotAPIServer:
             for key, value in message.items()
             if key not in {"reply_to_message", "pinned_message"}
         }
+
+    @staticmethod
+    def _rendered_text(fields: Mapping[str, Any]) -> str:
+        text = str(fields["text"])
+        if str(fields.get("parse_mode", "")).upper() != "HTML":
+            return text
+        parser = _TelegramHTMLTextParser()
+        parser.feed(text)
+        parser.close()
+        return "".join(parser.parts)
 
     @staticmethod
     def _error(

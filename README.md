@@ -60,7 +60,10 @@ generation, and standalone transcription remain hidden and fail closed.
 `make test` runs the fast suite without PostgreSQL. `make test-db` runs the
 ordinary database integration suite. `make test-e2e` runs the longer Telegram
 journeys against the mocked Bot API and a migrated PostgreSQL database. The E2E
-suite is isolated in CI and excluded from ordinary coverage runs.
+suite is isolated in CI and excluded from ordinary coverage runs. It uses real
+aiogram polling and HTTP/JSON, production middleware, independent database
+sessions, and deterministic local inference; unsupported Bot API methods fail
+the test instead of receiving permissive mock responses.
 
 ## Commands
 

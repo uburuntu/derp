@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from sqlalchemy import func, select
 
-from derp.models import Chat as ChatModel
-from derp.models import InferenceUsage
-from derp.models import Message as MessageModel
+from derp.models import (
+    Chat as ChatModel,
+)
+from derp.models import (
+    InferenceUsage,
+    PaymentUpdateInbox,
+)
+from derp.models import (
+    Message as MessageModel,
+)
 from tests.e2e.harness import (
+    BlockingPaymentInbox,
     DeterministicChatModel,
     TelegramChat,
     TelegramConversation,
@@ -73,7 +83,10 @@ async def test_private_conversation_survives_transport_retry_and_restart(
             chat=chat,
             text=prompt,
         )
-        reply = await telegram_conversation.expect_reply(incoming)
+        reply = await telegram_conversation.expect_reply(
+            incoming,
+            wait_persisted=True,
+        )
         visible_replies.append(str(reply["text"]))
 
     assert visible_replies == list(expected_replies)
@@ -102,7 +115,10 @@ async def test_private_conversation_survives_transport_retry_and_restart(
         chat=chat,
         text="After the restart, recap Atlas.",
     )
-    resumed_reply = await telegram_conversation.expect_reply(resumed)
+    resumed_reply = await telegram_conversation.expect_reply(
+        resumed,
+        wait_persisted=True,
+    )
 
     assert resumed_reply["text"].startswith("Atlas launches Friday")
     assert len(after_restart.calls) == 1
@@ -160,17 +176,19 @@ async def test_forum_topics_keep_ambient_and_assistant_history_isolated(
     )
     await telegram_conversation.start(model)
 
-    await telegram_conversation.send_text(
-        actor=actor,
-        chat=forum,
-        thread_id=11,
-        text="The dashboard deploy is Tuesday.",
-    )
-    await telegram_conversation.send_text(
-        actor=actor,
-        chat=forum,
-        thread_id=22,
-        text="The signing key rotation is Thursday.",
+    await asyncio.gather(
+        telegram_conversation.send_text(
+            actor=actor,
+            chat=forum,
+            thread_id=11,
+            text="The dashboard deploy is Tuesday.",
+        ),
+        telegram_conversation.send_text(
+            actor=actor,
+            chat=forum,
+            thread_id=22,
+            text="The signing key rotation is Thursday.",
+        ),
     )
     topic_11_question = await telegram_conversation.send_text(
         actor=actor,
@@ -178,14 +196,20 @@ async def test_forum_topics_keep_ambient_and_assistant_history_isolated(
         thread_id=11,
         text="Derp, what is this topic's schedule?",
     )
-    topic_11_reply = await telegram_conversation.expect_reply(topic_11_question)
+    topic_11_reply = await telegram_conversation.expect_reply(
+        topic_11_question,
+        wait_persisted=True,
+    )
     topic_22_question = await telegram_conversation.send_text(
         actor=actor,
         chat=forum,
         thread_id=22,
         text="Derp, what is this topic's schedule?",
     )
-    topic_22_reply = await telegram_conversation.expect_reply(topic_22_question)
+    topic_22_reply = await telegram_conversation.expect_reply(
+        topic_22_question,
+        wait_persisted=True,
+    )
 
     assert topic_11_reply["message_thread_id"] == 11
     assert topic_22_reply["message_thread_id"] == 22
@@ -236,7 +260,7 @@ async def test_settings_buttons_round_trip_through_rendered_callback_data(
     actor = TelegramUser(id=7_703_001, first_name="Lin", username="lin")
     chat = TelegramChat(id=actor.id, type="private", first_name=actor.first_name)
     await telegram_conversation.seed_paid_scope(actor=actor, chat=chat)
-    model = DeterministicChatModel.from_responses("unused")
+    model = DeterministicChatModel.expecting_no_calls()
     await telegram_conversation.start(model)
 
     command = await telegram_conversation.send_text(
@@ -245,16 +269,69 @@ async def test_settings_buttons_round_trip_through_rendered_callback_data(
         text="/settings",
     )
     panel = await telegram_conversation.expect_reply(command)
-    assert "<b>Derp</b>" in panel["text"]
+    assert str(panel["text"]).startswith("Derp\n")
+    settings_call = next(
+        call
+        for call in telegram_conversation.server.calls
+        if call.method == "sendMessage"
+        and "<b>Derp</b>" in str(call.fields.get("text", ""))
+    )
+    assert "<b>Derp</b>" in settings_call.fields["text"]
 
     privacy = await telegram_conversation.press_button(
         actor=actor,
         message=panel,
         text="Privacy & history",
     )
-    assert "<b>Privacy and history</b>" in privacy["text"]
+    assert str(privacy["text"]).startswith("Privacy and history\n")
+    privacy_edit = next(
+        call
+        for call in reversed(telegram_conversation.server.calls)
+        if call.method == "editMessageText"
+    )
+    assert "<b>Privacy and history</b>" in privacy_edit.fields["text"]
     assert any(
         call.method == "answerCallbackQuery"
         for call in telegram_conversation.server.calls
     )
     assert not model.calls
+    model.assert_exhausted()
+
+
+async def test_unpersisted_payment_is_redelivered_after_process_crash(
+    telegram_conversation: TelegramConversation,
+) -> None:
+    actor = TelegramUser(id=7_704_001, first_name="Katherine", username="kat")
+    chat = TelegramChat(id=actor.id, type="private", first_name=actor.first_name)
+    await telegram_conversation.seed_paid_scope(actor=actor, chat=chat)
+    blocked_inbox = BlockingPaymentInbox()
+    await telegram_conversation.start(
+        DeterministicChatModel.expecting_no_calls(),
+        payment_update_inbox=blocked_inbox,
+    )
+
+    payment = await telegram_conversation.push_successful_payment(
+        actor=actor,
+        chat=chat,
+    )
+    await asyncio.wait_for(blocked_inbox.started.wait(), timeout=5)
+
+    assert telegram_conversation.server.update_delivery_count(payment.update_id) == 1
+    assert telegram_conversation.server.confirmed_offset < payment.update_id + 1
+
+    await telegram_conversation.crash()
+    assert telegram_conversation.server.confirmed_offset < payment.update_id + 1
+
+    after_restart = DeterministicChatModel.expecting_no_calls()
+    await telegram_conversation.start(after_restart)
+    await telegram_conversation.server.wait_confirmed(payment.update_id)
+    reply = await telegram_conversation.expect_reply(payment)
+
+    assert "need review" in str(reply["text"]).lower()
+    assert telegram_conversation.server.update_delivery_count(payment.update_id) == 2
+    assert not after_restart.calls
+    async with telegram_conversation.database.read_session() as session:
+        inbox_rows = await session.scalar(
+            select(func.count()).select_from(PaymentUpdateInbox)
+        )
+    assert inbox_rows == 1

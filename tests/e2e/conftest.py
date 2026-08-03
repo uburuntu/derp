@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 
+import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
@@ -30,13 +32,19 @@ async def _truncate_application_tables(database: DatabaseManager) -> None:
 @pytest_asyncio.fixture
 async def e2e_database(migrated_database: str) -> AsyncIterator[DatabaseManager]:
     """Use production session boundaries against an otherwise empty schema."""
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        raise pytest.UsageError(
+            "Telegram E2E owns its test database and must run without pytest-xdist"
+        )
     database = DatabaseManager(migrated_database)
     await database.connect()
-    await _truncate_application_tables(database)
     try:
-        yield database
-    finally:
         await _truncate_application_tables(database)
+        try:
+            yield database
+        finally:
+            await _truncate_application_tables(database)
+    finally:
         await database.disconnect()
 
 

@@ -40,6 +40,7 @@ Always run commands instead of creating generated files manually. If Docker/data
 - Lint: `make lint` (Ruff)
 - Format: `make format` (Ruff format)
 - Tests: `make test` (quick, no DB) or `make test-all` (with PostgreSQL)
+- Telegram E2E: `make test-e2e` (strict local Bot API, polling, and PostgreSQL)
 - Database tests: `make test-db` (requires Docker)
 - Coverage: `make test-cov` (generates HTML report)
 - i18n: `make i18n` (extract → update → compile)
@@ -141,6 +142,7 @@ async def handler(...):
 - Frameworks: `pytest`, `pytest-asyncio`.
 - Name tests `tests/test_*.py`; use async tests for coroutine code.
 - Database tests use real PostgreSQL via Docker (`make test-db`).
+- Telegram E2E tests use the `telegram_e2e` marker and run without pytest-xdist.
 - Mark PostgreSQL tests with `pytest.mark.database`; `make test` excludes that
   marker and `make test-db` runs it.
 - Test schemas come only from `alembic upgrade head`; never call
