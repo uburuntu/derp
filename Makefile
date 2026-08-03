@@ -49,26 +49,31 @@ format f:
 
 ## Run tests (quick, no database)
 t test:
-	uv run pytest -q -m "not database"
+	uv run pytest -q -m "not database and not telegram_e2e"
 
-## Run tests verbosely
+## Run ordinary tests verbosely (excludes Telegram E2E)
 test-verbose:
-	uv run pytest -v
+	uv run pytest -v -m "not telegram_e2e"
 
-## Run ALL tests including database tests (requires PostgreSQL)
+## Run ordinary tests including database tests (requires PostgreSQL)
 test-all: db-test-up
 	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
-		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v -m "not telegram_e2e"
 
-## Run only database tests (requires PostgreSQL)
+## Run ordinary database tests (requires PostgreSQL)
 test-db: db-test-up
 	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
-		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v -m database
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v -m "database and not telegram_e2e"
 
-## Run tests with coverage
+## Run Telegram E2E journeys against the mocked Bot API (requires PostgreSQL)
+test-e2e: db-test-up
+	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v -m telegram_e2e tests/e2e
+
+## Run ordinary tests with coverage (excludes Telegram E2E)
 test-cov: db-test-up
 	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
-		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v --cov=derp --cov-report=html --cov-report=term-missing
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v -m "not telegram_e2e" --cov=derp --cov-report=html --cov-report=term-missing
 	@echo "Coverage report: htmlcov/index.html"
 
 ## =============================================================================
@@ -213,8 +218,9 @@ help:
 	@echo "  Testing:"
 	@echo "    test              Run tests (quick, no database)"
 	@echo "    test-verbose      Run tests verbosely"
-	@echo "    test-all          Run ALL tests including database"
-	@echo "    test-db           Run only database tests"
+	@echo "    test-all          Run ordinary tests including database"
+	@echo "    test-db           Run ordinary database tests"
+	@echo "    test-e2e          Run Telegram E2E journeys"
 	@echo "    test-cov          Run tests with coverage report"
 	@echo ""
 	@echo "  Database:"
@@ -243,7 +249,7 @@ help:
 	@echo "    dev-clean         Clean up dev environment"
 
 .PHONY: venv install run lint check format f \
-        test test-verbose test-all test-db test-cov \
+        test test-verbose test-all test-db test-e2e test-cov \
         db-up db-down db-test-up db-test-down db-migrate db-migrate-test \
         db-revision db-status db-downgrade db-reset db-shell \
         i18n i18n-extract i18n-update i18n-compile i18n-init \

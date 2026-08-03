@@ -75,7 +75,54 @@ jobs:
           uv run alembic check
 
       - name: Run tests with coverage
-        run: uv run pytest --no-logfire -v --cov=derp --cov-report=term-missing
+        run: uv run pytest --no-logfire -v -m "not telegram_e2e" --cov=derp --cov-report=term-missing
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          ENVIRONMENT: dev
+          TELEGRAM_BOT_TOKEN: "123456:TEST_TOKEN_FOR_TESTING"
+          GOOGLE_API_PAID_KEY: "test_key"
+          LOGFIRE_TOKEN: "test_token"
+          LOGFIRE_IGNORE_NO_CONFIG: "1"
+
+  telegram-e2e:
+    name: Telegram E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18.4-alpine3.24@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: derp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          version: "0.11.30"
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Migrate test database
+        run: uv run alembic upgrade head
+
+      - name: Run Telegram E2E journeys
+        run: uv run pytest --no-logfire -v -m telegram_e2e tests/e2e
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
           ENVIRONMENT: dev

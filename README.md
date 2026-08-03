@@ -55,6 +55,13 @@ non-ZDR and available only in private and inline contexts. Paid and group
 inference uses private ZDR routing. TTS stays on Google. Thinking, video
 generation, and standalone transcription remain hidden and fail closed.
 
+## Testing
+
+`make test` runs the fast suite without PostgreSQL. `make test-db` runs the
+ordinary database integration suite. `make test-e2e` runs the longer Telegram
+journeys against the mocked Bot API and a migrated PostgreSQL database. The E2E
+suite is isolated in CI and excluded from ordinary coverage runs.
+
 ## Commands
 
 Run `make help` to see all available targets.
