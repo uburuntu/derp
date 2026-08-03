@@ -30,9 +30,9 @@ _PRIVATE_COMMANDS = (
     "help",
     "settings",
     "privacy",
+    "info",
     "terms",
     "support",
-    "paysupport",
     "imagine",
     "edit",
     "tts",
@@ -46,6 +46,7 @@ _GROUP_COMMANDS = (
     "help",
     "settings",
     "privacy",
+    "info",
     "imagine",
     "edit",
     "tts",
@@ -104,10 +105,7 @@ def test_support_is_private_and_donations_are_suspended() -> None:
     private = _command_names(CommandAudience.PRIVATE)
     group = _command_names(CommandAudience.GROUP)
 
-    assert ("support", "paysupport") == (
-        private[private.index("support")],
-        private[private.index("paysupport")],
-    )
+    assert "support" in private
     assert "support" not in group
     assert "paysupport" not in group
     assert all("donate" not in _command_names(audience) for audience in CommandAudience)
@@ -136,8 +134,8 @@ def test_purchase_commands_follow_public_intake_and_chat_scope() -> None:
 
     assert private[private.index("credits") + 1] == "buy"
     assert "buy_chat" not in private
-    assert group[group.index("credits") + 1] == "buy_chat"
-    assert "buy" not in group
+    assert group[group.index("credits") + 1] == "buy"
+    assert "buy_chat" not in group
     assert admin == group
     assert operator[0] == "operator"
     assert operator[operator.index("credits") + 1] == "buy"

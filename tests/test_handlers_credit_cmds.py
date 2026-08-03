@@ -4,12 +4,17 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
+from aiogram.types import CallbackQuery
 
 from derp.billing import CommercePolicy, ProductKind
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
-from derp.billing.telegram import PurchaseCallback, PurchaseTargetCode
+from derp.billing.telegram import (
+    PurchaseCallback,
+    PurchaseTargetCallback,
+    PurchaseTargetCode,
+)
 from derp.handlers.credit_cmds import (
-    show_buy_chat_options,
+    choose_purchase_target,
     show_buy_options,
     show_credits,
 )
@@ -153,7 +158,11 @@ async def test_show_buy_options_is_fail_closed_by_default(
     mock_sender,
     mock_user_model,
 ):
-    message = make_message(text="/buy")
+    message = make_message(
+        text="/buy",
+        chat_type="private",
+        chat_id=12345,
+    )
     sender = mock_sender(message=message)
 
     await show_buy_options(message, sender, mock_user_model())
@@ -168,7 +177,7 @@ async def test_show_buy_options_presents_top_ups_and_personal_plan(
     mock_sender,
     mock_user_model,
 ):
-    message = make_message(text="/buy")
+    message = make_message(text="/buy", chat_type="private", chat_id=12345)
     sender = mock_sender(message=message)
     user = mock_user_model(user_id=UUID(int=1))
 
@@ -190,6 +199,7 @@ async def test_show_buy_options_presents_top_ups_and_personal_plan(
         DEFAULT_PRODUCT_CATALOG.subscription_plan.id,
     }
     assert all(callback.target is PurchaseTargetCode.USER for callback in callbacks)
+    assert all(callback.actor_id == user.telegram_id for callback in callbacks)
     assert sum(callback.kind is ProductKind.SUBSCRIPTION for callback in callbacks) == 1
 
 
@@ -206,94 +216,112 @@ async def test_show_buy_options_no_user(make_message, mock_sender):
 
 
 @pytest.mark.asyncio
-async def test_show_buy_chat_options_is_fail_closed_by_default(
+async def test_group_buy_is_fail_closed_by_default(
     make_message,
     mock_sender,
     mock_user_model,
-    mock_chat_model,
 ):
-    message = make_message(text="/buy_chat")
+    message = make_message(text="/buy", chat_type="supergroup")
     sender = mock_sender(message=message)
 
-    await show_buy_chat_options(
-        message,
-        sender,
-        mock_user_model(),
-        mock_chat_model(chat_type="supergroup"),
-    )
+    await show_buy_options(message, sender, mock_user_model())
 
     assert "temporarily unavailable" in sender.reply.await_args.args[0]
     assert sender.reply.await_args.kwargs.get("reply_markup") is None
 
 
 @pytest.mark.asyncio
-async def test_show_buy_chat_options_in_group_has_shared_top_ups_only(
+async def test_group_buy_asks_for_actor_bound_target(
+    make_message,
+    mock_sender,
+    mock_user_model,
+):
+    message = make_message(text="/buy", chat_type="supergroup", user_id=12345)
+    sender = mock_sender(message=message)
+    user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+
+    await show_buy_options(message, sender, user, OPEN_COMMERCE)
+
+    sender.reply.assert_awaited_once()
+    call_args = sender.reply.call_args
+    callbacks = tuple(
+        PurchaseTargetCallback.unpack(button.callback_data)
+        for row in call_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    )
+
+    assert "Who are they for?" in _get_text_from_call_args(call_args)
+    assert {callback.target for callback in callbacks} == {
+        PurchaseTargetCode.USER,
+        PurchaseTargetCode.CHAT,
+    }
+    assert all(callback.actor_id == user.telegram_id for callback in callbacks)
+
+
+@pytest.mark.asyncio
+async def test_group_target_choice_opens_shared_top_ups_only(
     make_message,
     mock_sender,
     mock_user_model,
     mock_chat_model,
 ):
-    message = make_message(text="/buy_chat")
-    sender = mock_sender(message=message)
-    user = mock_user_model(user_id=UUID(int=1))
+    message = make_message(text="/buy", chat_type="supergroup", user_id=12345)
+    query = MagicMock(spec=CallbackQuery)
+    query.message = message
+    query.from_user = message.from_user
+    query.answer = AsyncMock()
+    user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
     chat = mock_chat_model(chat_id=UUID(int=2), chat_type="supergroup")
 
-    await show_buy_chat_options(message, sender, user, chat, OPEN_COMMERCE)
+    await choose_purchase_target(
+        query,
+        PurchaseTargetCallback(
+            target=PurchaseTargetCode.CHAT,
+            actor_id=12345,
+        ),
+        user,
+        chat,
+        OPEN_COMMERCE,
+    )
 
-    sender.reply.assert_awaited_once()
-    call_args = sender.reply.call_args
-    response = _get_text_from_call_args(call_args)
+    message.edit_text.assert_awaited_once()
+    call_args = message.edit_text.await_args
     callbacks = [
         PurchaseCallback.unpack(button.callback_data)
         for row in call_args.kwargs["reply_markup"].inline_keyboard
         for button in row
     ]
-
-    assert "Buy chat credits" in response
-    assert {callback.product_id for callback in callbacks} == set(
-        DEFAULT_PRODUCT_CATALOG.current_top_ups
-    )
+    assert "Buy chat credits" in _get_text_from_call_args(call_args)
     assert all(callback.kind is ProductKind.TOP_UP for callback in callbacks)
     assert all(callback.target is PurchaseTargetCode.CHAT for callback in callbacks)
+    assert all(callback.actor_id == user.telegram_id for callback in callbacks)
+    query.answer.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
-async def test_show_buy_chat_options_private_falls_back_to_personal_panel(
+async def test_group_target_choice_rejects_another_actor(
     make_message,
-    mock_sender,
     mock_user_model,
     mock_chat_model,
 ):
-    message = make_message(text="/buy_chat", chat_type="private")
-    sender = mock_sender(message=message)
-    user = mock_user_model(user_id=UUID(int=1))
-    chat = mock_chat_model(chat_id=UUID(int=2), chat_type="private")
+    message = make_message(text="/buy", chat_type="supergroup", user_id=999)
+    query = MagicMock(spec=CallbackQuery)
+    query.message = message
+    query.from_user = message.from_user
+    query.answer = AsyncMock()
 
-    await show_buy_chat_options(message, sender, user, chat, OPEN_COMMERCE)
-
-    sender.reply.assert_awaited_once()
-    call_args = sender.reply.call_args
-    callbacks = [
-        PurchaseCallback.unpack(button.callback_data)
-        for row in call_args.kwargs["reply_markup"].inline_keyboard
-        for button in row
-    ]
-    assert "Buy personal credits" in _get_text_from_call_args(call_args)
-    assert any(callback.kind is ProductKind.SUBSCRIPTION for callback in callbacks)
-    assert all(callback.target is PurchaseTargetCode.USER for callback in callbacks)
-
-
-@pytest.mark.asyncio
-async def test_show_buy_chat_options_no_user(make_message, mock_sender):
-    message = make_message(text="/buy_chat")
-    sender = mock_sender(message=message)
-
-    await show_buy_chat_options(
-        message,
-        sender,
-        commerce_policy=OPEN_COMMERCE,
+    await choose_purchase_target(
+        query,
+        PurchaseTargetCallback(
+            target=PurchaseTargetCode.USER,
+            actor_id=12345,
+        ),
+        mock_user_model(telegram_id=999),
+        mock_chat_model(chat_type="supergroup"),
+        OPEN_COMMERCE,
     )
 
-    message.reply.assert_awaited_once()
-    sender.reply.assert_not_awaited()
-    assert "couldn't find this chat" in message.reply.await_args.args[0]
+    message.edit_text.assert_not_awaited()
+    query.answer.assert_awaited_once_with(
+        "This purchase menu belongs to someone else.", show_alert=True
+    )

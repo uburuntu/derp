@@ -17,12 +17,14 @@ from derp.billing import (
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
 from derp.billing.telegram import (
     PurchaseCallback,
+    PurchaseTargetCallback,
     PurchaseTargetCode,
     TelegramSubscriptionRenewalProvider,
     _credit_count,
     _day_count,
     _star_count,
     build_purchase_panel,
+    build_purchase_target_panel,
     create_stars_invoice_link,
 )
 
@@ -88,6 +90,22 @@ def test_chat_panel_excludes_personal_subscription() -> None:
     )
     assert all(callback.kind is ProductKind.TOP_UP for callback in callbacks)
     assert all(callback.target is PurchaseTargetCode.CHAT for callback in callbacks)
+
+
+def test_contextual_group_target_panel_is_actor_bound() -> None:
+    text, markup = build_purchase_target_panel(actor_telegram_id=42)
+    callbacks = tuple(
+        PurchaseTargetCallback.unpack(button.callback_data)
+        for row in markup.inline_keyboard
+        for button in row
+    )
+
+    assert "Who are they for?" in text
+    assert {callback.target for callback in callbacks} == {
+        PurchaseTargetCode.USER,
+        PurchaseTargetCode.CHAT,
+    }
+    assert all(callback.actor_id == 42 for callback in callbacks)
 
 
 @pytest.mark.parametrize(

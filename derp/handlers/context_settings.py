@@ -26,7 +26,9 @@ from aiogram.utils.i18n import gettext as _
 from pydantic import Field
 
 from derp.command_menu import creation_command_specs
+from derp.common.legal_documents import LegalDocumentKind
 from derp.common.localization import format_local_date, format_local_month_day
+from derp.config import settings
 from derp.db import (
     DatabaseManager,
     SharedFactDecisionConflictError,
@@ -35,10 +37,13 @@ from derp.db import (
     approve_shared_fact,
     claim_member_notice,
     clear_history_scope,
+    enable_chat_non_zdr_free_inference,
     forget_approved_shared_facts,
+    get_chat_free_model_policy,
     get_inference_privacy_preference,
     reject_shared_fact,
     remove_disqualified_message,
+    revoke_chat_non_zdr_free_inference,
     revoke_non_zdr_free_inference,
     set_admin_policy,
     set_ambient_history,
@@ -46,20 +51,26 @@ from derp.db import (
     set_history_retention,
     tombstone_user_messages,
 )
-from derp.db.inference_privacy import InferencePrivacyRevisionConflictError
-from derp.handlers.legal_support import SUPPORT_MENU_CALLBACK
+from derp.db.inference_privacy import (
+    ChatFreeModelRevisionConflictError,
+    InferencePrivacyRevisionConflictError,
+)
+from derp.handlers.legal_support import (
+    SUPPORT_MENU_CALLBACK,
+    LegalDocumentCallback,
+)
 from derp.history.policy import CONTEXT_NOTICE_VERSION, ChatPolicyFlag
 from derp.inference import (
-    FREE_INFERENCE_PRIVACY_URL,
     FREE_INFERENCE_PRIVACY_VERSION,
-    FREE_INFERENCE_TOS_URL,
     FREE_INFERENCE_TOS_VERSION,
+    ChatFreeModelPolicy,
     InferenceContext,
     InferencePrivacyPreference,
     NonZdrFreeInferenceReason,
     decide_non_zdr_free_inference,
+    project_chat_free_model_policy,
+    project_inference_privacy,
 )
-from derp.legal import PRIVACY_POLICY_URL, TERMS_OF_USE_URL
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
@@ -99,6 +110,8 @@ class ContextAction(StrEnum):
     PRIVACY = "privacy"
     INFERENCE_PRIVACY = "model_privacy"
     TOGGLE = "toggle"
+    TOGGLE_CONFIRM = "toggle_confirm"
+    CLEAN_AMBIENT = "clean_ambient"
     RETENTION = "retention"
     DELETE_MINE_CONFIRM = "delete_mine_confirm"
     DELETE_MINE = "delete_mine"
@@ -136,6 +149,23 @@ class InferencePrivacyCallback(CallbackData, prefix="ifp"):
     tos_version: str
     privacy_version: str
     preference_revision: Annotated[int, Field(ge=1, le=2_147_483_647)]
+
+
+class ChatFreeModelAction(StrEnum):
+    """Version-bound administrator actions for one chat's free fallback."""
+
+    REVIEW = "r"
+    ACCEPT = "a"
+    REVOKE = "x"
+
+
+class ChatFreeModelCallback(CallbackData, prefix="cfm"):
+    """Bind a chat-wide policy action to reviewed legal documents."""
+
+    action: ChatFreeModelAction
+    tos_version: str
+    privacy_version: str
+    policy_revision: Annotated[int, Field(ge=1, le=2_147_483_647)]
 
 
 _POLICY_FLAGS = {
@@ -205,7 +235,20 @@ def build_context_panel(
     """Build one context-aware help/settings surface without a command wall."""
     retention_days = chat.retention_days if chat else 30
     is_private = bool(chat and chat.type == "private")
+    is_group = bool(chat and chat.type in {"group", "supergroup"})
     enabled = bool(chat and chat.ambient_history_enabled and ambient_available)
+    free_policy = (
+        project_chat_free_model_policy(chat)
+        if chat is not None and is_group
+        else ChatFreeModelPolicy()
+    )
+    free_decision = decide_non_zdr_free_inference(
+        InferencePrivacyPreference(),
+        context=InferenceContext.SUPERGROUP,
+        current_tos_version=FREE_INFERENCE_TOS_VERSION,
+        current_privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+        chat_policy=free_policy,
+    )
     if is_private:
         state = _("On")
         context_line = _(
@@ -227,13 +270,24 @@ def build_context_panel(
         state = _("Mentions only")
         context_line = _("Context: Mentions only")
 
+    free_line = ""
+    if is_group:
+        free_state = (
+            _("On")
+            if free_decision.allowed
+            else _("Needs review")
+            if free_policy.enabled
+            else _("Off")
+        )
+        free_line = _("\nFree models: {state}").format(state=free_state)
+
     text = _(
         "<b>Derp</b>\n"
         "Message me privately, or mention or reply to me in a group.\n\n"
-        "{context_line}\n"
+        "{context_line}{free_line}\n"
         "Recent messages help me answer follow-ups. Anyone can check this setting "
-        "and delete their own saved messages."
-    ).format(context_line=context_line)
+        "and delete their own saved messages from my memory."
+    ).format(context_line=context_line, free_line=free_line)
     rows = [
         [
             InlineKeyboardButton(
@@ -254,6 +308,8 @@ def build_context_panel(
                     action=(
                         ContextAction.PRIVACY
                         if is_private
+                        else ContextAction.TOGGLE_CONFIRM
+                        if can_manage and enabled
                         else ContextAction.TOGGLE
                         if can_manage
                         else ContextAction.MENU
@@ -281,6 +337,28 @@ def build_context_panel(
         )
     if can_manage and chat:
         if not is_private:
+            if is_group:
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=(
+                                _("Disable free models")
+                                if free_decision.allowed
+                                else _("Review free-model privacy")
+                            ),
+                            callback_data=ChatFreeModelCallback(
+                                action=(
+                                    ChatFreeModelAction.REVOKE
+                                    if free_decision.allowed
+                                    else ChatFreeModelAction.REVIEW
+                                ),
+                                tos_version=FREE_INFERENCE_TOS_VERSION,
+                                privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+                                policy_revision=free_policy.revision,
+                            ).pack(),
+                        )
+                    ]
+                )
             rows.append(
                 [
                     InlineKeyboardButton(
@@ -565,11 +643,17 @@ def build_privacy_panel(
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build discoverable personal deletion and scoped admin cleanup controls."""
     retention_days = chat.retention_days if chat else 30
-    scope_label = _("topic") if thread_id is not None else _("chat")
+    scope_label = (
+        _("topic")
+        if thread_id is not None
+        else _("whole chat")
+        if chat and chat.is_forum
+        else _("chat")
+    )
     rows = [
         [
             InlineKeyboardButton(
-                text=_("Delete my messages"),
+                text=_("Delete from my memory"),
                 callback_data=ContextCallback(
                     action=ContextAction.DELETE_MINE_CONFIRM
                 ).pack(),
@@ -595,18 +679,36 @@ def build_privacy_panel(
         )
     rows.append(
         [
-            InlineKeyboardButton(text=_("Privacy policy"), url=PRIVACY_POLICY_URL),
-            InlineKeyboardButton(text=_("Terms of use"), url=TERMS_OF_USE_URL),
-        ]
-    )
-    rows.append(
-        [
             InlineKeyboardButton(
-                text=_("Contact support"),
-                callback_data=SUPPORT_MENU_CALLBACK,
-            )
+                text=_("Privacy policy"),
+                callback_data=LegalDocumentCallback(
+                    document=LegalDocumentKind.PRIVACY,
+                    separate=True,
+                ).pack(),
+            ),
+            InlineKeyboardButton(
+                text=_("Terms of use"),
+                callback_data=LegalDocumentCallback(
+                    document=LegalDocumentKind.TERMS,
+                    separate=True,
+                ).pack(),
+            ),
         ]
     )
+    support_button = (
+        InlineKeyboardButton(
+            text=_("Contact support"),
+            callback_data=SUPPORT_MENU_CALLBACK,
+        )
+        if chat is None or chat.type == "private"
+        else InlineKeyboardButton(
+            text=_("Contact support"),
+            url=(
+                f"https://t.me/{settings.bot_username.removeprefix('@')}?start=support"
+            ),
+        )
+    )
+    rows.append([support_button])
     rows.append(
         [
             InlineKeyboardButton(
@@ -618,11 +720,11 @@ def build_privacy_panel(
     text = _(
         "<b>Privacy and history</b>\n"
         "Saved messages are deleted after {days} day.\n\n"
-        "You can delete your own saved messages at any time. Chat admins can clear "
+        "You can delete your own saved messages from my memory at any time. Chat admins can clear "
         "this chat or topic. Approved shared facts are kept separately.",
         "<b>Privacy and history</b>\n"
         "Saved messages are deleted after {days} days.\n\n"
-        "You can delete your own saved messages at any time. Chat admins can clear "
+        "You can delete your own saved messages from my memory at any time. Chat admins can clear "
         "this chat or topic. Approved shared facts are kept separately.",
         retention_days,
     ).format(days=retention_days)
@@ -643,7 +745,8 @@ def build_inference_privacy_panel(
         mode = _("Mode: Free models allowed")
         detail = _(
             "Free-model providers may store prompts and replies. This permission "
-            "applies only in private chat and inline mode. Groups stay private."
+            "applies only in private chat and inline mode. Group admins choose "
+            "separately for each chat."
         )
         label = _("Use private models only")
         action = InferencePrivacyAction.REVOKE
@@ -652,13 +755,14 @@ def build_inference_privacy_panel(
         if decision.reason is NonZdrFreeInferenceReason.LEGAL_REACCEPTANCE_REQUIRED:
             detail = _(
                 "The free-model terms changed. Review them to enable free models "
-                "again. Groups stay private."
+                "again. Group admins choose separately for each chat."
             )
         else:
             detail = _(
                 "Derp uses zero-data-retention models. Free models are optional and "
-                "may let providers store prompts and replies. They can run only in "
-                "private chat and inline mode. Groups stay private."
+                "may let providers store prompts and replies. They can run in "
+                "private chat and inline mode. Group admins can enable them "
+                "separately for a chat."
             )
         label = _("Review free-model terms")
         action = InferencePrivacyAction.REVIEW
@@ -701,13 +805,26 @@ def build_inference_privacy_review(
         "policies. By continuing, you allow Derp to send prompts and replies to "
         "OpenRouter and selected free-model providers under the linked Terms and "
         "Privacy Policy.\n\n"
-        "This applies only in private chat and inline mode. Groups stay private."
+        "This applies to your private chat and inline mode. Group admins make a "
+        "separate choice for each chat."
     )
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=_("Terms"), url=FREE_INFERENCE_TOS_URL),
-                InlineKeyboardButton(text=_("Privacy"), url=FREE_INFERENCE_PRIVACY_URL),
+                InlineKeyboardButton(
+                    text=_("Terms"),
+                    callback_data=LegalDocumentCallback(
+                        document=LegalDocumentKind.TERMS,
+                        separate=True,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text=_("Privacy"),
+                    callback_data=LegalDocumentCallback(
+                        document=LegalDocumentKind.PRIVACY,
+                        separate=True,
+                    ).pack(),
+                ),
             ],
             [
                 InlineKeyboardButton(
@@ -733,6 +850,134 @@ def build_inference_privacy_review(
     return text, markup
 
 
+def build_chat_free_model_review(
+    policy_revision: int,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Explain the chat-wide privacy choice before an admin accepts it."""
+    text = _(
+        "<b>Allow free models in this chat?</b>\n\n"
+        "When chat credits are unavailable, Derp may send prompts and replies to "
+        "OpenRouter and selected free-model providers. Those providers may store "
+        "them under their own policies.\n\n"
+        "Everyone in this chat will see a notice. Admins should also tell members "
+        "who join later."
+    )
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_("Terms"),
+                    callback_data=LegalDocumentCallback(
+                        document=LegalDocumentKind.TERMS,
+                        separate=True,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text=_("Privacy"),
+                    callback_data=LegalDocumentCallback(
+                        document=LegalDocumentKind.PRIVACY,
+                        separate=True,
+                    ).pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_("Allow free models in this chat"),
+                    callback_data=ChatFreeModelCallback(
+                        action=ChatFreeModelAction.ACCEPT,
+                        tos_version=FREE_INFERENCE_TOS_VERSION,
+                        privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+                        policy_revision=policy_revision,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_("Back"),
+                    callback_data=ContextCallback(action=ContextAction.MENU).pack(),
+                )
+            ],
+        ]
+    )
+    return text, markup
+
+
+def build_free_model_recovery(
+    user: UserModel,
+    chat: ChatModel,
+    *,
+    context: InferenceContext,
+    can_manage: bool,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Return a direct recovery path when neither paid nor free chat can run."""
+    chat_policy = (
+        project_chat_free_model_policy(chat)
+        if context in {InferenceContext.GROUP, InferenceContext.SUPERGROUP}
+        else None
+    )
+    decision = decide_non_zdr_free_inference(
+        project_inference_privacy(user),
+        context=context,
+        current_tos_version=FREE_INFERENCE_TOS_VERSION,
+        current_privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+        chat_policy=chat_policy,
+    )
+
+    if decision.allowed:
+        text = _(
+            "No free model can handle this request. Try without the attachment, "
+            "or add credits with /buy."
+        )
+        button = InlineKeyboardButton(
+            text=_("Open settings"),
+            callback_data=ContextCallback(action=ContextAction.MENU).pack(),
+        )
+    elif context in {InferenceContext.PRIVATE, InferenceContext.INLINE}:
+        text = _("No credits left. Enable free models, or add credits with /buy.")
+        preference = project_inference_privacy(user)
+        button = InlineKeyboardButton(
+            text=_("Enable free models"),
+            callback_data=InferencePrivacyCallback(
+                action=InferencePrivacyAction.REVIEW,
+                tos_version=FREE_INFERENCE_TOS_VERSION,
+                privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+                preference_revision=preference.revision,
+            ).pack(),
+        )
+    elif context not in {InferenceContext.GROUP, InferenceContext.SUPERGROUP}:
+        text = _("Free models aren't available here. Add credits with /buy.")
+        button = InlineKeyboardButton(
+            text=_("Open settings"),
+            callback_data=ContextCallback(action=ContextAction.MENU).pack(),
+        )
+    elif can_manage:
+        text = _(
+            "This chat is out of credits. Enable free models, or add chat credits "
+            "with /buy."
+        )
+        policy = chat_policy or ChatFreeModelPolicy()
+        button = InlineKeyboardButton(
+            text=_("Enable free models"),
+            callback_data=ChatFreeModelCallback(
+                action=ChatFreeModelAction.REVIEW,
+                tos_version=FREE_INFERENCE_TOS_VERSION,
+                privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+                policy_revision=policy.revision,
+            ).pack(),
+        )
+    else:
+        text = _(
+            "This chat is out of credits. An admin can enable free models in "
+            "/settings. Anyone can add chat credits with /buy."
+        )
+        button = InlineKeyboardButton(
+            text=_("Open chat settings"),
+            callback_data=ContextCallback(action=ContextAction.MENU).pack(),
+        )
+
+    return text, InlineKeyboardMarkup(inline_keyboard=[[button]])
+
+
 def build_destructive_confirmation(
     *,
     action: ContextAction,
@@ -755,6 +1000,34 @@ def build_destructive_confirmation(
                 InlineKeyboardButton(
                     text=_("Cancel"),
                     callback_data=ContextCallback(action=ContextAction.PRIVACY).pack(),
+                ),
+            ]
+        ]
+    )
+    return text, markup
+
+
+def build_ambient_cleanup_confirmation() -> tuple[str, InlineKeyboardMarkup]:
+    """Name the full-chat scope before disabling and purging ambient history."""
+    text = _(
+        "<b>Clean up my memory?</b>\n"
+        "This turns context off and deletes ambient messages saved from this "
+        "whole chat, including every topic, from my memory. Mentions and replies "
+        "may still be saved. Telegram messages stay."
+    )
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_("Clean up memory"),
+                    callback_data=ContextCallback(
+                        action=ContextAction.CLEAN_AMBIENT,
+                        value=0,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text=_("Cancel"),
+                    callback_data=ContextCallback(action=ContextAction.MENU).pack(),
                 ),
             ]
         ]
@@ -1261,6 +1534,261 @@ async def revoke_inference_privacy_terms(
     await query.answer(_("Private models only."))
 
 
+async def _managed_group_free_model_message(
+    query: CallbackQuery,
+    bot: Bot,
+    chat_model: ChatModel | None,
+    user_model: UserModel | None,
+) -> Message | None:
+    message = query.message
+    if (
+        not isinstance(message, Message)
+        or message.chat.type not in {"group", "supergroup"}
+        or not chat_model
+        or chat_model.type not in {"group", "supergroup"}
+        or not user_model
+        or user_model.telegram_id != query.from_user.id
+    ):
+        await query.answer(
+            _("This setting is only available to chat admins."),
+            show_alert=True,
+        )
+        return None
+    if not await actor_can_manage(bot, message, query.from_user.id):
+        await query.answer(
+            _("Only chat admins can change this"),
+            show_alert=True,
+        )
+        return None
+    return message
+
+
+def _current_chat_free_model_legal_versions(
+    callback_data: ChatFreeModelCallback,
+) -> bool:
+    return (
+        callback_data.tos_version == FREE_INFERENCE_TOS_VERSION
+        and callback_data.privacy_version == FREE_INFERENCE_PRIVACY_VERSION
+    )
+
+
+def _apply_chat_free_model_policy(
+    chat_model: ChatModel,
+    policy: ChatFreeModelPolicy,
+) -> None:
+    chat_model.free_inference_enabled = policy.enabled
+    chat_model.free_inference_revision = policy.revision
+    chat_model.free_inference_tos_version = policy.accepted_tos_version
+    chat_model.free_inference_privacy_version = policy.accepted_privacy_version
+    chat_model.free_inference_accepted_by_user_id = policy.accepted_by_user_id
+    chat_model.free_inference_accepted_at = policy.accepted_at
+    chat_model.free_inference_revoked_at = policy.revoked_at
+
+
+async def _show_stale_chat_free_model_panel(
+    query: CallbackQuery,
+    message: Message,
+    bot: Bot,
+    chat_model: ChatModel,
+    policy: ChatFreeModelPolicy,
+) -> None:
+    _apply_chat_free_model_policy(chat_model, policy)
+    available = await ambient_delivery_available(bot, message.chat.id)
+    text, markup = build_context_panel(
+        chat_model,
+        ambient_available=available,
+        can_manage=True,
+    )
+    await message.edit_text(text, reply_markup=markup)
+    await query.answer(
+        _("This free-model button expired. Open the setting again."),
+        show_alert=True,
+    )
+
+
+@router.callback_query(
+    ChatFreeModelCallback.filter(F.action == ChatFreeModelAction.REVIEW)
+)
+async def review_chat_free_model_terms(
+    query: CallbackQuery,
+    callback_data: ChatFreeModelCallback,
+    db: DatabaseManager,
+    bot: Bot,
+    chat_model: ChatModel | None,
+    user_model: UserModel | None,
+) -> None:
+    """Place current legal details before a chat administrator's choice."""
+    message = await _managed_group_free_model_message(
+        query,
+        bot,
+        chat_model,
+        user_model,
+    )
+    if message is None or chat_model is None:
+        return
+    async with db.read_session() as session:
+        policy = await get_chat_free_model_policy(session, chat_model.id)
+    if callback_data.policy_revision != policy.revision:
+        return await _show_stale_chat_free_model_panel(
+            query,
+            message,
+            bot,
+            chat_model,
+            policy,
+        )
+    text, markup = build_chat_free_model_review(policy.revision)
+    await message.edit_text(text, reply_markup=markup)
+    if not _current_chat_free_model_legal_versions(callback_data):
+        await query.answer(
+            _("The terms changed. Review the latest versions."),
+            show_alert=True,
+        )
+        return
+    await query.answer()
+
+
+@router.callback_query(
+    ChatFreeModelCallback.filter(F.action == ChatFreeModelAction.ACCEPT)
+)
+async def accept_chat_free_model_terms(
+    query: CallbackQuery,
+    callback_data: ChatFreeModelCallback,
+    db: DatabaseManager,
+    bot: Bot,
+    chat_model: ChatModel | None,
+    user_model: UserModel | None,
+) -> None:
+    """Enable chat-wide free fallback after live administrator acceptance."""
+    message = await _managed_group_free_model_message(
+        query,
+        bot,
+        chat_model,
+        user_model,
+    )
+    if message is None or chat_model is None or user_model is None:
+        return
+    if not _current_chat_free_model_legal_versions(callback_data):
+        async with db.read_session() as session:
+            policy = await get_chat_free_model_policy(session, chat_model.id)
+        if callback_data.policy_revision != policy.revision:
+            return await _show_stale_chat_free_model_panel(
+                query,
+                message,
+                bot,
+                chat_model,
+                policy,
+            )
+        text, markup = build_chat_free_model_review(policy.revision)
+        await message.edit_text(text, reply_markup=markup)
+        return await query.answer(
+            _("The terms changed. Review the latest versions."),
+            show_alert=True,
+        )
+    try:
+        async with db.session() as session:
+            policy = await enable_chat_non_zdr_free_inference(
+                session,
+                chat_model.id,
+                accepted_by_user_id=user_model.id,
+                expected_revision=callback_data.policy_revision,
+                tos_version=callback_data.tos_version,
+                privacy_version=callback_data.privacy_version,
+            )
+    except ChatFreeModelRevisionConflictError as exc:
+        return await _show_stale_chat_free_model_panel(
+            query,
+            message,
+            bot,
+            chat_model,
+            exc.current,
+        )
+
+    _apply_chat_free_model_policy(chat_model, policy)
+    available = await ambient_delivery_available(bot, message.chat.id)
+    text, markup = build_context_panel(
+        chat_model,
+        ambient_available=available,
+        can_manage=True,
+    )
+    await message.edit_text(text, reply_markup=markup)
+    await message.answer(
+        _(
+            "<b>Free models are on</b>\n"
+            "When chat credits are unavailable, Derp may send prompts and replies "
+            "to OpenRouter and selected free-model providers. Those providers may "
+            "store them under their policies. Admins can change this in /settings."
+        )
+    )
+    logfire.info(
+        "chat_free_model_policy_changed",
+        chat_id=message.chat.id,
+        enabled=True,
+        policy_revision=policy.revision,
+    )
+    await query.answer(_("Free models are on for this chat."))
+
+
+@router.callback_query(
+    ChatFreeModelCallback.filter(F.action == ChatFreeModelAction.REVOKE)
+)
+async def revoke_chat_free_model_terms(
+    query: CallbackQuery,
+    callback_data: ChatFreeModelCallback,
+    db: DatabaseManager,
+    bot: Bot,
+    chat_model: ChatModel | None,
+    user_model: UserModel | None,
+) -> None:
+    """Disable future chat-wide free fallback after live admin authorization."""
+    message = await _managed_group_free_model_message(
+        query,
+        bot,
+        chat_model,
+        user_model,
+    )
+    if message is None or chat_model is None:
+        return
+    try:
+        async with db.session() as session:
+            policy = await revoke_chat_non_zdr_free_inference(
+                session,
+                chat_model.id,
+                expected_revision=callback_data.policy_revision,
+            )
+    except ChatFreeModelRevisionConflictError as exc:
+        return await _show_stale_chat_free_model_panel(
+            query,
+            message,
+            bot,
+            chat_model,
+            exc.current,
+        )
+    _apply_chat_free_model_policy(chat_model, policy)
+    available = await ambient_delivery_available(bot, message.chat.id)
+    text, markup = build_context_panel(
+        chat_model,
+        ambient_available=available,
+        can_manage=True,
+    )
+    await message.edit_text(text, reply_markup=markup)
+    logfire.info(
+        "chat_free_model_policy_changed",
+        chat_id=message.chat.id,
+        enabled=False,
+        policy_revision=policy.revision,
+    )
+    await query.answer(_("Free models are off for this chat."))
+
+
+@router.callback_query(F.data.startswith("cfm:"))
+async def reject_stale_chat_free_model_callback(query: CallbackQuery) -> None:
+    """Consume malformed or obsolete chat free-model controls."""
+    await query.answer(
+        _("This free-model button expired. Open the setting again."),
+        show_alert=True,
+    )
+
+
 @router.callback_query(F.data.startswith("ifp:"))
 async def reject_stale_inference_privacy_callback(query: CallbackQuery) -> None:
     """Consume malformed or obsolete preference controls."""
@@ -1298,7 +1826,7 @@ async def confirm_delete_my_history(query: CallbackQuery) -> None:
         return await query.answer()
     text, markup = build_destructive_confirmation(
         action=ContextAction.DELETE_MINE,
-        label=_("Delete your saved messages from this chat"),
+        label=_("Delete your saved messages from my memory"),
     )
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer()
@@ -1329,8 +1857,8 @@ async def delete_my_history(
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer(
         _(
-            "Deleted {count} saved message",
-            "Deleted {count} saved messages",
+            "Deleted {count} saved message from my memory",
+            "Deleted {count} saved messages from my memory",
             removed,
         ).format(count=removed)
     )
@@ -1345,7 +1873,13 @@ async def confirm_clear_history(query: CallbackQuery, bot: Bot) -> None:
         return await query.answer(
             _("Only chat admins can clear history"), show_alert=True
         )
-    scope = _("topic") if query.message.message_thread_id is not None else _("chat")
+    scope = (
+        _("topic")
+        if query.message.message_thread_id is not None
+        else _("whole chat")
+        if query.message.chat.is_forum
+        else _("chat")
+    )
     text, markup = build_destructive_confirmation(
         action=ContextAction.CLEAR,
         label=_("Clear saved history for this {scope}").format(scope=scope),
@@ -1373,6 +1907,9 @@ async def clear_current_history(
             session,
             chat_telegram_id=query.message.chat.id,
             thread_id=query.message.message_thread_id,
+            all_threads=bool(
+                query.message.chat.is_forum and query.message.message_thread_id is None
+            ),
         )
     text, markup = build_privacy_panel(
         chat_model,
@@ -1382,8 +1919,8 @@ async def clear_current_history(
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer(
         _(
-            "Deleted {count} saved message",
-            "Deleted {count} saved messages",
+            "Deleted {count} saved message from my memory",
+            "Deleted {count} saved messages from my memory",
             removed,
         ).format(count=removed)
     )
@@ -1401,7 +1938,13 @@ async def confirm_forget_shared_facts(query: CallbackQuery, bot: Bot) -> None:
             _("Only chat admins can forget shared facts"),
             show_alert=True,
         )
-    scope = _("topic") if query.message.message_thread_id is not None else _("chat")
+    scope = (
+        _("topic")
+        if query.message.message_thread_id is not None
+        else _("whole chat")
+        if query.message.chat.is_forum
+        else _("chat")
+    )
     text, markup = build_destructive_confirmation(
         action=ContextAction.FORGET_FACTS,
         label=_("Forget approved facts in this {scope}").format(scope=scope),
@@ -1434,6 +1977,9 @@ async def forget_current_shared_facts(
             session,
             chat_id=chat_model.id,
             thread_id=query.message.message_thread_id,
+            all_threads=bool(
+                query.message.chat.is_forum and query.message.message_thread_id is None
+            ),
         )
     text, markup = build_privacy_panel(
         chat_model,
@@ -1507,7 +2053,38 @@ async def review_shared_fact_proposal(
     await query.answer(state)
 
 
-@router.callback_query(ContextCallback.filter(F.action == ContextAction.TOGGLE))
+@router.callback_query(ContextCallback.filter(F.action == ContextAction.TOGGLE_CONFIRM))
+async def confirm_disable_context(
+    query: CallbackQuery,
+    bot: Bot,
+    chat_model: ChatModel | None,
+) -> None:
+    """Require a clear whole-chat confirmation before ambient history is purged."""
+    if not isinstance(query.message, Message) or not chat_model:
+        return await query.answer(_("Settings are unavailable"), show_alert=True)
+    if not await actor_can_manage(bot, query.message, query.from_user.id):
+        return await query.answer(
+            _("Only chat admins can change this"), show_alert=True
+        )
+    if not chat_model.ambient_history_enabled:
+        available = await ambient_delivery_available(bot, query.message.chat.id)
+        text, markup = build_context_panel(
+            chat_model,
+            ambient_available=available,
+            can_manage=True,
+        )
+        await query.message.edit_text(text, reply_markup=markup)
+        return await query.answer(_("Context is already off"))
+    text, markup = build_ambient_cleanup_confirmation()
+    await query.message.edit_text(text, reply_markup=markup)
+    await query.answer()
+
+
+@router.callback_query(
+    ContextCallback.filter(
+        F.action.in_({ContextAction.TOGGLE, ContextAction.CLEAN_AMBIENT})
+    )
+)
 async def toggle_context(
     query: CallbackQuery,
     callback_data: ContextCallback,
@@ -1522,7 +2099,16 @@ async def toggle_context(
         return await query.answer(
             _("Only chat admins can change this"), show_alert=True
         )
-    enable = bool(callback_data.value)
+    if callback_data.action is ContextAction.TOGGLE and callback_data.value == 0:
+        return await confirm_disable_context(query, bot, chat_model)
+    if (callback_data.action is ContextAction.TOGGLE and callback_data.value != 1) or (
+        callback_data.action is ContextAction.CLEAN_AMBIENT and callback_data.value != 0
+    ):
+        return await query.answer(
+            _("This setting is no longer valid"),
+            show_alert=True,
+        )
+    enable = callback_data.action is ContextAction.TOGGLE
     available = query.message.chat.type == "private" or (
         await ambient_delivery_available(bot, query.message.chat.id)
     )
@@ -1548,8 +2134,8 @@ async def toggle_context(
         _("Context is on")
         if enable
         else _(
-            "Context is off · {count} saved message deleted",
-            "Context is off · {count} saved messages deleted",
+            "Context is off · {count} saved message removed from my memory",
+            "Context is off · {count} saved messages removed from my memory",
             purged,
         ).format(count=purged)
     )
@@ -1753,20 +2339,23 @@ async def disclose_context_to_new_members(
 
 
 __all__ = [
+    "ChatFreeModelAction",
+    "ChatFreeModelCallback",
     "ContextAction",
     "ContextCallback",
-    "FREE_INFERENCE_PRIVACY_URL",
     "FREE_INFERENCE_PRIVACY_VERSION",
-    "FREE_INFERENCE_TOS_URL",
     "FREE_INFERENCE_TOS_VERSION",
     "InferencePrivacyAction",
     "InferencePrivacyCallback",
     "actor_can_manage",
     "ambient_delivery_available",
+    "build_ambient_cleanup_confirmation",
+    "build_chat_free_model_review",
     "build_creation_panel",
     "build_credit_panel",
     "build_context_panel",
     "build_destructive_confirmation",
+    "build_free_model_recovery",
     "build_inference_privacy_panel",
     "build_inference_privacy_review",
     "build_privacy_panel",

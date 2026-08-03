@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram.types import CallbackQuery, Message
@@ -16,13 +17,15 @@ from derp.handlers.operator import (
     OperatorMaintenanceCallback,
     OperatorMaintenanceConfirmCallback,
     OperatorSupportAction,
+    OperatorSupportQueueAction,
+    OperatorSupportQueueCallback,
     OperatorSupportResolveCallback,
-    OperatorSupportResolveConfirmCallback,
     OperatorView,
     build_maintenance_result_panel,
     build_operator_panel,
     build_operator_support_queue,
     check_operator_inference,
+    finish_operator_support_case,
     request_operator_maintenance,
     request_operator_support_resolution,
     request_operator_test_refund,
@@ -65,8 +68,9 @@ from derp.operator import (
 )
 from derp.support import (
     OperatorSupportCase,
-    ResolveSupportResult,
+    OperatorSupportPage,
     SupportKind,
+    SupportStatus,
 )
 
 
@@ -587,19 +591,25 @@ async def test_support_queue_refresh_reads_durable_service(make_message) -> None
         requester_telegram_id=77,
     )
     support = MagicMock()
-    support.list_operator_open = AsyncMock(return_value=(case,))
+    support.list_operator_page = AsyncMock(
+        return_value=OperatorSupportPage(cases=(case,), offset=0, total=1)
+    )
 
     with capture_outbound_history():
-        await show_operator_support_queue(callback, support)
+        await show_operator_support_queue(
+            callback,
+            OperatorSupportQueueCallback(action=OperatorSupportQueueAction.LIST),
+            support,
+        )
         assert should_capture_outbound()
 
-    support.list_operator_open.assert_awaited_once_with()
+    support.list_operator_page.assert_awaited_once_with(offset=0)
     assert "CASE123456" in message.edit_text.await_args.args[0]
     assert "user <code>77</code>" in message.edit_text.await_args.args[0]
     assert capture_states == [False]
 
 
-async def test_support_resolution_is_case_bound_single_use_and_notifies_requester(
+async def test_support_case_opens_with_explicit_operator_actions(
     make_message,
 ) -> None:
     message = make_message(text="operator", chat_id=42, chat_type="private")
@@ -613,106 +623,93 @@ async def test_support_resolution_is_case_bound_single_use_and_notifies_requeste
     )
     support = MagicMock()
     support.get_operator_open = AsyncMock(return_value=case)
-    effects: list[str] = []
-
-    async def resolve(reference: str) -> ResolveSupportResult:
-        effects.append(f"resolve:{reference}")
-        return ResolveSupportResult(
-            case=case,
-            resolved_at=datetime(2026, 7, 28, 12, 5, tzinfo=UTC),
-            changed=True,
-        )
-
-    async def notify(*args, **kwargs) -> None:
-        effects.append("notify")
-
-    support.resolve_operator = AsyncMock(side_effect=resolve)
-    support.list_operator_open = AsyncMock(return_value=())
-    store = OperatorConfirmationStore(token_factory=lambda: "fixed_support_token")
-
     await request_operator_support_resolution(
         callback,
         OperatorSupportResolveCallback(reference=case.reference),
         support,
-        store,
     )
 
     markup = message.edit_text.await_args.kwargs["reply_markup"]
-    packed = markup.inline_keyboard[0][0].callback_data
-    assert case.reference not in packed
-    confirm = OperatorSupportResolveConfirmCallback.unpack(packed)
-    bot = MagicMock()
-    bot.send_message = AsyncMock(side_effect=notify)
-    message.edit_text.reset_mock()
-    callback.answer.reset_mock()
-
-    await resolve_operator_support_case(
-        callback,
-        confirm,
-        support,
-        store,
-        bot,
-    )
-
-    callback.answer.assert_awaited_once_with("Resolving case")
-    support.resolve_operator.assert_awaited_once_with(case.reference)
-    bot.send_message.assert_awaited_once()
-    assert bot.send_message.await_args.args[0] == 77
-    assert case.reference in bot.send_message.await_args.args[1]
-    assert effects == ["notify", f"resolve:{case.reference}"]
-    assert "requester was notified" in message.edit_text.await_args.args[0]
-    assert "No open cases" in message.edit_text.await_args.args[0]
-
-    callback.answer.reset_mock()
-    await resolve_operator_support_case(
-        callback,
-        confirm,
-        support,
-        store,
-        bot,
-    )
-    callback.answer.assert_awaited_once_with(
-        "This confirmation expired. Choose the action again.",
-        show_alert=True,
-    )
-    assert support.resolve_operator.await_count == 1
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert "Reply and close" in labels
+    assert "Decline" in labels
+    assert "Back" in labels
+    assert case.reference in message.edit_text.await_args.args[0]
+    callback.answer.assert_awaited_once_with()
 
 
-async def test_support_notification_failure_keeps_case_open(make_message) -> None:
+async def test_legacy_support_confirmation_is_inert(make_message) -> None:
     message = make_message(text="operator", chat_id=42, chat_type="private")
     message.edit_text = AsyncMock()
     callback = _callback(message)
+
+    await resolve_operator_support_case(callback)
+
+    callback.answer.assert_awaited_once_with(
+        "This confirmation expired. Open the case and choose an action again.",
+        show_alert=True,
+    )
+    message.edit_text.assert_not_awaited()
+
+
+async def test_operator_support_reply_is_removed_from_chat_memory(
+    make_message,
+) -> None:
+    message = make_message(
+        text="I checked the receipt and restored the credits.",
+        user_id=42,
+        chat_id=42,
+        chat_type="private",
+        message_id=77,
+    )
     case = OperatorSupportCase(
-        reference="CASE654321",
-        kind=SupportKind.ACCESS,
-        created_at=datetime(2026, 7, 28, 12, tzinfo=UTC),
-        requester_telegram_id=88,
+        reference="A1B2C3D4E5",
+        kind=SupportKind.PAYMENT,
+        created_at=datetime(2026, 8, 3, tzinfo=UTC),
+        requester_telegram_id=99,
     )
     support = MagicMock()
-    support.get_operator_open = AsyncMock(return_value=case)
-    support.resolve_operator = AsyncMock()
-    support.list_operator_open = AsyncMock(return_value=(case,))
-    store = OperatorConfirmationStore(token_factory=lambda: "failed_notice_token")
-    token = store.issue(
-        actor_id=42,
-        action=OperatorSupportAction.RESOLVE,
-        resource_key=case.reference,
+    support.decide_operator = AsyncMock(
+        return_value=SimpleNamespace(changed=True, case=case)
     )
-    bot = MagicMock()
-    bot.send_message = AsyncMock(side_effect=RuntimeError("Telegram unavailable"))
+    session = object()
 
-    await resolve_operator_support_case(
-        callback,
-        OperatorSupportResolveConfirmCallback(token=token),
-        support,
-        store,
-        bot,
+    @asynccontextmanager
+    async def transactions():
+        yield session
+
+    db = SimpleNamespace(session=transactions)
+    with (
+        patch(
+            "derp.handlers.operator.remove_disqualified_message",
+            new=AsyncMock(),
+        ) as remove_message,
+        patch(
+            "derp.handlers.operator._update_requester_case_status",
+            new=AsyncMock(),
+        ),
+    ):
+        await finish_operator_support_case(
+            message,
+            support,
+            db,
+            MagicMock(),
+            MagicMock(),
+            OperatorSupportAction.RESOLVE,
+            case.reference,
+        )
+
+    remove_message.assert_awaited_once_with(
+        session,
+        chat_telegram_id=42,
+        telegram_message_id=77,
     )
-
-    support.resolve_operator.assert_not_awaited()
-    support.list_operator_open.assert_awaited_once_with()
-    assert "remains open" in message.edit_text.await_args.args[0]
-    assert case.reference in message.edit_text.await_args.args[0]
+    support.decide_operator.assert_awaited_once_with(
+        case.reference,
+        operator_telegram_id=42,
+        status=SupportStatus.RESOLVED,
+        reason="I checked the receipt and restored the credits.",
+    )
 
 
 @pytest.mark.parametrize(

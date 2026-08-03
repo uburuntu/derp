@@ -29,6 +29,7 @@ from derp.billing.types import (
 from derp.common.tasks import task_is_running
 from derp.models import PaymentUpdateInbox
 from derp.observability import report_exception
+from derp.support.types import SupportRefundReconciler
 
 type TransactionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
@@ -681,6 +682,7 @@ class PaymentUpdateReplayWorker:
         service: PaymentUpdateInboxService,
         notifier: PaymentUpdateNotifier,
         *,
+        support_refunds: SupportRefundReconciler | None = None,
         interval: timedelta = DEFAULT_PAYMENT_UPDATE_REPLAY_INTERVAL,
         batch_size: int = 20,
     ) -> None:
@@ -700,6 +702,7 @@ class PaymentUpdateReplayWorker:
             )
         self._service = service
         self._notifier = notifier
+        self._support_refunds = support_refunds
         self._interval_seconds = interval.total_seconds()
         self._batch_size = batch_size
         self._sweep_lock = asyncio.Lock()
@@ -745,6 +748,7 @@ class PaymentUpdateReplayWorker:
                 return PaymentUpdateReplayReport()
 
             settled = attention = retry = sent = failed = skipped = 0
+            support_refunds_completed = 0
             for claim in claims:
                 try:
                     outcome = await self._service.process_claim(claim)
@@ -771,6 +775,21 @@ class PaymentUpdateReplayWorker:
                         exception=exc,
                         level="warning",
                     )
+            if self._support_refunds is not None:
+                try:
+                    support_refunds_completed = (
+                        await self._support_refunds.complete_reconciled_refunds(
+                            limit=self._batch_size
+                        )
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    report_exception(
+                        "support_refund_reconciliation_failed",
+                        exception=exc,
+                        level="warning",
+                    )
 
         report = PaymentUpdateReplayReport(
             claimed_count=len(claims),
@@ -781,6 +800,11 @@ class PaymentUpdateReplayWorker:
             reply_failed_count=failed,
             reply_skipped_count=skipped,
         )
+        if support_refunds_completed:
+            logfire.info(
+                "support_refunds_reconciled",
+                completed_count=support_refunds_completed,
+            )
         if report.claimed_count:
             logfire.info(
                 "payment_update_replay_sweep",

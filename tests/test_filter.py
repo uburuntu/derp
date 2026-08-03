@@ -33,6 +33,22 @@ class TestDerpMentionFilter:
         result = await filter_instance(message)
         assert result is True
 
+    @pytest.mark.parametrize(
+        "text",
+        (
+            "Could you check this, derp, before Friday?",
+            "Можешь, пожалуйста, дерп проверить это?",
+            "This is for derp",
+        ),
+    )
+    @pytest.mark.asyncio
+    async def test_detects_whole_word_anywhere(self, filter_instance, text):
+        """A mention is not restricted to the beginning of the message."""
+        message = MagicMock(spec=Message)
+        message.text = text
+
+        assert await filter_instance(message) is True
+
     @pytest.mark.asyncio
     async def test_case_insensitive(self, filter_instance):
         """Detects regardless of case (uppercase/lowercase)."""

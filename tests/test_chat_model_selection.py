@@ -17,7 +17,7 @@ from derp.inference import (
     FREE_INFERENCE_TOS_VERSION,
     InferencePrivacyMode,
 )
-from derp.models import User
+from derp.models import Chat, User
 
 NOW = datetime(2026, 7, 21, 12, tzinfo=UTC)
 
@@ -63,6 +63,23 @@ def _turn(media_type: str | None = None) -> UserTextTurn:
         speaker=Speaker(10, "User"),
         text="Question",
         attachments=attachments,
+    )
+
+
+def _chat(*, free_mode: bool = False) -> Chat:
+    return Chat(
+        id=UUID(int=2),
+        telegram_id=-10010,
+        type="supergroup",
+        free_inference_enabled=free_mode,
+        free_inference_revision=2 if free_mode else 1,
+        free_inference_tos_version=(FREE_INFERENCE_TOS_VERSION if free_mode else None),
+        free_inference_privacy_version=(
+            FREE_INFERENCE_PRIVACY_VERSION if free_mode else None
+        ),
+        free_inference_accepted_by_user_id=UUID(int=3) if free_mode else None,
+        free_inference_accepted_at=NOW if free_mode else None,
+        free_inference_revoked_at=None,
     )
 
 
@@ -120,14 +137,27 @@ def test_current_private_consent_selects_free_models_without_paid_fallback() -> 
     assert video is not None and video.model.key is ModelRole.FREE_VISUAL
 
 
-def test_group_context_never_uses_members_non_zdr_preference() -> None:
+def test_group_context_does_not_use_members_non_zdr_preference() -> None:
     _, fallback = _select_chat_plans(
         user=_user(free_mode=True),
         chat_type="supergroup",
         turn=_turn(),
+        chat=_chat(),
     )
 
     assert fallback is None
+
+
+def test_group_admin_policy_enables_free_fallback_for_all_members() -> None:
+    _, fallback = _select_chat_plans(
+        user=_user(),
+        chat_type="supergroup",
+        turn=_turn(),
+        chat=_chat(free_mode=True),
+    )
+
+    assert fallback is not None
+    assert fallback.model.key is ModelRole.FREE_TEXT
 
 
 def test_empty_feature_set_is_explicit_direct_google_rollback(

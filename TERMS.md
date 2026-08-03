@@ -1,8 +1,8 @@
 # Derp Terms of Use / Условия использования Дерпа
 
-Version and effective date: 28 July 2026
+Version and effective date: 3 August 2026
 
-Версия и дата вступления в силу: 28 июля 2026 г.
+Версия и дата вступления в силу: 3 августа 2026 г.
 
 ## English
 
@@ -16,12 +16,21 @@ Derp is an independently operated AI Telegram bot. Features, models, limits,
 and availability may change. Some capabilities may be suspended or removed
 when they cannot be operated safely, privately, or economically.
 
+In a group, a case-insensitive whole-word `Derp` or `дерп` anywhere in message
+text or a caption can invoke the bot. A reply to Derp or an explicit command can
+also invoke it. Chat settings determine which recent messages may be used as
+context and which inference privacy mode is available.
+
 ### 2. AI results
 
 AI output can be incomplete, incorrect, outdated, or unsuitable. Check anything
 important independently. Derp is not a substitute for professional medical,
 legal, financial, safety, or other expert advice. Do not rely on it for
 high-risk decisions or emergency services.
+
+Reply to a delivered Derp answer with `/info` to inspect its model name, privacy
+mode, reported token use, context size when available, and credits charged. This
+receipt is informational and does not make the AI output verified.
 
 You are responsible for the prompts and media you submit and for how you use or
 share results. You keep your rights in submitted content and grant the operator
@@ -30,11 +39,15 @@ secure, and deliver the requested service as described in the Privacy Policy.
 
 ### 3. Privacy choices
 
-Paid and group inference uses private routes configured for zero data retention
-where supported. Optional free models may let providers retain prompts and
-replies. They run only after explicit consent in private chat or inline mode and
-never in groups. You can withdraw that consent for future requests in Derp's
-private settings.
+Paid inference uses private routes configured for zero data retention where
+supported. Optional free models may let OpenRouter or the selected model
+provider retain prompts and replies under their own policies. In private chat
+and inline mode, they run only after the user explicitly accepts the current
+notice. In a group, only a current chat administrator can enable them for that
+chat after reviewing the same disclosure. Derp posts a visible group notice
+when that setting is enabled. Administrators should also inform members who
+join later. The user or an administrator can disable future free-model use in
+the relevant settings.
 
 ### 4. Stars, credits, and subscriptions
 
@@ -42,9 +55,11 @@ Digital services inside Telegram are sold in Telegram Stars. Telegram shows the
 exact price before charging. Credits are internal service units, not money or
 property; they cannot be transferred, withdrawn, or exchanged for cash.
 
-Before Derp creates a public invoice, you must review and explicitly accept the
-current version of these Terms in the bot. Derp keeps that versioned acceptance
-and binds it to the purchase intent for audit and dispute handling.
+Before Derp creates an invoice, you must review and explicitly accept the
+current version of these Terms in the bot. Complete localized Terms and Privacy
+pages are available inside Telegram. Derp keeps the versioned acceptance, binds
+it to the exact actor, product, and personal or chat target, and resumes that
+selection after acceptance for audit and dispute handling.
 
 Purchased top-up credits do not expire under the current catalog. The personal
 plan renews every 30 days until canceled and grants a new allowance for that
@@ -94,10 +109,13 @@ published here and may be announced in the bot. Continued use after they take
 effect accepts the new terms; changed free-model terms require fresh consent.
 
 The only public contact and privacy-control channel is a private chat with Derp.
-Use `/privacy` to review policies, `/support` for an in-bot case, and
-`/paysupport` for a purchase or refund. Telegram and `@BotSupport` cannot resolve
-a purchase from an independently operated bot. There is no separate email
-support channel.
+Use `/privacy` to review policies and `/support` for an in-bot case. A support
+case stores one bounded message; payment and refund cases can be attached to the
+exact Derp receipt. The operator may answer and close, decline with a reason, or
+request a refund for that selected receipt. The message and operator reason are
+deleted 30 days after the case closes; case and accounting metadata remain.
+Telegram and `@BotSupport` cannot resolve a purchase from an independently
+operated bot. There is no separate email support channel.
 
 ## Русский
 
@@ -112,11 +130,20 @@ support channel.
 доступность могут меняться. Возможность может быть приостановлена или удалена,
 если её нельзя поддерживать безопасно, приватно или экономично.
 
+В группе слово `Derp` или `дерп` в любом месте текста или подписи запускает
+Дерпа, если это отдельное слово; регистр не важен. Дерпа также запускают ответ
+на его сообщение и явная команда. Настройки чата определяют доступный контекст
+и режим приватности моделей.
+
 ### 2. Ответы ИИ
 
 Ответ может быть неполным, неверным, устаревшим или неподходящим. Проверяйте
 важное самостоятельно. Дерп не заменяет врача, юриста, финансового, технического
 или другого специалиста и не предназначен для экстренных и рискованных решений.
+
+Ответьте на сообщение Дерпа командой `/info`, чтобы увидеть модель, режим
+приватности, доступные данные о токенах и контексте и списанные кредиты. Эта
+справка не делает ответ ИИ проверенным.
 
 Вы отвечаете за отправленные запросы и медиа, а также за использование и
 публикацию результата. Права на ваш контент остаются у вас. Вы разрешаете
@@ -125,11 +152,14 @@ support channel.
 
 ### 3. Настройки приватности
 
-Платные запросы и запросы из групп используют приватные маршруты с нулевым
-хранением, если маршрут это поддерживает. Необязательные бесплатные модели
-могут сохранять запросы и ответы. Они запускаются только после явного согласия
-в личном чате или inline-режиме и никогда в группах. Согласие на будущие запросы
-можно отозвать в личных настройках Дерпа.
+Платные запросы используют приватные маршруты с нулевым хранением, если маршрут
+это поддерживает. OpenRouter или провайдер бесплатной модели может хранить
+запросы и ответы по своим правилам. В личном чате и инлайн-режиме бесплатная
+модель запускается только после явного принятия текущего уведомления. В группе
+её может включить только действующий администратор после такого же
+предупреждения. Дерп публикует заметное сообщение об этом в группе. Админам
+следует отдельно предупредить новых участников. Будущее использование
+бесплатных моделей можно отключить в настройках пользователя или чата.
 
 ### 4. Stars, кредиты и подписка
 
@@ -137,9 +167,10 @@ support channel.
 показывает точную цену. Кредиты - внутренние единицы сервиса, а не деньги или
 имущество. Их нельзя передать, вывести или обменять на деньги.
 
-До создания публичного счёта нужно прочитать и явно принять текущую версию этих
-условий внутри Дерпа. Дерп хранит версию принятия и связывает её с намерением
-покупки для аудита и разбора споров.
+До создания счёта нужно прочитать и явно принять текущую версию условий внутри
+Дерпа. Полные локализованные Условия и Политика доступны прямо в Telegram. Дерп
+хранит версию принятия, связывает её с пользователем, товаром и личной либо
+групповой целью и после принятия продолжает именно эту покупку.
 
 Купленные кредиты текущего каталога не сгорают. Личный план продлевается каждые
 30 дней до отмены и выдаёт новый лимит на период. Остаток лимита не переносится.
@@ -188,6 +219,10 @@ Telegram, магазины приложений, налоги, Fragment и ку�
 подтверждения.
 
 Единственный публичный канал связи и управления приватностью - личный чат с
-Дерпом. `/privacy` открывает политики, `/support` создаёт обращение, а
-`/paysupport` нужен для покупок и возвратов. Telegram и `@BotSupport` не решают
-вопросы покупок у независимо управляемого бота. Отдельной почты поддержки нет.
+Дерпом. `/privacy` открывает политики, а `/support` - обращение. Обращение хранит
+одно короткое сообщение; для оплаты и возврата можно выбрать точный чек Дерпа.
+Оператор может ответить и закрыть обращение, отказать с причиной или запросить
+возврат выбранного платежа. Сообщение и ответ оператора удаляются через 30 дней
+после закрытия; метаданные обращения и оплаты остаются. Telegram и `@BotSupport`
+не решают вопросы покупок у независимо управляемого бота. Отдельной почты
+поддержки нет.

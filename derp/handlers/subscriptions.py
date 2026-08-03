@@ -203,7 +203,7 @@ async def set_subscription_renewal(
     if result.disposition is SubscriptionRenewalDisposition.PENDING:
         notice = _("Telegram hasn't confirmed this yet. Derp will retry.")
     elif result.disposition is SubscriptionRenewalDisposition.ATTENTION:
-        notice = _("Renewal still isn't confirmed. Use /paysupport.")
+        notice = _("Renewal still isn't confirmed. Use /support.")
     elif result.disposition is SubscriptionRenewalDisposition.SUPERSEDED:
         notice = _("This plan changed. Open /plan again.")
     else:

@@ -37,6 +37,8 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
 # Copy application code
 COPY --from=builder --chown=app:app /app/derp /app/derp
+COPY --from=builder --chown=app:app /app/TERMS.md /app/TERMS.md
+COPY --from=builder --chown=app:app /app/PRIVACY.md /app/PRIVACY.md
 
 # Copy alembic config and migrations for database upgrades
 COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini

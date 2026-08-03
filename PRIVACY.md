@@ -1,8 +1,8 @@
 # Derp Privacy Policy / Политика конфиденциальности Дерпа
 
-Version and effective date: 28 July 2026
+Version and effective date: 3 August 2026
 
-Версия и дата вступления в силу: 28 июля 2026 г.
+Версия и дата вступления в силу: 3 августа 2026 г.
 
 ## English
 
@@ -11,8 +11,7 @@ Version and effective date: 28 July 2026
 Derp is an independently operated Telegram bot. This policy describes the
 production bot and the data its operator controls. The only public contact and
 privacy-control channel is the bot itself: open a private chat with Derp and use
-`/privacy` or `/support`. Purchase and refund support is available through
-`/paysupport`. There is no separate email support channel.
+`/privacy` or `/support`. There is no separate email support channel.
 
 Telegram and the inference providers described below process data under their
 own terms and privacy policies.
@@ -32,12 +31,16 @@ privacy, and abuse-prevention features:
   personal-spending consent, and free-model privacy consent.
 - Operation and inference records such as the selected provider/model, token
   counts, costs, status, retries, and content-free request identities.
+- User-visible run receipts that connect a delivered Telegram answer to its
+  model display name, privacy mode, context counts, token usage when reported,
+  and final credit state. They do not duplicate the prompt or answer.
 - Stars purchase terms, hashed invoice capabilities, Telegram charge IDs,
   subscription state, wallet entries, charges, reversals, refunds, and debt.
   Derp does not receive card details; Telegram handles Stars payments.
-- Legal acceptance records and support cases. A support case stores only its
-  opaque reference, category, state, and requester relation; it does not store a
-  free-form support message.
+- Legal acceptance records and support cases. A support case stores its opaque
+  reference, category, state, requester relation, one bounded user message, an
+  optional exact payment receipt, and the operator's final reason or refund
+  state. Support messages are excluded from conversation history and inference.
 - Generated image or audio files held temporarily when delivery or retry needs
   them.
 
@@ -53,16 +56,18 @@ charges, diagnose failures, and protect the service from abuse.
 
 ### 4. AI providers and privacy modes
 
-OpenRouter is Derp's primary inference platform. Paid requests and all group
-requests use routes configured to deny data collection and require zero data
-retention where the selected route supports it. These are provider routing
-controls, not a promise beyond the providers' own terms.
+OpenRouter is Derp's primary inference platform. Paid requests use routes
+configured to deny data collection and require zero data retention where the
+selected route supports it. These are provider routing controls, not a promise
+beyond the providers' own terms.
 
-Free models are optional. They run only after explicit consent in a private
-chat or inline mode. OpenRouter and the selected free-model provider may retain
-prompts and replies under their own policies. Free non-ZDR models never run for
-groups. Consent can be withdrawn from `Model privacy` in Derp's private
-settings; withdrawal affects future requests.
+Free models are optional. OpenRouter and the selected free-model provider may
+retain prompts and replies under their own policies. In private chat and inline
+mode, they run only after the user explicitly accepts the current disclosure.
+In a group, only a current administrator can enable them for that chat after
+reviewing it. Derp then posts a visible public privacy notice; administrators
+should also inform members who join later. Personal and chat choices are
+separate. Either can be withdrawn in the relevant settings for future requests.
 
 Google processes direct services such as text-to-speech. Telegram processes bot
 messages, files, and Stars payments. Production Logfire telemetry receives
@@ -90,20 +95,25 @@ their storage, security, and legal bases.
   authorized user removes or changes them.
 - Generated artifacts are private and expire after at most 6 hours. They may be
   deleted earlier after confirmed delivery or terminal failure.
-- Billing, wallet, subscription, operation, consent, and reconciliation records
-  currently have no automated expiry. They are retained to keep purchases and
-  refunds idempotent, resolve disputes, prevent double charging, and satisfy
-  legal or abuse-prevention needs.
+- A support case's user description and operator decision text are deleted 30
+  days after the case closes. Its reference, category, status, requester
+  relation, timestamps, selected payment relation, and accounting records remain.
+- Billing, wallet, subscription, operation, run-receipt, consent, support-case
+  metadata, and reconciliation records currently have no automated expiry. They
+  are retained to keep purchases and refunds idempotent, resolve cases and
+  disputes, prevent double charging, and satisfy legal or abuse-prevention needs.
 - Telegram, OpenRouter, model providers, Google, and Logfire control their own
   retention. Derp cannot shorten it after data has been sent to them.
 
 ### 6. Your controls
 
-Use `/privacy` in the relevant chat to inspect retention, delete your saved
-messages there, and open this policy. Reply to one of your own messages with
-`/forget` to remove that saved message. Chat admins can clear a chat or topic,
-forget approved shared facts, and disable future ambient capture. Disabling
-ambient capture also purges prior ambient-only snapshots; explicit interactions
+Use `/privacy` in the relevant chat to inspect retention, delete saved messages
+"from my memory," and open the complete policy inside Telegram. Reply to one of
+your own messages with `/forget` to remove that saved message. Destructive
+actions require a confirmation that names the scope and what remains in
+Telegram. Chat admins can clear a chat or topic, forget approved shared facts,
+and disable future ambient capture. Disabling ambient capture purges prior
+ambient-only snapshots across the whole chat; explicit mentions and replies
 remain until separately cleared.
 
 Deletion removes application-managed content and media references. It cannot
@@ -112,9 +122,12 @@ in another message, provider-controlled logs or caches, or accounting facts
 that must remain for a purchase, refund, security, or legal record.
 
 For a privacy or data request, open Derp privately and use `/support`, then
-choose `Privacy or data`. For a purchase, charge, or refund issue, use
-`/paysupport`. Telegram and `@BotSupport` cannot resolve a purchase made from an
-independently operated bot; the in-bot case is the operator's support channel.
+choose `Privacy or data` and send one bounded message. For a purchase, charge,
+or refund issue, choose the relevant category and select the exact Derp payment
+receipt when available; a refund requires one. The operator's answer, decline
+reason, or refund state appears in the same stable case message. Telegram and
+`@BotSupport` cannot resolve a purchase made from an independently operated bot;
+the in-bot case is the operator's support channel.
 
 ### 7. Security and changes
 
@@ -130,8 +143,7 @@ changed free-model terms is requested again before that mode can run.
 Дерп - независимо управляемый Telegram-бот. Эта политика описывает боевого
 бота и данные под контролем его оператора. Единственный публичный канал связи и
 управления приватностью - сам бот: откройте личный чат с Дерпом и отправьте
-`/privacy` или `/support`. Для покупок и возвратов есть `/paysupport`. Отдельной
-почты поддержки нет.
+`/privacy` или `/support`. Отдельной почты нет.
 
 Telegram и указанные ниже провайдеры ИИ обрабатывают данные по собственным
 условиям и политикам.
@@ -150,12 +162,17 @@ Telegram и указанные ниже провайдеры ИИ обрабат
   хранения, согласия на личные кредиты и бесплатные модели;
 - записи операций и инференса: провайдер, модель, токены, стоимость, статус,
   повторы и идентификаторы без содержимого;
+- справки `/info`, связывающие доставленный ответ Telegram с названием модели,
+  режимом приватности, объёмом контекста, доступными данными о токенах и итоговым
+  списанием кредитов. Запрос и ответ в справку не копируются;
 - условия покупок Stars, хеши возможностей счёта, charge ID Telegram,
   подписки, движения кредитов, списания, возвраты и долг. Дерп не получает
   данные банковской карты: Stars обрабатывает Telegram;
 - записи принятия юридических условий и обращения в поддержку. В обращении
-  хранятся только непрозрачный номер, категория, состояние и связь с автором;
-  произвольный текст обращения не сохраняется;
+  хранятся непрозрачный номер, категория, состояние, связь с автором, одно
+  короткое сообщение пользователя, выбранный чек при наличии и итоговая причина
+  оператора либо состояние возврата. Текст поддержки не попадает в историю
+  диалога и инференс;
 - созданные изображения и аудио, временно нужные для доставки или повтора.
 
 Паспортные, авторизационные, контактные, географические, платёжные и web-app
@@ -170,22 +187,24 @@ payload Telegram не попадают в историю диалога.
 
 ### 4. Провайдеры ИИ и режимы приватности
 
-OpenRouter - основная платформа инференса. Платные запросы и запросы из групп
-идут по маршрутам с запретом сбора данных и требованием нулевого хранения, если
-выбранный маршрут это поддерживает. Это настройки маршрута, а не обещание
-сверх условий провайдера.
+OpenRouter - основная платформа инференса. Платные запросы идут по маршрутам с
+запретом сбора данных и требованием нулевого хранения, если выбранный маршрут
+это поддерживает. Это настройка маршрута, а не обещание сверх условий
+провайдера.
 
-Бесплатные модели включаются только после явного согласия в личном чате или
-inline-режиме. OpenRouter и провайдер бесплатной модели могут хранить запросы и
-ответы по своим правилам. В группах бесплатные non-ZDR модели не запускаются.
-Согласие можно отозвать в разделе `Приватность моделей` личных настроек Дерпа;
-это действует на будущие запросы.
+OpenRouter и провайдер бесплатной модели могут хранить запросы и ответы по своим
+правилам. В личном чате и инлайн-режиме бесплатная модель запускается только
+после явного принятия текущего предупреждения. В группе её может включить только
+действующий администратор после такого же предупреждения. Дерп публикует об этом
+заметное сообщение в группе; админам следует отдельно предупредить новых
+участников. Личный выбор и настройка чата независимы. Оба решения можно
+отозвать для будущих запросов.
 
-Google может обрабатывать прямые функции, например синтез речи, и запросы при
-включённом оператором резервном маршруте. Telegram обрабатывает сообщения,
-файлы и платежи Stars. В боевой Logfire-телеметрии есть технические
-идентификаторы, длительности, счётчики, модель, стоимость и очищенные места
-ошибок, но нет сообщений, промптов, ответов, аргументов инструментов, платёжных
+Google может обрабатывать прямые функции, например синтез речи. Telegram
+обрабатывает сообщения, файлы и платежи Stars. В боевой Logfire-телеметрии есть
+технические идентификаторы, длительности, счётчики, модель, стоимость и
+очищенные места ошибок, но нет сообщений, промптов, ответов, аргументов
+инструментов, платёжных
 payload и бинарных данных.
 
 Политики провайдеров:
@@ -208,31 +227,38 @@ payload и бинарных данных.
   уполномоченный пользователь их не удалит или не изменит.
 - Созданные файлы закрыты и хранятся не более 6 часов. После успешной доставки
   или окончательного сбоя они могут удалиться раньше.
-- У записей оплаты, кошельков, подписок, операций, согласий и сверки сейчас нет
-  автоматического срока удаления. Они нужны для идемпотентных покупок и
-  возвратов, споров, защиты от двойных списаний, злоупотреблений и выполнения
-  закона.
+- Сообщение пользователя и ответ оператора удаляются через 30 дней после
+  закрытия обращения. Номер, категория, состояние, связь с пользователем,
+  даты, выбранный платёж и учётные записи остаются.
+- У записей оплаты, кредитов, подписок, операций, справок `/info`, согласий,
+  метаданных поддержки и сверки сейчас нет автоматического срока удаления. Они
+  нужны для идемпотентных покупок и возвратов, обращений и споров, защиты от
+  двойных списаний, злоупотреблений и выполнения закона.
 - Telegram, OpenRouter, провайдеры моделей, Google и Logfire сами определяют
   свои сроки. После отправки данных Дерп не может их сократить.
 
 ### 6. Ваши настройки
 
-Отправьте `/privacy` в нужном чате, чтобы увидеть срок хранения, удалить свои
-сохранённые сообщения и открыть эту политику. Ответьте `/forget` на своё
-сообщение, чтобы удалить его сохранённую копию. Админы чата могут очистить чат
-или тему, забыть общие факты и отключить будущий фоновый контекст. При
-отключении удаляются прошлые фоновые снимки; явные обращения остаются до
-отдельной очистки.
+Отправьте `/privacy` в нужном чате, чтобы увидеть срок хранения, удалить
+сохранённые сообщения из памяти Дерпа и открыть полную политику в Telegram.
+Ответьте `/forget` на своё сообщение, чтобы удалить его сохранённую копию.
+Перед удалением Дерп показывает область действия и напоминает, что останется в
+Telegram. Админы чата могут очистить чат или тему, забыть общие факты и
+отключить будущий фоновый контекст. При отключении удаляются фоновые снимки из
+всего чата; явные упоминания и ответы остаются до отдельной очистки.
 
 Удаление стирает содержимое и ссылки под управлением Дерпа. Оно не удаляет
 сообщения Telegram, чужие копии, текст в сообщениях других людей, логи и кеши
 провайдеров и учётные факты, нужные для оплаты, возврата, безопасности или
 закона.
 
-Для запроса о данных откройте личный чат с Дерпом, отправьте `/support` и
-выберите `Приватность или данные`. По покупке, списанию или возврату отправьте
-`/paysupport`. Telegram и `@BotSupport` не решают вопросы покупок у независимо
-управляемого бота; канал оператора - обращение внутри Дерпа.
+Для запроса о данных откройте личный чат с Дерпом, отправьте `/support`, выберите
+`Приватность или данные` и отправьте одно короткое сообщение. Для оплаты или
+возврата сначала выберите категорию и, если он есть, точный чек Дерпа; для
+возврата чек обязателен. Ответ, причина отказа или состояние возврата появится
+в том же сообщении обращения. Telegram и `@BotSupport` не решают вопросы
+покупок у независимо управляемого бота; канал оператора - обращение внутри
+Дерпа.
 
 ### 7. Безопасность и изменения
 

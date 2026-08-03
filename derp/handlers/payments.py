@@ -44,6 +44,7 @@ from derp.billing import (
 from derp.billing.telegram import (
     PurchaseCallback,
     PurchaseTargetCode,
+    PurchaseTermsAcceptCallback,
     create_stars_invoice_link,
 )
 from derp.common.private_delivery import (
@@ -52,12 +53,17 @@ from derp.common.private_delivery import (
     deliver_sensitive_reply_with_disposition,
 )
 from derp.common.sender import MessageSender
-from derp.handlers.legal_support import TermsAcceptanceSource, build_terms_panel
-from derp.legal import TermsAcceptanceRequiredError
+from derp.handlers.legal_support import (
+    TermsAcceptanceSource,
+    build_terms_panel,
+    terms_callback_version,
+)
+from derp.legal import TERMS_ACCEPTANCE_VERSION, TermsAcceptanceRequiredError
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception, telemetry_fingerprint
 from derp.operator import OperatorAccessPolicy
+from derp.support import SupportRequestService, TermsAcceptanceService
 
 router = Router(name="payments")
 intake_router = Router(name="credit_purchase_intake")
@@ -100,6 +106,14 @@ async def handle_buy_callback(
             ),
             show_alert=True,
         )
+    if callback_data.actor_id not in {0, callback.from_user.id}:
+        return await callback.answer(
+            _(
+                "This purchase menu belongs to someone else. You won't be charged. "
+                "Open /buy for your own menu."
+            ),
+            show_alert=True,
+        )
 
     try:
         if callback_data.kind is ProductKind.SUBSCRIPTION:
@@ -131,6 +145,8 @@ async def handle_buy_callback(
         text, markup = build_terms_panel(
             accepted=False,
             source=TermsAcceptanceSource.PURCHASE_GATE,
+            actor_telegram_id=callback.from_user.id,
+            pending_purchase=callback_data,
         )
         await callback.message.answer(text, reply_markup=markup, protect_content=True)
         return await callback.answer(
@@ -198,6 +214,57 @@ async def handle_buy_callback(
         product_version=handle.product_version,
         target=handle.target.kind.value,
         user_id=user_model.telegram_id,
+    )
+
+
+@intake_router.callback_query(PurchaseTermsAcceptCallback.filter())
+async def accept_purchase_terms(
+    callback: CallbackQuery,
+    callback_data: PurchaseTermsAcceptCallback,
+    purchase_intents: PurchaseIntentService,
+    terms_acceptance: TermsAcceptanceService,
+    user_model: UserModel | None = None,
+    chat_model: ChatModel | None = None,
+    commerce_policy: CommercePolicy = CLOSED_COMMERCE_POLICY,
+) -> None:
+    """Accept current Terms and immediately resume the exact selected purchase."""
+    if (
+        not isinstance(callback.message, Message)
+        or user_model is None
+        or user_model.telegram_id != callback.from_user.id
+        or callback_data.actor_id != callback.from_user.id
+    ):
+        await callback.answer(
+            _(
+                "This purchase is no longer valid. You won't be charged. Open /buy again."
+            ),
+            show_alert=True,
+        )
+        return
+    if callback_data.version != terms_callback_version():
+        await callback.answer(
+            _("These terms changed. Open /buy and review the current version."),
+            show_alert=True,
+        )
+        return
+    await terms_acceptance.accept_current(
+        user_model.id,
+        source=TermsAcceptanceSource.PURCHASE_GATE.value,
+    )
+    await callback.message.edit_text(_("Terms accepted. Continuing your purchase…"))
+    logfire.info(
+        "legal.terms_accepted",
+        terms_version=TERMS_ACCEPTANCE_VERSION,
+        user_id=user_model.telegram_id,
+        purchase_continuation=True,
+    )
+    await handle_buy_callback(
+        callback,
+        callback_data.purchase(),
+        purchase_intents,
+        user_model,
+        chat_model,
+        commerce_policy,
     )
 
 
@@ -299,7 +366,7 @@ async def handle_successful_payment(
             sender,
             _(
                 "Telegram charged this payment, but your credits haven't been "
-                "added. The payment needs review. Don't buy again. Open /paysupport."
+                "added. The payment needs review. Don't buy again. Open /support."
             ),
         )
         return
@@ -309,7 +376,7 @@ async def handle_successful_payment(
     ):
         text = _(
             "Telegram charged this payment, but no credits were added because the "
-            "details need review. Don't pay again. Open /paysupport."
+            "details need review. Don't pay again. Open /support."
         )
     elif (result is not None and result.state is FulfillmentState.CLAWED_BACK) or (
         inbox_outcome is not None
@@ -323,7 +390,7 @@ async def handle_successful_payment(
     elif result.state is FulfillmentState.NEEDS_REVIEW:
         text = _(
             "Telegram charged this payment, but no credits were added because the "
-            "details need review. Don't pay again. Open /paysupport."
+            "details need review. Don't pay again. Open /support."
         )
     elif result.idempotent:
         text = _("This payment was already applied. No credits changed this time.")
@@ -377,6 +444,7 @@ async def handle_refunded_payment(
     payment_settlement: PaymentSettlementService,
     payment_update_inbox: PaymentUpdateInboxService | None = None,
     payment_update_inbox_id: uuid.UUID | None = None,
+    support_requests: SupportRequestService | None = None,
 ) -> None:
     """Validate and reconcile each Telegram refund against its captured charge."""
     payment = message.refunded_payment
@@ -419,7 +487,7 @@ async def handle_refunded_payment(
             sender,
             _(
                 "Telegram sent a refund, but it needs review. No credits changed. "
-                "Open /paysupport."
+                "Open /support."
             ),
         )
         return
@@ -434,17 +502,34 @@ async def handle_refunded_payment(
             sender,
             _(
                 "Telegram sent a refund, but it needs review. No credits changed. "
-                "Open /paysupport."
+                "Open /support."
             ),
         )
         return
+
+    if support_requests is not None:
+        try:
+            if result is not None:
+                await support_requests.complete_refund(result.receipt_id)
+            elif (
+                inbox_outcome is not None
+                and inbox_outcome.settlement_state is PaymentSettlementState.REFUNDED
+            ):
+                await support_requests.complete_reconciled_refunds(limit=10)
+        except Exception as exc:
+            report_exception(
+                "support_refund_completion_failed",
+                exception=exc,
+                level="warning",
+                charge_fingerprint=charge_fingerprint,
+            )
 
     if inbox_outcome is not None and (
         inbox_outcome.disposition is PaymentUpdateDisposition.ATTENTION
     ):
         text = _(
             "Telegram sent a refund, but it needs review. No credits changed. "
-            "Open /paysupport."
+            "Open /support."
         )
     elif result is None:
         text = _("Refund processed. Check /credits.")

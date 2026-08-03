@@ -14,7 +14,7 @@ from derp.models.credit_transaction import CreditTransaction
 from derp.models.daily_usage import DailyUsage
 from derp.models.delivery import Artifact, DeliveryIntent
 from derp.models.inference_usage import InferenceUsage
-from derp.models.legal_support import LegalAcceptance, SupportRequest
+from derp.models.legal_support import LegalAcceptance, SupportIntake, SupportRequest
 from derp.models.message import Message
 from derp.models.paid_operation import (
     DeferredToolRequest,
@@ -23,8 +23,10 @@ from derp.models.paid_operation import (
     PaidOperation,
 )
 from derp.models.refund import PaymentRefundRequest
+from derp.models.run_receipt import ChatRunReceipt
 from derp.models.shared_fact import SharedFact, SharedFactState
 from derp.models.user import User
+from derp.models.user_notice import UserNotice
 from derp.models.wallet import (
     PersonalSpendConsent,
     Wallet,
@@ -40,11 +42,13 @@ __all__ = [
     "PaymentReceipt",
     "PaymentUpdateInbox",
     "PaymentRefundRequest",
+    "ChatRunReceipt",
     "PurchaseIntent",
     "Subscription",
     "SubscriptionCycle",
     "SubscriptionRenewalCommandRecord",
     "User",
+    "UserNotice",
     "Chat",
     "Message",
     "DeferredToolRequest",
@@ -66,4 +70,5 @@ __all__ = [
     "InferenceUsage",
     "LegalAcceptance",
     "SupportRequest",
+    "SupportIntake",
 ]

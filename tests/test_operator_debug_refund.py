@@ -23,7 +23,11 @@ from derp.models import (
     Wallet,
     WalletLot,
 )
-from derp.operator import OperatorDebugRefundResult, OperatorDebugRefundService
+from derp.operator import (
+    OperatorDebugRefundResult,
+    OperatorDebugRefundService,
+    OperatorDebugRefundWorker,
+)
 
 pytestmark = pytest.mark.database
 
@@ -184,6 +188,30 @@ async def test_provider_acceptance_immediately_claws_back_and_is_idempotent(
         assert lot.clawed_back_credits == lot.granted_credits
 
 
+async def test_exact_receipt_refund_uses_the_same_durable_command(
+    db_engine: AsyncEngine,
+) -> None:
+    transactions = _transactions(db_engine)
+    purchase = await _create_fulfilled_debug_purchase(transactions)
+    bot = _bot()
+    service = OperatorDebugRefundService(
+        transactions,
+        bot,
+        PaymentSettlementService(transactions),
+    )
+
+    result = await service.refund_receipt(
+        requester_telegram_id=purchase.operator_id,
+        payment_receipt_id=purchase.receipt_id,
+    )
+
+    assert result is OperatorDebugRefundResult.REQUESTED
+    bot.refund_star_payment.assert_awaited_once_with(
+        user_id=purchase.operator_id,
+        telegram_payment_charge_id=purchase.charge_id,
+    )
+
+
 async def test_missing_debug_purchase_has_no_provider_effect(
     db_engine: AsyncEngine,
 ) -> None:
@@ -255,10 +283,18 @@ async def test_accepted_refund_reconciles_after_local_failure_and_restart(
     )
 
     restarted = OperatorDebugRefundService(transactions, bot, settlement)
-    recovered = await restarted.reconcile()
+    support = MagicMock()
+    support.complete_reconciled_refunds = AsyncMock(return_value=1)
+    support.purge_closed_content = AsyncMock(return_value=0)
+    recovered = await OperatorDebugRefundWorker(
+        restarted,
+        support_maintenance=support,
+    ).sweep()
 
     assert recovered.processed == 1
     assert recovered.reconciled == 1
+    support.complete_reconciled_refunds.assert_awaited_once_with(limit=20)
+    support.purge_closed_content.assert_awaited_once_with(limit=20)
     assert bot.refund_star_payment.await_count == 1
     request = await _refund_request(transactions, purchase.receipt_id)
     assert request.status == "reconciled"

@@ -15,7 +15,18 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import ARRAY, Text, cast, delete, exists, func, or_, select, update
+from sqlalchemy import (
+    ARRAY,
+    Text,
+    cast,
+    delete,
+    exists,
+    func,
+    or_,
+    select,
+    true,
+    update,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
@@ -83,10 +94,13 @@ async def _scrub_deferred_requests_for_scope(
     *,
     chat_id: uuid.UUID,
     thread_id: int | None,
+    all_threads: bool = False,
     now: datetime,
 ) -> int:
     scope = (
-        DeferredToolRequest.thread_id.is_(None)
+        true()
+        if all_threads
+        else DeferredToolRequest.thread_id.is_(None)
         if thread_id is None
         else DeferredToolRequest.thread_id == thread_id
     )
@@ -440,6 +454,7 @@ async def clear_history_scope(
     *,
     chat_telegram_id: int,
     thread_id: int | None,
+    all_threads: bool = False,
 ) -> int:
     """Purge the current chat/topic scope without touching approved facts."""
     chat = await lock_chat_history_policy(
@@ -448,8 +463,12 @@ async def clear_history_scope(
     )
     if chat is None:
         return 0
+    if all_threads and thread_id is not None:
+        raise ValueError("all_threads cannot be combined with a thread ID")
     scope = (
-        Message.thread_id.is_(None)
+        true()
+        if all_threads
+        else Message.thread_id.is_(None)
         if thread_id is None
         else Message.thread_id == thread_id
     )
@@ -457,6 +476,7 @@ async def clear_history_scope(
         session,
         chat_id=chat.id,
         thread_id=thread_id,
+        all_threads=all_threads,
         now=datetime.now(UTC),
     )
     result = await session.execute(

@@ -8,6 +8,7 @@ import pytest
 from aiogram import Bot
 from aiogram.types import CallbackQuery, ChatMemberAdministrator, User
 
+from derp.common.legal_documents import LegalDocumentKind
 from derp.execution import Feature
 from derp.handlers.context_settings import (
     AdminPolicyReplyFilter,
@@ -31,8 +32,8 @@ from derp.handlers.context_settings import (
     toggle_context,
     toggle_personal_spend,
 )
+from derp.handlers.legal_support import LegalDocumentCallback
 from derp.history.policy import ChatPolicyFlag
-from derp.legal import PRIVACY_POLICY_URL, TERMS_OF_USE_URL
 from derp.operations import (
     WalletActivity,
     WalletActivityKind,
@@ -176,20 +177,20 @@ def test_privacy_panel_exposes_personal_deletion_to_non_admin(
 ) -> None:
     text, markup = build_privacy_panel(mock_chat_model(), can_manage=False)
 
-    assert "delete your own saved messages" in text
+    assert "delete your own saved messages from my memory" in text
     labels = [button.text for row in markup.inline_keyboard for button in row]
-    assert "Delete my messages" in labels
+    assert "Delete from my memory" in labels
     assert "Clear this chat" not in labels
     assert "Contact support" in labels
-    urls = {
-        button.text: button.url
+    documents = {
+        button.text: LegalDocumentCallback.unpack(button.callback_data).document
         for row in markup.inline_keyboard
         for button in row
-        if button.url
+        if button.callback_data and button.callback_data.startswith("legal:")
     }
-    assert urls == {
-        "Privacy policy": PRIVACY_POLICY_URL,
-        "Terms of use": TERMS_OF_USE_URL,
+    assert documents == {
+        "Privacy policy": LegalDocumentKind.PRIVACY,
+        "Terms of use": LegalDocumentKind.TERMS,
     }
 
 
@@ -589,7 +590,7 @@ async def test_toggle_requires_live_admin_and_purges_when_disabled(
     db = MagicMock()
     db.session.return_value.__aenter__ = AsyncMock(return_value=session)
     db.session.return_value.__aexit__ = AsyncMock(return_value=None)
-    callback = ContextCallback(action=ContextAction.TOGGLE, value=0)
+    callback = ContextCallback(action=ContextAction.CLEAN_AMBIENT, value=0)
 
     with (
         patch(
@@ -619,7 +620,7 @@ async def test_toggle_requires_live_admin_and_purges_when_disabled(
         enabled=False,
     )
     assert chat.ambient_history_enabled is False
-    assert "4 saved messages deleted" in query.answer.await_args.args[0]
+    assert "4 saved messages removed from my memory" in query.answer.await_args.args[0]
     message.edit_text.assert_awaited_once()
 
 
@@ -653,7 +654,10 @@ async def test_non_admin_toggle_fails_before_database_access(
 
 @pytest.mark.parametrize(
     ("removed", "expected"),
-    [(1, "Deleted 1 saved message"), (2, "Deleted 2 saved messages")],
+    [
+        (1, "Deleted 1 saved message from my memory"),
+        (2, "Deleted 2 saved messages from my memory"),
+    ],
 )
 @pytest.mark.asyncio
 async def test_personal_deletion_uses_callback_actor_identity(

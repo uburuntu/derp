@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from datetime import UTC
 from decimal import Decimal
@@ -12,10 +13,11 @@ from importlib.metadata import PackageNotFoundError, version
 import logfire
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-from aiogram.filters import Command
+from aiogram.filters import BaseFilter, Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import (
     CallbackQuery,
+    ForceReply,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -28,6 +30,7 @@ from derp.catalog import CATALOG_VERIFIED_ON, GOOGLE_MODEL_CATALOG
 from derp.command_menu import configure_bot_command_menu
 from derp.common.localization import format_local_integer
 from derp.common.sender import MessageSender
+from derp.db import DatabaseManager, remove_disqualified_message
 from derp.handlers.debug import debug_buy_command
 from derp.history.capture import suppress_outbound_history
 from derp.observability import report_exception
@@ -47,7 +50,13 @@ from derp.operator import (
     OperatorOnlyFilter,
     OperatorProbeStatus,
 )
-from derp.support import OperatorSupportCase, SupportKind, SupportRequestService
+from derp.support import (
+    OperatorSupportCase,
+    SupportKind,
+    SupportRequestService,
+    SupportStatus,
+)
+from derp.support.telegram import build_support_status_receipt
 
 router = Router(name="operator")
 purchase_test_router = Router(name="operator_purchase_test")
@@ -64,6 +73,7 @@ _OPERATOR_CALLBACK_PREFIXES = (
     "opq:",
     "opqr:",
     "opqc:",
+    "opd:",
 )
 
 
@@ -99,6 +109,8 @@ class OperatorSupportAction(StrEnum):
     """Destructive support actions requiring an actor-bound capability."""
 
     RESOLVE = "resolve"
+    DECLINE = "decline"
+    REFUND = "refund"
 
 
 class OperatorNavigationCallback(CallbackData, prefix="op"):
@@ -124,6 +136,7 @@ class OperatorUtilityCallback(CallbackData, prefix="opu"):
 
 class OperatorSupportQueueCallback(CallbackData, prefix="opq"):
     action: OperatorSupportQueueAction
+    offset: int = 0
 
 
 class OperatorSupportResolveCallback(CallbackData, prefix="opqr"):
@@ -132,6 +145,41 @@ class OperatorSupportResolveCallback(CallbackData, prefix="opqr"):
 
 class OperatorSupportResolveConfirmCallback(CallbackData, prefix="opqc"):
     token: str
+
+
+class OperatorSupportDecisionCallback(CallbackData, prefix="opd"):
+    reference: str
+    action: OperatorSupportAction
+
+
+class OperatorSupportReplyFilter(BaseFilter):
+    """Recover one localized ForceReply decision without conversational state."""
+
+    async def __call__(self, message: Message) -> dict[str, object] | bool:
+        reply = message.reply_to_message
+        if (
+            message.chat.type != "private"
+            or message.from_user is None
+            or message.chat.id != message.from_user.id
+            or reply is None
+            or reply.from_user is None
+            or not reply.from_user.is_bot
+        ):
+            return False
+        prompt = reply.text
+        if not prompt:
+            return False
+        references = re.findall(r"\b[A-Z0-9]{6,16}\b", prompt)
+        if len(references) != 1:
+            return False
+        reference = references[0]
+        for action in (OperatorSupportAction.RESOLVE, OperatorSupportAction.DECLINE):
+            if prompt == _operator_support_reply_prompt(action, reference):
+                return {
+                    "support_action": action,
+                    "support_reference": reference,
+                }
+        return False
 
 
 def build_operator_panel(
@@ -193,30 +241,21 @@ def build_operator_support_queue(
     cases: tuple[OperatorSupportCase, ...],
     *,
     notice: str | None = None,
+    offset: int = 0,
+    total: int | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Render the bounded durable queue with operator-only actor identifiers."""
     sections = [_("<b>Support queue</b>")]
     if notice:
         sections.append(notice)
     if cases:
-        sections.extend(
-            _(
-                "<code>{reference}</code> · {kind}\n"
-                "{created_at} · user <code>{requester_id}</code>"
-            ).format(
-                reference=escape(case.reference),
-                kind=escape(_support_kind(case.kind)),
-                created_at=escape(_support_created_at(case)),
-                requester_id=case.requester_telegram_id,
-            )
-            for case in cases
-        )
+        sections.extend(_operator_support_case_summary(case) for case in cases)
     else:
         sections.append(_("No open cases."))
     rows = [
         [
             InlineKeyboardButton(
-                text=_("Resolve {reference}").format(reference=case.reference),
+                text=_("Open {reference}").format(reference=case.reference),
                 callback_data=OperatorSupportResolveCallback(
                     reference=case.reference
                 ).pack(),
@@ -224,11 +263,126 @@ def build_operator_support_queue(
         ]
         for case in cases
     ]
+    total = len(cases) if total is None else total
+    page_buttons = []
+    if offset > 0:
+        page_buttons.append(
+            InlineKeyboardButton(
+                text=_("Previous"),
+                callback_data=OperatorSupportQueueCallback(
+                    action=OperatorSupportQueueAction.LIST,
+                    offset=max(0, offset - 8),
+                ).pack(),
+            )
+        )
+    if offset + len(cases) < total:
+        page_buttons.append(
+            InlineKeyboardButton(
+                text=_("Next"),
+                callback_data=OperatorSupportQueueCallback(
+                    action=OperatorSupportQueueAction.LIST,
+                    offset=offset + 8,
+                ).pack(),
+            )
+        )
+    if page_buttons:
+        rows.append(page_buttons)
     rows.append(
         [
             _nav_button(_("Back"), OperatorView.COMMERCE),
             InlineKeyboardButton(
                 text=_("Refresh"),
+                callback_data=OperatorSupportQueueCallback(
+                    action=OperatorSupportQueueAction.LIST
+                ).pack(),
+            ),
+        ]
+    )
+    return "\n\n".join(sections), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_operator_support_case(
+    case: OperatorSupportCase,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Render the facts and decisions for one support case."""
+    sections = [_operator_support_case_summary(case)]
+    if case.description:
+        sections.append(
+            _("<b>User note</b>\n<blockquote expandable>{note}</blockquote>").format(
+                note=escape(case.description)
+            )
+        )
+    if case.payment:
+        credit_text = (
+            _("{count} credits").format(count=case.payment.credits)
+            if case.payment.credits is not None
+            else _("credits unknown")
+        )
+        sections.append(
+            _(
+                "<b>Payment</b>\n{stars} Stars · {credits}\n{created_at} · {status}"
+            ).format(
+                stars=case.payment.stars,
+                credits=credit_text,
+                created_at=case.payment.created_at.astimezone(UTC).strftime(
+                    "%Y-%m-%d %H:%M UTC"
+                ),
+                status=escape(case.payment.status.replace("_", " ")),
+            )
+        )
+    if case.status is SupportStatus.REFUND_PENDING:
+        if case.decision_reason:
+            sections.append(
+                _("<b>Status</b>\n{reason}").format(reason=escape(case.decision_reason))
+            )
+        rows = []
+        if case.payment is not None:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=_("Retry refund"),
+                        callback_data=OperatorSupportDecisionCallback(
+                            reference=case.reference,
+                            action=OperatorSupportAction.REFUND,
+                        ).pack(),
+                    )
+                ]
+            )
+        rows.extend(_support_queue_navigation().inline_keyboard)
+        return "\n\n".join(sections), InlineKeyboardMarkup(inline_keyboard=rows)
+
+    actions = []
+    if case.kind is SupportKind.REFUND and case.payment is not None:
+        actions.append(
+            InlineKeyboardButton(
+                text=_("Refund"),
+                callback_data=OperatorSupportDecisionCallback(
+                    reference=case.reference,
+                    action=OperatorSupportAction.REFUND,
+                ).pack(),
+            )
+        )
+    actions.append(
+        InlineKeyboardButton(
+            text=_("Reply and close"),
+            callback_data=OperatorSupportDecisionCallback(
+                reference=case.reference,
+                action=OperatorSupportAction.RESOLVE,
+            ).pack(),
+        )
+    )
+    rows = [actions]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=_("Decline"),
+                callback_data=OperatorSupportDecisionCallback(
+                    reference=case.reference,
+                    action=OperatorSupportAction.DECLINE,
+                ).pack(),
+            ),
+            InlineKeyboardButton(
+                text=_("Back"),
                 callback_data=OperatorSupportQueueCallback(
                     action=OperatorSupportQueueAction.LIST
                 ).pack(),
@@ -641,6 +795,7 @@ async def check_operator_inference(
 @router.callback_query(OperatorSupportQueueCallback.filter())
 async def show_operator_support_queue(
     callback: CallbackQuery,
+    callback_data: OperatorSupportQueueCallback,
     support_requests: SupportRequestService,
 ) -> None:
     """Refresh the support queue directly from its durable database state."""
@@ -652,6 +807,7 @@ async def show_operator_support_queue(
         message,
         support_requests=support_requests,
         operator_id=callback.from_user.id,
+        offset=callback_data.offset,
     )
 
 
@@ -660,9 +816,8 @@ async def request_operator_support_resolution(
     callback: CallbackQuery,
     callback_data: OperatorSupportResolveCallback,
     support_requests: SupportRequestService,
-    operator_confirmations: OperatorConfirmationStore,
 ) -> None:
-    """Bind one exact open case to a short-lived resolution capability."""
+    """Open one exact case with the facts needed for a decision."""
     message = await _private_operator_callback(callback)
     if message is None:
         return
@@ -684,49 +839,8 @@ async def request_operator_support_resolution(
             operator_id=callback.from_user.id,
         )
         return
-    try:
-        token = operator_confirmations.issue(
-            actor_id=callback.from_user.id,
-            action=OperatorSupportAction.RESOLVE,
-            resource_key=case.reference,
-        )
-    except OperatorConfirmationCapacityError:
-        await callback.answer(
-            _("Too many pending confirmations. Try again shortly."),
-            show_alert=True,
-        )
-        return
     await callback.answer()
-    text = _(
-        "<b>Resolve support case?</b>\n"
-        "<code>{reference}</code> · {kind}\n"
-        "{created_at} · user <code>{requester_id}</code>"
-    ).format(
-        reference=escape(case.reference),
-        kind=escape(_support_kind(case.kind)),
-        created_at=escape(_support_created_at(case)),
-        requester_id=case.requester_telegram_id,
-    )
-    markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=_("Resolve case"),
-                    callback_data=OperatorSupportResolveConfirmCallback(
-                        token=token
-                    ).pack(),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=_("Cancel"),
-                    callback_data=OperatorSupportQueueCallback(
-                        action=OperatorSupportQueueAction.LIST
-                    ).pack(),
-                )
-            ],
-        ]
-    )
+    text, markup = build_operator_support_case(case)
     await _edit_operator_message(
         message,
         text,
@@ -739,114 +853,147 @@ async def request_operator_support_resolution(
 @router.callback_query(OperatorSupportResolveConfirmCallback.filter())
 async def resolve_operator_support_case(
     callback: CallbackQuery,
-    callback_data: OperatorSupportResolveConfirmCallback,
-    support_requests: SupportRequestService,
-    operator_confirmations: OperatorConfirmationStore,
-    bot: Bot,
 ) -> None:
-    """Notify the requester, then resolve the server-bound case once."""
+    """Reject superseded confirmation buttons without changing a case."""
+    if await _private_operator_callback(callback) is None:
+        return
+    await callback.answer(
+        _("This confirmation expired. Open the case and choose an action again."),
+        show_alert=True,
+    )
+
+
+@router.callback_query(OperatorSupportDecisionCallback.filter())
+async def decide_operator_support_case(
+    callback: CallbackQuery,
+    callback_data: OperatorSupportDecisionCallback,
+    support_requests: SupportRequestService,
+    operator_debug_refunds: OperatorDebugRefundService,
+    bot: Bot,
+    i18n: I18n,
+) -> None:
+    """Collect a reason or submit one exact restart-safe refund."""
     message = await _private_operator_callback(callback)
     if message is None:
         return
-    reference = operator_confirmations.consume_resource(
-        callback_data.token,
-        actor_id=callback.from_user.id,
-        action=OperatorSupportAction.RESOLVE,
-    )
-    if reference is None:
-        await callback.answer(
-            _("This confirmation expired. Choose the action again."),
-            show_alert=True,
-        )
-        return
-    await callback.answer(_("Resolving case"))
-    try:
-        case = await support_requests.get_operator_open(reference)
-    except Exception as exc:
-        report_exception(
-            "operator.support_case_read_failed",
-            exception=exc,
-            operator_id=callback.from_user.id,
-        )
-        await _refresh_support_queue(
-            message,
-            support_requests=support_requests,
-            operator_id=callback.from_user.id,
-            notice=_("Support queue is unavailable. The case was not changed."),
-        )
-        return
+    case = await support_requests.get_operator_open(callback_data.reference)
     if case is None:
-        await _refresh_support_queue(
-            message,
-            support_requests=support_requests,
-            operator_id=callback.from_user.id,
-            notice=_("The case was already resolved."),
-        )
+        await callback.answer(_("This case is no longer open."), show_alert=True)
         return
-
-    try:
-        with suppress_outbound_history():
-            await bot.send_message(
-                case.requester_telegram_id,
-                _(
-                    "<b>Support case resolved</b>\n{kind}: <code>{reference}</code>"
-                ).format(
-                    kind=escape(_support_kind(case.kind)),
-                    reference=escape(case.reference),
-                ),
-                protect_content=True,
-            )
-    except Exception as exc:
-        report_exception(
-            "operator.support_resolution_notification_failed",
-            exception=exc,
-            level="warning",
-            operator_id=callback.from_user.id,
-        )
-        await _refresh_support_queue(
-            message,
-            support_requests=support_requests,
-            operator_id=callback.from_user.id,
-            notice=_("Notification failed. The case remains open."),
-        )
+    if (
+        case.status is SupportStatus.REFUND_PENDING
+        and callback_data.action is not OperatorSupportAction.REFUND
+    ):
+        await callback.answer(_("This refund is already in progress."), show_alert=True)
         return
-
-    try:
-        result = await support_requests.resolve_operator(reference)
-    except Exception as exc:
-        report_exception(
-            "operator.support_resolution_failed",
-            exception=exc,
-            operator_id=callback.from_user.id,
-        )
-        await _refresh_support_queue(
-            message,
-            support_requests=support_requests,
-            operator_id=callback.from_user.id,
-            notice=_(
-                "The requester was notified, but closing failed. The case remains open."
+    if callback_data.action is not OperatorSupportAction.REFUND:
+        await message.answer(
+            _operator_support_reply_prompt(callback_data.action, case.reference),
+            reply_markup=ForceReply(
+                selective=True,
+                input_field_placeholder=_("One short reply"),
             ),
+            protect_content=True,
         )
+        await callback.answer()
         return
-    if result is None or not result.changed:
-        await _refresh_support_queue(
-            message,
-            support_requests=support_requests,
-            operator_id=callback.from_user.id,
-            notice=_("The case was already resolved."),
-        )
+    if case.payment is None:
+        await callback.answer(_("This case has no payment."), show_alert=True)
         return
-
-    logfire.info(
-        "operator.support_case_resolved",
-        operator_id=callback.from_user.id,
+    locale = (
+        case.requester_language_code
+        if case.requester_language_code in i18n.available_locales
+        else i18n.default_locale
     )
+    with i18n.context(), i18n.use_locale(locale):
+        pending_reason = _("Refund requested. Telegram is processing it.")
+        complete_reason = _("Refund complete.")
+        rejected_reason = _("Telegram did not accept this refund. The case stays open.")
+    if case.status is SupportStatus.OPEN:
+        claim = await support_requests.decide_operator(
+            case.reference,
+            operator_telegram_id=callback.from_user.id,
+            status=SupportStatus.REFUND_PENDING,
+            reason=pending_reason,
+        )
+        if claim is None or claim.status is not SupportStatus.REFUND_PENDING:
+            await callback.answer(_("This case is no longer open."), show_alert=True)
+            return
+        case = claim.case
+    await callback.answer(_("Requesting refund"))
+    outcome = await operator_debug_refunds.refund_receipt(
+        requester_telegram_id=case.requester_telegram_id,
+        payment_receipt_id=case.payment.receipt_id,
+    )
+    if outcome is OperatorDebugRefundResult.REQUESTED:
+        operator_notice = _("Refund complete.")
+        await support_requests.complete_refund(
+            case.payment.receipt_id,
+            reason=complete_reason,
+        )
+        final_case = await support_requests.get_operator_case(case.reference)
+    elif outcome is OperatorDebugRefundResult.PENDING:
+        operator_notice = _("Refund requested. Telegram is processing it.")
+        final_case = await support_requests.get_operator_case(case.reference)
+    else:
+        operator_notice = _("Telegram did not accept this refund. The case stays open.")
+        final_case = await support_requests.reopen_refund(
+            case.reference,
+            operator_telegram_id=callback.from_user.id,
+            reason=rejected_reason,
+        )
+    if final_case is not None:
+        await _update_requester_case_status(bot, final_case, i18n)
     await _refresh_support_queue(
         message,
         support_requests=support_requests,
         operator_id=callback.from_user.id,
-        notice=_("Case resolved. The requester was notified."),
+        notice=operator_notice,
     )
+
+
+@router.message(OperatorSupportReplyFilter())
+async def finish_operator_support_case(
+    message: Message,
+    support_requests: SupportRequestService,
+    db: DatabaseManager,
+    bot: Bot,
+    i18n: I18n,
+    support_action: OperatorSupportAction,
+    support_reference: str,
+) -> None:
+    """Store one operator reply, close the case, and edit its stable receipt."""
+    note = (message.text or "").strip()
+    async with db.session() as session:
+        await remove_disqualified_message(
+            session,
+            chat_telegram_id=message.chat.id,
+            telegram_message_id=message.message_id,
+        )
+    if not 1 <= len(note) <= 800:
+        with suppress_outbound_history():
+            await message.reply(_("Keep the reply under 800 characters."))
+        return
+    status = (
+        SupportStatus.RESOLVED
+        if support_action is OperatorSupportAction.RESOLVE
+        else SupportStatus.DECLINED
+    )
+    result = await support_requests.decide_operator(
+        support_reference,
+        operator_telegram_id=message.from_user and message.from_user.id or 0,
+        status=status,
+        reason=note,
+    )
+    if result is None or not result.changed:
+        with suppress_outbound_history():
+            await message.reply(_("That case is already closed."))
+        return
+    await _update_requester_case_status(bot, result.case, i18n)
+    with suppress_outbound_history():
+        await message.reply(
+            _("Case {reference} closed.").format(reference=result.case.reference)
+        )
 
 
 @stale_callback_router.callback_query(F.data.startswith(_OPERATOR_CALLBACK_PREFIXES))
@@ -920,10 +1067,16 @@ async def _refresh_support_queue(
     support_requests: SupportRequestService,
     operator_id: int,
     notice: str | None = None,
+    offset: int = 0,
 ) -> None:
     try:
-        cases = await support_requests.list_operator_open()
-        text, markup = build_operator_support_queue(cases, notice=notice)
+        page = await support_requests.list_operator_page(offset=offset)
+        text, markup = build_operator_support_queue(
+            page.cases,
+            notice=notice,
+            offset=page.offset,
+            total=page.total,
+        )
     except Exception as exc:
         report_exception(
             "operator.support_queue_refresh_failed",
@@ -1656,6 +1809,93 @@ def _support_kind(kind: SupportKind) -> str:
         SupportKind.PRIVACY: _("Privacy or data"),
         SupportKind.ACCESS: _("Access or account"),
     }[kind]
+
+
+def _operator_support_case_summary(case: OperatorSupportCase) -> str:
+    status = (
+        ""
+        if case.status is SupportStatus.OPEN
+        else _(" · {status}").format(status=case.status.value.replace("_", " "))
+    )
+    return _(
+        "<code>{reference}</code> · {kind}{status}\n"
+        "{created_at} · user <code>{requester_id}</code>"
+    ).format(
+        reference=escape(case.reference),
+        kind=escape(_support_kind(case.kind)),
+        status=escape(status),
+        created_at=escape(_support_created_at(case)),
+        requester_id=case.requester_telegram_id,
+    )
+
+
+def _operator_support_reply_prompt(
+    action: OperatorSupportAction,
+    reference: str,
+) -> str:
+    if action is OperatorSupportAction.RESOLVE:
+        return _(
+            "Reply and close {reference}\nSend one short message for the user."
+        ).format(reference=reference)
+    if action is OperatorSupportAction.DECLINE:
+        return _("Decline {reference}\nSend one short reason for the user.").format(
+            reference=reference
+        )
+    raise ValueError("refund decisions do not use a reply prompt")
+
+
+async def _update_requester_case_status(
+    bot: Bot,
+    case: OperatorSupportCase,
+    i18n: I18n,
+) -> None:
+    """Idempotently edit the stable case message instead of sending duplicates."""
+    if case.status_message is None:
+        logfire.warning(
+            "operator.support_status_message_missing",
+            reference=case.reference,
+        )
+        return
+    locale = (
+        case.requester_language_code
+        if case.requester_language_code in i18n.available_locales
+        else i18n.default_locale
+    )
+    with i18n.context(), i18n.use_locale(locale):
+        text, markup = build_support_status_receipt(
+            case,
+            actor_telegram_id=case.requester_telegram_id,
+        )
+    try:
+        with suppress_outbound_history():
+            await bot.edit_message_text(
+                text,
+                chat_id=case.status_message.chat_id,
+                message_id=case.status_message.message_id,
+                reply_markup=markup,
+            )
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in exc.message.lower():
+            report_exception(
+                "operator.support_status_edit_failed",
+                exception=exc,
+                level="warning",
+                reference=case.reference,
+            )
+    except TelegramAPIError as exc:
+        report_exception(
+            "operator.support_status_edit_failed",
+            exception=exc,
+            level="warning",
+            reference=case.reference,
+        )
+    except Exception as exc:
+        report_exception(
+            "operator.support_status_edit_failed",
+            exception=exc,
+            level="warning",
+            reference=case.reference,
+        )
 
 
 def _support_created_at(case: OperatorSupportCase) -> str:

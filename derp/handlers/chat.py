@@ -40,6 +40,7 @@ from derp.common.extractor import Extractor
 from derp.config import settings
 from derp.db import (
     DatabaseManager,
+    claim_user_notice,
     get_db_manager,
     list_approved_shared_facts,
     store_tool_transcript,
@@ -56,7 +57,10 @@ from derp.features.chat_accounting import (
     PaidChatExecutionGrant,
 )
 from derp.filters import DerpMentionFilter
-from derp.handlers.context_settings import ensure_group_context_notice
+from derp.handlers.context_settings import (
+    build_free_model_recovery,
+    ensure_group_context_notice,
+)
 from derp.handlers.tool_approvals import (
     approval_service,
     live_image_source,
@@ -65,7 +69,7 @@ from derp.handlers.tool_approvals import (
 from derp.handlers.tool_approvals import (
     router as tool_approvals_router,
 )
-from derp.history.capture import capture_outbound_history
+from derp.history.capture import capture_outbound_history, suppress_outbound_history
 from derp.history.core import (
     AttachmentReference,
     LogicalTurn,
@@ -103,6 +107,7 @@ from derp.inference import (
     InferenceContext,
     InferenceRecorder,
     decide_non_zdr_free_inference,
+    project_chat_free_model_policy,
     project_inference_privacy,
 )
 from derp.llm import (
@@ -120,6 +125,7 @@ from derp.models import User as UserModel
 from derp.observability import report_exception
 from derp.operations import OperationId, chat_execution_budget
 from derp.operator import OperatorOnlyFilter
+from derp.run_info import ChatRunDelivery, RunInfoService, RunPrivacyMode
 from derp.tools import create_chat_toolset
 from derp.tools.authorization import ActorRoleResolver
 from derp.tools.policy import (
@@ -155,6 +161,7 @@ def _select_chat_plans(
     user: UserModel,
     chat_type: str,
     turn: UserTextTurn,
+    chat: ChatModel | None = None,
 ) -> tuple[ExecutionPlan, ExecutionPlan | None]:
     modalities = _chat_modalities(turn)
     if not settings.uses_openrouter(Feature.CHAT):
@@ -176,6 +183,12 @@ def _select_chat_plans(
         context=context,
         current_tos_version=FREE_INFERENCE_TOS_VERSION,
         current_privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+        chat_policy=(
+            project_chat_free_model_policy(chat)
+            if chat is not None
+            and context in {InferenceContext.GROUP, InferenceContext.SUPERGROUP}
+            else None
+        ),
     )
     selector = ModelSelector()
     paid_model = selector.select_chat(ChatSelection(paid=True, modalities=modalities))
@@ -219,6 +232,7 @@ router.include_router(tool_approvals_router)
 
 # Provider serialization and registered tool schemas are outside history estimation.
 _CHAT_RUNTIME_OVERHEAD_TOKENS = 2_048
+_PAID_CHAT_NOTICE_VERSION = 1
 
 
 @logfire.instrument("extract_media", extract_args=False)
@@ -579,6 +593,78 @@ async def _release_undelivered_paid_chat_turn(
         )
 
 
+async def _record_chat_run_receipt(
+    *,
+    db: DatabaseManager,
+    decision: PaidChatExecutionGrant | EconomyChatExecutionGrant,
+    history: LoadedHistory,
+    delivery: AgentContentDelivered,
+    user_model: UserModel,
+    chat_model: ChatModel,
+    request_message_id: int,
+) -> None:
+    """Persist inspectable delivery facts without affecting the user response."""
+    try:
+        await RunInfoService(db.session).record_chat_delivery(
+            ChatRunDelivery(
+                operation_id=decision.operation_id.value,
+                chat_id=chat_model.id,
+                requester_id=user_model.id,
+                request_message_id=request_message_id,
+                response_message_ids=delivery.message_ids,
+                model_key=decision.plan.model.key.value,
+                model_display_name=decision.plan.model.display_name,
+                privacy_mode=(
+                    RunPrivacyMode.PRIVATE
+                    if isinstance(decision, PaidChatExecutionGrant)
+                    else RunPrivacyMode.FREE
+                ),
+                context_messages=len(history.messages),
+                context_turns=len(history.turns),
+                context_estimated_tokens=history.estimated_tokens,
+            )
+        )
+    except Exception as exc:
+        report_exception(
+            "chat_run_receipt_recording_failed",
+            exception=exc,
+            level="warning",
+            operation_id=str(decision.operation_id),
+        )
+
+
+async def _show_first_paid_chat_notice(
+    *,
+    db: DatabaseManager,
+    message: Message,
+    user_model: UserModel,
+) -> None:
+    """Best-effort one-time disclosure before a user's first paid chat run."""
+    try:
+        async with db.session() as session:
+            claimed = await claim_user_notice(
+                session,
+                user_id=user_model.id,
+                notice="paid_chat",
+                version=_PAID_CHAT_NOTICE_VERSION,
+            )
+        if claimed is True:
+            with suppress_outbound_history():
+                await message.reply(
+                    _(
+                        "Private models use credits. Reply to any answer with "
+                        "/info for the details."
+                    )
+                )
+    except Exception as exc:
+        report_exception(
+            "paid_chat_notice_failed",
+            exception=exc,
+            level="warning",
+            user_id=str(user_model.id),
+        )
+
+
 @router.message(Command("context"), OperatorOnlyFilter())
 async def show_context(message: Message, chat_model: ChatModel | None) -> None:
     """Operator command to show the context that would be sent to the agent."""
@@ -687,6 +773,7 @@ class ChatAgentHandler(MessageHandler):
                 user=user_model,
                 chat_type=self.event.chat.type,
                 turn=current_turn,
+                chat=chat_model,
             )
             estimated_input_tokens = _estimate_chat_input_tokens(
                 history=standard_probe,
@@ -717,12 +804,25 @@ class ChatAgentHandler(MessageHandler):
                 return None
             if isinstance(decision, PaidChatExecutionGrant):
                 paid_operation_id = decision.operation_id
+                await _show_first_paid_chat_notice(
+                    db=db,
+                    message=self.event,
+                    user_model=user_model,
+                )
             elif isinstance(decision, ChatFallbackUnavailable):
+                try:
+                    inference_context = InferenceContext(self.event.chat.type)
+                except ValueError:
+                    inference_context = InferenceContext.GROUP
+                text, markup = build_free_model_recovery(
+                    user_model,
+                    chat_model,
+                    context=inference_context,
+                    can_manage=actor_role is ActorRole.ADMIN,
+                )
                 return await self.event.reply(
-                    _(
-                        "No free model is available here. Enable free models in "
-                        "a private chat, or add credits for private models."
-                    )
+                    text,
+                    reply_markup=markup,
                 )
             elif not isinstance(decision, EconomyChatExecutionGrant):
                 raise RuntimeError("chat accounting returned an unsupported decision")
@@ -988,6 +1088,15 @@ class ChatAgentHandler(MessageHandler):
                     chat_turn_accounting,
                     paid_operation_id,
                     self.event,
+                )
+                await _record_chat_run_receipt(
+                    db=db,
+                    decision=decision,
+                    history=history,
+                    delivery=delivery,
+                    user_model=user_model,
+                    chat_model=chat_model,
+                    request_message_id=self.event.message_id,
                 )
                 return delivery.message
 

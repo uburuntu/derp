@@ -16,9 +16,13 @@ from derp.db.history import (
 )
 from derp.db.inference_privacy import (
     accept_non_zdr_free_inference,
+    enable_chat_non_zdr_free_inference,
+    get_chat_free_model_policy,
     get_inference_privacy_preference,
+    revoke_chat_non_zdr_free_inference,
     revoke_non_zdr_free_inference,
 )
+from derp.db.notices import claim_user_notice
 from derp.db.queries import (
     get_chat_by_telegram_id,
     get_chat_settings,
@@ -75,6 +79,10 @@ __all__ = [
     "propose_shared_fact",
     "reject_shared_fact",
     "accept_non_zdr_free_inference",
+    "enable_chat_non_zdr_free_inference",
+    "get_chat_free_model_policy",
     "get_inference_privacy_preference",
+    "claim_user_notice",
+    "revoke_chat_non_zdr_free_inference",
     "revoke_non_zdr_free_inference",
 ]

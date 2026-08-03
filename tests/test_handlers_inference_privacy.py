@@ -11,6 +11,7 @@ import pytest
 from aiogram.types import CallbackQuery
 from babel.messages.pofile import read_po
 
+from derp.common.legal_documents import LegalDocumentKind
 from derp.db.inference_privacy import InferencePrivacyRevisionConflictError
 from derp.handlers.context_settings import (
     ContextAction,
@@ -25,10 +26,9 @@ from derp.handlers.context_settings import (
     revoke_inference_privacy_terms,
     show_inference_privacy_menu,
 )
+from derp.handlers.legal_support import LegalDocumentCallback
 from derp.inference import (
-    FREE_INFERENCE_PRIVACY_URL,
     FREE_INFERENCE_PRIVACY_VERSION,
-    FREE_INFERENCE_TOS_URL,
     FREE_INFERENCE_TOS_VERSION,
     InferencePrivacyMode,
     InferencePrivacyPreference,
@@ -108,7 +108,7 @@ def test_private_mode_offers_version_bound_review() -> None:
 
     assert "Mode: Private" in text
     assert "zero-data-retention" in text
-    assert "Groups stay private" in text
+    assert "Group admins" in text
     action_button = markup.inline_keyboard[0][0]
     assert action_button.text == "Review free-model terms"
     assert action_button.callback_data is not None
@@ -121,7 +121,7 @@ def test_current_acceptance_offers_one_action_revocation() -> None:
     text, markup = build_inference_privacy_panel(_preference())
 
     assert "Mode: Free models allowed" in text
-    assert "Groups stay private" in text
+    assert "Group admins" in text
     action_button = markup.inline_keyboard[0][0]
     assert action_button.text == "Use private models only"
     assert action_button.callback_data is not None
@@ -151,11 +151,15 @@ def test_review_links_and_acceptance_match_current_legal_versions() -> None:
     text, markup = build_inference_privacy_review(7)
 
     assert "may store prompts and replies" in text
-    assert "Groups stay private" in text
+    assert "Group admins" in text
     buttons = _buttons(markup)
-    assert {button.text: button.url for button in buttons if button.url} == {
-        "Terms": FREE_INFERENCE_TOS_URL,
-        "Privacy": FREE_INFERENCE_PRIVACY_URL,
+    assert {
+        button.text: LegalDocumentCallback.unpack(button.callback_data).document
+        for button in buttons
+        if button.callback_data and button.callback_data.startswith("legal:")
+    } == {
+        "Terms": LegalDocumentKind.TERMS,
+        "Privacy": LegalDocumentKind.PRIVACY,
     }
     accept = next(button for button in buttons if button.text.startswith("I agree"))
     assert accept.callback_data is not None

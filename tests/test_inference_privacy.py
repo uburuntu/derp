@@ -104,15 +104,26 @@ def test_current_explicit_acceptance_allows_only_supported_personal_contexts(
 
 
 @pytest.mark.parametrize(
-    "context",
-    [InferenceContext.GROUP, InferenceContext.SUPERGROUP, InferenceContext.CHANNEL],
+    "context", [InferenceContext.GROUP, InferenceContext.SUPERGROUP]
 )
-def test_non_zdr_free_inference_is_never_eligible_outside_private_or_inline(
+def test_group_free_inference_requires_chat_admin_policy(
     context: InferenceContext,
 ) -> None:
     decision = decide_non_zdr_free_inference(
         _accepted_preference(),
         context=context,
+        current_tos_version=TOS_VERSION,
+        current_privacy_version=PRIVACY_VERSION,
+    )
+
+    assert not decision.allowed
+    assert decision.reason is NonZdrFreeInferenceReason.CHAT_ADMIN_OPT_IN_REQUIRED
+
+
+def test_channel_free_inference_remains_unavailable() -> None:
+    decision = decide_non_zdr_free_inference(
+        _accepted_preference(),
+        context=InferenceContext.CHANNEL,
         current_tos_version=TOS_VERSION,
         current_privacy_version=PRIVACY_VERSION,
     )

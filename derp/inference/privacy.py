@@ -1,4 +1,4 @@
-"""Content-free user consent and eligibility for non-ZDR free inference."""
+"""Content-free user and chat consent for non-ZDR free inference."""
 
 from __future__ import annotations
 
@@ -7,16 +7,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Final, Protocol, Self
+from uuid import UUID
 
-from derp.legal import PRIVACY_POLICY_URL, TERMS_OF_USE_URL
+from derp.legal import LEGAL_DOCUMENT_VERSION, TERMS_ACCEPTANCE_VERSION
 
 FREE_INFERENCE_LEGAL_VERSION_MAX_LENGTH: Final = 64
-FREE_INFERENCE_TOS_URL: Final = TERMS_OF_USE_URL
-FREE_INFERENCE_PRIVACY_URL: Final = PRIVACY_POLICY_URL
 # Keep legal labels compact enough to share Telegram callback space with the
 # preference revision that prevents stale consent controls from being replayed.
-FREE_INFERENCE_TOS_VERSION: Final = "derp-terms-20260728"
-FREE_INFERENCE_PRIVACY_VERSION: Final = "derp-privacy-20260728"
+FREE_INFERENCE_TOS_VERSION: Final = TERMS_ACCEPTANCE_VERSION
+FREE_INFERENCE_PRIVACY_VERSION: Final = (
+    f"derp-privacy-{LEGAL_DOCUMENT_VERSION.replace('-', '')}"
+)
 _LEGAL_VERSION = re.compile(
     rf"^[A-Za-z0-9._-]{{1,{FREE_INFERENCE_LEGAL_VERSION_MAX_LENGTH}}}$"
 )
@@ -50,12 +51,25 @@ class InferencePrivacyFields(Protocol):
     free_inference_revoked_at: datetime | None
 
 
+class ChatFreeModelFields(Protocol):
+    """Persisted chat policy fields needed at an inference boundary."""
+
+    free_inference_enabled: bool
+    free_inference_revision: int
+    free_inference_tos_version: str | None
+    free_inference_privacy_version: str | None
+    free_inference_accepted_by_user_id: UUID | None
+    free_inference_accepted_at: datetime | None
+    free_inference_revoked_at: datetime | None
+
+
 class NonZdrFreeInferenceReason(StrEnum):
     """Stable reasons for one non-ZDR free-inference decision."""
 
     ALLOWED = "allowed"
     CONTEXT_NOT_ALLOWED = "context_not_allowed"
     USER_OPT_IN_REQUIRED = "user_opt_in_required"
+    CHAT_ADMIN_OPT_IN_REQUIRED = "chat_admin_opt_in_required"
     LEGAL_REACCEPTANCE_REQUIRED = "legal_reacceptance_required"
 
 
@@ -174,6 +188,129 @@ class InferencePrivacyPreference:
 
 
 @dataclass(frozen=True, slots=True)
+class ChatFreeModelPolicy:
+    """One chat's versioned administrator choice for free-model fallback."""
+
+    enabled: bool = False
+    revision: int = 1
+    accepted_tos_version: str | None = None
+    accepted_privacy_version: str | None = None
+    accepted_by_user_id: UUID | None = None
+    accepted_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("enabled must be a bool")
+        if (
+            isinstance(self.revision, bool)
+            or not isinstance(self.revision, int)
+            or self.revision <= 0
+        ):
+            raise ValueError("revision must be a positive integer")
+
+        acceptance = (
+            self.accepted_tos_version,
+            self.accepted_privacy_version,
+            self.accepted_by_user_id,
+            self.accepted_at,
+        )
+        if any(value is None for value in acceptance) and any(
+            value is not None for value in acceptance
+        ):
+            raise ValueError("chat legal acceptance fields must be present together")
+        if self.accepted_tos_version is not None:
+            object.__setattr__(
+                self,
+                "accepted_tos_version",
+                _legal_version(self.accepted_tos_version, "accepted_tos_version"),
+            )
+        if self.accepted_privacy_version is not None:
+            object.__setattr__(
+                self,
+                "accepted_privacy_version",
+                _legal_version(
+                    self.accepted_privacy_version,
+                    "accepted_privacy_version",
+                ),
+            )
+        if self.accepted_by_user_id is not None and not isinstance(
+            self.accepted_by_user_id, UUID
+        ):
+            raise TypeError("accepted_by_user_id must be a UUID")
+        if self.accepted_at is not None:
+            _require_aware(self.accepted_at, "accepted_at")
+        if self.revoked_at is not None:
+            _require_aware(self.revoked_at, "revoked_at")
+            if self.accepted_at is None:
+                raise ValueError("revocation requires a prior legal acceptance")
+            if self.revoked_at < self.accepted_at:
+                raise ValueError("revoked_at cannot precede accepted_at")
+
+        if self.enabled:
+            if self.accepted_at is None:
+                raise ValueError("enabled free models require legal acceptance")
+            if self.revoked_at is not None:
+                raise ValueError("enabled free models cannot be revoked")
+        elif self.accepted_at is None:
+            if self.revoked_at is not None:
+                raise ValueError("the default chat policy cannot be revoked")
+        elif self.revoked_at is None:
+            raise ValueError("disabled accepted policy must record revocation")
+
+    def enable(
+        self,
+        *,
+        tos_version: str,
+        privacy_version: str,
+        accepted_by_user_id: UUID,
+        accepted_at: datetime,
+    ) -> Self:
+        """Record one explicit administrator acceptance for this chat."""
+        tos = _legal_version(tos_version, "tos_version")
+        privacy = _legal_version(privacy_version, "privacy_version")
+        if not isinstance(accepted_by_user_id, UUID):
+            raise TypeError("accepted_by_user_id must be a UUID")
+        _require_aware(accepted_at, "accepted_at")
+        if (
+            self.enabled
+            and self.accepted_tos_version == tos
+            and self.accepted_privacy_version == privacy
+        ):
+            return self
+        last_change = self.revoked_at or self.accepted_at
+        if last_change is not None and accepted_at < last_change:
+            raise ValueError("accepted_at cannot precede the current chat policy")
+        return type(self)(
+            enabled=True,
+            revision=self.revision + 1,
+            accepted_tos_version=tos,
+            accepted_privacy_version=privacy,
+            accepted_by_user_id=accepted_by_user_id,
+            accepted_at=accepted_at,
+        )
+
+    def revoke(self, *, revoked_at: datetime) -> Self:
+        """Disable future free fallback while retaining its acceptance audit."""
+        _require_aware(revoked_at, "revoked_at")
+        if not self.enabled:
+            return self
+        if self.accepted_at is None:  # pragma: no cover - guarded by construction
+            raise RuntimeError("enabled chat policy omitted its legal acceptance")
+        if revoked_at < self.accepted_at:
+            raise ValueError("revoked_at cannot precede accepted_at")
+        return type(self)(
+            enabled=False,
+            revision=self.revision + 1,
+            accepted_tos_version=self.accepted_tos_version,
+            accepted_privacy_version=self.accepted_privacy_version,
+            accepted_by_user_id=self.accepted_by_user_id,
+            accepted_at=self.accepted_at,
+            revoked_at=revoked_at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class NonZdrFreeInferenceDecision:
     """Identifier-free eligibility outcome for one request context."""
 
@@ -201,8 +338,9 @@ def decide_non_zdr_free_inference(
     context: InferenceContext,
     current_tos_version: str,
     current_privacy_version: str,
+    chat_policy: ChatFreeModelPolicy | None = None,
 ) -> NonZdrFreeInferenceDecision:
-    """Allow current legal consent only in private and inline contexts."""
+    """Apply actor consent privately and administrator policy in groups."""
     if not isinstance(preference, InferencePrivacyPreference):
         raise TypeError("preference must be an InferencePrivacyPreference")
     if not isinstance(context, InferenceContext):
@@ -210,6 +348,18 @@ def decide_non_zdr_free_inference(
     tos = _legal_version(current_tos_version, "current_tos_version")
     privacy = _legal_version(current_privacy_version, "current_privacy_version")
 
+    if context in {InferenceContext.GROUP, InferenceContext.SUPERGROUP}:
+        policy = chat_policy or ChatFreeModelPolicy()
+        if not policy.enabled:
+            reason = NonZdrFreeInferenceReason.CHAT_ADMIN_OPT_IN_REQUIRED
+        elif (
+            policy.accepted_tos_version != tos
+            or policy.accepted_privacy_version != privacy
+        ):
+            reason = NonZdrFreeInferenceReason.LEGAL_REACCEPTANCE_REQUIRED
+        else:
+            reason = NonZdrFreeInferenceReason.ALLOWED
+        return NonZdrFreeInferenceDecision(reason, policy.revision)
     if context not in {InferenceContext.PRIVATE, InferenceContext.INLINE}:
         reason = NonZdrFreeInferenceReason.CONTEXT_NOT_ALLOWED
     elif preference.mode is InferencePrivacyMode.PRIVATE_ONLY:
@@ -241,6 +391,24 @@ def project_inference_privacy(
         return InferencePrivacyPreference()
 
 
+def project_chat_free_model_policy(
+    fields: ChatFreeModelFields,
+) -> ChatFreeModelPolicy:
+    """Project persisted chat policy and fail closed on invalid legacy state."""
+    try:
+        return ChatFreeModelPolicy(
+            enabled=fields.free_inference_enabled,
+            revision=fields.free_inference_revision,
+            accepted_tos_version=fields.free_inference_tos_version,
+            accepted_privacy_version=fields.free_inference_privacy_version,
+            accepted_by_user_id=fields.free_inference_accepted_by_user_id,
+            accepted_at=fields.free_inference_accepted_at,
+            revoked_at=fields.free_inference_revoked_at,
+        )
+    except TypeError, ValueError:
+        return ChatFreeModelPolicy()
+
+
 def _legal_version(value: str, name: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string")
@@ -259,10 +427,10 @@ def _require_aware(value: datetime, name: str) -> None:
 
 __all__ = [
     "FREE_INFERENCE_LEGAL_VERSION_MAX_LENGTH",
-    "FREE_INFERENCE_PRIVACY_URL",
     "FREE_INFERENCE_PRIVACY_VERSION",
-    "FREE_INFERENCE_TOS_URL",
     "FREE_INFERENCE_TOS_VERSION",
+    "ChatFreeModelFields",
+    "ChatFreeModelPolicy",
     "InferenceContext",
     "InferencePrivacyFields",
     "InferencePrivacyMode",
@@ -271,4 +439,5 @@ __all__ = [
     "NonZdrFreeInferenceReason",
     "decide_non_zdr_free_inference",
     "project_inference_privacy",
+    "project_chat_free_model_policy",
 ]

@@ -142,8 +142,12 @@ async def _store_request(
     *,
     thread_id: int | None = 77,
     prompt: str = "private original prompt",
+    scope: tuple[UUID, int, UUID, int] | None = None,
+    message_id: int = 1001,
 ) -> StoredRequest:
-    user_id, user_telegram_id, chat_id, chat_telegram_id = await _create_scope(env)
+    user_id, user_telegram_id, chat_id, chat_telegram_id = scope or await _create_scope(
+        env
+    )
     operation_id = OperationId(uuid4())
     quote = _quote(operation_id, env.clock())
     await env.ledger.register_quote(
@@ -166,7 +170,7 @@ async def _store_request(
     handle = await env.service.create_request(
         operation_id=operation_id,
         quote_id=quote.id,
-        message_id=1001,
+        message_id=message_id,
         tool_call=tool_call,
         original_history=history,
     )
@@ -547,3 +551,65 @@ async def test_scope_clear_scrubs_approval_even_after_source_row_is_gone(
     ) == ({}, [])
     inspected = await approval_env.service.inspect(stored.capability)
     assert inspected.status is DeferredToolStatus.EXPIRED
+
+
+async def test_forum_root_clear_covers_every_topic_and_expires_approvals(
+    approval_env: ApprovalEnvironment,
+) -> None:
+    scope = await _create_scope(approval_env)
+    root = await _store_request(
+        approval_env,
+        thread_id=None,
+        scope=scope,
+        message_id=1001,
+    )
+    selected_topic = await _store_request(
+        approval_env,
+        thread_id=77,
+        scope=scope,
+        message_id=1002,
+    )
+    sibling_topic = await _store_request(
+        approval_env,
+        thread_id=88,
+        scope=scope,
+        message_id=1003,
+    )
+    for stored in (root, selected_topic, sibling_topic):
+        await _store_source_message(approval_env, stored)
+
+    async with approval_env.transactions() as session:
+        removed = await clear_history_scope(
+            session,
+            chat_telegram_id=selected_topic.capability.chat_telegram_id,
+            thread_id=selected_topic.capability.thread_id,
+        )
+
+    assert removed == 1
+    assert (await approval_env.service.inspect(root.capability)).status is (
+        DeferredToolStatus.PENDING
+    )
+    assert (await approval_env.service.inspect(selected_topic.capability)).status is (
+        DeferredToolStatus.EXPIRED
+    )
+    assert (await approval_env.service.inspect(sibling_topic.capability)).status is (
+        DeferredToolStatus.PENDING
+    )
+
+    async with approval_env.transactions() as session:
+        removed = await clear_history_scope(
+            session,
+            chat_telegram_id=root.capability.chat_telegram_id,
+            thread_id=None,
+            all_threads=True,
+        )
+
+    assert removed == 2
+    for stored in (root, selected_topic, sibling_topic):
+        assert await _stored_payload(
+            approval_env,
+            stored.handle.snapshot.request_id,
+        ) == ({}, [])
+        assert (await approval_env.service.inspect(stored.capability)).status is (
+            DeferredToolStatus.EXPIRED
+        )

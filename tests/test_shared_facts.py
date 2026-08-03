@@ -334,3 +334,79 @@ async def test_history_and_approved_facts_are_forgotten_independently(
         )
         == 1
     )
+
+
+async def test_forum_root_forget_covers_approved_facts_in_every_topic(
+    db_session, chat_factory, user_factory
+) -> None:
+    chat = await chat_factory(telegram_id=-9_100_010)
+    proposer = await user_factory(telegram_id=9_100_016)
+    admin = await user_factory(telegram_id=9_100_017)
+
+    async def approved_fact(thread_id: int | None, text: str) -> SharedFact:
+        fact = await propose_shared_fact(
+            db_session,
+            chat_id=chat.id,
+            thread_id=thread_id,
+            proposer_user_id=proposer.id,
+            fact_text=text,
+        )
+        return await approve_shared_fact(
+            db_session,
+            fact_id=fact.id,
+            chat_id=chat.id,
+            thread_id=thread_id,
+            admin_actor_id=admin.id,
+        )
+
+    root = await approved_fact(None, "Root fact")
+    await approved_fact(33, "Selected topic fact")
+    sibling_topic = await approved_fact(44, "Sibling topic fact")
+
+    assert (
+        await forget_approved_shared_facts(
+            db_session,
+            chat_id=chat.id,
+            thread_id=33,
+        )
+        == 1
+    )
+    assert [
+        fact.id
+        for fact in await list_approved_shared_facts(
+            db_session,
+            chat_id=chat.id,
+            thread_id=None,
+        )
+    ] == [root.id]
+    assert [
+        fact.id
+        for fact in await list_approved_shared_facts(
+            db_session,
+            chat_id=chat.id,
+            thread_id=44,
+        )
+    ] == [sibling_topic.id]
+    assert not await list_approved_shared_facts(
+        db_session,
+        chat_id=chat.id,
+        thread_id=33,
+    )
+
+    assert (
+        await forget_approved_shared_facts(
+            db_session,
+            chat_id=chat.id,
+            thread_id=None,
+            all_threads=True,
+        )
+        == 2
+    )
+    assert not await db_session.scalar(
+        select(func.count())
+        .select_from(SharedFact)
+        .where(
+            SharedFact.chat_id == chat.id,
+            SharedFact.state == SharedFactState.APPROVED.value,
+        )
+    )

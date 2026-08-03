@@ -596,7 +596,7 @@ async def test_provider_failure_releases_paid_turn_before_fallback(
     )
     env.accounting.release_delivery_failure.assert_not_awaited()
     env.accounting.capture_success.assert_not_awaited()
-    env.message.reply.assert_awaited_once()
+    assert env.message.reply.await_count == 2
     assert env.message.reply.await_args.args[0] == (
         "I couldn't answer that. You weren't charged. Try again."
     )
@@ -656,7 +656,7 @@ async def test_delivery_failure_releases_paid_turn_and_sends_fallback(
     )
     env.accounting.release_provider_failure.assert_not_awaited()
     env.accounting.capture_success.assert_not_awaited()
-    env.message.reply.assert_awaited_once()
+    assert env.message.reply.await_count == 2
     assert env.message.reply.await_args.args[0] == (
         "I couldn't answer that. You weren't charged. Try again."
     )
@@ -841,7 +841,9 @@ async def test_capture_failure_after_visible_delivery_does_not_retry_or_release(
     assert delivered is env.message
     env.agent_result.reply_to.assert_awaited_once_with(env.message)
     env.accounting.release_provider_failure.assert_not_awaited()
-    env.message.reply.assert_not_awaited()
+    env.message.reply.assert_awaited_once_with(
+        "Private models use credits. Reply to any answer with /info for the details."
+    )
     assert env.report_exception.call_args.args[0] == (
         "chat_turn_capture_failed_after_delivery"
     )

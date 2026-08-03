@@ -31,9 +31,15 @@ from derp.billing import (
     PurchaseTarget,
 )
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
-from derp.billing.telegram import PurchaseCallback, PurchaseTargetCode
+from derp.billing.telegram import (
+    PurchaseCallback,
+    PurchaseTargetCode,
+    PurchaseTermsAcceptCallback,
+)
 from derp.billing.types import RefundedPaymentCommand
+from derp.handlers.legal_support import terms_callback_version
 from derp.handlers.payments import (
+    accept_purchase_terms,
     handle_buy_callback,
     handle_pre_checkout,
     handle_refunded_payment,
@@ -177,10 +183,59 @@ class TestBuyCallback:
 
         callback.bot.create_invoice_link.assert_not_awaited()
         assert "Terms and privacy" in callback.message.answer.await_args.args[0]
+        markup = callback.message.answer.await_args.kwargs["reply_markup"]
+        continuation = PurchaseTermsAcceptCallback.unpack(
+            markup.inline_keyboard[-1][0].callback_data
+        )
+        assert continuation.product_id == "starter"
+        assert continuation.target is PurchaseTargetCode.USER
+        assert continuation.actor_id == 12345
         callback.answer.assert_awaited_once_with(
             "Review and accept the current terms before buying.",
             show_alert=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_terms_acceptance_resumes_exact_purchase(
+        self,
+        make_message,
+        make_user,
+        mock_user_model,
+    ) -> None:
+        user = mock_user_model(user_id=UUID(int=1), telegram_id=12345)
+        handle = _intent(target=PurchaseTarget.user(user.id), product_id="standard")
+        service = _purchase_intents(handle=handle)
+        acceptance = MagicMock()
+        acceptance.accept_current = AsyncMock()
+        callback = _callback(make_message, make_user)
+
+        await accept_purchase_terms(
+            callback,
+            PurchaseTermsAcceptCallback(
+                version=terms_callback_version(),
+                kind=ProductKind.TOP_UP,
+                product_id="standard",
+                target=PurchaseTargetCode.USER,
+                actor_id=12345,
+            ),
+            service,
+            acceptance,
+            user,
+            commerce_policy=OPEN_COMMERCE,
+        )
+
+        acceptance.accept_current.assert_awaited_once_with(
+            user.id,
+            source="purchase_gate",
+        )
+        service.create_top_up_intent.assert_awaited_once_with(
+            payer_user_id=user.id,
+            target=PurchaseTarget.user(user.id),
+            product_id="standard",
+        )
+        callback.bot.create_invoice_link.assert_awaited_once()
+        assert "Terms accepted" in callback.message.edit_text.await_args.args[0]
+        callback.answer.assert_awaited_once_with("Invoice ready")
 
     @pytest.mark.asyncio
     async def test_personal_top_up_creates_bound_intent_and_invoice_link(
@@ -878,6 +933,33 @@ class TestSuccessfulPayment:
 
 
 class TestRefundedPayment:
+    @pytest.mark.asyncio
+    async def test_closes_support_case_for_the_exact_reconciled_receipt(
+        self,
+        make_message,
+        mock_sender,
+    ) -> None:
+        message = _refund_message(make_message)
+        sender = mock_sender(message=message)
+        result = ClawbackResult(
+            receipt_id=UUID(int=58),
+            wallet_id=UUID(int=59),
+            removed_available_credits=10,
+            debt_created_credits=0,
+            idempotent=False,
+        )
+        support = MagicMock()
+        support.complete_refund = AsyncMock(return_value=1)
+
+        await handle_refunded_payment(
+            message,
+            sender,
+            _refund_settlement(result),
+            support_requests=support,
+        )
+
+        support.complete_refund.assert_awaited_once_with(result.receipt_id)
+
     @pytest.mark.asyncio
     async def test_maps_allowlisted_fields_and_reports_removed_value_and_debt(
         self,

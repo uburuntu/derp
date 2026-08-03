@@ -8,7 +8,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -27,6 +27,7 @@ from derp.billing import (
     PaymentUpdateEnvelope,
     PaymentUpdateInboxService,
     PaymentUpdateKind,
+    PaymentUpdateOutcome,
     PaymentUpdateReplayWorker,
     PreCheckoutRequest,
     PurchaseIntentService,
@@ -193,6 +194,35 @@ async def test_restart_replays_update_committed_before_handler(
         assert row is not None
         assert row.status == "completed"
         assert row.reply_status == "sent"
+
+
+async def test_restart_replay_runs_support_refund_reconciliation() -> None:
+    claim = object()
+    outcome = PaymentUpdateOutcome(
+        inbox_id=UUID(int=80),
+        kind=PaymentUpdateKind.REFUNDED,
+        disposition=PaymentUpdateDisposition.SETTLED,
+        lease_token=UUID(int=81),
+        clawback=MagicMock(),
+        settlement_state=PaymentSettlementState.REFUNDED,
+    )
+    service = MagicMock()
+    service.claim_due = AsyncMock(return_value=(claim,))
+    service.process_claim = AsyncMock(return_value=outcome)
+    service.finish_notification = AsyncMock()
+    notifier = SimpleNamespace(
+        notify=AsyncMock(return_value=PaymentReplyDisposition.SENT)
+    )
+    support = SimpleNamespace(complete_reconciled_refunds=AsyncMock(return_value=1))
+
+    report = await PaymentUpdateReplayWorker(
+        service,
+        notifier,
+        support_refunds=support,
+    ).sweep()
+
+    assert report.settled_count == 1
+    support.complete_reconciled_refunds.assert_awaited_once_with(limit=20)
 
 
 async def test_crash_after_settlement_commit_replays_idempotently(

@@ -20,6 +20,7 @@ from derp.billing import DEFAULT_PRODUCT_CATALOG
 from derp.common.tasks import task_is_running
 from derp.models import PaymentReceipt, PaymentRefundRequest, PurchaseIntent
 from derp.observability import report_exception
+from derp.support.types import SupportMaintenance
 
 type TransactionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
@@ -79,7 +80,7 @@ def _utc_now() -> datetime:
 
 
 class OperatorDebugRefundService:
-    """Submit and reconcile only the caller's latest operator debug purchase."""
+    """Submit exact durable refunds plus the operator debug convenience flow."""
 
     def __init__(
         self,
@@ -114,6 +115,25 @@ class OperatorDebugRefundService:
         self._require_operator_id(operator_telegram_id)
         async with self._lock:
             command = await self._ensure_latest_request(operator_telegram_id)
+            if command is None:
+                return OperatorDebugRefundResult.NOT_FOUND
+            return await self._process(command)
+
+    async def refund_receipt(
+        self,
+        *,
+        requester_telegram_id: int,
+        payment_receipt_id: uuid.UUID,
+    ) -> OperatorDebugRefundResult:
+        """Create or resume a refund for one requester-owned receipt."""
+        self._require_operator_id(requester_telegram_id)
+        if not isinstance(payment_receipt_id, uuid.UUID):
+            raise TypeError("payment_receipt_id must be a UUID")
+        async with self._lock:
+            command = await self._ensure_receipt_request(
+                requester_telegram_id=requester_telegram_id,
+                payment_receipt_id=payment_receipt_id,
+            )
             if command is None:
                 return OperatorDebugRefundResult.NOT_FOUND
             return await self._process(command)
@@ -265,6 +285,53 @@ class OperatorDebugRefundService:
             return _RefundCommand(
                 request.id,
                 operator_telegram_id,
+                receipt.telegram_charge_id,
+                request.status,
+            )
+
+    async def _ensure_receipt_request(
+        self,
+        *,
+        requester_telegram_id: int,
+        payment_receipt_id: uuid.UUID,
+    ) -> _RefundCommand | None:
+        async with self._transactions() as session:
+            receipt = await session.scalar(
+                select(PaymentReceipt)
+                .where(
+                    PaymentReceipt.id == payment_receipt_id,
+                    PaymentReceipt.payer_telegram_id == requester_telegram_id,
+                    PaymentReceipt.status.in_(
+                        ("fulfilled", "refund_requested", "clawed_back")
+                    ),
+                )
+                .with_for_update()
+            )
+            if receipt is None:
+                return None
+            request = await session.scalar(
+                select(PaymentRefundRequest)
+                .where(PaymentRefundRequest.payment_receipt_id == receipt.id)
+                .with_for_update()
+            )
+            if request is None:
+                if receipt.status == "clawed_back":
+                    return None
+                request = PaymentRefundRequest(
+                    payment_receipt_id=receipt.id,
+                    requester_telegram_id=requester_telegram_id,
+                )
+                session.add(request)
+                await session.flush()
+                receipt.status = "refund_requested"
+            elif request.status == "rejected":
+                request.status = "pending"
+                request.submitted_at = None
+                request.last_error_code = None
+                receipt.status = "refund_requested"
+            return _RefundCommand(
+                request.id,
+                requester_telegram_id,
                 receipt.telegram_charge_id,
                 request.status,
             )
@@ -465,6 +532,7 @@ class OperatorDebugRefundWorker:
         self,
         service: OperatorDebugRefundService,
         *,
+        support_maintenance: SupportMaintenance | None = None,
         interval: timedelta = DEFAULT_DEBUG_REFUND_RECONCILIATION_INTERVAL,
         batch_size: int = 20,
     ) -> None:
@@ -480,6 +548,7 @@ class OperatorDebugRefundWorker:
                 f"batch_size must be between 1 and {MAX_DEBUG_REFUND_BATCH_SIZE}"
             )
         self._service = service
+        self._support_maintenance = support_maintenance
         self._interval_seconds = interval.total_seconds()
         self._batch_size = batch_size
         self._sweep_lock = asyncio.Lock()
@@ -520,11 +589,41 @@ class OperatorDebugRefundWorker:
                     level="warning",
                 )
                 return OperatorDebugRefundSweep.empty()
+            support_refunds_completed = support_content_purged = 0
+            support_intakes_purged = 0
+            if self._support_maintenance is not None:
+                try:
+                    support_refunds_completed = (
+                        await self._support_maintenance.complete_reconciled_refunds(
+                            limit=self._batch_size
+                        )
+                    )
+                    support_content_purged = (
+                        await self._support_maintenance.purge_closed_content(
+                            limit=self._batch_size
+                        )
+                    )
+                    support_intakes_purged = (
+                        await self._support_maintenance.purge_expired_intakes(
+                            limit=self._batch_size
+                        )
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    report_exception(
+                        "operator.support_refund_reconciliation_failed",
+                        exception=exc,
+                        level="warning",
+                    )
             logfire.info(
                 "operator.debug_refund_reconciliation",
                 processed=report.processed,
                 reconciled=report.reconciled,
                 pending_review=report.pending_review,
+                support_refunds_completed=support_refunds_completed,
+                support_content_purged=support_content_purged,
+                support_intakes_purged=support_intakes_purged,
             )
             return report
 

@@ -72,8 +72,10 @@ from derp.handlers import (
     paid_media_delivery,
     payments,
     premium_suspension,
+    run_info,
     subscriptions,
     tts,
+    unknown_commands,
 )
 from derp.health import RuntimeHeartbeat
 from derp.history.retention import HistoryRetentionWorker
@@ -131,12 +133,14 @@ APPLICATION_ROUTERS = (
     basic.router,
     credit_cmds.router,
     premium_suspension.router,
+    run_info.router,
     payments.router,
     subscriptions.router,
     paid_media_delivery.router,
     image.router,
     tts.router,
     inline.router,
+    unknown_commands.router,
     chat.router,
 )
 
@@ -218,6 +222,7 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
         )
         operation_ledger = OperationLedger(db.session)
         payment_settlement = PaymentSettlementService(db.session)
+        support_requests = SupportRequestService(db.session)
         payment_update_inbox = PaymentUpdateInboxService(
             db.session,
             payment_settlement,
@@ -226,6 +231,7 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             PaymentUpdateReplayWorker(
                 payment_update_inbox,
                 TelegramPaymentUpdateNotifier(bot),
+                support_refunds=support_requests,
             )
         )
         subscription_renewal_replay = await stack.enter_async_context(
@@ -346,7 +352,10 @@ async def open_runtime(settings: Settings) -> AsyncIterator[Runtime]:
             payment_settlement,
         )
         operator_debug_refund_replay = await stack.enter_async_context(
-            OperatorDebugRefundWorker(operator_debug_refunds)
+            OperatorDebugRefundWorker(
+                operator_debug_refunds,
+                support_maintenance=support_requests,
+            )
         )
         operator_console = OperatorConsoleService(
             db,

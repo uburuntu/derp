@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -187,13 +187,16 @@ async def forget_approved_shared_facts(
     *,
     chat_id: UUID,
     thread_id: int | None,
+    all_threads: bool = False,
 ) -> int:
     """Delete approved facts in one scope without touching conversation history."""
     _validate_scope(thread_id)
+    if all_threads and thread_id is not None:
+        raise ValueError("all_threads cannot be combined with a thread ID")
     result = await session.execute(
         delete(SharedFact).where(
             SharedFact.chat_id == chat_id,
-            _scope_condition(thread_id),
+            true() if all_threads else _scope_condition(thread_id),
             SharedFact.state == SharedFactState.APPROVED.value,
         )
     )

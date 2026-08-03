@@ -4,10 +4,10 @@ from typing import TYPE_CHECKING, Any
 
 from derp.inference.privacy import (
     FREE_INFERENCE_LEGAL_VERSION_MAX_LENGTH,
-    FREE_INFERENCE_PRIVACY_URL,
     FREE_INFERENCE_PRIVACY_VERSION,
-    FREE_INFERENCE_TOS_URL,
     FREE_INFERENCE_TOS_VERSION,
+    ChatFreeModelFields,
+    ChatFreeModelPolicy,
     InferenceContext,
     InferencePrivacyFields,
     InferencePrivacyMode,
@@ -15,6 +15,7 @@ from derp.inference.privacy import (
     NonZdrFreeInferenceDecision,
     NonZdrFreeInferenceReason,
     decide_non_zdr_free_inference,
+    project_chat_free_model_policy,
     project_inference_privacy,
 )
 from derp.inference.recorder import (
@@ -59,10 +60,10 @@ _RECONCILIATION_EXPORTS = frozenset(
 )
 
 __all__ = [
+    "ChatFreeModelFields",
+    "ChatFreeModelPolicy",
     "FREE_INFERENCE_LEGAL_VERSION_MAX_LENGTH",
-    "FREE_INFERENCE_PRIVACY_URL",
     "FREE_INFERENCE_PRIVACY_VERSION",
-    "FREE_INFERENCE_TOS_URL",
     "FREE_INFERENCE_TOS_VERSION",
     "InferenceContext",
     "InferencePrivacyFields",
@@ -72,6 +73,7 @@ __all__ = [
     "NonZdrFreeInferenceReason",
     "decide_non_zdr_free_inference",
     "project_inference_privacy",
+    "project_chat_free_model_policy",
     "InferenceAttempt",
     "InferenceRecorder",
     "InferenceRoutePolicyError",

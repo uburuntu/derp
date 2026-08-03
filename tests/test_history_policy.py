@@ -37,6 +37,7 @@ def test_private_and_explicit_group_messages_are_captured(make_message) -> None:
         "/dcredits 100",
         "/support",
         "/paysupport@DerpRobot",
+        "/info",
         "/terms",
     ],
 )

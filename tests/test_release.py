@@ -111,6 +111,103 @@ async def _scalar(database_url: str, statement: str) -> object:
         await engine.dispose()
 
 
+@pytest.mark.database
+def test_conversation_migration_downgrades_new_support_states(
+    database_url: str,
+) -> None:
+    with _isolated_migration_database(database_url) as (config, candidate_url):
+        command.upgrade(config, "head")
+        asyncio.run(
+            _execute(
+                candidate_url,
+                (
+                    """
+                    INSERT INTO users (
+                        id, telegram_id, is_bot, first_name, is_premium
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000901',
+                        9900901,
+                        false,
+                        'Migration',
+                        false
+                    )
+                    """,
+                    """
+                    INSERT INTO support_requests (
+                        id, reference, requester_user_id, kind, source,
+                        status, resolved_at, decided_at
+                    ) VALUES
+                    (
+                        '00000000-0000-0000-0000-000000000902',
+                        'PENDING001',
+                        '00000000-0000-0000-0000-000000000901',
+                        'refund',
+                        'support',
+                        'refund_pending',
+                        NULL,
+                        now()
+                    ),
+                    (
+                        '00000000-0000-0000-0000-000000000903',
+                        'DECLINED01',
+                        '00000000-0000-0000-0000-000000000901',
+                        'access',
+                        'support',
+                        'declined',
+                        now(),
+                        now()
+                    )
+                    """,
+                ),
+            )
+        )
+
+        command.downgrade(config, "89f60115a175")
+
+        assert (
+            asyncio.run(
+                _scalar(
+                    candidate_url,
+                    "SELECT status FROM support_requests "
+                    "WHERE reference = 'PENDING001'",
+                )
+            )
+            == "open"
+        )
+        assert (
+            asyncio.run(
+                _scalar(
+                    candidate_url,
+                    "SELECT resolved_at IS NULL FROM support_requests "
+                    "WHERE reference = 'PENDING001'",
+                )
+            )
+            is True
+        )
+        assert (
+            asyncio.run(
+                _scalar(
+                    candidate_url,
+                    "SELECT status FROM support_requests "
+                    "WHERE reference = 'DECLINED01'",
+                )
+            )
+            == "resolved"
+        )
+        assert (
+            asyncio.run(
+                _scalar(
+                    candidate_url,
+                    "SELECT resolved_at IS NOT NULL FROM support_requests "
+                    "WHERE reference = 'DECLINED01'",
+                )
+            )
+            is True
+        )
+
+        command.upgrade(config, "head")
+
+
 def test_cli_failure_does_not_echo_exception_or_database_url(monkeypatch) -> None:
     database_url = "postgresql+asyncpg://release:private@db/release"
 

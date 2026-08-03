@@ -124,9 +124,9 @@ class TelegramPaymentUpdateNotifier:
         russian = outcome.reply_language == "ru"
         if outcome.disposition is PaymentUpdateDisposition.ATTENTION:
             return (
-                "Платёж требует проверки. Не платите повторно. Откройте /paysupport."
+                "Платёж требует проверки. Не платите повторно. Откройте /support."
                 if russian
-                else "This payment needs review. Don't pay again. Open /paysupport."
+                else "This payment needs review. Don't pay again. Open /support."
             )
         if outcome.kind is PaymentUpdateKind.REFUNDED:
             return (

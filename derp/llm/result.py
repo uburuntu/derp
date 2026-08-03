@@ -22,6 +22,13 @@ class AgentContentDelivered:
     """Telegram acknowledged delivery of actual model-produced content."""
 
     message: Message
+    message_ids: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.message_ids:
+            object.__setattr__(self, "message_ids", (self.message.message_id,))
+        if any(message_id <= 0 for message_id in self.message_ids):
+            raise ValueError("delivered Telegram message IDs must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,8 +127,12 @@ class AgentResult:
             result = await builder.reply()
             if self.images:
                 logfire.info("images_sent", count=len(self.images))
-            delivered = result if isinstance(result, Message) else result[-1]
-            return AgentContentDelivered(delivered)
+            messages = (result,) if isinstance(result, Message) else tuple(result)
+            delivered = messages[-1]
+            return AgentContentDelivered(
+                delivered,
+                tuple(item.message_id for item in messages),
+            )
         except Exception as exc:
             report_exception(
                 "send_content_failed",

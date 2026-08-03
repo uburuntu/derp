@@ -38,6 +38,7 @@ async def test_rich_send_failure_with_text_fallback_delivers_model_content(
         outcome = await result.reply_to(message)
 
     assert isinstance(outcome, AgentContentDelivered)
+    assert outcome.message_ids == (outcome.message.message_id,)
     assert outcome.message is message
     sender.reply.assert_awaited_once_with("The requested answer")
     message.reply.assert_not_awaited()

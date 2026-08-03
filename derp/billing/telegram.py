@@ -30,6 +30,33 @@ class PurchaseCallback(CallbackData, prefix="buy"):
     kind: ProductKind
     product_id: str
     target: PurchaseTargetCode
+    actor_id: int = 0
+
+
+class PurchaseTargetCallback(CallbackData, prefix="buy-target"):
+    """Bind a contextual group purchase target to the user who opened it."""
+
+    target: PurchaseTargetCode
+    actor_id: int
+
+
+class PurchaseTermsAcceptCallback(CallbackData, prefix="bt"):
+    """Carry one exact catalog selection through the purchase Terms gate."""
+
+    version: str
+    kind: ProductKind
+    product_id: str
+    target: PurchaseTargetCode
+    actor_id: int
+
+    def purchase(self) -> PurchaseCallback:
+        """Recover the exact non-commercial selector accepted by the actor."""
+        return PurchaseCallback(
+            kind=self.kind,
+            product_id=self.product_id,
+            target=self.target,
+            actor_id=self.actor_id,
+        )
 
 
 class TelegramSubscriptionRenewalProvider:
@@ -64,6 +91,7 @@ def _day_count(count: int) -> str:
 def build_purchase_panel(
     *,
     target: PurchaseTargetCode,
+    actor_telegram_id: int = 0,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build a compact top-up picker, with the personal plan only for users."""
     rows: list[list[InlineKeyboardButton]] = []
@@ -80,6 +108,7 @@ def build_purchase_panel(
                         kind=ProductKind.TOP_UP,
                         product_id=product.id,
                         target=target,
+                        actor_id=actor_telegram_id,
                     ).pack(),
                 )
                 for product in top_ups[offset : offset + 2]
@@ -100,6 +129,7 @@ def build_purchase_panel(
                         kind=ProductKind.SUBSCRIPTION,
                         product_id=plan.id,
                         target=target,
+                        actor_id=actor_telegram_id,
                     ).pack(),
                 )
             ]
@@ -113,6 +143,38 @@ def build_purchase_panel(
         "Choose an option. Telegram asks you to confirm before charging."
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_purchase_target_panel(
+    *,
+    actor_telegram_id: int,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Ask one group actor whether the purchase is personal or shared."""
+    if actor_telegram_id <= 0:
+        raise ValueError("actor_telegram_id must be positive")
+    return (
+        _("<b>Buy credits</b>\nWho are they for?"),
+        InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=_("For me"),
+                        callback_data=PurchaseTargetCallback(
+                            target=PurchaseTargetCode.USER,
+                            actor_id=actor_telegram_id,
+                        ).pack(),
+                    ),
+                    InlineKeyboardButton(
+                        text=_("For this chat"),
+                        callback_data=PurchaseTargetCallback(
+                            target=PurchaseTargetCode.CHAT,
+                            actor_id=actor_telegram_id,
+                        ).pack(),
+                    ),
+                ]
+            ]
+        ),
+    )
 
 
 async def create_stars_invoice_link(
@@ -165,8 +227,11 @@ async def create_stars_invoice_link(
 
 __all__ = [
     "PurchaseCallback",
+    "PurchaseTargetCallback",
     "PurchaseTargetCode",
+    "PurchaseTermsAcceptCallback",
     "TelegramSubscriptionRenewalProvider",
     "build_purchase_panel",
+    "build_purchase_target_panel",
     "create_stars_invoice_link",
 ]

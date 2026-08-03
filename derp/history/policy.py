@@ -25,6 +25,7 @@ _DERP_NAME = re.compile(r"\b(?:derp|дерп)\b", re.IGNORECASE)
 _CONTROL_PLANE_COMMANDS: Final = frozenset(
     {
         "context",
+        "credits",
         "dbuy",
         "dcredits",
         "debug_buy",
@@ -39,9 +40,18 @@ _CONTROL_PLANE_COMMANDS: Final = frozenset(
         "dreset",
         "dstatus",
         "dtools",
+        "info",
+        "buy",
+        "buy_chat",
+        "forget",
+        "help",
         "operator",
         "ops",
         "paysupport",
+        "plan",
+        "privacy",
+        "settings",
+        "start",
         "support",
         "terms",
     }

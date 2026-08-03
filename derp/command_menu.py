@@ -83,9 +83,9 @@ def command_specs_for(
             CommandSpec("help", _("See what Derp can do")),
             CommandSpec("settings", _("Manage privacy and history")),
             CommandSpec("privacy", _("Open privacy and deletion controls")),
+            CommandSpec("info", _("Inspect a replied-to answer")),
             CommandSpec("terms", _("Review terms for purchases")),
             CommandSpec("support", _("Contact in-bot support")),
-            CommandSpec("paysupport", _("Get purchase and refund support")),
             *creation,
             CommandSpec("credits", _("See credits and recent charges")),
         ]
@@ -111,11 +111,12 @@ def command_specs_for(
         CommandSpec("help", _("See what Derp can do")),
         CommandSpec("settings", settings_description),
         CommandSpec("privacy", _("Open privacy and deletion controls")),
+        CommandSpec("info", _("Inspect a replied-to answer")),
         *creation,
         CommandSpec("credits", _("See personal and chat credits")),
     ]
     if public_purchases_enabled:
-        commands.append(CommandSpec("buy_chat", _("Buy credits for this chat")))
+        commands.append(CommandSpec("buy", _("Buy personal or chat credits")))
     commands.extend((CommandSpec("forget", _("Forget a message you reply to")),))
     return tuple(commands)
 

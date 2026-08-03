@@ -10,6 +10,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     DateTime,
+    ForeignKey,
     Integer,
     String,
     Text,
@@ -40,6 +41,38 @@ class Chat(TimestampMixin, Base):
             name="chat_retention_days_allowed",
         ),
         CheckConstraint("credits >= 0", name="chat_credits_non_negative"),
+        CheckConstraint(
+            "free_inference_revision > 0",
+            name="chat_free_inference_revision_positive",
+        ),
+        CheckConstraint(
+            "num_nonnulls(free_inference_tos_version, "
+            "free_inference_privacy_version, free_inference_accepted_by_user_id, "
+            "free_inference_accepted_at) = ANY (ARRAY[0, 4])",
+            name="chat_free_inference_acceptance_complete",
+        ),
+        CheckConstraint(
+            "coalesce(length(btrim(free_inference_tos_version::text)), 1) > 0 "
+            "AND coalesce(length(btrim(free_inference_privacy_version::text)), 1) "
+            "> 0",
+            name="chat_free_inference_versions_nonblank",
+        ),
+        CheckConstraint(
+            "free_inference_enabled = false AND "
+            "(free_inference_accepted_at IS NULL AND "
+            "free_inference_revoked_at IS NULL OR "
+            "free_inference_accepted_at IS NOT NULL AND "
+            "free_inference_revoked_at IS NOT NULL) OR "
+            "free_inference_enabled = true AND "
+            "free_inference_accepted_at IS NOT NULL AND "
+            "free_inference_revoked_at IS NULL",
+            name="chat_free_inference_state_complete",
+        ),
+        CheckConstraint(
+            "free_inference_revoked_at IS NULL OR "
+            "free_inference_revoked_at >= free_inference_accepted_at",
+            name="chat_free_inference_revocation_order",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -73,6 +106,27 @@ class Chat(TimestampMixin, Base):
     )
     expensive_tools_enabled: Mapped[bool] = mapped_column(
         default=True, server_default=text("true")
+    )
+    free_inference_enabled: Mapped[bool] = mapped_column(
+        default=False, server_default=text("false")
+    )
+    free_inference_revision: Mapped[int] = mapped_column(
+        Integer, default=1, server_default=text("1")
+    )
+    free_inference_tos_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    free_inference_privacy_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    free_inference_accepted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    free_inference_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    free_inference_revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     # Credit balance for group pool (sponsors can fund the group)

@@ -16,6 +16,7 @@ from derp.handlers import (
     operator,
     payments,
     premium_suspension,
+    unknown_commands,
 )
 
 
@@ -51,6 +52,12 @@ def test_premium_suspension_precedes_catch_all_chat() -> None:
     ) < APPLICATION_ROUTERS.index(chat.router)
     assert {router.name for router in APPLICATION_ROUTERS}.isdisjoint(
         {"think", "video"}
+    )
+
+
+def test_unknown_commands_recover_immediately_before_chat_inference() -> None:
+    assert APPLICATION_ROUTERS.index(unknown_commands.router) + 1 == (
+        APPLICATION_ROUTERS.index(chat.router)
     )
 
 
@@ -286,6 +293,13 @@ async def test_runtime_closes_bot_before_database(tmp_path) -> None:
             assert runtime.payment_update_replay is payment_replay_worker.return_value
             assert (
                 runtime.operator_debug_refund_replay is debug_refund_worker.return_value
+            )
+            support_maintenance = payment_replay_worker.call_args.kwargs[
+                "support_refunds"
+            ]
+            assert (
+                debug_refund_worker.call_args.kwargs["support_maintenance"]
+                is support_maintenance
             )
             assert (
                 runtime.subscription_renewal_replay

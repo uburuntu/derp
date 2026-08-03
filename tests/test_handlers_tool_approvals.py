@@ -17,6 +17,7 @@ from derp.approvals import (
     ApprovalAuthorizationError,
     DecisionDisposition,
     DeferredToolApprovalService,
+    DeferredToolStatus,
 )
 from derp.approvals.image_tools import (
     ImageToolRunContext,
@@ -25,11 +26,21 @@ from derp.approvals.image_tools import (
 from derp.billing import CommercePolicy
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
 from derp.billing.telegram import PurchaseCallback, PurchaseTargetCode
-from derp.catalog import GoogleModelKey, ImageResolution, InferenceProvider
+from derp.catalog import (
+    GoogleModelKey,
+    ImageResolution,
+    InferenceProvider,
+    get_openrouter_model,
+)
 from derp.db import DatabaseManager
 from derp.delivery import DeliveryResendCallback
 from derp.execution import Feature, plan_execution
-from derp.features import ImageAwaitingFunding, ImageDelivered, ImageDeliveryUncertain
+from derp.features import (
+    ImageAwaitingFunding,
+    ImageDelivered,
+    ImageDeliveryUncertain,
+    ImageGenerateRequest,
+)
 from derp.handlers.tool_approvals import (
     ImageApprovalAction,
     ImageApprovalCallback,
@@ -37,7 +48,9 @@ from derp.handlers.tool_approvals import (
     _chat_purchase_callback,
     _render_image_outcome,
     _resume_approved_image,
+    apply_image_style,
     approve_image_tool,
+    choose_image_style,
     deny_image_tool,
     present_image_approvals,
 )
@@ -615,7 +628,7 @@ async def test_funding_preflight_does_not_spend_a_finishing_model_call(
 
 
 @pytest.mark.asyncio
-async def test_presenter_shows_exact_quote_without_prompt_content(
+async def test_presenter_shows_exact_quote_and_bounded_prompt(
     make_message,
 ) -> None:
     message = make_message(text="private prompt sentinel")
@@ -625,9 +638,17 @@ async def test_presenter_shows_exact_quote_without_prompt_content(
         "call-1",
     )
     requests = DeferredToolRequests(approvals=[call_part])
+    model = get_openrouter_model(GoogleModelKey.IMAGE)
     prepared = SimpleNamespace(
-        call=SimpleNamespace(feature=Feature.IMAGE_GENERATE),
-        quote=SimpleNamespace(credits=7),
+        call=SimpleNamespace(
+            feature=Feature.IMAGE_GENERATE,
+            request=ImageGenerateRequest("private prompt sentinel"),
+        ),
+        quote=SimpleNamespace(
+            credits=7,
+            provider=InferenceProvider.OPENROUTER,
+            provider_model_id=model.provider_model_id,
+        ),
         handle=SimpleNamespace(callback_token="a" * 43),
     )
 
@@ -642,19 +663,198 @@ async def test_presenter_shows_exact_quote_without_prompt_content(
                 ModelRequest(parts=[UserPromptPart("private prompt sentinel")]),
                 ModelResponse(parts=[call_part]),
             ),
-            context=MagicMock(spec=ImageToolRunContext),
+            context=SimpleNamespace(
+                chat_telegram_id=12345,
+                requester_telegram_id=22,
+            ),
             image_operations=MagicMock(),
             approvals=MagicMock(),
+            purchases_enabled=True,
         )
 
     text = message.reply.await_args.args[0]
     markup = message.reply.await_args.kwargs["reply_markup"]
-    assert text == "Create this image for 7 credits?"
-    assert "private prompt sentinel" not in text
-    assert markup.inline_keyboard[0][0].text == "Create image"
-    assert markup.inline_keyboard[0][1].text == "Cancel"
-    assert len(markup.inline_keyboard[0][0].callback_data) <= 64
-    assert len(markup.inline_keyboard[0][1].callback_data) <= 64
+    assert text == (
+        "<b>Generate image?</b>\n"
+        "7 credits · Gemini 3.1 Flash Image\n"
+        "Private · zero-data retention\n"
+        "<b>Prompt:</b> private prompt sentinel\n"
+        "Style: Automatic"
+    )
+    assert [button.text for row in markup.inline_keyboard for button in row] == [
+        "Generate",
+        "Change style",
+        "Buy credits",
+        "Cancel",
+    ]
+    generate = ImageApprovalCallback.unpack(markup.inline_keyboard[0][0].callback_data)
+    style = ImageApprovalCallback.unpack(markup.inline_keyboard[0][1].callback_data)
+    purchase = PurchaseCallback.unpack(markup.inline_keyboard[1][0].callback_data)
+    assert generate.action is ImageApprovalAction.RUN
+    assert style.action is ImageApprovalAction.CHANGE_STYLE
+    assert purchase.target is PurchaseTargetCode.USER
+    assert purchase.actor_id == 22
+    assert all(
+        len(button.callback_data) <= 64
+        for row in markup.inline_keyboard
+        for button in row
+    )
+
+
+@pytest.mark.asyncio
+async def test_style_menu_authenticates_without_approving_or_running(
+    make_message,
+    make_user,
+) -> None:
+    message = make_message(text="approval", business_connection_id=None)
+    callback = _callback(message, make_user(id=22))
+    service = MagicMock(spec=DeferredToolApprovalService)
+    service.inspect = AsyncMock(
+        return_value=SimpleNamespace(
+            tool_name="generate_image",
+            status=DeferredToolStatus.PENDING,
+        )
+    )
+
+    await choose_image_style(
+        callback,
+        ImageApprovalCallback(
+            action=ImageApprovalAction.CHANGE_STYLE,
+            token=CALLBACK_CAPABILITY,
+        ),
+        MagicMock(spec=DatabaseManager),
+        service,
+    )
+
+    service.approve.assert_not_called()
+    edit = message.edit_text.await_args
+    assert edit.args[0] == (
+        "<b>Choose a style</b>\nYou'll confirm the updated price next."
+    )
+    assert [
+        button.text
+        for row in edit.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ] == ["Automatic", "Photo", "Illustration", "Cinematic", "Cancel"]
+
+
+@pytest.mark.asyncio
+async def test_style_choice_cancels_old_quote_and_presents_new_exact_approval(
+    make_message,
+    make_user,
+) -> None:
+    message = make_message(
+        text="approval",
+        chat_id=-100_123,
+        business_connection_id=None,
+    )
+    callback = _callback(message, make_user(id=22))
+    requester_id = uuid4()
+    chat_id = uuid4()
+    old_operation_id = OperationId.for_tool(
+        feature=Feature.IMAGE_GENERATE,
+        chat_id=-100_123,
+        message_id=77,
+        tool_call_id="call-1",
+    )
+    old_call = ToolCallPart(
+        "generate_image",
+        {"prompt": "private prompt sentinel", "style": None},
+        "call-1",
+    )
+    history = (
+        ModelRequest(parts=[UserPromptPart("private prompt sentinel")]),
+        ModelResponse(parts=[old_call]),
+    )
+    snapshot = SimpleNamespace(
+        request_id=uuid4(),
+        operation_id=old_operation_id,
+        requester_id=requester_id,
+        requester_telegram_id=22,
+        chat_id=chat_id,
+        chat_telegram_id=-100_123,
+        message_id=77,
+        thread_id=None,
+        tool_name="generate_image",
+        tool_call_id="call-1",
+    )
+    claim = SimpleNamespace(
+        snapshot=snapshot,
+        build_run_input=MagicMock(
+            return_value=SimpleNamespace(message_history=history)
+        ),
+    )
+    service = MagicMock(spec=DeferredToolApprovalService)
+    service.approve = AsyncMock(
+        return_value=SimpleNamespace(disposition=DecisionDisposition.APPLIED)
+    )
+    service.claim_resume = AsyncMock(return_value=claim)
+    service.cancel_resume = AsyncMock()
+    service.release_resume = AsyncMock()
+    ledger = MagicMock(spec=OperationLedger)
+    ledger.cancel = AsyncMock()
+    image_operations = MagicMock()
+    model = get_openrouter_model(GoogleModelKey.IMAGE)
+    revised = SimpleNamespace(
+        call=SimpleNamespace(
+            feature=Feature.IMAGE_GENERATE,
+            request=ImageGenerateRequest(
+                "private prompt sentinel",
+                style="cinematic",
+            ),
+        ),
+        quote=SimpleNamespace(
+            credits=8,
+            provider=InferenceProvider.OPENROUTER,
+            provider_model_id=model.provider_model_id,
+        ),
+        handle=SimpleNamespace(callback_token="c" * 43),
+    )
+
+    with patch(
+        "derp.handlers.tool_approvals.ImageToolApprovalCoordinator.prepare",
+        new=AsyncMock(return_value=revised),
+    ) as prepare:
+        await apply_image_style(
+            callback,
+            ImageApprovalCallback(
+                action=ImageApprovalAction.STYLE_CINEMATIC,
+                token=CALLBACK_CAPABILITY,
+            ),
+            MagicMock(spec=DatabaseManager),
+            image_operations,
+            ledger,
+            service,
+        )
+
+    ledger.cancel.assert_awaited_once_with(
+        old_operation_id,
+        reason="image_style_changed",
+    )
+    service.cancel_resume.assert_awaited_once_with(claim)
+    service.release_resume.assert_not_awaited()
+    prepared_call = prepare.await_args.kwargs["tool_call"]
+    assert prepared_call.args_as_dict() == {
+        "prompt": "private prompt sentinel",
+        "style": "cinematic",
+    }
+    assert prepared_call.tool_call_id != old_call.tool_call_id
+    prepared_history = prepare.await_args.kwargs["original_history"]
+    assert prepared_history[-1].parts == [prepared_call]
+    image_operations.run.assert_not_called()
+    callback.answer.assert_awaited_once_with("Style updated")
+    edit = message.edit_text.await_args
+    assert edit.args[0].endswith("Style: cinematic")
+    actions = [
+        ImageApprovalCallback.unpack(button.callback_data).action
+        for row in edit.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert actions == [
+        ImageApprovalAction.RUN,
+        ImageApprovalAction.CHANGE_STYLE,
+        ImageApprovalAction.CANCEL,
+    ]
 
 
 @pytest.mark.asyncio

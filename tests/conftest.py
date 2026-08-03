@@ -632,6 +632,13 @@ def mock_chat_model():
         chat.shared_facts_member_edit = False
         chat.shared_credit_spending_enabled = True
         chat.expensive_tools_enabled = True
+        chat.free_inference_enabled = False
+        chat.free_inference_revision = 1
+        chat.free_inference_tos_version = None
+        chat.free_inference_privacy_version = None
+        chat.free_inference_accepted_by_user_id = None
+        chat.free_inference_accepted_at = None
+        chat.free_inference_revoked_at = None
         for key, value in kwargs.items():
             setattr(chat, key, value)
         return chat

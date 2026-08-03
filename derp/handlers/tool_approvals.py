@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
+from html import escape
 
 from aiogram import F, Router
 from aiogram.filters.callback_data import CallbackData
@@ -32,6 +34,7 @@ from derp.approvals import (
     ApprovalTokenCodec,
     DecisionDisposition,
     DeferredToolApprovalService,
+    DeferredToolStatus,
     ResumeLease,
     ResumeUnavailable,
     ResumeUnavailableReason,
@@ -39,6 +42,7 @@ from derp.approvals import (
 )
 from derp.approvals.image_tools import (
     EDIT_IMAGE_TOOL,
+    GENERATE_IMAGE_TOOL,
     DeferredImageCall,
     DeferredImageToolError,
     ImageToolApprovalCoordinator,
@@ -49,6 +53,12 @@ from derp.approvals.image_tools import (
 from derp.billing import CLOSED_COMMERCE_POLICY, CommercePolicy
 from derp.billing.products import DEFAULT_PRODUCT_CATALOG
 from derp.billing.telegram import PurchaseCallback, PurchaseTargetCode
+from derp.catalog import (
+    InferenceProvider,
+    ModelSpec,
+    get_google_model_by_id,
+    get_openrouter_model_by_id,
+)
 from derp.common.extractor import Extractor
 from derp.common.sender import MessageSender
 from derp.config import settings
@@ -59,6 +69,7 @@ from derp.features import (
     ImageAwaitingFunding,
     ImageDelivered,
     ImageDeliveryUncertain,
+    ImageGenerateRequest,
     ImageInProgress,
     ImageNotCharged,
     ImageOperationCoordinator,
@@ -71,7 +82,7 @@ from derp.media import MediaReference, image_reference_from_telegram
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
 from derp.observability import report_exception
-from derp.operations import OperationLedger, ReservationRejection
+from derp.operations import OperationLedger, Quote, ReservationRejection
 from derp.tools.authorization import ActorRoleResolver
 from derp.tools.policy import (
     ActorRole,
@@ -89,6 +100,11 @@ class ImageApprovalAction(StrEnum):
 
     RUN = "r"
     CANCEL = "c"
+    CHANGE_STYLE = "s"
+    STYLE_AUTO = "0"
+    STYLE_PHOTO = "p"
+    STYLE_ILLUSTRATION = "i"
+    STYLE_CINEMATIC = "f"
     USE_PERSONAL_ONCE = "m"
     ALWAYS_HERE = "a"
 
@@ -106,6 +122,14 @@ class ImageResumeResult:
 
     text: str
     outcome: ImageOperationOutcome
+
+
+_IMAGE_STYLE_VALUES: dict[ImageApprovalAction, str | None] = {
+    ImageApprovalAction.STYLE_AUTO: None,
+    ImageApprovalAction.STYLE_PHOTO: "photorealistic",
+    ImageApprovalAction.STYLE_ILLUSTRATION: "editorial illustration",
+    ImageApprovalAction.STYLE_CINEMATIC: "cinematic",
+}
 
 
 def approval_service(db: DatabaseManager) -> DeferredToolApprovalService:
@@ -135,8 +159,9 @@ async def present_image_approvals(
     context: ImageToolRunContext,
     image_operations: ImageOperationCoordinator,
     approvals: DeferredToolApprovalService,
+    purchases_enabled: bool | None = None,
 ) -> Message | None:
-    """Persist validated calls and render one exact Run/Cancel choice per quote."""
+    """Persist validated calls and render one exact, actionable quote."""
     if requests.calls or len(requests.approvals) != 1:
         with suppress_outbound_history():
             return await message.reply(
@@ -175,25 +200,203 @@ async def present_image_approvals(
             continue
 
         editing = prepared.call.feature is Feature.IMAGE_EDIT
-        action = _("Edit this image") if editing else _("Create this image")
-        credit_count = prepared.quote.credits
-        text = _(
-            "{action} for {credits} credit?",
-            "{action} for {credits} credits?",
-            credit_count,
-        ).format(
-            action=action,
-            credits=credit_count,
-        )
+        purchase_callback = None
+        if (
+            settings.public_purchases_enabled
+            if purchases_enabled is None
+            else purchases_enabled
+        ):
+            target = (
+                PurchaseTargetCode.USER
+                if context.chat_telegram_id > 0
+                else PurchaseTargetCode.CHAT
+            )
+            purchase_callback = _purchase_callback(
+                prepared.quote.credits,
+                target=target,
+                actor_id=context.requester_telegram_id,
+            )
         with suppress_outbound_history():
             last_message = await message.reply(
-                text,
+                _approval_text(prepared.call, prepared.quote),
                 reply_markup=_decision_keyboard(
                     prepared.handle.callback_token,
-                    action_label=_("Edit image") if editing else _("Create image"),
+                    editing=editing,
+                    purchase_callback=purchase_callback,
                 ),
             )
     return last_message
+
+
+@router.callback_query(
+    ImageApprovalCallback.filter(F.action == ImageApprovalAction.CHANGE_STYLE)
+)
+async def choose_image_style(
+    callback: CallbackQuery,
+    callback_data: ImageApprovalCallback,
+    db: DatabaseManager,
+    deferred_tool_approval_service: DeferredToolApprovalService | None = None,
+) -> None:
+    """Open authenticated style presets without approving provider work."""
+    service = deferred_tool_approval_service or approval_service(db)
+    try:
+        message, capability = _callback_context(callback, callback_data.token)
+        snapshot = await service.inspect(capability)
+    except ApprovalAuthorizationError:
+        await callback.answer(
+            _("I can't use this request in this chat."),
+            show_alert=True,
+        )
+        return
+
+    if (
+        snapshot.tool_name != GENERATE_IMAGE_TOOL
+        or snapshot.status is not DeferredToolStatus.PENDING
+    ):
+        await callback.answer(
+            _("This image request is no longer editable."),
+            show_alert=True,
+        )
+        return
+
+    await callback.answer()
+    await _edit_control(
+        message,
+        _("<b>Choose a style</b>\nYou'll confirm the updated price next."),
+        reply_markup=_style_keyboard(callback_data.token),
+    )
+
+
+@router.callback_query(
+    ImageApprovalCallback.filter(F.action == ImageApprovalAction.STYLE_CINEMATIC)
+)
+@router.callback_query(
+    ImageApprovalCallback.filter(F.action == ImageApprovalAction.STYLE_ILLUSTRATION)
+)
+@router.callback_query(
+    ImageApprovalCallback.filter(F.action == ImageApprovalAction.STYLE_PHOTO)
+)
+@router.callback_query(
+    ImageApprovalCallback.filter(F.action == ImageApprovalAction.STYLE_AUTO)
+)
+async def apply_image_style(
+    callback: CallbackQuery,
+    callback_data: ImageApprovalCallback,
+    db: DatabaseManager,
+    image_operation_coordinator: ImageOperationCoordinator,
+    operation_ledger: OperationLedger,
+    deferred_tool_approval_service: DeferredToolApprovalService | None = None,
+) -> None:
+    """Replace a pending image approval with a newly quoted styled request."""
+    service = deferred_tool_approval_service or approval_service(db)
+    try:
+        message, capability = _callback_context(callback, callback_data.token)
+        decision = await service.approve(capability)
+        if decision.disposition is DecisionDisposition.EXPIRED:
+            await callback.answer(_("This image request has expired."), show_alert=True)
+            await _edit_control(
+                message,
+                _("This image request expired. You weren't charged. Send it again."),
+            )
+            return
+        claim = await service.claim_resume(capability)
+    except ApprovalAuthorizationError:
+        await callback.answer(
+            _("I can't use this request in this chat."),
+            show_alert=True,
+        )
+        return
+    except ApprovalDecisionConflictError:
+        await callback.answer(
+            _("This image request is no longer editable."),
+            show_alert=True,
+        )
+        return
+
+    if isinstance(claim, ResumeUnavailable):
+        await _answer_unavailable(callback, message, claim.reason)
+        return
+
+    old_canceled = False
+    try:
+        run_input = claim.build_run_input()
+        old_call = _persisted_tool_call(
+            run_input.message_history,
+            tool_name=claim.snapshot.tool_name,
+            tool_call_id=claim.snapshot.tool_call_id,
+        )
+        style = _IMAGE_STYLE_VALUES[callback_data.action]
+        revised_call = _revised_style_call(
+            old_call,
+            action=callback_data.action,
+            style=style,
+        )
+        revised_history = _replace_tool_call(
+            run_input.message_history,
+            old_call=old_call,
+            revised_call=revised_call,
+        )
+        await operation_ledger.cancel(
+            claim.snapshot.operation_id,
+            reason="image_style_changed",
+        )
+        await service.cancel_resume(claim)
+        old_canceled = True
+        prepared = await ImageToolApprovalCoordinator(
+            image_operation_coordinator,
+            service,
+        ).prepare(
+            context=ImageToolRunContext(
+                requester_id=claim.snapshot.requester_id,
+                requester_telegram_id=claim.snapshot.requester_telegram_id,
+                chat_id=claim.snapshot.chat_id,
+                chat_telegram_id=claim.snapshot.chat_telegram_id,
+                message_id=claim.snapshot.message_id,
+                thread_id=claim.snapshot.thread_id,
+                business_connection_id=message.business_connection_id,
+            ),
+            tool_call=revised_call,
+            original_history=revised_history,
+        )
+    except Exception as exc:
+        if not old_canceled:
+            await service.release_resume(claim)
+        report_exception(
+            "image_style_change_failed",
+            exception=exc,
+            request_id=str(claim.snapshot.request_id),
+            operation_id=str(claim.snapshot.operation_id),
+        )
+        await callback.answer()
+        await _edit_control(
+            message,
+            _(
+                "I couldn't change the style. You weren't charged. Send the request again."
+            ),
+        )
+        return
+
+    purchase_callback = None
+    if settings.public_purchases_enabled:
+        purchase_callback = _purchase_callback(
+            prepared.quote.credits,
+            target=(
+                PurchaseTargetCode.USER
+                if claim.snapshot.chat_telegram_id > 0
+                else PurchaseTargetCode.CHAT
+            ),
+            actor_id=claim.snapshot.requester_telegram_id,
+        )
+    await callback.answer(_("Style updated"))
+    await _edit_control(
+        message,
+        _approval_text(prepared.call, prepared.quote),
+        reply_markup=_decision_keyboard(
+            prepared.handle.callback_token,
+            editing=False,
+            purchase_callback=purchase_callback,
+        ),
+    )
 
 
 @router.callback_query(
@@ -525,21 +728,167 @@ def _callback_context(
     )
 
 
-def _decision_keyboard(token: str, *, action_label: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=action_label,
-                    callback_data=_pack_callback(ImageApprovalAction.RUN, token),
-                ),
-                InlineKeyboardButton(
-                    text=_("Cancel"),
-                    callback_data=_pack_callback(ImageApprovalAction.CANCEL, token),
-                ),
-            ]
+def _approval_text(call: DeferredImageCall, quote: Quote) -> str:
+    """Render fixed commercial and privacy facts without repeating the prompt."""
+    model = _model_for_quote(quote)
+    credit_text = _(
+        "{count} credit",
+        "{count} credits",
+        quote.credits,
+    ).format(count=quote.credits)
+    headline = (
+        _("Edit image?") if call.feature is Feature.IMAGE_EDIT else _("Generate image?")
+    )
+    lines = [
+        f"<b>{headline}</b>",
+        _("{credits} · {model}").format(
+            credits=credit_text,
+            model=escape(model.display_name),
+        ),
+        (
+            _("Private · zero-data retention")
+            if model.routing is not None and model.routing.zero_data_retention
+            else _("Provider retention policy applies")
+        ),
+        _("<b>Prompt:</b> {prompt}").format(
+            prompt=escape(_prompt_preview(call.request.prompt))
+        ),
+    ]
+    if isinstance(call.request, ImageGenerateRequest):
+        style = escape(call.request.style) if call.request.style else _("Automatic")
+        lines.append(_("Style: {style}").format(style=style))
+    return "\n".join(lines)
+
+
+def _prompt_preview(prompt: str, *, limit: int = 280) -> str:
+    """Keep approvals inspectable without approaching Telegram's text limit."""
+    compact = " ".join(prompt.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3].rstrip() + "..."
+
+
+def _model_for_quote(quote: Quote) -> ModelSpec:
+    resolver = (
+        get_openrouter_model_by_id
+        if quote.provider is InferenceProvider.OPENROUTER
+        else get_google_model_by_id
+    )
+    return resolver(quote.provider_model_id)
+
+
+def _decision_keyboard(
+    token: str,
+    *,
+    editing: bool,
+    purchase_callback: str | None,
+) -> InlineKeyboardMarkup:
+    primary = InlineKeyboardButton(
+        text=_("Apply edit") if editing else _("Generate"),
+        callback_data=_pack_callback(ImageApprovalAction.RUN, token),
+    )
+    first_row = [primary]
+    if not editing:
+        first_row.append(
+            InlineKeyboardButton(
+                text=_("Change style"),
+                callback_data=_pack_callback(ImageApprovalAction.CHANGE_STYLE, token),
+            )
+        )
+    final_row: list[InlineKeyboardButton] = []
+    if purchase_callback is not None:
+        final_row.append(
+            InlineKeyboardButton(
+                text=_("Buy credits"),
+                callback_data=purchase_callback,
+            )
+        )
+    final_row.append(
+        InlineKeyboardButton(
+            text=_("Cancel"),
+            callback_data=_pack_callback(ImageApprovalAction.CANCEL, token),
+        )
+    )
+    return InlineKeyboardMarkup(inline_keyboard=[first_row, final_row])
+
+
+def _style_keyboard(token: str) -> InlineKeyboardMarkup:
+    options = (
+        (ImageApprovalAction.STYLE_AUTO, _("Automatic")),
+        (ImageApprovalAction.STYLE_PHOTO, _("Photo")),
+        (ImageApprovalAction.STYLE_ILLUSTRATION, _("Illustration")),
+        (ImageApprovalAction.STYLE_CINEMATIC, _("Cinematic")),
+    )
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=label,
+                callback_data=_pack_callback(action, token),
+            )
+            for action, label in options[offset : offset + 2]
+        ]
+        for offset in range(0, len(options), 2)
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=_("Cancel"),
+                callback_data=_pack_callback(ImageApprovalAction.CANCEL, token),
+            )
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _revised_style_call(
+    tool_call: ToolCallPart,
+    *,
+    action: ImageApprovalAction,
+    style: str | None,
+) -> ToolCallPart:
+    if tool_call.tool_name != GENERATE_IMAGE_TOOL:
+        raise ValueError("only image generation has a style")
+    arguments = tool_call.args_as_dict(raise_if_invalid=True)
+    prompt = arguments.get("prompt")
+    if not isinstance(prompt, str):
+        raise ValueError("image generation prompt is invalid")
+    digest = hashlib.sha256(
+        f"{tool_call.tool_call_id}:{action.value}".encode()
+    ).hexdigest()[:24]
+    return ToolCallPart(
+        GENERATE_IMAGE_TOOL,
+        {"prompt": prompt, "style": style},
+        f"style-{digest}",
+    )
+
+
+def _replace_tool_call(
+    history: Sequence[ModelMessage],
+    *,
+    old_call: ToolCallPart,
+    revised_call: ToolCallPart,
+) -> tuple[ModelMessage, ...]:
+    replacements = 0
+    revised_history: list[ModelMessage] = []
+    for message in history:
+        if not isinstance(message, ModelResponse):
+            revised_history.append(message)
+            continue
+        parts = []
+        for part in message.parts:
+            if (
+                isinstance(part, ToolCallPart)
+                and part.tool_name == old_call.tool_name
+                and part.tool_call_id == old_call.tool_call_id
+            ):
+                parts.append(revised_call)
+                replacements += 1
+            else:
+                parts.append(part)
+        revised_history.append(replace(message, parts=parts))
+    if replacements != 1:
+        raise ValueError("image approval history has no unique tool call")
+    return tuple(revised_history)
 
 
 def _retry_keyboard(token: str) -> InlineKeyboardMarkup:
@@ -604,7 +953,12 @@ def _funding_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _chat_purchase_callback(required_credits: int) -> str | None:
+def _purchase_callback(
+    required_credits: int,
+    *,
+    target: PurchaseTargetCode,
+    actor_id: int,
+) -> str | None:
     eligible = (
         product
         for product in DEFAULT_PRODUCT_CATALOG.current_top_ups.values()
@@ -616,11 +970,21 @@ def _chat_purchase_callback(required_credits: int) -> str | None:
     packed = PurchaseCallback(
         kind=product.kind,
         product_id=product.id,
-        target=PurchaseTargetCode.CHAT,
+        target=target,
+        actor_id=actor_id,
     ).pack()
     if len(packed.encode("utf-8")) > 64:
-        raise ValueError("chat purchase callback exceeds Telegram's 64-byte limit")
+        raise ValueError("purchase callback exceeds Telegram's 64-byte limit")
     return packed
+
+
+def _chat_purchase_callback(required_credits: int) -> str | None:
+    """Retain the funding-panel compatibility path for shared wallets."""
+    return _purchase_callback(
+        required_credits,
+        target=PurchaseTargetCode.CHAT,
+        actor_id=0,
+    )
 
 
 def _pack_callback(action: ImageApprovalAction, token: str) -> str:
@@ -757,7 +1121,9 @@ __all__ = [
     "ImageApprovalCallback",
     "ImageResumeResult",
     "approval_service",
+    "apply_image_style",
     "approve_image_tool",
+    "choose_image_style",
     "deny_image_tool",
     "live_image_source",
     "present_image_approvals",
