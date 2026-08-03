@@ -80,15 +80,10 @@ if [[ ! -f "$DEPLOY_DIR/.env.prod" ]]; then
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 
 # Database (from pg_create_db output)
-DATABASE_URL=postgresql+asyncpg://derp_user:PASSWORD@localhost:5432/derp?sslmode=require
+DATABASE_URL=postgresql+asyncpg://derp_user:PASSWORD@host.docker.internal:5432/derp?sslmode=require
 
 # LLM
-DEFAULT_LLM_MODEL=gemini-2.0-flash
-GOOGLE_API_KEY=your_google_api_key
-GOOGLE_API_EXTRA_KEYS=
-GOOGLE_API_PAID_KEY=
-OPENAI_API_KEY=
-OPENROUTER_API_KEY=
+GOOGLE_API_PAID_KEY=your_google_api_key
 
 # Observability
 LOGFIRE_TOKEN=your_logfire_token

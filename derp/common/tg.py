@@ -1,5 +1,4 @@
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     Chat,
     Message,
@@ -9,7 +8,6 @@ from aiogram.types import (
     User,
 )
 
-from .sanitize import sanitize_for_telegram
 from .utils import one_liner
 
 
@@ -155,73 +153,7 @@ def extract_attachment_info(
     return attachment_type, attachment_file_id, attachment_filename
 
 
-async def extract_attachment_info_with_url(
-    message: Message,
-) -> tuple[str | None, str | None, str | None, str | None]:
-    attachment_type, attachment_file_id, attachment_filename = extract_attachment_info(
-        message
-    )
-    attachment_url = None
-
-    if attachment_file_id:
-        attachment_url = await create_sensitive_url_from_file_id(
-            message.bot, attachment_file_id
-        )
-
-    return attachment_type, attachment_file_id, attachment_filename, attachment_url
-
-
 def extract_attachment_file_id(message: Message) -> str | None:
     _, attachment_file_id, _ = extract_attachment_info(message)
 
     return attachment_file_id
-
-
-async def reply_with_attachment(
-    message: Message,
-    text: str,
-    attachment_type: str,
-    attachment_file_id: str,
-    attachment_url_fallback: str | None = None,
-):
-    """Reply to a message with an attachment and caption.
-
-    Sanitizes the caption text before sending.
-    """
-    prepared_caption = sanitize_for_telegram(text) if text else None
-
-    async def send(method):
-        try:
-            return await method(
-                attachment_file_id,
-                caption=prepared_caption,
-                parse_mode="HTML" if prepared_caption else None,
-            )
-        except TelegramBadRequest:
-            if attachment_url_fallback:
-                return await method(
-                    attachment_url_fallback,
-                    caption=prepared_caption,
-                    parse_mode="HTML" if prepared_caption else None,
-                )
-            raise
-
-    match attachment_type:
-        case "photo":
-            return await send(message.reply_photo)
-        case "audio":
-            return await send(message.reply_audio)
-        case "voice":
-            return await send(message.reply_voice)
-        case "sticker":
-            return await send(message.reply_sticker)
-        case "video":
-            return await send(message.reply_video)
-        case "video_note":
-            return await send(message.reply_video_note)
-        case "animation":
-            return await send(message.reply_animation)
-        case "document":
-            return await send(message.reply_document)
-
-    return await message.reply(text, disable_web_page_preview=False)

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,8 +15,11 @@ import pytest
 import pytest_asyncio
 from aiogram.types import Chat, Message, User
 from aiogram.utils.i18n import I18n
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from alembic import command
+from alembic.config import Config
+from pydantic_ai import models
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 # Set up test environment variables before any imports
 os.environ.setdefault("LOGFIRE_IGNORE_NO_CONFIG", "1")
@@ -26,19 +28,15 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN_FOR_TESTING")
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+asyncpg://derp_test:derp_test@localhost:5433/derp_test"
 )
-os.environ.setdefault("DEFAULT_LLM_MODEL", "gemini-2.0-flash")
-os.environ.setdefault("OPENAI_API_KEY", "test_openai_key")
-os.environ.setdefault("GOOGLE_API_KEY", "test_google_key")
-os.environ.setdefault("GOOGLE_API_EXTRA_KEYS", "test_key2,test_key3")
 os.environ.setdefault("GOOGLE_API_PAID_KEY", "test_paid_key")
-os.environ.setdefault("OPENROUTER_API_KEY", "test_openrouter_key")
 os.environ.setdefault("LOGFIRE_TOKEN", "test_logfire_token")
+
+models.ALLOW_MODEL_REQUESTS = False
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from derp.models import Chat as ChatModel
-    from derp.models import Message as MessageModel
     from derp.models import User as UserModel
 
 # =============================================================================
@@ -46,23 +44,45 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def database_url() -> str:
     """Get the database URL from environment."""
-    return os.environ.get(
+    url = os.environ.get(
         "DATABASE_URL",
         "postgresql+asyncpg://derp_test:derp_test@localhost:5433/derp_test",
     )
+    database = make_url(url).database or ""
+    if not database.endswith("_test"):
+        raise pytest.UsageError(
+            f"Refusing to run database tests against non-test database {database!r}"
+        )
+    return url
+
+
+@pytest.fixture(scope="session")
+def alembic_config(database_url: str) -> Config:
+    """Build an Alembic config that is independent of application settings."""
+    config = Config("alembic.ini")
+    config.attributes["database_url"] = database_url
+    config.attributes["configure_logger"] = False
+    return config
+
+
+@pytest.fixture(scope="session")
+def migrated_database(alembic_config: Config, database_url: str) -> str:
+    """Upgrade the test database to the sole Alembic head once per run."""
+    command.upgrade(alembic_config, "head")
+    return database_url
 
 
 @pytest_asyncio.fixture
-async def db_engine(database_url: str):
+async def db_engine(migrated_database: str) -> AsyncGenerator[AsyncEngine]:
     """Create a database engine for tests.
 
     Creates a fresh engine for each test to avoid event loop conflicts.
     """
     engine = create_async_engine(
-        database_url,
+        migrated_database,
         echo=False,
         pool_pre_ping=True,
     )
@@ -71,58 +91,26 @@ async def db_engine(database_url: str):
 
 
 @pytest_asyncio.fixture
-async def db_session(db_engine) -> AsyncGenerator[AsyncSession]:
-    """Provide a database session with automatic rollback after each test.
+async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
+    """Join a session to an outer transaction that always rolls back.
 
-    Each test runs in its own transaction that is rolled back at the end,
-    ensuring test isolation without needing to clean up data manually.
+    `create_savepoint` lets application code call commit or rollback without
+    controlling the connection-level transaction owned by the fixture.
     """
-    from derp.models import Base
-
-    # Ensure schema exists
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async_session = async_sessionmaker(
-        db_engine,
-        expire_on_commit=False,
-        class_=AsyncSession,
-    )
-
-    async with async_session() as session:
-        yield session
-        # Rollback any uncommitted changes
-        await session.rollback()
-
-
-@pytest_asyncio.fixture
-async def db_session_committed(db_engine) -> AsyncGenerator[AsyncSession]:
-    """Provide a database session that commits changes.
-
-    Use this when you need to test behavior that requires committed data,
-    such as testing unique constraints or triggers.
-    """
-    from derp.models import Base
-
-    # Ensure schema exists
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async_session = async_sessionmaker(
-        db_engine,
-        expire_on_commit=False,
-        class_=AsyncSession,
-    )
-
-    async with async_session() as session:
-        yield session
-
-    # Clean up after committed tests
-    async with async_session() as cleanup_session:
-        await cleanup_session.execute(
-            text("TRUNCATE users, chats, messages RESTART IDENTITY CASCADE")
+    async with db_engine.connect() as connection:
+        transaction = await connection.begin()
+        session = AsyncSession(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
         )
-        await cleanup_session.commit()
+        try:
+            yield session
+        finally:
+            await session.close()
+            if not transaction.is_active:
+                raise RuntimeError("Database test escaped its outer transaction")
+            await transaction.rollback()
 
 
 # =============================================================================
@@ -185,7 +173,6 @@ def chat_factory(db_session: AsyncSession):
         first_name: str | None = None,
         last_name: str | None = None,
         is_forum: bool = False,
-        llm_memory: str | None = None,
     ) -> ChatModel:
         chat = ChatModel(
             telegram_id=telegram_id,
@@ -195,67 +182,10 @@ def chat_factory(db_session: AsyncSession):
             first_name=first_name,
             last_name=last_name,
             is_forum=is_forum,
-            llm_memory=llm_memory,
         )
         db_session.add(chat)
         await db_session.flush()
         return chat
-
-    return _create
-
-
-@pytest.fixture
-def message_factory(db_session: AsyncSession, chat_factory, user_factory):
-    """Factory for creating Message model instances in the database.
-
-    Usage:
-        async def test_message(message_factory):
-            msg = await message_factory(text="Hello world")
-            assert msg.id is not None
-    """
-    from derp.models import Message as MessageModel
-
-    async def _create(
-        telegram_message_id: int = 1,
-        text: str | None = "Test message",
-        direction: str = "in",
-        content_type: str | None = "text",
-        chat: ChatModel | None = None,
-        user: UserModel | None = None,
-        thread_id: int | None = None,
-        media_group_id: str | None = None,
-        attachment_type: str | None = None,
-        attachment_file_id: str | None = None,
-        reply_to_message_id: int | None = None,
-        telegram_date: datetime | None = None,
-        edited_at: datetime | None = None,
-        deleted_at: datetime | None = None,
-    ) -> MessageModel:
-        # Create chat and user if not provided
-        if chat is None:
-            chat = await chat_factory()
-        if user is None:
-            user = await user_factory()
-
-        message = MessageModel(
-            chat_id=chat.id,
-            user_id=user.id,
-            telegram_message_id=telegram_message_id,
-            thread_id=thread_id,
-            direction=direction,
-            content_type=content_type,
-            text=text,
-            media_group_id=media_group_id,
-            attachment_type=attachment_type,
-            attachment_file_id=attachment_file_id,
-            reply_to_message_id=reply_to_message_id,
-            telegram_date=telegram_date or datetime.now(UTC),
-            edited_at=edited_at,
-            deleted_at=deleted_at,
-        )
-        db_session.add(message)
-        await db_session.flush()
-        return message
 
     return _create
 
@@ -272,42 +202,6 @@ def setup_i18n():
     token = i18n.set_current(i18n)
     yield i18n
     i18n.reset_current(token)
-
-
-@pytest.fixture
-def i18n_ru(setup_i18n):
-    """Provide Russian i18n context for testing translations."""
-    return setup_i18n.use_locale("ru")
-
-
-# =============================================================================
-# SETTINGS FIXTURES
-# =============================================================================
-
-
-@pytest.fixture
-def mock_settings():
-    """Provide a mock Settings object with sensible test defaults."""
-    settings = MagicMock()
-    settings.app_name = "derp-test"
-    settings.environment = "dev"
-    settings.is_docker = False
-    settings.telegram_bot_token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
-    settings.bot_username = "DerpTestBot"
-    settings.bot_id = 123456
-    settings.database_url = os.environ.get("DATABASE_URL")
-    settings.default_llm_model = "gemini-2.0-flash"
-    settings.openai_api_key = "test_openai_key"
-    settings.google_api_key = "test_google_key"
-    settings.google_api_extra_keys = "test_key2,test_key3"
-    settings.google_api_paid_key = "test_paid_key"
-    settings.google_api_keys = ["test_google_key", "test_key2", "test_key3"]
-    settings.openrouter_api_key = "test_openrouter_key"
-    settings.logfire_token = "test_logfire_token"
-    settings.admin_ids = {28006241}
-    settings.rmbk_id = 28006241
-    settings.premium_chat_ids = {28006241, -1001174590460, -1001130715084}
-    return settings
 
 
 # =============================================================================
@@ -422,6 +316,8 @@ def make_message(make_user, make_chat):
         message.message_id = message_id
         message.text = text
         message.caption = caption
+        message.entities = None
+        message.caption_entities = None
         message.from_user = user
         message.chat = chat
         message.reply_to_message = reply_to_message
@@ -443,12 +339,17 @@ def make_message(make_user, make_chat):
         message.animation = None
         message.video_note = None
         message.media_group_id = None
+        message.live_photo = None
+        message.paid_media = None
         message.date = datetime.now(UTC)
         message.edit_date = None
         message.html_text = text
         message.forward_from = None
         message.is_topic_message = False
+        message.direct_messages_topic = None
         message.sender_chat = None
+        message.external_reply = None
+        message.reply_to_story = None
 
         # Mock common async methods
         message.reply = AsyncMock(return_value=message)
@@ -489,46 +390,6 @@ def make_message(make_user, make_chat):
         return message
 
     return _make_message
-
-
-@pytest.fixture
-def make_bot(make_user):
-    """Factory fixture for creating mock Bot objects."""
-
-    def _make_bot(
-        id: int = 123456,
-        username: str = "DerpTestBot",
-        first_name: str = "Derp",
-        **kwargs,
-    ) -> MagicMock:
-        bot = MagicMock()
-
-        bot_user = make_user(
-            id=id,
-            is_bot=True,
-            first_name=first_name,
-            username=username,
-        )
-        bot.me = AsyncMock(return_value=bot_user)
-        bot.id = id
-
-        bot.send_message = AsyncMock()
-        bot.send_photo = AsyncMock()
-        bot.send_document = AsyncMock()
-        bot.send_audio = AsyncMock()
-        bot.send_video = AsyncMock()
-        bot.edit_message_text = AsyncMock()
-        bot.delete_message = AsyncMock()
-        bot.answer_callback_query = AsyncMock()
-        bot.get_chat = AsyncMock()
-        bot.get_chat_member = AsyncMock()
-
-        for key, value in kwargs.items():
-            setattr(bot, key, value)
-
-        return bot
-
-    return _make_bot
 
 
 # =============================================================================
@@ -757,7 +618,6 @@ def mock_chat_model():
         telegram_id: int = -100123456,
         chat_type: str = "supergroup",
         credits: int = 0,
-        llm_memory: str | None = None,
         **kwargs,
     ) -> MagicMock:
         chat = MagicMock()
@@ -765,7 +625,20 @@ def mock_chat_model():
         chat.telegram_id = telegram_id
         chat.type = chat_type
         chat.credits = credits
-        chat.llm_memory = llm_memory
+        chat.admin_policy = None
+        chat.ambient_history_enabled = False
+        chat.context_notice_version = 1
+        chat.retention_days = 30
+        chat.shared_facts_member_edit = False
+        chat.shared_credit_spending_enabled = True
+        chat.expensive_tools_enabled = True
+        chat.free_inference_enabled = False
+        chat.free_inference_revision = 1
+        chat.free_inference_tos_version = None
+        chat.free_inference_privacy_version = None
+        chat.free_inference_accepted_by_user_id = None
+        chat.free_inference_accepted_at = None
+        chat.free_inference_revoked_at = None
         for key, value in kwargs.items():
             setattr(chat, key, value)
         return chat
@@ -821,23 +694,34 @@ def make_credit_check_result():
                 reject_reason="Not enough credits"
             )
     """
-    from derp.credits.models import ModelTier
+    from derp.catalog import GoogleModelKey
     from derp.credits.types import CreditCheckResult
+    from derp.execution import ExecutionPlan, Feature, plan_execution
 
     def _make(
         allowed: bool = True,
-        tier: ModelTier = ModelTier.STANDARD,
-        model_id: str = "gemini-2.5-flash",
+        plan: ExecutionPlan | None = None,
+        feature: Feature | None = None,
+        model_key: GoogleModelKey = GoogleModelKey.CHAT_STANDARD,
         source: str = "user",
         credits_to_deduct: int = 1,
         credits_remaining: int | None = 99,
         free_remaining: int = 0,
         reject_reason: str | None = None,
     ) -> CreditCheckResult:
+        default_features = {
+            GoogleModelKey.CHAT_ECONOMY: Feature.CHAT,
+            GoogleModelKey.CHAT_STANDARD: Feature.CHAT,
+            GoogleModelKey.CHAT_REASONING: Feature.DEEP_THINK,
+            GoogleModelKey.IMAGE: Feature.IMAGE_GENERATE,
+            GoogleModelKey.TTS: Feature.TTS,
+            GoogleModelKey.VIDEO_FAST: Feature.VIDEO_GENERATE,
+            GoogleModelKey.VIDEO_STANDARD: Feature.VIDEO_GENERATE,
+        }
         return CreditCheckResult(
             allowed=allowed,
-            tier=tier,
-            model_id=model_id,
+            plan=plan
+            or plan_execution(feature or default_features[model_key], model_key),
             source=source if allowed else "rejected",
             credits_to_deduct=credits_to_deduct if allowed else 0,
             credits_remaining=credits_remaining,
@@ -850,18 +734,7 @@ def make_credit_check_result():
 
 @pytest.fixture
 def mock_credit_service_factory(make_credit_check_result):
-    """Create a pre-configured mock CreditService.
-
-    Returns a mock that can be passed directly to handlers.
-
-    Usage:
-        async def test_with_credits(mock_credit_service_factory, make_credit_check_result):
-            service = mock_credit_service_factory(
-                check_result=make_credit_check_result(allowed=True)
-            )
-            await handle_video(message, meta, service, user_model=user, chat_model=chat)
-            service.deduct.assert_awaited_once()
-    """
+    """Create a pre-configured mock CreditService for remaining legacy routes."""
 
     def _make(
         check_result=None,
@@ -871,12 +744,21 @@ def mock_credit_service_factory(make_credit_check_result):
 
         service = MagicMock()
         service.session = MagicMock()
+        service.get_balances = AsyncMock(return_value=(0, 0))
         service.check_tool_access = AsyncMock(return_value=check_result)
         service.check_model_access = AsyncMock(return_value=check_result)
         service.deduct = AsyncMock()
         service.purchase_credits = AsyncMock(return_value=purchase_result)
+        from derp.catalog import GoogleModelKey
+        from derp.execution import Feature, plan_execution
+        from derp.history.service import HISTORY_WINDOWS
+
+        chat_plan = plan_execution(Feature.CHAT, GoogleModelKey.CHAT_STANDARD)
         service.get_orchestrator_config = AsyncMock(
-            return_value=(check_result.tier, check_result.model_id, 100)
+            return_value=(
+                chat_plan,
+                HISTORY_WINDOWS[chat_plan.model.key],
+            )
         )
         service.refund_credits = AsyncMock(return_value=True)
 
@@ -918,14 +800,7 @@ def mock_credit_service(mock_credit_service_factory, make_credit_check_result):
 
 @pytest.fixture
 def mock_sender(make_message):
-    """Create a mock MessageSender for handler tests.
-
-    Usage:
-        async def test_handler(mock_sender):
-            sender = mock_sender()
-            await handle_think(message, sender, credit_service, ...)
-            sender.reply.assert_awaited_once()
-    """
+    """Create a mock MessageSender for handler tests."""
     from derp.common.sender import MessageSender
 
     def _make(message=None, **kwargs):
@@ -953,87 +828,3 @@ def mock_sender(make_message):
         return sender
 
     return _make
-
-
-# =============================================================================
-# COMMON TEST DATA
-# =============================================================================
-
-
-@pytest.fixture
-def sample_private_chat(make_message):
-    """Provide a sample private chat message for testing."""
-    return make_message(
-        chat_id=12345,
-        chat_type="private",
-        text="/start",
-    )
-
-
-@pytest.fixture
-def sample_group_chat(make_message):
-    """Provide a sample group chat message for testing."""
-    return make_message(
-        chat_id=-1001234567890,
-        chat_type="supergroup",
-        text="Hello everyone!",
-    )
-
-
-# =============================================================================
-# HELPER UTILITIES
-# =============================================================================
-
-
-@pytest.fixture
-def simple_namespace_message():
-    """Factory for creating SimpleNamespace messages (legacy pattern)."""
-
-    def _make(
-        message_id: int = 1,
-        text: str | None = None,
-        user_id: int = 12345,
-        chat_id: int = -100123,
-        **kwargs,
-    ) -> SimpleNamespace:
-        user = SimpleNamespace(
-            id=user_id,
-            first_name="Test",
-            full_name="Test User",
-            username="testuser",
-        )
-        chat = SimpleNamespace(id=chat_id, type="supergroup")
-
-        ns = SimpleNamespace(
-            message_id=message_id,
-            text=text,
-            from_user=user,
-            chat=chat,
-            message_thread_id=None,
-            reply_to_message=None,
-            content_type="text",
-            **kwargs,
-        )
-
-        ns.reply = AsyncMock()
-        ns.answer = AsyncMock()
-        ns.delete = AsyncMock()
-
-        return ns
-
-    return _make
-
-
-@pytest.fixture
-def freeze_random(monkeypatch):
-    """Helper to make random functions deterministic in tests."""
-
-    def _freeze(choice_result: Any = None, random_result: float = 0.5):
-        if choice_result is not None:
-            monkeypatch.setattr(
-                "random.choice",
-                lambda seq: choice_result if choice_result in seq else seq[0],
-            )
-        monkeypatch.setattr("random.random", lambda: random_result)
-
-    return _freeze

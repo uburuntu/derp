@@ -2,14 +2,33 @@
 
 ## Project Structure & Module Organization
 
-- `derp/`: Main package (entrypoint `__main__.py`).
-- `derp/handlers/`, `derp/middlewares/`, `derp/filters/`: Telegram logic split by concern. Add new handlers under `derp/handlers/` and include their router in `derp/__main__.py`.
-- `derp/common/`: Shared services (utils, LLM integration, Telegram helpers).
-- `derp/db/`: Database module (session management, queries).
-- `derp/models/`: SQLAlchemy models (User, Chat, Message).
+- `derp/`: Main package. `__main__.py` owns process observability/bootstrap;
+  `application.py` owns runtime resources, middleware, routers, and workers.
+- `derp/handlers/`, `derp/middlewares/`, `derp/filters/`: Telegram boundaries.
+  Register new routers in `derp/application.py::APPLICATION_ROUTERS`.
+- `derp/common/`: Shared Telegram rendering and small cross-domain helpers.
+- `derp/history/`, `derp/media/`: Scoped conversation state and bounded source
+  media hydration.
+- `derp/catalog/`, `derp/execution.py`, `derp/features/`: Canonical provider
+  facts, validated plans/outcomes, and provider-neutral feature services.
+- `derp/operations/`, `derp/approvals/`, `derp/artifacts/`, `derp/delivery/`:
+  Paid-operation accounting, deferred consent, and durable result delivery.
+- `derp/operator/`: Identifier-free aggregate diagnostics, fail-closed operator
+  access, short-lived confirmations, and adapters to live maintenance workers.
+- `derp/billing/`: Versioned Stars products, intents, settlement, subscriptions,
+  refunds, and clawbacks.
+- `derp/db/`, `derp/models/`: Cohesive persistence stores and SQLAlchemy models;
+  Alembic migrations are the schema authority.
 - `derp/locales/`: i18n sources (`.po/.pot`) and compiled `.mo` files.
 - `tests/`: Pytest suite (async-friendly, real database integration).
 - `migrations/`: Alembic migrations (generated via `make db-revision`).
+- `docs/architecture-roadmap.md`: Normative product contract plus a dated,
+  evidence-based implementation-status ledger.
+- `docs/message-style.md`: Required English/Russian voice, terminology, message
+  order, and review checklist for every user-visible string.
+- `docs/operator-console.md`: Deployment-operator access, privacy boundaries,
+  maintenance semantics, test controls, and extension/removal guidance.
+- `references/`: Gitignored upstream source checkouts matching the lockfile.
 
 ## Build, Test, and Development Commands
 
@@ -21,6 +40,7 @@ Always run commands instead of creating generated files manually. If Docker/data
 - Lint: `make lint` (Ruff)
 - Format: `make format` (Ruff format)
 - Tests: `make test` (quick, no DB) or `make test-all` (with PostgreSQL)
+- Telegram E2E: `make test-e2e` (strict local Bot API, polling, and PostgreSQL)
 - Database tests: `make test-db` (requires Docker)
 - Coverage: `make test-cov` (generates HTML report)
 - i18n: `make i18n` (extract → update → compile)
@@ -37,7 +57,7 @@ Always run commands instead of creating generated files manually. If Docker/data
 
 ## Coding Style & Naming Conventions
 
-- Python 3.13+, 4‑space indentation, type hints required.
+- Python 3.14+, 4‑space indentation, type hints required.
 - Naming: modules/functions `snake_case`, classes `CamelCase`, constants `UPPER_SNAKE`.
 - Imports: prefer absolute within `derp.*`.
 - Keep handlers small; place cross‑cutting logic in `middlewares/` or `common/`.
@@ -80,28 +100,28 @@ logfire.info("checkout", cart_id=cart_id, total=total.amount)
 
 - **Never log error then raise:** Let exceptions propagate; the final handler logs.
 - **Warning for recoverable, then fallback:** Log warning, then use fallback value.
-- **`logfire.exception()` only at boundaries:** Use in top-level handlers where you catch-all and reply with a friendly message.
-- **Include traceback with `_exc_info=True`:** For `.warning()` and `.error()` inside `except` blocks, add `_exc_info=True` to capture the traceback. `.exception()` does this automatically.
+- **Privacy-safe exception reports only at boundaries:** Use `report_exception()` in top-level handlers that recover and reply with a friendly message. It preserves safe stack locations while redacting exception text.
+- **Never use raw exception capture:** `logfire.exception()` and `_exc_info` export exception messages and stack traces outside normal scrubbing. Let exceptions propagate or use `report_exception(..., level="warning" | "error")` when recovering.
 - **Include context in logs:** Always add identifiers as structured attributes for traceability.
 - **Fail fast internally, degrade gracefully externally:** Raise for programmer errors; recover for environmental failures.
 
 ```python
 # BAD: double-logging
 except SomeError as exc:
-    logfire.exception("operation_failed")  # logged here
+    report_exception("operation_failed", exception=exc)  # logged here
     raise  # ...and logged again by caller
 
 # GOOD: warning + fallback
 except SomeError as exc:
-    logfire.warning("operation_failed_fallback")
+    report_exception("operation_failed_fallback", exception=exc, level="warning")
     return fallback_value
 
 # GOOD: let it propagate, log at boundary
 async def handler(...):
     try:
         await do_work()
-    except Exception:
-        logfire.exception("handler_failed")  # only logged here
+    except Exception as exc:
+        report_exception("handler_failed", exception=exc)  # only logged here
         await message.reply("Something went wrong")
 ```
 
@@ -122,7 +142,13 @@ async def handler(...):
 - Frameworks: `pytest`, `pytest-asyncio`.
 - Name tests `tests/test_*.py`; use async tests for coroutine code.
 - Database tests use real PostgreSQL via Docker (`make test-db`).
-- Use `db_session` fixture for tests with automatic transaction rollback.
+- Telegram E2E tests use the `telegram_e2e` marker and run without pytest-xdist.
+- Mark PostgreSQL tests with `pytest.mark.database`; `make test` excludes that
+  marker and `make test-db` runs it.
+- Test schemas come only from `alembic upgrade head`; never call
+  `Base.metadata.create_all()` in fixtures.
+- Use `db_session` for automatic outer-transaction rollback. Application code
+  may call `commit()` because the session joins through `create_savepoint`.
 - Use factory fixtures (`user_factory`, `chat_factory`, `message_factory`) to create test data.
 - Prefer reusable fixtures in `conftest.py` over duplicating mocks across test files.
 - Aim to cover filters, handlers' pure logic, database queries, and utilities.
@@ -138,37 +164,70 @@ async def handler(...):
 ## Security & Configuration
 
 - Do not commit secrets. Use `env.example` to populate `.env`/`.env.prod`.
-- Required env: Telegram token, `DATABASE_URL`, OpenAI/Google/OpenRouter keys, `LOGFIRE_TOKEN`, `ENVIRONMENT`.
+- Required env: Telegram token, `DATABASE_URL`, `GOOGLE_API_PAID_KEY`, `LOGFIRE_TOKEN`, `ENVIRONMENT`.
 - Production containers run non‑root; prefer read‑only FS and minimal privileges.
 
 ## Architecture Overview
 
 Note: this section is descriptive, not prescriptive. It reflects the current implementation and is not set in stone. If requirements change, evolve the architecture.
 
-- **Runtime Core:** `aiogram` v3 with a single `Dispatcher` and in‑memory FSM storage. Entry is `derp/__main__.py` which wires logging, i18n, DB client, middlewares, and routers, then starts long‑polling.
-- **Update Flow:** Telegram Update → outer middlewares (logging + DB) → filters → inner middlewares (context + chat settings + chat actions) → matched handler router.
+`docs/architecture-roadmap.md` is the normative product and architecture
+contract. Its dated status ledger distinguishes shipped behavior, intentionally
+suspended surfaces, and external activation gates. Delete a legacy path only
+when its replacement is covered and working or the public surface fails closed.
+
+- **Runtime Core:** `derp/application.py` owns the aiogram dispatcher and every
+  closeable runtime resource through one `AsyncExitStack`; `derp/__main__.py`
+  owns process observability and the application boundary.
+- **Update Flow:** Telegram update -> content-free tracing and source-event
+  persistence -> event context -> router match -> route-scoped model/commerce
+  dependencies -> handler.
 - **Concerns Split:**
   - `derp/handlers/*`: message/inline/media logic.
   - `derp/middlewares/*`: cross‑cutting concerns (logging, DB persistence, event context, DB model injection, credit service, throttling helper).
   - `derp/filters/*`: input shaping (mentions, meta command/hashtag parser).
   - `derp/common/*`: shared services (LLM, extraction, executors, Telegram helpers).
-  - `derp/credits/*`: credit economy (pricing, tiers, service, registries).
+  - `derp/catalog/*`: immutable provider model facts and pricing.
+  - `derp/execution.py`: validated feature/model plans and typed outcomes.
+  - `derp/operations/*`: immutable quotes, wallet reservations, settlement,
+    request binding, telemetry, and startup reconciliation.
+  - `derp/approvals/*`: authenticated durable deferred-tool approvals.
+  - `derp/delivery/*`, `derp/artifacts/*`: durable Telegram delivery and
+    private TTL-bound generated artifacts.
+  - `derp/billing/*`: versioned Stars products, purchase intents,
+    subscriptions, settlement, and clawbacks.
+  - `derp/operator/*`: private deployment-control policy, aggregate snapshots,
+    confirmation capabilities, and serialized live-worker maintenance.
+  - `derp/credits/*`: transitional free-tool and legacy compatibility policy.
+  - `derp/features/*`: provider-neutral chat, image, TTS, video, thinking, and
+    inline application services.
   - `derp/db/*`: database session and query functions.
-  - `derp/models/*`: SQLAlchemy models (User, Chat, Message, CreditTransaction, DailyUsage).
-  - `derp/tools/*`: LLM tool implementations (chat memory, web search, image gen, think).
+  - `derp/models/*`: normalized history and policy, wallet lots/events/consent,
+    quotes and operations, approvals, artifacts and delivery intents, billing,
+    and shared facts.
+  - `derp/tools/*`: LLM tool implementations exposed through governed toolsets.
   - `derp/llm/*`: LLM provider abstraction and agent factories.
   - `derp/locales/*`: i18n resources and compiled catalogs.
 
 ## Event Handling & Middlewares
 
-- **Routers:** Registered in `derp/__main__.py` via `dp.include_routers(...)` in this order: `debug` (admin only), `basic`, `donations`, `chat_settings`, `credit_cmds`, `payments`, `image`, `inline`, then catch‑all `chat` last.
+- **Routers:** `operator`, `operator_rejection`, `debug`, `debug_rejection`,
+  `legal_support`, `context_settings`, `basic`, `credit_cmds`,
+  `premium_suspension`, `payments`, `subscriptions`, `paid_media_delivery`,
+  `image`, `tts`, `inline`, then catch-all `chat`. Privileged rejection routers
+  consume unauthorized or stale controls before conversation handling.
 - **Outer middlewares:**
   - `LogUpdatesMiddleware`: formats and logs each `Update` with elapsed ms.
   - `DatabaseLoggerMiddleware`: upserts user/chat and projects messages to the messages table.
-- **Inner middlewares:**
-  - `EventContextMiddleware`: injects `bot`, `db`, and derived `user`, `chat`, `thread_id`, `business_connection_id` into handler `data`. Note: `user` and `chat` here are aiogram types (with `.id` for Telegram ID).
-  - `DatabaseModelMiddleware`: loads SQLAlchemy models from DB and injects `user_model` (`UserModel`) and `chat_model` (`ChatModel`) into handler `data`. These have `.telegram_id` for the Telegram ID and `.id` for the database UUID.
-  - `CreditServiceMiddleware`: creates a `CreditService` instance with a fresh DB session and injects it as `credit_service` into handler `data`.
+- **Update middleware:** `EventContextMiddleware` injects static runtime and
+  aiogram context for every update. `RouteDependencyMiddleware` runs after a
+  handler matches and loads SQLAlchemy models or commerce services only for
+  routes listed in `ROUTE_DEPENDENCY_PLANS`; legacy credit injection is not a
+  global update cost. Operator routes use dispatcher-injected console services
+  without model loading; only the subsequent durable debug-purchase callback
+  loads models and purchase-intent services.
+- **Event middlewares:**
+  - `MessageSenderMiddleware`: injects `MessageSender` for messages and callback queries.
   - `ChatActionMiddleware`: shows typing/upload actions for long‑running handlers.
   - `ThrottleUsersMiddleware` (available): prevents concurrent handling per user; not enabled by default.
 - **Session middlewares:**
@@ -176,43 +235,71 @@ Note: this section is descriptive, not prescriptive. It reflects the current imp
 
 ## LLM Integration (Pydantic-AI)
 
-- **Provider Abstraction:** `derp/llm/providers.py` defines `ModelTier` enum and `create_model()` factory. Models are selected by tier (CHEAP, STANDARD, PREMIUM, IMAGE), not by name, enabling easy provider switching.
-- **Agent Factories:** `derp/llm/agents.py` provides `create_chat_agent()`, `create_image_agent()`, `create_inline_agent()` pre-configured with system prompts and toolsets.
-- **Dependencies:** `AgentDeps` dataclass (`derp/llm/deps.py`) injects context (message, chat, user, db, bot, tier, credit_service) into tools and prompts.
+- **Provider Factory:** `derp/llm/providers.py` accepts an exact catalog spec or
+  semantic key and creates the corresponding OpenRouter or Google model.
+  Production exposes only the reviewed OpenRouter chat/image routes; Google is
+  retained for TTS and explicit non-production recovery work.
+- **Agent Factories:** `derp/llm/agents.py` provides `create_chat_agent()`,
+  `create_image_agent()`, and `create_inline_agent()`. They accept validated
+  `ExecutionPlan` objects (or resolve a compatible default plan). Chat tools are
+  attached per run through `create_chat_toolset()`.
+- **Dependencies:** `AgentDeps` dataclass (`derp/llm/deps.py`) injects context
+  (message, chat, user, db, bot, exact model spec) into tools and prompts.
 - **Result Wrapper:** `AgentResult` (`derp/llm/result.py`) standardizes agent output and provides `reply_to()` for sending Telegram messages with text, images, code blocks.
 - **Handlers:**
-  - `derp/handlers/chat.py`: main chat handler. Determines tier from credits, builds context, runs agent, handles multi-modal output.
-  - `derp/handlers/image.py`: premium image generation/editing via `/imagine` and `/edit` commands.
-  - `derp/handlers/inline.py`: inline mode with placeholder-then-edit pattern.
+  - `derp/handlers/chat.py`: quotes the standard context band, atomically
+    authorizes one provider run, falls back to the bounded economy plan when
+    appropriate, and captures only an acknowledged model-content delivery.
+    Failed delivery releases spend; ordinary chat text is not yet persisted for
+    post-crash resend.
+  - `derp/handlers/image.py` and `tool_approvals.py`: command and natural image
+    requests converge on one approval, operation, feature, and delivery path.
+  - `derp/handlers/tts.py`: exact quote -> authenticated approval -> bounded
+    TTS -> durable voice artifact -> capture/delivery/reversal.
+  - `derp/handlers/inline.py`: consented zero-cost answers with strict
+    per-request input, token, timeout, and output limits.
+  - `premium_suspension.py`: `/think` and `/video` fail closed with no provider
+    call or charge until their new services receive complete adapters.
 - **Tools & Toolsets:**
-  - `derp/tools/toolsets.py`: creates `FunctionToolset` instances with registered tools (chat memory, web search, image gen, think).
-  - Tools wrapped with `credit_aware_tool` for access control and credit deduction.
-  - Chat memory stored in `chats.llm_memory` column, capped at 1024 chars.
+  - `derp/tools/toolsets.py`: creates policy-derived `FunctionToolset` instances.
+    Suspended premium capabilities are excluded even from manually assembled
+    access values.
+  - Search is hidden until it has a governed provider adapter. Image tools
+    require a server-approved deferred call and the operation ledger.
+  - Natural TTS, thinking, and video tools remain absent until they can preserve
+    the same quote, approval, delivery, and parent-turn settlement guarantees.
 
 ### Pydantic-AI Tool Best Practices
 
-**Naming:** `snake_case`, descriptive (`generate_image` not `gen_img`). File names reflect provider (`gemini_image.py`, `veo_video.py`).
+**Naming:** `snake_case`, descriptive (`generate_image` not `gen_img`). Provider
+adapters use explicit names such as `image_executor.py` and `tts_executor.py`.
 
 **Docstrings:** Google style. First line = tool description for model. `Args:` = parameter descriptions (omit `ctx`).
 
-**Return values:** Strings only. Direct-sending tools return `"[Sent directly to chat. Do not output anything else unless the user asked a follow-up question.]"`.
+**Return values:** Provider executors return typed domain outcomes and never
+send Telegram messages or mutate balances. Thin command/tool adapters translate
+outcomes; do not add another direct-sending implementation.
 
-**Limits:** `UsageLimits(tool_calls_limit=3)` on agent runs to prevent abuse.
+**Limits:** Paid chat permits at most two model requests, three tool calls, and
+2048 output tokens per request. The quote covers the aggregate 4096-token
+output ceiling so execution cannot exceed its authorized budget.
 
 **Parameters:** Simple types (`str`, `int`, `bool`). Use `| None` for optionals.
 
 ## Data & Persistence (PostgreSQL + SQLAlchemy)
 
-- **Session Management:** `derp/db/session.py` provides `DatabaseManager` with async session context managers.
-- **Models:** `derp/models/` contains SQLAlchemy 2.0 models:
-  - `User`: Telegram users with computed `full_name`, `display_name` properties.
-  - `Chat`: Chats with `llm_memory` for LLM context, computed `display_name`.
-  - `Message`: Conversation history for LLM context building, with `is_deleted` property.
-- **Queries:** `derp/db/queries.py` contains typed async query functions:
-  - `upsert_user`, `upsert_chat`, `upsert_message`: idempotent creates/updates.
-  - `get_recent_messages`: returns messages in chronological order for LLM context.
-  - `update_chat_memory`: sets/clears chat memory.
-- **Migrations:** Alembic migrations in `migrations/versions/`. Generate with `make db-revision MSG="..."`.
+- **Session Management:** `derp/db/session.py` provides `DatabaseManager`; a
+  database transaction never spans provider or Telegram I/O.
+- **Domain Stores:** history/context queries live under `derp/db/`; operation,
+  approval, artifact, delivery, billing, wallet, and inline stores stay with
+  their cohesive subsystems and exchange typed domain values.
+- **Models:** SQLAlchemy models cover users/chats, normalized history and policy,
+  wallet lots/events/consent/debt provenance, quotes and paid operations,
+  deferred approvals, artifacts and delivery attempts, legal acceptances,
+  support cases/intakes, purchase intents/receipts/payment updates/subscriptions,
+  run receipts/notices, and shared facts.
+- **Migrations:** Alembic is authoritative. Generate migrations with
+  `make db-revision MSG="..."`; parity tests must fail on model/schema drift.
 
 ## Credit Economy
 
@@ -220,49 +307,99 @@ The bot uses a credit-based monetization system with tiered access to features.
 
 ### Core Concepts
 
-- **Two Credit Pools:** Users have personal credits; chats (groups) have shared pool credits. Chat credits are consumed first, then personal credits.
-- **Model Tiers:** LLM models are abstracted into quality tiers (CHEAP, STANDARD, PREMIUM, IMAGE) rather than specific model names. This allows swapping providers without changing business logic.
-- **Free Tier:** Users without credits use the CHEAP tier with reduced context length and no premium tools.
-- **Paid Tier:** Users/chats with credits > 0 unlock STANDARD tier, longer context, and premium tools.
+- **Wallets:** A personal wallet contains expiring subscription allowance and
+  purchased credits; a group wallet contains purchased shared credits. One
+  operation uses one wallet, tries the chat first, and requires authenticated
+  per-user/per-chat consent before personal fallback.
+- **Model Keys:** Stable semantic keys select immutable provider model specs.
+  The shared spec carries the exact provider ID, lifecycle, limits,
+  capabilities, source links, routing policy, and current pricing used by both
+  execution and billing.
+- **Free Tier:** Consented zero-cost OpenRouter models have no daily admission
+  quota. Users opt in for private and inline use; a current group admin decides
+  per chat and Derp posts a visible retention disclosure. Each request remains
+  bounded by input, token, timeout, and output limits.
+- **Paid Tier:** Users/chats with credits unlock the standard chat role, longer
+  context, and premium tools.
 
 ### Architecture
 
 ```
-derp/credits/
-├── models.py     # ModelConfig, MODEL_REGISTRY, tier mappings
-├── tools.py      # ToolConfig, TOOL_REGISTRY, tool pricing
-├── types.py      # ModelTier, ModelType, TransactionType, CreditCheckResult
-└── service.py    # CreditService: check access, deduct, purchase, refund
+derp/catalog/
+├── google.py          # Immutable Google TTS specs and pricing
+└── openrouter.py      # Reviewed text/image models, routes, limits, and pricing
+derp/operations/
+├── quotes.py          # Fixed catalog-derived quotes and context bands
+├── ledger.py          # Wallet selection, reserve/capture/release/reversal
+├── debt.py            # Exact debt sources and repayment provenance
+├── bindings.py        # HMAC request identities without stored content
+└── reconciliation.py  # Crash-boundary cleanup without provider replay
+derp/billing/
+├── products.py        # Immutable top-ups and one recurring plan
+├── intents.py         # Opaque, expiring, payer/target-bound purchase intents
+├── payment_updates.py # Pre-ack payment inbox, settlement, and reply recovery
+├── subscriptions.py   # Cycles and leased absolute renewal commands
+└── settlement.py      # Idempotent fulfillment, refunds, and clawbacks
 ```
 
-- **CreditService:** Central service for all credit operations. Accepts SQLAlchemy `UserModel`/`ChatModel` directly (not Telegram IDs). Performs atomic balance updates, records transactions with idempotency keys, and checks tool/model access. Injected via `CreditServiceMiddleware`.
-- **Registries:** `MODEL_REGISTRY` and `TOOL_REGISTRY` define available models/tools with their costs. Pricing is derived from provider costs with a margin.
-- **CreditCheckResult:** Returned by access checks; contains `allowed`, `reject_reason`, source (chat/user), and cost information.
+- **OperationLedger:** The authoritative paid-operation state machine. Database
+  transactions cover state only; provider and Telegram I/O occur outside them.
+- **QuoteEngine:** Derives a fixed quote from the same canonical
+  `ExecutionPlan` used at runtime. Pricing inputs contain bounded commercial
+  values and keyed request/delivery bindings, never prompt content.
+- **Legacy CreditService:** Retained only for remaining compatibility. New
+  provider-backed work must not use it.
 
 ### Payment Flow
 
-1. User runs `/buy` or `/buy_chat` → shows inline keyboard with credit packs
-2. User taps pack → `payments.py` creates Telegram Stars invoice via `bot.create_invoice_link()`
-3. Telegram sends `pre_checkout_query` → bot approves
-4. Telegram sends `successful_payment` → `CreditService.purchase_credits()` adds credits atomically
-5. Transaction recorded with `telegram_charge_id` for idempotency and refund support
+- Public `/buy` and `/buy_chat` intake is controlled by
+  `PUBLIC_PURCHASES_ENABLED` and defaults closed until the real Stars smoke test
+  is recorded. Reconciliation remains live even while intake is closed.
+- Invoice creation persists an opaque expiring intent before Telegram I/O.
+  Public intent creation requires an immutable acceptance of the current Terms
+  version and binds that acceptance to the intent; the operator-only 1-Star
+  diagnostic is the controlled exception.
+  Pre-checkout validates payer, target, product version, currency, amount, and
+  expiry. The dispatcher durably records every successful/refunded payment
+  update before polling can acknowledge it; replay settles exactly once and
+  retries the private result notice independently.
+- Subscription renewals create non-rolling 30-day allowance cycles. Cancellation
+  is an absolute desired-state command with a durable lease and bounded retry.
+  Refunds claw back the exact purchase/cycle source; debt and later repayment
+  allocations retain source provenance rather than making inventory negative.
+- Donation billing is suspended. `/support` collects one bounded note, binds
+  payment/refund cases to an exact receipt, and notifies the private operator
+  surface. Decisions and refund outcomes update one stable requester message.
 
 ### Tool Credit Integration
 
-- Tools are wrapped with `credit_aware_tool` decorator that checks access before execution
-- Premium tools (image gen, deep thinking) are visible to the agent but return placeholder messages when credits are insufficient
-- Daily usage limits tracked in `daily_usage` table for free-tier rate limiting
+- Paid chat, image, and TTS use immutable operation IDs and atomic settlement.
+- Only premium tools backed by durable approval/accounting are visible to the
+  agent. Thinking and video are absent from toolsets and intercepted commands.
+- Zero-cost model requests are unlimited after versioned consent, remain
+  bounded per request, and are fully accounted for.
 
 ### Extending
 
-- **Add a model:** Add entry to `MODEL_REGISTRY` with provider, tier, and pricing. Tests will fail if tier hierarchy is violated.
-- **Add a tool:** Add entry to `TOOL_REGISTRY` with base cost and daily limits. Wrap function with `credit_aware_tool`.
-- **Change pricing:** Update registry entries; credit costs are derived automatically from provider costs.
+- **Add a model:** Update the single Google catalog and its drift tests; runtime
+  resolution and verified provider pricing must change together.
+- **Add a paid tool:** Reuse the quote/operation service and typed feature
+  outcome. The legacy `TOOL_REGISTRY` and `credit_aware_tool` path is
+  transitional, not a pattern to duplicate.
+- **Change pricing:** Verify current provider pricing, then update the single
+  catalog and quote tests. Existing TODO prices are not authoritative.
 
 ## Media & Extraction
 
-- **Extractor:** `derp/common/extractor.py` supports photos (incl. image docs and static stickers), videos (incl. video stickers/animations/video notes), audio/voice, documents (PDF path supported), and text. Uses signed file URLs via `derp/common/tg.py` and `httpx` to download bytes.
-- **Formatting:** Helpers in `derp/common/tg.py` format user/chat/message info and provide reply helpers for attachments.
+- **Source media:** History stores normalized Telegram attachment references,
+  never bytes or signed URLs. `MediaGateway` uses one owned HTTP client and
+  hydrates references on demand with time, size, MIME, and redirect limits.
+- **Generated media:** `DeliveryService` persists bounded private artifacts,
+  records intent before Telegram sends, distinguishes definite from ambiguous
+  failure, authenticates no-charge resend, and reverses captured spend on
+  terminal failure or expiry.
+- **Formatting:** `derp/common/tg.py` and `MessageSender` own Telegram rendering;
+  provider executors have no Telegram dependency.
 
 ## Filters & Commands
 
@@ -272,13 +409,27 @@ derp/credits/
 ## Configuration & i18n
 
 - **Settings:** `derp/config.py` uses `pydantic-settings` to load `.env` and `.env.prod`, with helpers for rotating Google API keys and deriving `bot_id`.
+- **Operator:** A deployment operator is an explicit `OPERATOR_IDS` allowlist
+  member, distinct from Telegram chat administrators and owners. Production
+  requires at least one ID; `ADMIN_IDS` is a deprecated migration alias.
 - **i18n:** `aiogram.utils.i18n` with catalogs under `derp/locales`. Use `make i18n` to extract/update/compile; `SimpleI18nMiddleware` installs runtime translation. Never manually edit `.mo` files—always generate them via `make i18n-compile`.
+- **Message style:** Follow `docs/message-style.md` for all fixed copy. English
+  is concise and conversational; Russian is tighter, uses `Дерп`, and must not
+  retain fuzzy or untranslated production entries.
+- **Command menu:** `derp/command_menu.py` is the desired state for private,
+  group, and group-admin command scopes. Startup reapplies every supported
+  locale and deletes the default scope so stale BotFather commands cannot expose
+  suspended features.
 
 ## Observability & Resilience
 
-- **Logging/Tracing:** `logfire` is configured with service name and environment. In `dev`, instruments `httpx`. Also instruments system metrics, Pydantic failures, and Google GenAI calls. A `LogfireLoggingHandler` bridges stdlib logging.
-- **Backpressure/Throttling:** `ThrottleUsersMiddleware` available to drop concurrent messages per user. For CPU/IO offload with timeouts, see `derp/common/executor.py` (thread/process pools with `ThrottlerSimultaneous` and per‑task timeouts).
-- **Error Handling:** Handlers catch and log exceptions, replying with friendly fallbacks; image pipelines degrade to text if no images are returned.
+- **Logging/Tracing:** `derp/observability.py` owns Logfire configuration, scrubbing, integrations, stdlib logging, and shutdown. `derp/application.py` owns the bot/database runtime. Every update gets one content-free `telegram.update` consumer span.
+- **Operator console:** `docs/operator-console.md` defines its aggregate-only
+  data contract, conservative maintenance results, and `operator.*` events.
+- **Backpressure/Throttling:** Polling has a configurable global concurrency limit. `ThrottleUsersMiddleware` is available for per-user exclusion but is not enabled.
+- **Error Handling:** Boundaries report privacy-safe failures once and return a
+  typed not-charged, refunded, retry, or reconciliation state. Paid media never
+  substitutes generic text and then treats the requested artifact as delivered.
 
 ### Instrumentation Guidelines
 
@@ -288,9 +439,14 @@ derp/credits/
 - Use `@logfire.instrument()` for standalone functions that warrant tracing; prefer explicit `with logfire.span(...)` in async contexts.
 
 **Auto-instrumentation:**
-- Gemini calls are auto-instrumented via `logfire.instrument_google_genai()`. Do not create manual `genai.generate` spans.
-- Token usage (`gen_ai.usage.*`) and model details are captured automatically; avoid manual tracking.
+- Configure Pydantic AI through the configured `Logfire.instrument_pydantic_ai(...)` instance so it uses the same tracer and meter providers. Content-free Google GenAI SDK child spans are intentional for direct and provider calls; do not add manual provider-generation spans.
+- Run-level token usage is captured under `gen_ai.aggregated_usage.*`; provider
+  spans may expose more specific `gen_ai.usage.*` attributes. Avoid duplicate
+  manual token tracking.
 - Metrics are aggregated within spans via `MetricsOptions(collect_in_spans=True)`.
+- Direct Google SDK content and completion hooks are always disabled. The explicit local-dev opt-in enables only Pydantic AI text content and may never enable production or binary capture.
+- The global exception callback must redact exception messages, stack source text, and status descriptions for auto-instrumented spans. Recovering boundaries use `report_exception()`; never bypass either layer.
+- Do not globally instrument HTTPX: Telegram file URLs contain the bot token. Instrument only owned safe clients with headers and bodies disabled, or use explicit semantic spans.
 
 **Structured attributes:**
 - Use OpenTelemetry semantic conventions: `gen_ai.*`, `http.*`, `db.*`.
@@ -307,32 +463,45 @@ derp/credits/
 
 **Anti-patterns:**
 - Avoid logging inside tight loops.
-- Don't log full message content at info level (use debug or omit).
+- Never log message, prompt, query, callback, payment payload, tool arguments, or provider response content at any level; record lengths, types, identifiers, and outcomes instead.
 - Don't create spans for synchronous, fast operations.
 - Never log secrets, tokens, or API keys.
 - Don't duplicate what auto-instrumentation already captures.
+- Don't propagate Telegram identifiers through OpenTelemetry baggage. Local correlation belongs in the update root span and `UpdateContext`.
 
 ## Telegram/Aiogram Guidelines
 
-- **Aiogram vs SQLAlchemy types:** aiogram `User`/`Chat` objects have `.id` for Telegram ID. SQLAlchemy `UserModel`/`ChatModel` have `.telegram_id` for Telegram ID and `.id` for database UUID. Middlewares inject both: `user`/`chat` (aiogram) and `user_model`/`chat_model` (SQLAlchemy). Pass SQLAlchemy models to `CreditService` and DB queries.
+- **Aiogram vs SQLAlchemy types:** aiogram `User`/`Chat` objects have `.id` for
+  Telegram ID. SQLAlchemy models have `.telegram_id` and a database UUID `.id`.
+  Event context provides aiogram values globally; SQLAlchemy models are present
+  only when the matched route dependency plan requests them.
 - Direct fields: aiogram types are Pydantic models; access fields directly (they exist and may be `None`), avoid `getattr(..., "field", None)` for defined attributes.
 - Short-circuit idioms: prefer concise patterns for optionals like `user and user.id` and `user and user.username or ""`.
-- Logging: instrument decision points with `logfire` and include identifiers (chat_id, user_id, payload) for traceability.
-- Resilience: wrap network sends in try/except, degrade gracefully (e.g., fall back from media to text), and ensure auxiliary failures don't impact the core user flow.
+- Logging: instrument decision points with `logfire` and include safe identifiers and outcomes; never include Telegram or payment payload content.
+- Personal balances, subscription state, payment outcomes, and refund amounts are
+  actor-only. In groups, use `deliver_sensitive_reply()` for a protected private
+  message plus a content-free public acknowledgement; callbacks that mutate a
+  personal plan must fail closed outside the private chat.
+- Operator controls are additionally allowlist-gated and private-chat-bound.
+  Never infer operator access from Telegram chat administrator/owner status.
+- Resilience: recover network sends only where the product contract permits.
+  Paid artifact failure uses durable delivery/reversal state rather than a
+  generic text substitute; auxiliary failures must not corrupt the core flow.
 - Comments: keep comments purposeful (document intent/invariants); avoid restating obvious behavior that the code already conveys.
 
 ## Major Libraries
 
-When generating code, setting up configuration, or needing API documentation for any of these libraries, use the Context7 MCP tools (`resolve-library-id` and `get-library-docs`) automatically to get up-to-date references.
+When generating code, setting up configuration, or needing API documentation,
+use the `ctx7` CLI workflow defined at the top of this file. For aiogram and
+pydantic-ai, inspect the lock-matched `references/` checkout as the primary
+source for repository-specific changes.
 
-- **aiogram 3.x:** Telegram bot framework (routers, middleware, filters, FSM, i18n).
-- **pydantic-ai:** Provider-agnostic LLM framework (agents, tools, structured output, multi-provider support).
+- **aiogram 3.30.0:** Telegram runtime. Consult `references/aiogram` before changing routers, middleware, dependency injection, polling, flags, payments, or session middleware.
+- **pydantic-ai 2.14.1:** Agent runtime. Consult its upgrade guide and `references/pydantic-ai` before changing agents, capabilities, tools, history, retries, instrumentation, or durable execution.
 - **SQLAlchemy 2.x + asyncpg:** Async PostgreSQL ORM with typed models.
 - **Alembic:** Database migrations.
-- **logfire 4.x:** Structured logging, metrics, instrumentation.
+- **logfire 4.38.0:** Structured logging, metrics, instrumentation. Consult `references/logfire` before changing configuration, integrations, scrubbing, tracing, metrics, or exporter lifecycle.
 - **pydantic 2.x + pydantic-settings:** Config and validation.
-- **throttler:** Concurrency control for executors.
-- **aiocache, aiojobs:** Caching and background job utilities (available; enable as needed).
 - **babel/pybabel:** i18n extraction/update/compile.
 - **dev tools:** `uv`, `ruff`, `pytest`, `pytest-asyncio`.
 
@@ -340,15 +509,25 @@ When generating code, setting up configuration, or needing API documentation for
 
 - **Add a handler:**
   - Create `derp/handlers/<name>.py` with a `Router` and handlers.
-  - Import and add the router in `derp/__main__.py` via `dp.include_routers(...)` in the right order.
+  - Import and add the router in `derp/application.py` via `dispatcher.include_routers(...)` in the right order.
 - **Add a middleware:** Implement `BaseMiddleware` (or `UserContextMiddleware`) in `derp/middlewares/` and register as outer or inner depending on concern.
 - **Add a filter:** Place in `derp/filters/` and use in router decorators.
 - **Add a database migration:** Run `make db-revision MSG="description"` (**never create migration files manually**).
 - **Add a model:** Create in `derp/models/`, add to `derp/models/__init__.py`, generate migration.
 - **Add a query:** Add function to `derp/db/queries.py`, add tests in `tests/test_db_queries.py`.
-- **Add a tool for LLM:** Write a function with `RunContext[AgentDeps]` as first param; add to `derp/tools/`, register in toolset, wrap with `credit_aware_tool` if it costs credits.
-- **Add a credit pack:** Add entry to `CREDIT_PACKS` in `payments.py`.
-- **Add a debug command:** Add to `derp/handlers/debug.py` (admin-only filter is already applied).
+- **Add an LLM capability:** Build or reuse a feature service with typed outcomes,
+  then expose it through a thin `RunContext[AgentDeps]` tool adapter and a
+  role/policy-derived toolset. Do not add a second billing or direct-sending path.
+- **Add a credit pack:** Add an immutable versioned product to
+  `DEFAULT_PRODUCT_CATALOG`; both intent creation and fulfillment consume the
+  persisted version and amount.
+- **Add an operator control:** Extend identifier-free types and aggregates under
+  `derp/operator/`, then add bounded presentation in
+  `derp/handlers/operator.py`. Reuse a live bounded domain worker for mutations,
+  require an actor/action-bound confirmation, update router dependencies and
+  history exclusions, and preserve fail-closed stale-control handling. Do not
+  add generic debug mutation commands; `/debug_buy` is the compatibility path
+  for the durable 1-Star validation flow.
 
 ---
 

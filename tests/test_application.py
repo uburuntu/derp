@@ -1,0 +1,426 @@
+"""Tests for application runtime ownership."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from derp.application import APPLICATION_ROUTERS, open_runtime
+from derp.catalog import InferenceProvider
+from derp.handlers import (
+    chat,
+    debug,
+    legal_support,
+    operator,
+    payments,
+    premium_suspension,
+    unknown_commands,
+)
+
+
+def test_payment_router_order_preserves_legal_gate_and_one_reconciliation_path() -> (
+    None
+):
+    assert APPLICATION_ROUTERS.index(legal_support.router) < APPLICATION_ROUTERS.index(
+        payments.router
+    )
+    assert APPLICATION_ROUTERS.index(debug.router) < APPLICATION_ROUTERS.index(
+        payments.router
+    )
+    assert payments.reconciliation_router in payments.router.sub_routers
+    assert "donations" not in {router.name for router in APPLICATION_ROUTERS}
+
+
+def test_operator_controls_precede_rejections_and_conversation_routes() -> None:
+    assert APPLICATION_ROUTERS.index(operator.router) < APPLICATION_ROUTERS.index(
+        operator.rejection_router
+    )
+    assert APPLICATION_ROUTERS.index(operator.rejection_router) < (
+        APPLICATION_ROUTERS.index(chat.router)
+    )
+    assert APPLICATION_ROUTERS.index(debug.router) < APPLICATION_ROUTERS.index(
+        debug.rejection_router
+    )
+
+
+def test_premium_suspension_precedes_catch_all_chat() -> None:
+    assert premium_suspension.router in APPLICATION_ROUTERS
+    assert APPLICATION_ROUTERS.index(
+        premium_suspension.router
+    ) < APPLICATION_ROUTERS.index(chat.router)
+    assert {router.name for router in APPLICATION_ROUTERS}.isdisjoint(
+        {"think", "video"}
+    )
+
+
+def test_unknown_commands_recover_immediately_before_chat_inference() -> None:
+    assert APPLICATION_ROUTERS.index(unknown_commands.router) + 1 == (
+        APPLICATION_ROUTERS.index(chat.router)
+    )
+
+
+class FakeBot:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("bot_enter")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("bot_close")
+
+    async def refund_star_payment(
+        self,
+        user_id: int,
+        telegram_payment_charge_id: str,
+    ) -> bool:
+        raise AssertionError("runtime assembly must not request a Stars refund")
+
+
+class FakeDatabase:
+    def __init__(self, events: list[str], *, fail_connect: bool = False) -> None:
+        self.events = events
+        self.fail_connect = fail_connect
+
+    async def connect(self) -> None:
+        self.events.append("db_connect")
+        if self.fail_connect:
+            raise RuntimeError("database unavailable")
+
+    async def disconnect(self) -> None:
+        self.events.append("db_disconnect")
+
+    def session(self):
+        raise AssertionError("fake expiry worker must not open a database session")
+
+
+class FakeRetentionWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("retention_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("retention_stop")
+
+
+class FakeSubscriptionExpiryWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("subscription_expiry_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("subscription_expiry_stop")
+
+
+class FakePaymentUpdateReplayWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("payment_replay_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("payment_replay_stop")
+
+
+class FakeSubscriptionRenewalWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("subscription_renewal_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("subscription_renewal_stop")
+
+
+class FakeOperatorDebugRefundWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("debug_refund_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("debug_refund_stop")
+
+
+class FakeOperationReconciliationWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("operation_reconciliation_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("operation_reconciliation_stop")
+
+
+class FakeDeliveryMaintenanceWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("delivery_maintenance_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("delivery_maintenance_stop")
+
+
+class FakeDeferredApprovalExpiryWorker:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append("approval_expiry_start")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        self.events.append("approval_expiry_stop")
+
+
+class FakeTtsExecutor:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def aclose(self) -> None:
+        self.events.append("tts_close")
+
+
+@pytest.mark.asyncio
+async def test_runtime_closes_bot_before_database(tmp_path) -> None:
+    events: list[str] = []
+    bot = FakeBot(events)
+    database = FakeDatabase(events)
+    settings = SimpleNamespace(
+        database_url="postgresql://test",
+        environment="dev",
+        artifact_store_path=tmp_path / "artifacts",
+        callback_signing_key=b"runtime-test-key".ljust(32, b"!"),
+        google_api_paid_key=SimpleNamespace(get_secret_value=lambda: "test-google-key"),
+        openrouter_api_key=None,
+        openrouter_enabled_features=frozenset(),
+        uses_openrouter=lambda _feature: False,
+        inference_provider=lambda _feature: InferenceProvider.GOOGLE,
+    )
+    tts_executor = FakeTtsExecutor(events)
+
+    with (
+        patch("derp.application.create_bot", return_value=bot),
+        patch("derp.application.init_db_manager", return_value=database),
+        patch(
+            "derp.application.HistoryRetentionWorker",
+            return_value=FakeRetentionWorker(events),
+        ) as retention_worker,
+        patch(
+            "derp.application.SubscriptionExpiryWorker",
+            return_value=FakeSubscriptionExpiryWorker(events),
+        ) as expiry_worker,
+        patch(
+            "derp.application.PaymentUpdateReplayWorker",
+            return_value=FakePaymentUpdateReplayWorker(events),
+        ) as payment_replay_worker,
+        patch(
+            "derp.application.SubscriptionRenewalWorker",
+            return_value=FakeSubscriptionRenewalWorker(events),
+        ) as subscription_renewal_worker,
+        patch(
+            "derp.application.OperatorDebugRefundWorker",
+            return_value=FakeOperatorDebugRefundWorker(events),
+        ) as debug_refund_worker,
+        patch(
+            "derp.application.OperationReconciliationWorker",
+            return_value=FakeOperationReconciliationWorker(events),
+        ) as reconciliation_worker,
+        patch(
+            "derp.application.DeliveryMaintenanceWorker",
+            return_value=FakeDeliveryMaintenanceWorker(events),
+        ) as delivery_maintenance_worker,
+        patch(
+            "derp.application.DeferredApprovalExpiryWorker",
+            return_value=FakeDeferredApprovalExpiryWorker(events),
+        ) as approval_expiry_worker,
+        patch(
+            "derp.application.GoogleTtsExecutor",
+            return_value=tts_executor,
+        ) as executor_factory,
+    ):
+        async with open_runtime(settings) as runtime:
+            assert runtime.bot is bot
+            assert runtime.db is database
+            assert runtime.delivery_service._spend_reversal is runtime.operation_ledger
+            assert runtime.chat_turn_accounting._ledger is runtime.operation_ledger
+            assert (
+                runtime.image_operation_coordinator._ledger is runtime.operation_ledger
+            )
+            assert (
+                runtime.image_operation_coordinator._delivery_service
+                is runtime.delivery_service
+            )
+            assert (
+                runtime.paid_media_operation_coordinator._ledger
+                is runtime.operation_ledger
+            )
+            assert (
+                runtime.paid_media_operation_coordinator._delivery_service
+                is runtime.delivery_service
+            )
+            assert (
+                runtime.paid_media_approval_coordinator._operations
+                is runtime.paid_media_operation_coordinator
+            )
+            assert (
+                runtime.paid_media_approval_coordinator._request_binder
+                is runtime.image_operation_coordinator._request_binder
+            )
+            assert runtime.tts_paid_media_adapter.service._executor is tts_executor
+            assert runtime.openrouter_client is None
+            assert runtime.inference_reconciliation is None
+            assert runtime.payment_update_replay is payment_replay_worker.return_value
+            assert (
+                runtime.operator_debug_refund_replay is debug_refund_worker.return_value
+            )
+            support_maintenance = payment_replay_worker.call_args.kwargs[
+                "support_refunds"
+            ]
+            assert (
+                debug_refund_worker.call_args.kwargs["support_maintenance"]
+                is support_maintenance
+            )
+            assert (
+                runtime.subscription_renewal_replay
+                is subscription_renewal_worker.return_value
+            )
+            assert (
+                runtime.payment_update_inbox._settlement
+                is expiry_worker.call_args.args[0]
+            )
+            assert runtime.inline_chat_service._free_plan is None
+            assert (
+                runtime.inline_chat_service._inference_recorder
+                is runtime.inference_recorder
+            )
+            reconciler = reconciliation_worker.call_args.args[0]
+            assert reconciler._delivery is runtime.delivery_service
+            assert (
+                delivery_maintenance_worker.call_args.args[0]
+                is runtime.delivery_service
+            )
+            assert (
+                approval_expiry_worker.call_args.args[0]
+                is runtime.deferred_tool_approval_service
+            )
+            assert (
+                runtime.operator_console._history_retention
+                is retention_worker.return_value
+            )
+            assert (
+                runtime.operator_console._subscription_expiry
+                is expiry_worker.return_value
+            )
+            assert (
+                runtime.operator_console._subscription_renewal
+                is subscription_renewal_worker.return_value
+            )
+            assert (
+                runtime.operator_console._payment_update_replay
+                is payment_replay_worker.return_value
+            )
+            assert (
+                runtime.operator_console._debug_refund_reconciliation
+                is debug_refund_worker.return_value
+            )
+            assert (
+                runtime.operator_console._operation_reconciliation
+                is reconciliation_worker.return_value
+            )
+            assert (
+                runtime.operator_console._delivery_maintenance
+                is delivery_maintenance_worker.return_value
+            )
+            assert (
+                runtime.operator_console._approval_expiry
+                is approval_expiry_worker.return_value
+            )
+            events.append("running")
+
+    executor_factory.assert_called_once()
+
+    assert events == [
+        "bot_enter",
+        "db_connect",
+        "payment_replay_start",
+        "subscription_renewal_start",
+        "retention_start",
+        "subscription_expiry_start",
+        "operation_reconciliation_start",
+        "delivery_maintenance_start",
+        "approval_expiry_start",
+        "debug_refund_start",
+        "running",
+        "debug_refund_stop",
+        "approval_expiry_stop",
+        "delivery_maintenance_stop",
+        "operation_reconciliation_stop",
+        "subscription_expiry_stop",
+        "retention_stop",
+        "tts_close",
+        "subscription_renewal_stop",
+        "payment_replay_stop",
+        "bot_close",
+        "db_disconnect",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_cleans_up_after_partial_startup() -> None:
+    events: list[str] = []
+    bot = FakeBot(events)
+    database = FakeDatabase(events, fail_connect=True)
+    settings = SimpleNamespace(database_url="postgresql://test", environment="prod")
+
+    with (
+        patch("derp.application.create_bot", return_value=bot),
+        patch("derp.application.init_db_manager", return_value=database),
+        patch("derp.application.HistoryRetentionWorker") as retention_worker,
+        patch("derp.application.SubscriptionExpiryWorker") as expiry_worker,
+        patch(
+            "derp.application.OperationReconciliationWorker"
+        ) as reconciliation_worker,
+        patch(
+            "derp.application.DeliveryMaintenanceWorker"
+        ) as delivery_maintenance_worker,
+        patch(
+            "derp.application.DeferredApprovalExpiryWorker"
+        ) as approval_expiry_worker,
+        pytest.raises(RuntimeError, match="database unavailable"),
+    ):
+        async with open_runtime(settings):
+            pytest.fail("runtime should not open")
+
+    retention_worker.assert_not_called()
+    expiry_worker.assert_not_called()
+    reconciliation_worker.assert_not_called()
+    delivery_maintenance_worker.assert_not_called()
+    approval_expiry_worker.assert_not_called()
+
+    assert events == [
+        "bot_enter",
+        "db_connect",
+        "bot_close",
+        "db_disconnect",
+    ]

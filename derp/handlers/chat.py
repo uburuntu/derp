@@ -5,13 +5,13 @@ the provider-agnostic Pydantic-AI infrastructure with tools like
 DuckDuckGo search and chat memory.
 
 The handler is credit-aware:
-- Free tier (no credits): Uses CHEAP model with 10 message context
-- Paid tier (has credits): Uses STANDARD model with 100 message context
+- Free access: Uses the economy chat role with 10-message context
+- Paid access: Uses the standard chat role with 100-message context
 """
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
 from typing import Any
 
 import logfire
@@ -20,41 +20,242 @@ from aiogram.filters import Command
 from aiogram.handlers import MessageHandler
 from aiogram.types import Message, ReactionTypeEmoji
 from aiogram.utils.i18n import gettext as _
-from pydantic_ai import BinaryContent, UsageLimits
+from pydantic_ai import BinaryContent, DeferredToolRequests, UsageLimits
 from pydantic_ai.exceptions import (
     ModelHTTPError,
     UnexpectedModelBehavior,
     UsageLimitExceeded,
 )
 
+from derp.approvals import DeferredToolApprovalService
+from derp.approvals.image_tools import ImageToolRunContext
+from derp.catalog import (
+    ChatSelection,
+    InferenceProvider,
+    InputModality,
+    ModelRole,
+    ModelSelector,
+)
 from derp.common.extractor import Extractor
 from derp.config import settings
-from derp.credits import CONTEXT_LIMITS, CreditService
-from derp.credits import ModelTier as CreditModelTier
-from derp.db import DatabaseManager, get_db_manager, get_recent_messages
+from derp.db import (
+    DatabaseManager,
+    claim_user_notice,
+    get_db_manager,
+    list_approved_shared_facts,
+    store_tool_transcript,
+)
+from derp.execution import ExecutionPlan, Feature, plan_execution
+from derp.features import ImageOperationCoordinator
+from derp.features.chat_accounting import (
+    ChatExecutionAlreadyHandled,
+    ChatExecutionInProgress,
+    ChatFallbackUnavailable,
+    ChatTurnAccounting,
+    ChatTurnInvocation,
+    EconomyChatExecutionGrant,
+    PaidChatExecutionGrant,
+)
 from derp.filters import DerpMentionFilter
+from derp.handlers.context_settings import (
+    build_free_model_recovery,
+    ensure_group_context_notice,
+)
+from derp.handlers.tool_approvals import (
+    approval_service,
+    live_image_source,
+    present_image_approvals,
+)
+from derp.handlers.tool_approvals import (
+    router as tool_approvals_router,
+)
+from derp.history.capture import capture_outbound_history, suppress_outbound_history
+from derp.history.core import (
+    AttachmentReference,
+    LogicalTurn,
+    Speaker,
+    TokenEstimator,
+    UserTextTurn,
+    render_user_content,
+)
+from derp.history.facts import ApprovedFact, render_approved_facts
+from derp.history.media import (
+    DEFAULT_AGGREGATE_MEDIA_BYTES,
+    HydratedMedia,
+    hydrate_media,
+    hydration_candidate,
+)
+from derp.history.persistence import project_persisted_message
+from derp.history.service import (
+    HISTORY_WINDOWS,
+    ConversationHistoryService,
+    HistoryWindow,
+    LoadedHistory,
+)
+from derp.history.snapshot import (
+    CaptureKind,
+    MessageDirection,
+    SnapshotRole,
+    TelegramMessageSnapshot,
+    project_message_snapshot,
+)
+from derp.history.transcript import extract_tool_rounds, serialize_tool_rounds
+from derp.inference import (
+    FREE_INFERENCE_PRIVACY_VERSION,
+    FREE_INFERENCE_TOS_VERSION,
+    InferenceAttempt,
+    InferenceContext,
+    InferenceRecorder,
+    decide_non_zdr_free_inference,
+    project_chat_free_model_policy,
+    project_inference_privacy,
+)
 from derp.llm import (
-    RELAXED_SAFETY_SETTINGS,
+    AgentContentDelivered,
+    AgentContentUnavailable,
     AgentDeps,
     AgentResult,
     create_chat_agent,
+    model_run_settings,
 )
-from derp.llm import (
-    ModelTier as LLMModelTier,
-)
+from derp.llm.prompts import BASE_SYSTEM_PROMPT
+from derp.media import MediaGateway
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.observability import report_exception
+from derp.operations import OperationId, chat_execution_budget
+from derp.operator import OperatorOnlyFilter
+from derp.run_info import ChatRunDelivery, RunInfoService, RunPrivacyMode
 from derp.tools import create_chat_toolset
+from derp.tools.authorization import ActorRoleResolver
+from derp.tools.policy import (
+    ActorRole,
+    ChatToolPolicy,
+    derive_chat_tool_access,
+)
+from derp.tools.shared_facts import SharedFactTools
 
 router = Router(name="chat")
 
+_IMAGE_MEDIA_TYPES = frozenset({"live_photo", "photo", "sticker"})
+_AUDIO_MEDIA_TYPES = frozenset({"audio", "voice"})
+_VIDEO_MEDIA_TYPES = frozenset({"animation", "video", "video_note"})
 
-@logfire.instrument("extract_media")
-async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
+
+def _chat_modalities(turn: UserTextTurn) -> frozenset[InputModality]:
+    modalities = {InputModality.TEXT}
+    media_types = {attachment.media_type for attachment in turn.attachments}
+    if media_types & _IMAGE_MEDIA_TYPES:
+        modalities.add(InputModality.IMAGE)
+    if media_types & _AUDIO_MEDIA_TYPES:
+        modalities.add(InputModality.AUDIO)
+    if media_types & _VIDEO_MEDIA_TYPES:
+        modalities.add(InputModality.VIDEO)
+    if "document" in media_types:
+        modalities.add(InputModality.PDF)
+    return frozenset(modalities)
+
+
+def _select_chat_plans(
+    *,
+    user: UserModel,
+    chat_type: str,
+    turn: UserTextTurn,
+    chat: ChatModel | None = None,
+) -> tuple[ExecutionPlan, ExecutionPlan | None]:
+    modalities = _chat_modalities(turn)
+    if not settings.uses_openrouter(Feature.CHAT):
+        return (
+            plan_execution(
+                Feature.CHAT,
+                ModelRole.CHAT_STANDARD,
+                provider=InferenceProvider.GOOGLE,
+            ),
+            None,
+        )
+
+    try:
+        context = InferenceContext(chat_type)
+    except ValueError:
+        context = InferenceContext.GROUP
+    free_decision = decide_non_zdr_free_inference(
+        project_inference_privacy(user),
+        context=context,
+        current_tos_version=FREE_INFERENCE_TOS_VERSION,
+        current_privacy_version=FREE_INFERENCE_PRIVACY_VERSION,
+        chat_policy=(
+            project_chat_free_model_policy(chat)
+            if chat is not None
+            and context in {InferenceContext.GROUP, InferenceContext.SUPERGROUP}
+            else None
+        ),
+    )
+    selector = ModelSelector()
+    paid_model = selector.select_chat(ChatSelection(paid=True, modalities=modalities))
+    fallback_model = None
+    if free_decision.allowed:
+        try:
+            fallback_model = selector.select_chat(
+                ChatSelection(
+                    paid=False,
+                    free_mode_allowed=True,
+                    modalities=modalities,
+                )
+            )
+        except ValueError:
+            fallback_model = None
+        if fallback_model is not None and not fallback_model.available:
+            fallback_model = None
+    return (
+        plan_execution(Feature.CHAT, paid_model),
+        plan_execution(Feature.CHAT, fallback_model) if fallback_model else None,
+    )
+
+
+async def _record_failed_inference(
+    recorder: InferenceRecorder,
+    attempt: InferenceAttempt,
+) -> None:
+    """Best-effort terminal state without masking the provider failure."""
+    try:
+        await recorder.fail(attempt)
+    except Exception as exc:
+        report_exception(
+            "inference_failure_recording_failed",
+            exception=exc,
+            level="warning",
+            inference_usage_id=str(attempt.id),
+        )
+
+
+router.include_router(tool_approvals_router)
+
+# Provider serialization and registered tool schemas are outside history estimation.
+_CHAT_RUNTIME_OVERHEAD_TOKENS = 2_048
+_PAID_CHAT_NOTICE_VERSION = 1
+
+
+@logfire.instrument("extract_media", extract_args=False)
+async def extract_media_for_agent(
+    message: Message,
+    media_gateway: MediaGateway | None = None,
+    *,
+    max_total_bytes: int = DEFAULT_AGGREGATE_MEDIA_BYTES,
+) -> list[BinaryContent]:
     """Extract supported media from message for agent processing.
 
     Converts Telegram media to Pydantic-AI BinaryContent format.
     """
+    if max_total_bytes < 0:
+        raise ValueError("Aggregate media byte limit must not be negative")
+    if media_gateway is not None:
+        hydrated = await _hydrate_current_media(
+            message,
+            media_gateway,
+            max_total_bytes=max_total_bytes,
+        )
+        return list(hydrated.content.values())
+
     media_parts: list[BinaryContent] = []
 
     # Extract photo (includes image documents and static stickers)
@@ -73,7 +274,7 @@ async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
                 size=len(image_data),
             )
         except Exception:
-            logfire.exception("photo_download_failed")
+            report_exception("photo_download_failed")
 
     # Extract video (includes video stickers, animations, video notes)
     if video := await Extractor.video(message):
@@ -91,7 +292,7 @@ async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
                 size=len(video_data),
             )
         except Exception:
-            logfire.exception("video_download_failed")
+            report_exception("video_download_failed")
 
     # Extract audio (includes audio files and voice messages)
     if audio := await Extractor.audio(message):
@@ -109,7 +310,7 @@ async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
                 size=len(audio_data),
             )
         except Exception:
-            logfire.exception("audio_download_failed")
+            report_exception("audio_download_failed")
 
     # Extract document (PDF only for now)
     if (
@@ -129,216 +330,782 @@ async def extract_media_for_agent(message: Message) -> list[BinaryContent]:
                 size=len(document_data),
             )
         except Exception:
-            logfire.exception("document_download_failed")
+            report_exception("document_download_failed")
 
-    return media_parts
+    bounded_parts: list[BinaryContent] = []
+    retained_bytes = 0
+    for part in media_parts:
+        if retained_bytes + len(part.data) > max_total_bytes:
+            continue
+        bounded_parts.append(part)
+        retained_bytes += len(part.data)
+    return bounded_parts
 
 
-@logfire.instrument("build_context")
+async def _hydrate_current_media(
+    message: Message,
+    media_gateway: MediaGateway,
+    *,
+    max_total_bytes: int,
+) -> HydratedMedia:
+    snapshot = _attachment_source_snapshot(message)
+    candidates = [
+        candidate
+        for attachment in snapshot.attachments
+        if (candidate := hydration_candidate(attachment)) is not None
+    ]
+    return await hydrate_media(
+        gateway=media_gateway,
+        bot=message.bot,
+        candidates=candidates,
+        max_items=8,
+        max_total_bytes=max_total_bytes,
+    )
+
+
+def _attachment_source_snapshot(message: Message) -> TelegramMessageSnapshot:
+    current = project_message_snapshot(
+        message,
+        role=SnapshotRole.USER,
+        direction=MessageDirection.INBOUND,
+        capture=CaptureKind.EXPLICIT,
+    )
+    if current.attachments or not message.reply_to_message:
+        return current
+    return project_message_snapshot(
+        message.reply_to_message,
+        role=SnapshotRole.USER,
+        direction=MessageDirection.INBOUND,
+        capture=CaptureKind.EXPLICIT,
+    )
+
+
+@logfire.instrument("build_context", extract_args=False)
 async def build_context_prompt(
     message: Message,
     db: DatabaseManager,
     context_limit: int = 100,
 ) -> str:
-    """Build the context prompt for the agent.
+    """Render the scoped native history for the operator `/context` diagnostic."""
+    window = HistoryWindow(
+        max_turns=context_limit,
+        max_tokens=max(4_096, context_limit * 2_048),
+        query_limit=max(context_limit, context_limit * 3),
+    )
+    history = await _load_history(message, db, window)
+    current = render_user_content(_current_user_turn(message))
+    title = message.chat.title or message.chat.username or str(message.chat.id)
+    parts = [
+        f"scope={message.chat.id}:{message.message_thread_id or 0} chat={title}",
+        *(repr(native) for native in history.messages),
+        current,
+    ]
+    return "\n".join(parts)
 
-    Includes chat info, recent history, and current message.
-    Note: Chat memory is injected via the agent's system prompt.
 
-    Args:
-        message: The Telegram message.
-        db: Database manager.
-        context_limit: Max number of recent messages to include.
-    """
-    context_parts: list[str] = []
-
-    # Chat info
-    context_parts.extend(
-        [
-            "# CHAT",
-            json.dumps(
-                message.chat.model_dump(
-                    exclude_defaults=True, exclude_none=True, exclude_unset=True
-                )
-            ),
-        ]
+async def _load_history(
+    message: Message,
+    db: DatabaseManager,
+    window: HistoryWindow,
+    media_gateway: MediaGateway | None = None,
+) -> LoadedHistory:
+    return await ConversationHistoryService(
+        db,
+        media_gateway=media_gateway,
+        bot=message.bot if media_gateway else None,
+    ).load_before(
+        chat_id=message.chat.id,
+        thread_id=message.message_thread_id,
+        current_date=message.date,
+        current_message_id=message.message_id,
+        window=window,
     )
 
-    # Recent chat history from messages table (limited by tier)
-    async with db.read_session() as session:
-        recent_msgs = await get_recent_messages(
-            session, chat_telegram_id=message.chat.id, limit=context_limit
-        )
 
-    if recent_msgs:
-        context_parts.append("# RECENT CHAT HISTORY")
-        context_parts.extend(
-            json.dumps(
-                {
-                    "message_id": m.telegram_message_id,
-                    "sender": m.user
-                    and {
-                        "user_id": m.user.telegram_id,
-                        "name": m.user.display_name,
-                        "username": m.user.username,
-                    },
-                    "date": m.telegram_date and m.telegram_date.isoformat(),
-                    "content": m.content_type,
-                    "text": m.text,
-                    "reply_to": m.reply_to_message_id,
-                    "attachment": m.attachment_type,
-                },
-                ensure_ascii=False,
+def _current_user_turn(message: Message) -> UserTextTurn:
+    snapshot = project_message_snapshot(
+        message,
+        role=SnapshotRole.USER,
+        direction=MessageDirection.INBOUND,
+        capture=CaptureKind.EXPLICIT,
+    )
+    attachment_snapshot = _attachment_source_snapshot(message)
+    projection = project_persisted_message(snapshot)
+    sender = snapshot.sender
+    display_name = "Unknown sender"
+    if sender:
+        display_name = (
+            sender.title
+            or (f"@{sender.username}" if sender.username else None)
+            or " ".join(part for part in (sender.first_name, sender.last_name) if part)
+            or str(sender.id)
+        )
+    return UserTextTurn(
+        source_message_id=snapshot.message_id,
+        timestamp=snapshot.sent_at,
+        speaker=Speaker(id=sender and sender.id, display_name=display_name),
+        text=projection.text,
+        attachments=tuple(
+            AttachmentReference(
+                media_type=attachment.media_type.value,
+                file_id=attachment.file_id,
+                file_unique_id=attachment.file_unique_id,
             )
-            for m in recent_msgs
+            for attachment in attachment_snapshot.attachments
+        ),
+    )
+
+
+def _current_user_prompt(
+    message: Message,
+    media_by_reference: Mapping[AttachmentReference, BinaryContent],
+    approved_facts: tuple[ApprovedFact, ...] = (),
+) -> list[str | BinaryContent]:
+    turn = _current_user_turn(message)
+    media_parts = [
+        media_by_reference[reference]
+        for reference in turn.attachments
+        if reference in media_by_reference
+    ]
+    current = render_user_content(
+        turn,
+        available_attachments=media_by_reference,
+    )
+    text_parts = [render_approved_facts(approved_facts)] if approved_facts else []
+    return [*text_parts, current, *media_parts]
+
+
+async def _load_approved_facts(
+    db: DatabaseManager,
+    chat_model: ChatModel | None,
+    thread_id: int | None,
+) -> tuple[ApprovedFact, ...]:
+    if chat_model is None:
+        return ()
+    async with db.read_session() as session:
+        facts = await list_approved_shared_facts(
+            session,
+            chat_id=chat_model.id,
+            thread_id=thread_id,
+        )
+    return tuple(ApprovedFact(id=fact.id, text=fact.fact_text) for fact in facts)
+
+
+def _history_media_bytes(history: LoadedHistory) -> int:
+    total = 0
+    for message in history.messages:
+        for part in message.parts:
+            content = getattr(part, "content", None)
+            values = content if isinstance(content, list) else [content]
+            total += sum(
+                len(value.data) for value in values if isinstance(value, BinaryContent)
+            )
+    return total
+
+
+def _estimate_chat_input_tokens(
+    *,
+    history: LoadedHistory,
+    current_turn: UserTextTurn,
+    approved_facts: tuple[ApprovedFact, ...],
+    chat_model: ChatModel,
+) -> int:
+    """Estimate the stable text envelope used to quote one ordinary turn."""
+    estimator = TokenEstimator()
+    system_prompt = BASE_SYSTEM_PROMPT
+    if chat_model.admin_policy:
+        system_prompt += "\n\n## Admin Chat Policy\n" + chat_model.admin_policy
+
+    system_tokens = (
+        estimator.message_overhead
+        + estimator.part_overhead
+        + estimator.estimate_text(system_prompt)
+    )
+    current_tokens = estimator.estimate_turn(LogicalTurn(request=current_turn))
+    shared_fact_tokens = 0
+    if approved_facts:
+        shared_fact_tokens = estimator.part_overhead + estimator.estimate_text(
+            render_approved_facts(approved_facts)
+        )
+    return (
+        history.estimated_tokens
+        + system_tokens
+        + current_tokens
+        + shared_fact_tokens
+        + _CHAT_RUNTIME_OVERHEAD_TOKENS
+    )
+
+
+async def _release_paid_chat_turn(
+    accounting: ChatTurnAccounting | None,
+    operation_id: OperationId | None,
+    message: Message,
+) -> None:
+    if accounting is None or operation_id is None:
+        return
+    try:
+        await accounting.release_provider_failure(operation_id)
+    except Exception as exc:
+        report_exception(
+            "chat_turn_release_failed",
+            exception=exc,
+            operation_id=str(operation_id),
+            chat_id=message.chat.id,
+            message_id=message.message_id,
         )
 
-    # Current message
-    context_parts.extend(
-        [
-            "# CURRENT MESSAGE",
-            message.model_dump_json(
-                exclude_defaults=True, exclude_none=True, exclude_unset=True
-            ),
-        ]
-    )
 
-    logfire.debug(
-        "context_built",
-        chars=len("\n".join(context_parts)),
-        messages=len(recent_msgs) if recent_msgs else 0,
-        limit=context_limit,
-    )
+async def _capture_delivered_paid_chat_turn(
+    accounting: ChatTurnAccounting | None,
+    operation_id: OperationId | None,
+    message: Message,
+) -> None:
+    if accounting is None or operation_id is None:
+        return
+    try:
+        await accounting.capture_success(operation_id)
+    except Exception as exc:
+        report_exception(
+            "chat_turn_capture_failed_after_delivery",
+            exception=exc,
+            operation_id=str(operation_id),
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+        )
 
-    return "\n".join(context_parts)
+
+async def _release_undelivered_paid_chat_turn(
+    accounting: ChatTurnAccounting | None,
+    operation_id: OperationId | None,
+    message: Message,
+) -> None:
+    if accounting is None or operation_id is None:
+        return
+    try:
+        await accounting.release_delivery_failure(operation_id)
+    except Exception as exc:
+        report_exception(
+            "chat_turn_delivery_release_failed",
+            exception=exc,
+            operation_id=str(operation_id),
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+        )
 
 
-@router.message(Command("context"), F.from_user.id.in_(settings.admin_ids))
+async def _record_chat_run_receipt(
+    *,
+    db: DatabaseManager,
+    decision: PaidChatExecutionGrant | EconomyChatExecutionGrant,
+    history: LoadedHistory,
+    delivery: AgentContentDelivered,
+    user_model: UserModel,
+    chat_model: ChatModel,
+    request_message_id: int,
+) -> None:
+    """Persist inspectable delivery facts without affecting the user response."""
+    try:
+        await RunInfoService(db.session).record_chat_delivery(
+            ChatRunDelivery(
+                operation_id=decision.operation_id.value,
+                chat_id=chat_model.id,
+                requester_id=user_model.id,
+                request_message_id=request_message_id,
+                response_message_ids=delivery.message_ids,
+                model_key=decision.plan.model.key.value,
+                model_display_name=decision.plan.model.display_name,
+                privacy_mode=(
+                    RunPrivacyMode.PRIVATE
+                    if isinstance(decision, PaidChatExecutionGrant)
+                    else RunPrivacyMode.FREE
+                ),
+                context_messages=len(history.messages),
+                context_turns=len(history.turns),
+                context_estimated_tokens=history.estimated_tokens,
+            )
+        )
+    except Exception as exc:
+        report_exception(
+            "chat_run_receipt_recording_failed",
+            exception=exc,
+            level="warning",
+            operation_id=str(decision.operation_id),
+        )
+
+
+async def _show_first_paid_chat_notice(
+    *,
+    db: DatabaseManager,
+    message: Message,
+    user_model: UserModel,
+) -> None:
+    """Best-effort one-time disclosure before a user's first paid chat run."""
+    try:
+        async with db.session() as session:
+            claimed = await claim_user_notice(
+                session,
+                user_id=user_model.id,
+                notice="paid_chat",
+                version=_PAID_CHAT_NOTICE_VERSION,
+            )
+        if claimed is True:
+            with suppress_outbound_history():
+                await message.reply(
+                    _(
+                        "Private models use credits. Reply to any answer with "
+                        "/info for the details."
+                    )
+                )
+    except Exception as exc:
+        report_exception(
+            "paid_chat_notice_failed",
+            exception=exc,
+            level="warning",
+            user_id=str(user_model.id),
+        )
+
+
+@router.message(Command("context"), OperatorOnlyFilter())
 async def show_context(message: Message, chat_model: ChatModel | None) -> None:
-    """Admin command to show the context that would be sent to the agent."""
+    """Operator command to show the context that would be sent to the agent."""
+    if (
+        message.chat.type != "private"
+        or message.from_user is None
+        or message.chat.id != message.from_user.id
+    ):
+        await message.reply(
+            _("Operator diagnostics are private. Open /operator in your private chat.")
+        )
+        return
     db = get_db_manager()
     ctx = await build_context_prompt(message, db)
-    stats = _("Context: {chars} chars, {msgs} messages").format(
-        chars=len(ctx),
-        msgs=ctx.count('"message_id"'),
+    char_count = len(ctx)
+    message_count = ctx.count('"message_id"')
+    chars = _("{count} character", "{count} characters", char_count).format(
+        count=char_count
+    )
+    messages = _("{count} message", "{count} messages", message_count).format(
+        count=message_count
+    )
+    stats = _("Context: {chars}, {messages}").format(
+        chars=chars,
+        messages=messages,
     )
     await message.reply(stats)
+
+
+@router.message(Command("context"))
+async def reject_unauthorized_context(_message: Message) -> None:
+    """Consume unauthorized context diagnostics before conversational routing."""
 
 
 @router.message(DerpMentionFilter())
 @router.message(Command("derp"))
 @router.message(F.chat.type == "private")
 @router.message(F.reply_to_message.from_user.id == settings.bot_id)
+@flags.chat_action
 class ChatAgentHandler(MessageHandler):
-    """Message handler for AI responses using Pydantic-AI agents.
+    """Run one atomically quoted chat turn with its selected context window."""
 
-    Credit-aware handler that selects model tier and context limit
-    based on user/chat credit balance:
-    - No credits: CHEAP model, 10 message context
-    - Has credits: STANDARD model, 100 message context
-    """
-
-    @flags.chat_action
     async def handle(self) -> Any:
         """Handle messages using the Pydantic-AI chat agent."""
-        # Extract dependencies from middleware data
         db: DatabaseManager = self.data.get("db") or get_db_manager()
         bot: Bot = self.data.get("bot") or self.event.bot
         user_model: UserModel | None = self.data.get("user_model")
         chat_model: ChatModel | None = self.data.get("chat_model")
-        credit_service: CreditService | None = self.data.get("credit_service")
-
-        # Determine tier and context limit based on credits
-        tier = LLMModelTier.CHEAP  # Default for free tier
-        context_limit = CONTEXT_LIMITS[CreditModelTier.CHEAP]
-
-        tier_map = {
-            CreditModelTier.CHEAP: LLMModelTier.CHEAP,
-            CreditModelTier.STANDARD: LLMModelTier.STANDARD,
-            CreditModelTier.PREMIUM: LLMModelTier.PREMIUM,
-        }
-
-        if user_model and chat_model and credit_service:
-            (
-                credit_tier,
-                _model_id,
-                context_limit,
-            ) = await credit_service.get_orchestrator_config(user_model, chat_model)
-            tier = tier_map.get(credit_tier, LLMModelTier.CHEAP)
-
-        # Create agent dependencies with determined tier
-        deps = AgentDeps(
-            message=self.event,
-            db=db,
-            bot=bot,
-            user_model=user_model,
-            chat_model=chat_model,
-            tier=tier,
+        chat_turn_accounting: ChatTurnAccounting | None = self.data.get(
+            "chat_turn_accounting"
         )
-
+        media_gateway: MediaGateway | None = self.data.get("media_gateway")
+        role_resolver: ActorRoleResolver | None = self.data.get("actor_role_resolver")
+        image_operation_coordinator: ImageOperationCoordinator | None = self.data.get(
+            "image_operation_coordinator"
+        )
+        deferred_tool_approval_service: DeferredToolApprovalService | None = (
+            self.data.get("deferred_tool_approval_service")
+        )
+        inference_recorder: InferenceRecorder | None = self.data.get(
+            "inference_recorder"
+        )
+        paid_operation_id: OperationId | None = None
         try:
+            await ensure_group_context_notice(
+                self.event,
+                chat_model=chat_model,
+                db=db,
+                bot=bot,
+            )
+            if (
+                user_model is None
+                or chat_model is None
+                or chat_turn_accounting is None
+                or inference_recorder is None
+            ):
+                return await self.event.reply(
+                    _("I couldn't verify your account. You weren't charged. Try again.")
+                )
+
+            if role_resolver is not None and self.event.from_user is not None:
+                actor_role = await role_resolver.resolve(
+                    chat_id=self.event.chat.id,
+                    chat_type=self.event.chat.type,
+                    user_id=self.event.from_user.id,
+                )
+            elif self.event.chat.type == "private":
+                actor_role = ActorRole.PRIVATE_OWNER
+            else:
+                actor_role = ActorRole.MEMBER
+            tool_policy = ChatToolPolicy.from_chat(chat_model)
+            tool_access = derive_chat_tool_access(actor_role, tool_policy)
+
+            approved_facts = await _load_approved_facts(
+                db,
+                chat_model,
+                self.event.message_thread_id,
+            )
+            standard_probe = await _load_history(
+                self.event,
+                db,
+                HISTORY_WINDOWS[ModelRole.CHAT_STANDARD],
+            )
+            current_turn = _current_user_turn(self.event)
+            paid_plan, fallback_plan = _select_chat_plans(
+                user=user_model,
+                chat_type=self.event.chat.type,
+                turn=current_turn,
+                chat=chat_model,
+            )
+            estimated_input_tokens = _estimate_chat_input_tokens(
+                history=standard_probe,
+                current_turn=current_turn,
+                approved_facts=approved_facts,
+                chat_model=chat_model,
+            )
+            invocation = ChatTurnInvocation(
+                telegram_chat_id=self.event.chat.id,
+                telegram_message_id=self.event.message_id,
+                requester_id=user_model.id,
+                chat_id=chat_model.id,
+                thread_id=self.event.message_thread_id,
+                estimated_input_tokens=estimated_input_tokens,
+                paid_plan=paid_plan,
+                fallback_plan=fallback_plan,
+            )
+            decision = await chat_turn_accounting.authorize(invocation)
+            if isinstance(
+                decision,
+                (ChatExecutionInProgress, ChatExecutionAlreadyHandled),
+            ):
+                logfire.info(
+                    "chat_turn_duplicate_suppressed",
+                    operation_id=str(decision.operation_id),
+                    outcome=type(decision).__name__,
+                )
+                return None
+            if isinstance(decision, PaidChatExecutionGrant):
+                paid_operation_id = decision.operation_id
+                await _show_first_paid_chat_notice(
+                    db=db,
+                    message=self.event,
+                    user_model=user_model,
+                )
+            elif isinstance(decision, ChatFallbackUnavailable):
+                try:
+                    inference_context = InferenceContext(self.event.chat.type)
+                except ValueError:
+                    inference_context = InferenceContext.GROUP
+                text, markup = build_free_model_recovery(
+                    user_model,
+                    chat_model,
+                    context=inference_context,
+                    can_manage=actor_role is ActorRole.ADMIN,
+                )
+                return await self.event.reply(
+                    text,
+                    reply_markup=markup,
+                )
+            elif not isinstance(decision, EconomyChatExecutionGrant):
+                raise RuntimeError("chat accounting returned an unsupported decision")
+            plan = decision.plan
+            history_window = HISTORY_WINDOWS[plan.model.key]
+            execution_budget = chat_execution_budget(
+                plan=plan,
+                context_band=decision.quote.key.context_band,
+            )
+
+            image_tool_context = ImageToolRunContext(
+                requester_id=user_model.id,
+                requester_telegram_id=(
+                    self.event.from_user.id
+                    if self.event.from_user is not None
+                    else user_model.telegram_id
+                ),
+                chat_id=chat_model.id,
+                chat_telegram_id=self.event.chat.id,
+                message_id=self.event.message_id,
+                thread_id=self.event.message_thread_id,
+                business_connection_id=self.event.business_connection_id,
+                source=await live_image_source(self.event),
+            )
+
+            deps = AgentDeps(
+                message=self.event,
+                db=db,
+                bot=bot,
+                user_model=user_model,
+                chat_model=chat_model,
+                model=plan.model,
+                history_window=history_window,
+                tool_access=tool_access,
+                image_operation_coordinator=image_operation_coordinator,
+                image_tool_context=image_tool_context,
+            )
+
             with logfire.span(
                 "chat_agent_run",
                 _tags=["agent", "chat"],
                 telegram_chat_id=self.event.chat.id,
                 telegram_user_id=self.event.from_user and self.event.from_user.id,
                 telegram_message_id=self.event.message_id,
-                model_tier=deps.tier.value,
-                context_limit=context_limit,
+                model_key=deps.model.key.value,
+                model=deps.model.provider_model_id,
+                history_max_turns=history_window.max_turns,
+                history_max_tokens=history_window.max_tokens,
             ) as span:
-                # Build context prompt with tier-appropriate limit
-                context = await build_context_prompt(self.event, db, context_limit)
-                span.set_attribute("derp.context_chars", len(context))
+                history = await _load_history(
+                    self.event,
+                    db,
+                    history_window,
+                    media_gateway,
+                )
+                span.set_attribute("derp.context_messages", len(history.messages))
+                span.set_attribute("derp.context_turns", len(history.turns))
                 span.set_attribute(
-                    "derp.context_messages", context.count('"message_id"')
+                    "derp.context_estimated_tokens", history.estimated_tokens
+                )
+                span.set_attribute("derp.history_media", history.hydrated_media)
+                span.set_attribute(
+                    "derp.history_media_failures", history.media_failures
+                )
+                span.set_attribute("derp.approved_shared_facts", len(approved_facts))
+
+                history_media_bytes = _history_media_bytes(history)
+                current_media_budget = max(
+                    0,
+                    DEFAULT_AGGREGATE_MEDIA_BYTES - history_media_bytes,
+                )
+                if media_gateway is not None:
+                    hydrated_current = await _hydrate_current_media(
+                        self.event,
+                        media_gateway,
+                        max_total_bytes=current_media_budget,
+                    )
+                    media_by_reference = hydrated_current.content
+                else:
+                    media_parts = await extract_media_for_agent(self.event)
+                    media_by_reference = dict(
+                        zip(current_turn.attachments, media_parts, strict=False)
+                    )
+                span.set_attribute("derp.has_media", bool(media_by_reference))
+                span.set_attribute("derp.media_count", len(media_by_reference))
+                span.set_attribute(
+                    "derp.media_bytes",
+                    history_media_bytes
+                    + sum(len(item.data) for item in media_by_reference.values()),
                 )
 
-                # Extract media
-                media_parts = await extract_media_for_agent(self.event)
-                span.set_attribute("derp.has_media", len(media_parts) > 0)
-                span.set_attribute("derp.media_count", len(media_parts))
+                user_prompt = _current_user_prompt(
+                    self.event,
+                    media_by_reference,
+                    approved_facts,
+                )
 
-                # Build the user prompt with context and media
-                user_prompt: list[str | BinaryContent] = [context]
-                user_prompt.extend(media_parts)
-
-                # Create and run the agent with tools
-                agent = create_chat_agent(deps.tier)
-                toolset = create_chat_toolset()
+                agent = create_chat_agent(plan)
+                toolset = create_chat_toolset(
+                    tool_access,
+                    shared_fact_tools=SharedFactTools(),
+                )
 
                 logfire.info(
                     "running_agent",
-                    tier=deps.tier.value,
-                    context_limit=context_limit,
-                    tools=len(toolset._tools) if hasattr(toolset, "_tools") else 0,
+                    model_key=deps.model.key.value,
+                    model=deps.model.provider_model_id,
+                    history_max_turns=history_window.max_turns,
+                    history_estimated_tokens=history.estimated_tokens,
+                    actor_role=actor_role.value,
+                    tools=len(toolset.tools),
                 )
 
-                result = await agent.run(
-                    user_prompt,
-                    deps=deps,
-                    toolsets=[toolset],
-                    usage_limits=UsageLimits(tool_calls_limit=3),
-                    model_settings=RELAXED_SAFETY_SETTINGS,
+                inference_attempt = await inference_recorder.start(
+                    model=plan.model,
+                    user_id=user_model.id,
+                    chat_id=chat_model.id,
+                    operation_id=decision.operation_id.value,
                 )
+                try:
+                    with capture_outbound_history():
+                        with agent.parallel_tool_call_execution_mode("sequential"):
+                            result = await agent.run(
+                                user_prompt,
+                                message_history=history.messages,
+                                deps=deps,
+                                toolsets=[toolset],
+                                usage_limits=UsageLimits(
+                                    request_limit=execution_budget.request_limit,
+                                    tool_calls_limit=execution_budget.tool_calls_limit,
+                                    input_tokens_limit=(
+                                        execution_budget.input_tokens_limit
+                                    ),
+                                    output_tokens_limit=(
+                                        execution_budget.output_tokens_limit
+                                    ),
+                                ),
+                                model_settings=model_run_settings(
+                                    plan.model,
+                                    user_id=user_model.id,
+                                    max_tokens=(
+                                        execution_budget.max_output_tokens_per_request
+                                    ),
+                                ),
+                            )
+                except Exception:
+                    await _record_failed_inference(
+                        inference_recorder,
+                        inference_attempt,
+                    )
+                    raise
 
-                # Convert to AgentResult and send response
+                reports = await inference_recorder.succeed(
+                    inference_attempt,
+                    result.new_messages(),
+                )
+                span.set_attribute("derp.inference_responses", len(reports))
+                if reports:
+                    span.set_attribute(
+                        "gen_ai.response.model",
+                        reports[-1].actual_model,
+                    )
+                    if downstream := reports[-1].downstream_provider:
+                        span.set_attribute("gen_ai.provider.name", downstream)
+
+                tool_rounds = extract_tool_rounds(result.new_messages())
+                span.set_attribute("derp.tool_rounds", len(tool_rounds))
+                if tool_rounds:
+                    try:
+                        async with db.session() as session:
+                            await store_tool_transcript(
+                                session,
+                                chat_telegram_id=self.event.chat.id,
+                                telegram_message_id=self.event.message_id,
+                                tool_rounds=serialize_tool_rounds(tool_rounds),
+                            )
+                    except Exception as exc:
+                        report_exception(
+                            "tool_transcript_persist_failed",
+                            exception=exc,
+                            level="warning",
+                            chat_id=self.event.chat.id,
+                            message_id=self.event.message_id,
+                        )
+
+                if isinstance(result.output, DeferredToolRequests):
+                    if (
+                        image_operation_coordinator is None
+                        or image_tool_context is None
+                    ):
+                        raise RuntimeError(
+                            "deferred image tools require durable operation context"
+                        )
+                    delivered = await present_image_approvals(
+                        message=self.event,
+                        requests=result.output,
+                        original_history=result.all_messages(),
+                        context=image_tool_context,
+                        image_operations=image_operation_coordinator,
+                        approvals=deferred_tool_approval_service
+                        or approval_service(db),
+                    )
+                    if delivered is None:
+                        await _release_undelivered_paid_chat_turn(
+                            chat_turn_accounting,
+                            paid_operation_id,
+                            self.event,
+                        )
+                        return None
+                    await _capture_delivered_paid_chat_turn(
+                        chat_turn_accounting,
+                        paid_operation_id,
+                        self.event,
+                    )
+                    return delivered
+
                 agent_result = AgentResult.from_run_result(result)
 
                 span.set_attribute("derp.response_has_text", bool(agent_result.text))
                 span.set_attribute("derp.response_images", len(agent_result.images))
 
-                # Handle empty response
                 if not agent_result.has_content:
                     try:
                         await self.event.react(reaction=[ReactionTypeEmoji(emoji="👌")])
                         logfire.debug("empty_response_reacted")
                     except Exception:
                         logfire.debug("empty_response_react_failed")
+                    await _release_paid_chat_turn(
+                        chat_turn_accounting,
+                        paid_operation_id,
+                        self.event,
+                    )
                     return None
 
-                return await agent_result.reply_to(self.event)
+                try:
+                    with capture_outbound_history():
+                        delivery = await agent_result.reply_to(self.event)
+                except Exception:
+                    await _release_undelivered_paid_chat_turn(
+                        chat_turn_accounting,
+                        paid_operation_id,
+                        self.event,
+                    )
+                    paid_operation_id = None
+                    raise
+                if delivery is None:
+                    await _release_undelivered_paid_chat_turn(
+                        chat_turn_accounting,
+                        paid_operation_id,
+                        self.event,
+                    )
+                    return None
+                if isinstance(delivery, AgentContentUnavailable):
+                    await _release_undelivered_paid_chat_turn(
+                        chat_turn_accounting,
+                        paid_operation_id,
+                        self.event,
+                    )
+                    return delivery.notice
+                if not isinstance(delivery, AgentContentDelivered):
+                    raise TypeError("chat delivery returned an unsupported outcome")
+                await _capture_delivered_paid_chat_turn(
+                    chat_turn_accounting,
+                    paid_operation_id,
+                    self.event,
+                )
+                await _record_chat_run_receipt(
+                    db=db,
+                    decision=decision,
+                    history=history,
+                    delivery=delivery,
+                    user_model=user_model,
+                    chat_model=chat_model,
+                    request_message_id=self.event.message_id,
+                )
+                return delivery.message
 
         except ModelHTTPError as exc:
+            await _release_paid_chat_turn(
+                chat_turn_accounting,
+                paid_operation_id,
+                self.event,
+            )
             if exc.status_code == 429:
                 logfire.warning(
                     "chat_rate_limited",
@@ -347,30 +1114,56 @@ class ChatAgentHandler(MessageHandler):
                 )
                 return await self.event.reply(
                     _(
-                        "⏳ The AI service is overloaded right now.\n\n"
-                        "This happens during peak usage. Please wait 30-60 seconds "
-                        "and try again."
+                        "I'm busy right now. You weren't charged. "
+                        "Try again in about a minute."
                     )
                 )
-            logfire.exception("chat_model_http_error", status_code=exc.status_code)
-            return await self.event.reply(
-                _("😅 Something went wrong. I couldn't process that message.")
+            report_exception(
+                "chat_model_http_error",
+                exception=exc,
+                status_code=exc.status_code,
             )
-        except UsageLimitExceeded:
-            logfire.warning("agent_usage_limit_exceeded", _exc_info=True)
             return await self.event.reply(
-                _("⚠️ Too many tool calls. Please try a simpler request.")
+                _("I couldn't answer that. You weren't charged. Try again.")
             )
-        except UnexpectedModelBehavior:
-            logfire.warning("agent_unexpected_behavior", _exc_info=True)
+        except UsageLimitExceeded as exc:
+            await _release_paid_chat_turn(
+                chat_turn_accounting,
+                paid_operation_id,
+                self.event,
+            )
+            report_exception(
+                "agent_usage_limit_exceeded",
+                exception=exc,
+                level="warning",
+            )
             return await self.event.reply(
                 _(
-                    "⏳ I'm getting too many requests right now. "
-                    "Please try again in about 30 seconds."
+                    "That request became too complex. You weren't charged. "
+                    "Try a simpler version."
                 )
             )
-        except Exception:
-            logfire.exception("chat_agent_failed")
+        except UnexpectedModelBehavior as exc:
+            await _release_paid_chat_turn(
+                chat_turn_accounting,
+                paid_operation_id,
+                self.event,
+            )
+            report_exception(
+                "agent_unexpected_behavior",
+                exception=exc,
+                level="warning",
+            )
             return await self.event.reply(
-                _("😅 Something went wrong. I couldn't process that message.")
+                _("I couldn't answer that. You weren't charged. Try again.")
+            )
+        except Exception as exc:
+            await _release_paid_chat_turn(
+                chat_turn_accounting,
+                paid_operation_id,
+                self.event,
+            )
+            report_exception("chat_agent_failed", exception=exc)
+            return await self.event.reply(
+                _("I couldn't answer that. You weren't charged. Try again.")
             )

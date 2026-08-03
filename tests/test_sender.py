@@ -216,6 +216,14 @@ class TestMessageSenderReply:
         assert "<b>bold</b>" in call_args.kwargs.get("text", "")
 
     @pytest.mark.asyncio
+    async def test_reply_propagates_content_protection(self, mock_message):
+        sender = MessageSender.from_message(mock_message, protect_content=True)
+
+        await sender.reply("Private control")
+
+        assert mock_message.reply.await_args.kwargs["protect_content"] is True
+
+    @pytest.mark.asyncio
     async def test_reply_requires_source_message(self, mock_bot):
         sender = MessageSender(bot=mock_bot, chat_id=123)
         with pytest.raises(ValueError, match="Cannot reply without source message"):

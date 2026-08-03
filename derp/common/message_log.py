@@ -10,8 +10,20 @@ import datetime as _dt
 
 from aiogram.types import Message, Update
 
-from derp.common.tg import extract_attachment_info
-from derp.db import DatabaseManager, mark_message_deleted, upsert_message
+from derp.db import (
+    DatabaseManager,
+    lock_chat_history_policy,
+    mark_message_deleted,
+    purge_expired_history,
+    upsert_message,
+)
+from derp.history.persistence import project_persisted_message
+from derp.history.snapshot import (
+    CaptureKind,
+    MessageDirection,
+    SnapshotRole,
+    project_message_snapshot,
+)
 
 
 async def upsert_message_from_update(
@@ -19,6 +31,7 @@ async def upsert_message_from_update(
     *,
     update: Update,
     direction: str = "in",
+    capture: CaptureKind = CaptureKind.EXPLICIT,
 ) -> None:
     """Project supported update kinds into messages table via upsert.
 
@@ -41,6 +54,7 @@ async def upsert_message_from_update(
         db,
         message=msg,
         direction=direction,
+        capture=capture,
     )
 
 
@@ -49,9 +63,21 @@ async def upsert_message_from_message(
     *,
     message: Message,
     direction: str,
+    capture: CaptureKind = CaptureKind.EXPLICIT,
 ) -> None:
     """Upsert a message record from a Telegram Message object."""
-    attachment_type, attachment_file_id, _ = extract_attachment_info(message)
+    role = SnapshotRole.ASSISTANT if direction == "out" else SnapshotRole.USER
+    normalized_direction = (
+        MessageDirection.OUTBOUND if direction == "out" else MessageDirection.INBOUND
+    )
+    snapshot = project_message_snapshot(
+        message,
+        role=role,
+        direction=normalized_direction,
+        capture=capture,
+    )
+    projection = project_persisted_message(snapshot)
+    attachment = snapshot.attachments[0] if snapshot.attachments else None
 
     # Extract edited_at from edit_date
     edited_at = None
@@ -62,6 +88,18 @@ async def upsert_message_from_message(
             edited_at = message.edit_date
 
     async with db.session() as session:
+        chat = await lock_chat_history_policy(
+            session,
+            chat_telegram_id=message.chat.id,
+        )
+        if chat is None or (
+            capture is CaptureKind.AMBIENT and not chat.ambient_history_enabled
+        ):
+            return
+        await purge_expired_history(
+            session,
+            chat_telegram_id=message.chat.id,
+        )
         await upsert_message(
             session,
             chat_telegram_id=message.chat.id,
@@ -69,11 +107,19 @@ async def upsert_message_from_message(
             telegram_message_id=message.message_id,
             thread_id=message.message_thread_id,
             direction=direction,
+            role=role.value,
+            capture_kind=capture.value,
             content_type=message.content_type,
-            text=message.html_text,
+            text=projection.text,
+            source_snapshot=projection.source_snapshot,
+            history_dto=projection.history_dto,
+            canonical_projection=projection.canonical_projection,
+            retention_expires_at=(
+                snapshot.sent_at + _dt.timedelta(days=chat.retention_days)
+            ),
             media_group_id=message.media_group_id,
-            attachment_type=attachment_type,
-            attachment_file_id=attachment_file_id,
+            attachment_type=attachment and attachment.media_type.value,
+            attachment_file_id=attachment and attachment.file_id,
             reply_to_message_id=(
                 message.reply_to_message.message_id
                 if message.reply_to_message

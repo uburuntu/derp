@@ -3,14 +3,20 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import logfire
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update
+from aiogram.types.update import UpdateTypeLookupError
 
 from derp.common.message_log import upsert_message_from_update
 from derp.common.tg import decompose_update
-from derp.common.update_context import UpdateContext, update_ctx
-from derp.db import DatabaseManager, upsert_chat, upsert_user
+from derp.db import (
+    DatabaseManager,
+    remove_disqualified_message,
+    upsert_chat,
+    upsert_user,
+)
+from derp.history.policy import capture_kind_for_message
+from derp.observability import report_exception
 
 
 class DatabaseLoggerMiddleware(BaseMiddleware):
@@ -20,8 +26,16 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
     messages table for LLM context building.
     """
 
-    def __init__(self, db: DatabaseManager):
+    def __init__(
+        self,
+        db: DatabaseManager,
+        *,
+        bot_id: int,
+        bot_username: str,
+    ):
         self.db = db
+        self.bot_id = bot_id
+        self.bot_username = bot_username
 
     async def __call__(
         self,
@@ -32,7 +46,10 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
         if not isinstance(event, Update):
             raise RuntimeError("Got an unexpected event type")
 
-        update_type = event.event_type
+        try:
+            update_type = event.event_type
+        except UpdateTypeLookupError:
+            return await handler(event, data)
 
         # Skip inline queries (no message context)
         if update_type == "inline_query":
@@ -41,6 +58,7 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
         _, user, sender_chat, chat, _ = decompose_update(event)
 
         # Upsert user and chat records
+        chat_model = None
         async with self.db.session() as session:
             if user:
                 await upsert_user(
@@ -55,7 +73,7 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
                 )
 
             if chat:
-                await upsert_chat(
+                chat_model = await upsert_chat(
                     session,
                     telegram_id=chat.id,
                     chat_type=chat.type,
@@ -79,34 +97,50 @@ class DatabaseLoggerMiddleware(BaseMiddleware):
                     is_forum=sender_chat.is_forum or False,
                 )
 
-        # Expose correlation context for downstream (e.g., API session middleware)
-        token = update_ctx.set(
-            UpdateContext(
-                update_id=event.update_id,
-                chat_id=chat and chat.id,
-                user_id=user and user.id,
-                thread_id=event.message and event.message.message_thread_id,
-            )
+        # Project only explicit or policy-enabled ambient conversation messages.
+        message = (
+            event.message
+            or event.edited_message
+            or event.channel_post
+            or event.edited_channel_post
         )
+        capture = (
+            capture_kind_for_message(
+                message,
+                ambient_enabled=bool(chat_model and chat_model.ambient_history_enabled),
+                bot_id=self.bot_id,
+                bot_username=self.bot_username,
+            )
+            if message
+            else None
+        )
+        if message and capture:
+            try:
+                await upsert_message_from_update(
+                    self.db,
+                    update=event,
+                    direction="in",
+                    capture=capture,
+                )
+            except Exception as exc:
+                report_exception(
+                    "persist_inbound_failed",
+                    exception=exc,
+                    level="warning",
+                )
+        elif message and (event.edited_message or event.edited_channel_post):
+            try:
+                async with self.db.session() as session:
+                    await remove_disqualified_message(
+                        session,
+                        chat_telegram_id=message.chat.id,
+                        telegram_message_id=message.message_id,
+                    )
+            except Exception as exc:
+                report_exception(
+                    "remove_disqualified_edit_failed",
+                    exception=exc,
+                    level="warning",
+                )
 
-        # Project inbound message to messages table BEFORE handler for context reads
-        try:
-            await upsert_message_from_update(self.db, update=event, direction="in")
-        except Exception as exc:
-            logfire.warning("persist_inbound_failed", _exc_info=exc)
-
-        # Execute the handler with Logfire baggage for correlation
-        try:
-            baggage: dict[str, str] = {"update_id": str(event.update_id)}
-            if chat and chat.id is not None:
-                baggage["chat_id"] = str(chat.id)
-            if user and user.id is not None:
-                baggage["user_id"] = str(user.id)
-
-            with logfire.set_baggage(**baggage):
-                response = await handler(event, data)
-        finally:
-            # Clear context to avoid leaks
-            update_ctx.reset(token)
-
-        return response
+        return await handler(event, data)

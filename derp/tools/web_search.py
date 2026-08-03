@@ -6,15 +6,19 @@ DuckDuckGo is free, but we still track daily usage for limits.
 
 from __future__ import annotations
 
+import asyncio
+
 import logfire
+from ddgs import DDGS
 from pydantic_ai import RunContext
-from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 
 from derp.llm.deps import AgentDeps
 from derp.tools.wrapper import credit_aware_tool
 
-# Get the underlying DuckDuckGo search function
-_ddg_search = duckduckgo_search_tool()
+
+def _search(query: str, max_results: int) -> list[dict[str, str]]:
+    with DDGS() as ddgs:
+        return list(ddgs.text(query, max_results=max_results))
 
 
 @credit_aware_tool("web_search")
@@ -31,7 +35,6 @@ async def web_search(
     weather, or verifying current facts.
 
     Args:
-        ctx: The run context with agent dependencies.
         query: The search query.
         max_results: Maximum number of results to return (default 5).
 
@@ -45,30 +48,15 @@ async def web_search(
         chat_id=ctx.deps.chat_id,
     )
 
-    # The DDG tool doesn't need our context, it's standalone
-    # We need to call the underlying function directly
-    # Note: The pydantic-ai DDG tool is a simple function, not agent-aware
+    results = await asyncio.to_thread(_search, query, max_results)
+    if not results:
+        return f"No results found for: {query}"
 
-    try:
-        # DuckDuckGo search is synchronous, but wrapped for async
-        from ddgs import DDGS
+    formatted = []
+    for index, result in enumerate(results, 1):
+        title = result.get("title", "No title")
+        body = result.get("body", "No description")
+        url = result.get("href", "")
+        formatted.append(f"{index}. **{title}**\n   {body}\n   {url}")
 
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
-
-        if not results:
-            return f"No results found for: {query}"
-
-        # Format results
-        formatted = []
-        for i, result in enumerate(results, 1):
-            title = result.get("title", "No title")
-            body = result.get("body", "No description")
-            url = result.get("href", "")
-            formatted.append(f"{i}. **{title}**\n   {body}\n   {url}")
-
-        return "\n\n".join(formatted)
-
-    except Exception as e:
-        logfire.exception("web_search_failed", query=query)
-        return f"Search failed: {e}"
+    return "\n\n".join(formatted)

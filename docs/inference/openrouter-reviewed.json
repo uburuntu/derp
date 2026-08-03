@@ -1,0 +1,2537 @@
+{
+  "catalog_unavailable": [
+    "google/gemini-3.1-flash-tts-preview",
+    "openai/whisper-large-v3"
+  ],
+  "default_policy_profile": "private_zdr",
+  "manifest_sha256": "sha256:03bb6b37099d06707aab342b21badc009c43a798b62fa73e010db5c1a3deb0b8",
+  "models": [
+    {
+      "api_contract_available": true,
+      "api_path": "/chat/completions",
+      "approved_slug": "anthropic/claude-sonnet-5",
+      "availability": "primary",
+      "canonical_slug": "anthropic/claude-sonnet-5-20260630",
+      "dedicated_catalog": null,
+      "dedicated_catalog_available": false,
+      "dedicated_endpoints": null,
+      "key": "claude_sonnet_5",
+      "name": "Claude Sonnet 5",
+      "openapi_documented": false,
+      "policy_profile": "private_zdr",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "group",
+          "inline",
+          "private"
+        ],
+        "blockers": [],
+        "private_zdr": {
+          "blockers": [],
+          "runtime_ready": true,
+          "zero_data_retention": "verified"
+        },
+        "requires_versioned_consent": false,
+        "runtime_ready": true,
+        "selected_profile": "private_zdr",
+        "zero_data_retention": "verified"
+      },
+      "primary_catalog": {
+        "architecture": {
+          "input_modalities": [
+            "file",
+            "image",
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Claude"
+        },
+        "canonical_slug": "anthropic/claude-sonnet-5-20260630",
+        "context_length": 1000000,
+        "created": 1782843083,
+        "expiration_date": null,
+        "id": "anthropic/claude-sonnet-5",
+        "knowledge_cutoff": null,
+        "name": "Anthropic: Claude Sonnet 5",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.00001",
+          "input_cache_read": "0.0000002",
+          "input_cache_write": "0.0000025",
+          "input_cache_write_1h": "0.000004",
+          "prompt": "0.000002",
+          "web_search": "0.01"
+        },
+        "reasoning": {
+          "default_effort": "high",
+          "default_enabled": true,
+          "mandatory": false,
+          "supported_efforts": [
+            "high",
+            "low",
+            "max",
+            "medium",
+            "xhigh"
+          ]
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_completion_tokens",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 1000000,
+          "is_moderated": true,
+          "max_completion_tokens": 128000
+        }
+      },
+      "primary_catalog_available": true,
+      "provider_endpoints": {
+        "architecture": {
+          "input_modalities": [
+            "file",
+            "image",
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Claude"
+        },
+        "endpoints": [
+          {
+            "context_length": 1000000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0.00001",
+              "discount": 0,
+              "input_cache_read": "0.0000002",
+              "input_cache_write": "0.0000025",
+              "input_cache_write_1h": "0.000004",
+              "prompt": "0.000002",
+              "web_search": "0.01"
+            },
+            "provider_name": "Amazon Bedrock",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "stop",
+              "structured_outputs",
+              "tool_choice",
+              "tools",
+              "verbosity"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "amazon-bedrock/claude-on-aws"
+          },
+          {
+            "context_length": 1000000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0.00001",
+              "discount": 0,
+              "input_cache_read": "0.0000002",
+              "input_cache_write": "0.0000025",
+              "input_cache_write_1h": "0.000004",
+              "prompt": "0.000002",
+              "web_search": "0.01"
+            },
+            "provider_name": "Amazon Bedrock",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "stop",
+              "structured_outputs",
+              "tool_choice",
+              "tools",
+              "verbosity"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "amazon-bedrock/global"
+          },
+          {
+            "context_length": 1000000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0.000011",
+              "discount": 0,
+              "input_cache_read": "0.00000022",
+              "input_cache_write": "0.00000275",
+              "input_cache_write_1h": "0.0000044",
+              "prompt": "0.0000022",
+              "web_search": "0.01"
+            },
+            "provider_name": "Amazon Bedrock",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "stop",
+              "structured_outputs",
+              "tool_choice",
+              "tools",
+              "verbosity"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "amazon-bedrock/us-east-1"
+          },
+          {
+            "context_length": 1000000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0.00001",
+              "discount": 0,
+              "input_cache_read": "0.0000002",
+              "input_cache_write": "0.0000025",
+              "input_cache_write_1h": "0.000004",
+              "prompt": "0.000002",
+              "web_search": "0.01"
+            },
+            "provider_name": "Anthropic",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "stop",
+              "structured_outputs",
+              "tool_choice",
+              "tools",
+              "verbosity"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "anthropic"
+          },
+          {
+            "context_length": 1000000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0.00001",
+              "discount": 0,
+              "input_cache_read": "0.0000002",
+              "input_cache_write": "0.0000025",
+              "input_cache_write_1h": "0.000004",
+              "prompt": "0.000002",
+              "web_search": "0.01"
+            },
+            "provider_name": "Azure",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_completion_tokens",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "stop",
+              "structured_outputs",
+              "tool_choice",
+              "tools",
+              "verbosity"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "azure/us-east-2"
+          },
+          {
+            "context_length": 1000000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0.000011",
+              "discount": 0,
+              "input_cache_read": "0.00000022",
+              "input_cache_write": "0.00000275",
+              "input_cache_write_1h": "0.0000044",
+              "prompt": "0.0000022",
+              "web_search": "0.01"
+            },
+            "provider_name": "Google",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "stop",
+              "tool_choice",
+              "tools",
+              "verbosity"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "google-vertex/europe"
+          },
+          {
+            "context_length": 1000000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0.00001",
+              "discount": 0,
+              "input_cache_read": "0.0000002",
+              "input_cache_write": "0.0000025",
+              "input_cache_write_1h": "0.000004",
+              "prompt": "0.000002",
+              "web_search": "0.01"
+            },
+            "provider_name": "Google",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "stop",
+              "tool_choice",
+              "tools",
+              "verbosity"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "google-vertex/global"
+          }
+        ],
+        "id": "anthropic/claude-sonnet-5"
+      },
+      "surface": "primary",
+      "zdr_provider_tags": [
+        "amazon-bedrock/global",
+        "amazon-bedrock/us-east-1",
+        "azure/us-east-2",
+        "google-vertex/europe",
+        "google-vertex/global"
+      ]
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/chat/completions",
+      "approved_slug": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "availability": "primary",
+      "canonical_slug": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428",
+      "dedicated_catalog": null,
+      "dedicated_catalog_available": false,
+      "dedicated_endpoints": null,
+      "key": "free_multimodal_reasoning",
+      "name": "Nemotron 3 Nano Omni",
+      "openapi_documented": false,
+      "policy_profile": "consented_non_zdr_free",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "inline",
+          "private"
+        ],
+        "blockers": [],
+        "private_zdr": {
+          "blockers": [
+            "zero_data_retention_unavailable"
+          ],
+          "runtime_ready": false,
+          "zero_data_retention": "unavailable"
+        },
+        "requires_versioned_consent": true,
+        "runtime_ready": true,
+        "selected_profile": "consented_non_zdr_free",
+        "zero_data_retention": "not_required"
+      },
+      "primary_catalog": {
+        "architecture": {
+          "input_modalities": [
+            "audio",
+            "image",
+            "text",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+audio+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428",
+        "context_length": 256000,
+        "created": 1777393095,
+        "expiration_date": null,
+        "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "knowledge_cutoff": null,
+        "name": "NVIDIA: Nemotron 3 Nano Omni (free)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "reasoning": {
+          "default_enabled": true,
+          "mandatory": false,
+          "supports_max_tokens": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "seed",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 256000,
+          "is_moderated": false,
+          "max_completion_tokens": 65536
+        }
+      },
+      "primary_catalog_available": true,
+      "provider_endpoints": {
+        "architecture": {
+          "input_modalities": [
+            "audio",
+            "image",
+            "text",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+audio+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Other"
+        },
+        "endpoints": [
+          {
+            "context_length": 256000,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0",
+              "discount": 0,
+              "prompt": "0"
+            },
+            "provider_name": "Nvidia",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "seed",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "nvidia"
+          }
+        ],
+        "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+      },
+      "surface": "primary",
+      "zdr_provider_tags": []
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/chat/completions",
+      "approved_slug": "google/gemma-4-31b-it:free",
+      "availability": "primary",
+      "canonical_slug": "google/gemma-4-31b-it-20260402",
+      "dedicated_catalog": null,
+      "dedicated_catalog_available": false,
+      "dedicated_endpoints": null,
+      "key": "free_text_google",
+      "name": "Gemma 4 31B",
+      "openapi_documented": false,
+      "policy_profile": "consented_non_zdr_free",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "inline",
+          "private"
+        ],
+        "blockers": [],
+        "private_zdr": {
+          "blockers": [
+            "zero_data_retention_unavailable"
+          ],
+          "runtime_ready": false,
+          "zero_data_retention": "unavailable"
+        },
+        "requires_versioned_consent": true,
+        "runtime_ready": true,
+        "selected_profile": "consented_non_zdr_free",
+        "zero_data_retention": "not_required"
+      },
+      "primary_catalog": {
+        "architecture": {
+          "input_modalities": [
+            "image",
+            "text",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Gemma"
+        },
+        "canonical_slug": "google/gemma-4-31b-it-20260402",
+        "context_length": 262144,
+        "created": 1775148486,
+        "expiration_date": null,
+        "id": "google/gemma-4-31b-it:free",
+        "knowledge_cutoff": null,
+        "name": "Google: Gemma 4 31B (free)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "reasoning": {
+          "default_enabled": false,
+          "mandatory": false
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 262144,
+          "is_moderated": false,
+          "max_completion_tokens": 32768
+        }
+      },
+      "primary_catalog_available": true,
+      "provider_endpoints": {
+        "architecture": {
+          "input_modalities": [
+            "image",
+            "text",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Gemma"
+        },
+        "endpoints": [
+          {
+            "context_length": 262144,
+            "max_completion_tokens": 32768,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0",
+              "discount": 0,
+              "prompt": "0"
+            },
+            "provider_name": "Google AI Studio",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "response_format",
+              "seed",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "google-ai-studio"
+          }
+        ],
+        "id": "google/gemma-4-31b-it:free"
+      },
+      "surface": "primary",
+      "zdr_provider_tags": []
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/chat/completions",
+      "approved_slug": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "availability": "primary",
+      "canonical_slug": "nvidia/nemotron-3-ultra-550b-a55b-20260604",
+      "dedicated_catalog": null,
+      "dedicated_catalog_available": false,
+      "dedicated_endpoints": null,
+      "key": "free_text_reasoning",
+      "name": "Nemotron 3 Ultra",
+      "openapi_documented": false,
+      "policy_profile": "consented_non_zdr_free",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "inline",
+          "private"
+        ],
+        "blockers": [],
+        "private_zdr": {
+          "blockers": [
+            "zero_data_retention_unavailable"
+          ],
+          "runtime_ready": false,
+          "zero_data_retention": "unavailable"
+        },
+        "requires_versioned_consent": true,
+        "runtime_ready": true,
+        "selected_profile": "consented_non_zdr_free",
+        "zero_data_retention": "not_required"
+      },
+      "primary_catalog": {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "nvidia/nemotron-3-ultra-550b-a55b-20260604",
+        "context_length": 1000000,
+        "created": 1780551208,
+        "expiration_date": null,
+        "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "knowledge_cutoff": null,
+        "name": "NVIDIA: Nemotron 3 Ultra (free)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "reasoning": {
+          "default_effort": "high",
+          "default_enabled": true,
+          "mandatory": false,
+          "supported_efforts": [
+            "high",
+            "medium"
+          ],
+          "supports_max_tokens": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "seed",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 1000000,
+          "is_moderated": false,
+          "max_completion_tokens": 65536
+        }
+      },
+      "primary_catalog_available": true,
+      "provider_endpoints": {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Other"
+        },
+        "endpoints": [
+          {
+            "context_length": 1000000,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0",
+              "discount": 0,
+              "prompt": "0"
+            },
+            "provider_name": "Nvidia",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "seed",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "nvidia"
+          }
+        ],
+        "id": "nvidia/nemotron-3-ultra-550b-a55b:free"
+      },
+      "surface": "primary",
+      "zdr_provider_tags": []
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/images",
+      "approved_slug": "google/gemini-3.1-flash-image",
+      "availability": "primary_and_dedicated",
+      "canonical_slug": "google/gemini-3.1-flash-image-20260528",
+      "dedicated_catalog": {
+        "architecture": {
+          "input_modalities": [
+            "image",
+            "text"
+          ],
+          "output_modalities": [
+            "image",
+            "text"
+          ]
+        },
+        "canonical_slug": null,
+        "created": 1781754065,
+        "id": "google/gemini-3.1-flash-image",
+        "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)",
+        "supported_parameters": {
+          "aspect_ratio": {
+            "type": "enum",
+            "values": [
+              "16:9",
+              "1:1",
+              "1:4",
+              "1:8",
+              "21:9",
+              "2:3",
+              "3:2",
+              "3:4",
+              "4:1",
+              "4:3",
+              "4:5",
+              "5:4",
+              "8:1",
+              "9:16"
+            ]
+          },
+          "input_references": {
+            "max": 14,
+            "min": 0,
+            "type": "range"
+          },
+          "n": {
+            "max": 1,
+            "min": 1,
+            "type": "range"
+          },
+          "resolution": {
+            "type": "enum",
+            "values": [
+              "1K",
+              "2K",
+              "4K",
+              "512"
+            ]
+          }
+        },
+        "supports_streaming": false
+      },
+      "dedicated_catalog_available": true,
+      "dedicated_endpoints": {
+        "endpoints": [
+          {
+            "allowed_passthrough_parameters": [
+              "cachedContent"
+            ],
+            "pricing": [
+              {
+                "billable": "output_image",
+                "cost_usd": "0.00006",
+                "unit": "token"
+              }
+            ],
+            "provider_name": "Google AI Studio",
+            "provider_slug": "google-ai-studio",
+            "provider_tag": "google-ai-studio",
+            "supported_parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "1:1",
+                  "1:4",
+                  "1:8",
+                  "21:9",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:1",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "8:1",
+                  "9:16"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K",
+                  "512"
+                ]
+              }
+            },
+            "supports_streaming": false
+          },
+          {
+            "allowed_passthrough_parameters": [
+              "cachedContent"
+            ],
+            "pricing": [
+              {
+                "billable": "output_image",
+                "cost_usd": "0.00006",
+                "unit": "token"
+              }
+            ],
+            "provider_name": "Google Vertex",
+            "provider_slug": "google-vertex/global",
+            "provider_tag": "google-vertex/global",
+            "supported_parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "1:1",
+                  "1:4",
+                  "1:8",
+                  "21:9",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:1",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "8:1",
+                  "9:16"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K",
+                  "512"
+                ]
+              }
+            },
+            "supports_streaming": false
+          }
+        ],
+        "id": "google/gemini-3.1-flash-image"
+      },
+      "key": "gemini_3_1_flash_image",
+      "name": "Gemini 3.1 Flash Image",
+      "openapi_documented": false,
+      "policy_profile": "private_zdr",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "group",
+          "inline",
+          "private"
+        ],
+        "blockers": [],
+        "private_zdr": {
+          "blockers": [],
+          "runtime_ready": true,
+          "zero_data_retention": "verified"
+        },
+        "requires_versioned_consent": false,
+        "runtime_ready": true,
+        "selected_profile": "private_zdr",
+        "zero_data_retention": "verified"
+      },
+      "primary_catalog": {
+        "architecture": {
+          "input_modalities": [
+            "image",
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->text+image",
+          "output_modalities": [
+            "image",
+            "text"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "canonical_slug": "google/gemini-3.1-flash-image-20260528",
+        "context_length": 131072,
+        "created": 1781754065,
+        "expiration_date": null,
+        "id": "google/gemini-3.1-flash-image",
+        "knowledge_cutoff": null,
+        "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.000003",
+          "image_output": "0.00006",
+          "prompt": "0.0000005",
+          "web_search": "0.014"
+        },
+        "reasoning": {
+          "default_effort": "minimal",
+          "default_enabled": true,
+          "mandatory": false,
+          "supported_efforts": [
+            "high",
+            "minimal"
+          ]
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 131072,
+          "is_moderated": false,
+          "max_completion_tokens": 32768
+        }
+      },
+      "primary_catalog_available": true,
+      "provider_endpoints": {
+        "architecture": {
+          "input_modalities": [
+            "image",
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->text+image",
+          "output_modalities": [
+            "image",
+            "text"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "endpoints": [
+          {
+            "context_length": 65536,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0.000003",
+              "discount": 0,
+              "image_output": "0.00006",
+              "prompt": "0.0000005",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google AI Studio",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "temperature",
+              "top_p"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "google-ai-studio"
+          },
+          {
+            "context_length": 131072,
+            "max_completion_tokens": 32768,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0.000003",
+              "discount": 0,
+              "image_output": "0.00006",
+              "prompt": "0.0000005",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "temperature",
+              "top_p"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "google-vertex/global"
+          }
+        ],
+        "id": "google/gemini-3.1-flash-image"
+      },
+      "surface": "images",
+      "zdr_provider_tags": [
+        "google-vertex/global"
+      ]
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/chat/completions",
+      "approved_slug": "google/gemini-3.1-flash-lite",
+      "availability": "primary",
+      "canonical_slug": "google/gemini-3.1-flash-lite-20260507",
+      "dedicated_catalog": null,
+      "dedicated_catalog_available": false,
+      "dedicated_endpoints": null,
+      "key": "gemini_3_1_flash_lite",
+      "name": "Gemini 3.1 Flash Lite",
+      "openapi_documented": false,
+      "policy_profile": "private_zdr",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "group",
+          "inline",
+          "private"
+        ],
+        "blockers": [],
+        "private_zdr": {
+          "blockers": [],
+          "runtime_ready": true,
+          "zero_data_retention": "verified"
+        },
+        "requires_versioned_consent": false,
+        "runtime_ready": true,
+        "selected_profile": "private_zdr",
+        "zero_data_retention": "verified"
+      },
+      "primary_catalog": {
+        "architecture": {
+          "input_modalities": [
+            "audio",
+            "file",
+            "image",
+            "text",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file+audio+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "canonical_slug": "google/gemini-3.1-flash-lite-20260507",
+        "context_length": 1048576,
+        "created": 1778168828,
+        "expiration_date": null,
+        "id": "google/gemini-3.1-flash-lite",
+        "knowledge_cutoff": null,
+        "name": "Google: Gemini 3.1 Flash Lite",
+        "per_request_limits": null,
+        "pricing": {
+          "audio": "0.0000005",
+          "completion": "0.0000015",
+          "image": "0.00000025",
+          "input_audio_cache": "0.00000005",
+          "input_cache_read": "0.000000025",
+          "input_cache_write": "0.00000008333333333333334",
+          "internal_reasoning": "0.0000015",
+          "prompt": "0.00000025",
+          "web_search": "0.014"
+        },
+        "reasoning": {
+          "default_effort": "minimal",
+          "default_enabled": true,
+          "mandatory": false,
+          "supported_efforts": [
+            "high",
+            "low",
+            "medium",
+            "minimal"
+          ]
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 1048576,
+          "is_moderated": false,
+          "max_completion_tokens": 65536
+        }
+      },
+      "primary_catalog_available": true,
+      "provider_endpoints": {
+        "architecture": {
+          "input_modalities": [
+            "audio",
+            "file",
+            "image",
+            "text",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file+audio+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "endpoints": [
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.0000005",
+              "completion": "0.0000015",
+              "discount": 0,
+              "image": "0.00000025",
+              "input_audio_cache": "0.00000005",
+              "input_cache_read": "0.000000025",
+              "input_cache_write": "0.00000008333333333333334",
+              "internal_reasoning": "0.0000015",
+              "prompt": "0.00000025",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google AI Studio",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-ai-studio"
+          },
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.00000025",
+              "completion": "0.00000075",
+              "discount": 0,
+              "image": "0.000000125",
+              "input_audio_cache": "0.000000025",
+              "input_cache_read": "0.0000000125",
+              "input_cache_write": "0.00000004166666666666667",
+              "internal_reasoning": "0.00000075",
+              "prompt": "0.000000125",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google AI Studio",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-ai-studio/flex"
+          },
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.0000009",
+              "completion": "0.0000027",
+              "discount": 0,
+              "image": "0.00000045",
+              "input_audio_cache": "0.00000009",
+              "input_cache_read": "0.000000045",
+              "input_cache_write": "0.000000150000000000000012",
+              "internal_reasoning": "0.0000027",
+              "prompt": "0.00000045",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google AI Studio",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-ai-studio/priority"
+          },
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.0000005",
+              "completion": "0.0000015",
+              "discount": 0,
+              "image": "0.00000025",
+              "input_audio_cache": "0.00000005",
+              "input_cache_read": "0.000000025",
+              "input_cache_write": "0.00000008333333333333334",
+              "internal_reasoning": "0.0000015",
+              "prompt": "0.00000025",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-vertex/global"
+          },
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.00000025",
+              "completion": "0.00000075",
+              "discount": 0,
+              "image": "0.000000125",
+              "input_audio_cache": "0.000000025",
+              "input_cache_read": "0.0000000125",
+              "input_cache_write": "0.00000004166666666666667",
+              "internal_reasoning": "0.00000075",
+              "prompt": "0.000000125",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-vertex/global/flex"
+          },
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.0000009",
+              "completion": "0.0000027",
+              "discount": 0,
+              "image": "0.00000045",
+              "input_audio_cache": "0.00000009",
+              "input_cache_read": "0.000000045",
+              "input_cache_write": "0.000000150000000000000012",
+              "internal_reasoning": "0.0000027",
+              "prompt": "0.00000045",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-vertex/global/priority"
+          }
+        ],
+        "id": "google/gemini-3.1-flash-lite"
+      },
+      "surface": "primary",
+      "zdr_provider_tags": [
+        "google-vertex/global",
+        "google-vertex/global/flex",
+        "google-vertex/global/priority"
+      ]
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/audio/speech",
+      "approved_slug": "google/gemini-3.1-flash-tts-preview",
+      "availability": "unavailable",
+      "canonical_slug": null,
+      "dedicated_catalog": null,
+      "dedicated_catalog_available": false,
+      "dedicated_endpoints": null,
+      "key": "gemini_3_1_flash_tts",
+      "name": "Gemini 3.1 Flash TTS",
+      "openapi_documented": false,
+      "policy_profile": "private_zdr",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "group",
+          "inline",
+          "private"
+        ],
+        "blockers": [
+          "catalog_unavailable"
+        ],
+        "private_zdr": {
+          "blockers": [
+            "catalog_unavailable"
+          ],
+          "runtime_ready": false,
+          "zero_data_retention": "not_evaluable"
+        },
+        "requires_versioned_consent": false,
+        "runtime_ready": false,
+        "selected_profile": "private_zdr",
+        "zero_data_retention": "not_evaluable"
+      },
+      "primary_catalog": null,
+      "primary_catalog_available": false,
+      "provider_endpoints": null,
+      "surface": "speech",
+      "zdr_provider_tags": [
+        "google-vertex"
+      ]
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/chat/completions",
+      "approved_slug": "google/gemini-3.5-flash",
+      "availability": "primary",
+      "canonical_slug": "google/gemini-3.5-flash-20260519",
+      "dedicated_catalog": null,
+      "dedicated_catalog_available": false,
+      "dedicated_endpoints": null,
+      "key": "gemini_3_5_flash",
+      "name": "Gemini 3.5 Flash",
+      "openapi_documented": false,
+      "policy_profile": "private_zdr",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "group",
+          "inline",
+          "private"
+        ],
+        "blockers": [],
+        "private_zdr": {
+          "blockers": [],
+          "runtime_ready": true,
+          "zero_data_retention": "verified"
+        },
+        "requires_versioned_consent": false,
+        "runtime_ready": true,
+        "selected_profile": "private_zdr",
+        "zero_data_retention": "verified"
+      },
+      "primary_catalog": {
+        "architecture": {
+          "input_modalities": [
+            "audio",
+            "file",
+            "image",
+            "text",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file+audio+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "canonical_slug": "google/gemini-3.5-flash-20260519",
+        "context_length": 1048576,
+        "created": 1779193800,
+        "expiration_date": null,
+        "id": "google/gemini-3.5-flash",
+        "knowledge_cutoff": "2025-01-01",
+        "name": "Google: Gemini 3.5 Flash",
+        "per_request_limits": null,
+        "pricing": {
+          "audio": "0.000003",
+          "completion": "0.000009",
+          "image": "0.0000015",
+          "input_audio_cache": "0.0000003",
+          "input_cache_read": "0.00000015",
+          "input_cache_write": "0.00000008333333333333334",
+          "internal_reasoning": "0.000009",
+          "prompt": "0.0000015",
+          "web_search": "0.014"
+        },
+        "reasoning": {
+          "default_effort": "medium",
+          "default_enabled": true,
+          "mandatory": true,
+          "supported_efforts": [
+            "high",
+            "low",
+            "medium",
+            "minimal"
+          ]
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 1048576,
+          "is_moderated": false,
+          "max_completion_tokens": 65536
+        }
+      },
+      "primary_catalog_available": true,
+      "provider_endpoints": {
+        "architecture": {
+          "input_modalities": [
+            "audio",
+            "file",
+            "image",
+            "text",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file+audio+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "endpoints": [
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.000003",
+              "completion": "0.000009",
+              "discount": 0,
+              "image": "0.0000015",
+              "input_audio_cache": "0.0000003",
+              "input_cache_read": "0.00000015",
+              "input_cache_write": "0.00000008333333333333334",
+              "internal_reasoning": "0.000009",
+              "prompt": "0.0000015",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google AI Studio",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-ai-studio"
+          },
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.0000015",
+              "completion": "0.0000045",
+              "discount": 0,
+              "image": "0.00000075",
+              "input_audio_cache": "0.00000015",
+              "input_cache_read": "0.000000075",
+              "input_cache_write": "0.00000004166666666666667",
+              "internal_reasoning": "0.0000045",
+              "prompt": "0.00000075",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google AI Studio",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-ai-studio/flex"
+          },
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.0000054",
+              "completion": "0.0000162",
+              "discount": 0,
+              "image": "0.0000027",
+              "input_audio_cache": "0.00000054",
+              "input_cache_read": "0.00000027",
+              "input_cache_write": "0.000000150000000000000012",
+              "internal_reasoning": "0.0000162",
+              "prompt": "0.0000027",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google AI Studio",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-ai-studio/priority"
+          },
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.000003",
+              "completion": "0.000009",
+              "discount": 0,
+              "image": "0.0000015",
+              "input_audio_cache": "0.0000003",
+              "input_cache_read": "0.00000015",
+              "input_cache_write": "0.00000008333333333333334",
+              "internal_reasoning": "0.000009",
+              "prompt": "0.0000015",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-vertex/global"
+          },
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.0000015",
+              "completion": "0.0000045",
+              "discount": 0,
+              "image": "0.00000075",
+              "input_audio_cache": "0.00000015",
+              "input_cache_read": "0.000000075",
+              "input_cache_write": "0.00000004166666666666667",
+              "internal_reasoning": "0.0000045",
+              "prompt": "0.00000075",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-vertex/global/flex"
+          },
+          {
+            "context_length": 1048576,
+            "max_completion_tokens": 65536,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "audio": "0.0000054",
+              "completion": "0.0000162",
+              "discount": 0,
+              "image": "0.0000027",
+              "input_audio_cache": "0.00000054",
+              "input_cache_read": "0.00000027",
+              "input_cache_write": "0.000000150000000000000012",
+              "internal_reasoning": "0.0000162",
+              "prompt": "0.0000027",
+              "web_search": "0.014"
+            },
+            "provider_name": "Google",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_p"
+            ],
+            "supports_implicit_caching": true,
+            "tag": "google-vertex/global/priority"
+          }
+        ],
+        "id": "google/gemini-3.5-flash"
+      },
+      "surface": "primary",
+      "zdr_provider_tags": [
+        "google-vertex/global",
+        "google-vertex/global/flex",
+        "google-vertex/global/priority"
+      ]
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/chat/completions",
+      "approved_slug": "openai/gpt-5.6-sol",
+      "availability": "primary",
+      "canonical_slug": "openai/gpt-5.6-sol-20260709",
+      "dedicated_catalog": null,
+      "dedicated_catalog_available": false,
+      "dedicated_endpoints": null,
+      "key": "gpt_5_6_sol",
+      "name": "GPT-5.6 Sol",
+      "openapi_documented": false,
+      "policy_profile": "private_zdr",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "group",
+          "inline",
+          "private"
+        ],
+        "blockers": [],
+        "private_zdr": {
+          "blockers": [],
+          "runtime_ready": true,
+          "zero_data_retention": "verified"
+        },
+        "requires_versioned_consent": false,
+        "runtime_ready": true,
+        "selected_profile": "private_zdr",
+        "zero_data_retention": "verified"
+      },
+      "primary_catalog": {
+        "architecture": {
+          "input_modalities": [
+            "file",
+            "image",
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/gpt-5.6-sol-20260709",
+        "context_length": 1050000,
+        "created": 1783590850,
+        "expiration_date": null,
+        "id": "openai/gpt-5.6-sol",
+        "knowledge_cutoff": "2026-02-16",
+        "name": "OpenAI: GPT-5.6 Sol",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.00003",
+          "input_cache_read": "0.0000005",
+          "input_cache_write": "0.00000625",
+          "overrides": [
+            {
+              "completion": "0.000045",
+              "input_cache_read": "0.000001",
+              "input_cache_write": "0.0000125",
+              "min_prompt_tokens": 272000,
+              "prompt": "0.00001"
+            }
+          ],
+          "prompt": "0.000005",
+          "web_search": "0.01"
+        },
+        "reasoning": {
+          "default_effort": "medium",
+          "default_enabled": true,
+          "mandatory": false,
+          "supported_efforts": [
+            "high",
+            "low",
+            "max",
+            "medium",
+            "none",
+            "xhigh"
+          ]
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_completion_tokens",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 1050000,
+          "is_moderated": true,
+          "max_completion_tokens": 128000
+        }
+      },
+      "primary_catalog_available": true,
+      "provider_endpoints": {
+        "architecture": {
+          "input_modalities": [
+            "file",
+            "image",
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "GPT"
+        },
+        "endpoints": [
+          {
+            "context_length": 1050000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": 922000,
+            "pricing": {
+              "completion": "0.00003",
+              "discount": 0,
+              "input_cache_read": "0.0000005",
+              "input_cache_write": "0.00000625",
+              "overrides": [
+                {
+                  "completion": "0.000045",
+                  "input_cache_read": "0.000001",
+                  "input_cache_write": "0.0000125",
+                  "min_prompt_tokens": 272000,
+                  "prompt": "0.00001"
+                }
+              ],
+              "prompt": "0.000005",
+              "web_search": "0.01"
+            },
+            "provider_name": "Azure",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_completion_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "azure"
+          },
+          {
+            "context_length": 1050000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": null,
+            "pricing": {
+              "completion": "0.000033",
+              "discount": 0,
+              "input_cache_read": "0.00000055",
+              "input_cache_write": "0.000006875",
+              "overrides": [
+                {
+                  "completion": "0.0000495",
+                  "input_cache_read": "0.0000011",
+                  "input_cache_write": "0.00001375",
+                  "min_prompt_tokens": 272000,
+                  "prompt": "0.000011"
+                }
+              ],
+              "prompt": "0.0000055",
+              "web_search": "0.01"
+            },
+            "provider_name": "Azure",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_completion_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "azure/eu"
+          },
+          {
+            "context_length": 1050000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": 922000,
+            "pricing": {
+              "completion": "0.00003",
+              "discount": 0,
+              "input_cache_read": "0.0000005",
+              "input_cache_write": "0.00000625",
+              "overrides": [
+                {
+                  "completion": "0.000045",
+                  "input_cache_read": "0.000001",
+                  "input_cache_write": "0.0000125",
+                  "min_prompt_tokens": 272000,
+                  "prompt": "0.00001"
+                }
+              ],
+              "prompt": "0.000005",
+              "web_search": "0.01"
+            },
+            "provider_name": "OpenAI",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "openai"
+          },
+          {
+            "context_length": 1050000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": 922000,
+            "pricing": {
+              "completion": "0.000015",
+              "discount": 0,
+              "input_cache_read": "0.00000025",
+              "input_cache_write": "0.000003125",
+              "overrides": [
+                {
+                  "completion": "0.0000225",
+                  "input_cache_read": "0.0000005",
+                  "input_cache_write": "0.00000625",
+                  "min_prompt_tokens": 272000,
+                  "prompt": "0.000005"
+                }
+              ],
+              "prompt": "0.0000025",
+              "web_search": "0.01"
+            },
+            "provider_name": "OpenAI",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "openai/flex"
+          },
+          {
+            "context_length": 1050000,
+            "max_completion_tokens": 128000,
+            "max_prompt_tokens": 922000,
+            "pricing": {
+              "completion": "0.00006",
+              "discount": 0,
+              "input_cache_read": "0.000001",
+              "input_cache_write": "0.0000125",
+              "prompt": "0.00001",
+              "web_search": "0.01"
+            },
+            "provider_name": "OpenAI",
+            "quantization": "unknown",
+            "supported_parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "supports_implicit_caching": false,
+            "tag": "openai/priority"
+          }
+        ],
+        "id": "openai/gpt-5.6-sol"
+      },
+      "surface": "primary",
+      "zdr_provider_tags": [
+        "azure",
+        "azure/eu"
+      ]
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/videos",
+      "approved_slug": "google/veo-3.1-fast",
+      "availability": "dedicated_only",
+      "canonical_slug": "google/veo-3.1-fast-20260320",
+      "dedicated_catalog": {
+        "allowed_passthrough_parameters": [
+          "aspectRatio",
+          "conditioningScale",
+          "enhancePrompt",
+          "negativePrompt",
+          "personGeneration"
+        ],
+        "canonical_slug": "google/veo-3.1-fast-20260320",
+        "created": 1776994666,
+        "generate_audio": true,
+        "id": "google/veo-3.1-fast",
+        "name": "Google: Veo 3.1 Fast",
+        "pricing_skus": {
+          "duration_seconds_with_audio": "0.12",
+          "duration_seconds_with_audio_4k": "0.30",
+          "duration_seconds_with_audio_720p": "0.10",
+          "duration_seconds_without_audio": "0.10",
+          "duration_seconds_without_audio_4k": "0.25",
+          "duration_seconds_without_audio_720p": "0.08"
+        },
+        "seed": true,
+        "supported_aspect_ratios": [
+          "16:9",
+          "9:16"
+        ],
+        "supported_durations": [
+          4,
+          6,
+          8
+        ],
+        "supported_frame_images": [
+          "first_frame",
+          "last_frame"
+        ],
+        "supported_resolutions": [
+          "1080p",
+          "4K",
+          "720p"
+        ],
+        "supported_sizes": [
+          "1080x1920",
+          "1280x720",
+          "1920x1080",
+          "2160x3840",
+          "3840x2160",
+          "720x1280"
+        ]
+      },
+      "dedicated_catalog_available": true,
+      "dedicated_endpoints": null,
+      "key": "veo_3_1_fast",
+      "name": "Veo 3.1 Fast",
+      "openapi_documented": false,
+      "policy_profile": "private_zdr",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "group",
+          "inline",
+          "private"
+        ],
+        "blockers": [
+          "zero_data_retention_unverified"
+        ],
+        "private_zdr": {
+          "blockers": [
+            "zero_data_retention_unverified"
+          ],
+          "runtime_ready": false,
+          "zero_data_retention": "unverified"
+        },
+        "requires_versioned_consent": false,
+        "runtime_ready": false,
+        "selected_profile": "private_zdr",
+        "zero_data_retention": "unverified"
+      },
+      "primary_catalog": null,
+      "primary_catalog_available": false,
+      "provider_endpoints": null,
+      "surface": "videos",
+      "zdr_provider_tags": []
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/videos",
+      "approved_slug": "google/veo-3.1",
+      "availability": "dedicated_only",
+      "canonical_slug": "google/veo-3.1-20260320",
+      "dedicated_catalog": {
+        "allowed_passthrough_parameters": [
+          "aspectRatio",
+          "conditioningScale",
+          "enhancePrompt",
+          "negativePrompt",
+          "personGeneration"
+        ],
+        "canonical_slug": "google/veo-3.1-20260320",
+        "created": 1774277148,
+        "generate_audio": true,
+        "id": "google/veo-3.1",
+        "name": "Google: Veo 3.1",
+        "pricing_skus": {
+          "duration_seconds_with_audio": "0.40",
+          "duration_seconds_with_audio_4k": "0.60",
+          "duration_seconds_without_audio": "0.20",
+          "duration_seconds_without_audio_4k": "0.40"
+        },
+        "seed": true,
+        "supported_aspect_ratios": [
+          "16:9",
+          "9:16"
+        ],
+        "supported_durations": [
+          4,
+          6,
+          8
+        ],
+        "supported_frame_images": [
+          "first_frame",
+          "last_frame"
+        ],
+        "supported_resolutions": [
+          "1080p",
+          "4K",
+          "720p"
+        ],
+        "supported_sizes": [
+          "1080x1920",
+          "1280x720",
+          "1920x1080",
+          "2160x3840",
+          "3840x2160",
+          "720x1280"
+        ]
+      },
+      "dedicated_catalog_available": true,
+      "dedicated_endpoints": null,
+      "key": "veo_3_1_standard",
+      "name": "Veo 3.1 Standard",
+      "openapi_documented": true,
+      "policy_profile": "private_zdr",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "group",
+          "inline",
+          "private"
+        ],
+        "blockers": [
+          "zero_data_retention_unverified"
+        ],
+        "private_zdr": {
+          "blockers": [
+            "zero_data_retention_unverified"
+          ],
+          "runtime_ready": false,
+          "zero_data_retention": "unverified"
+        },
+        "requires_versioned_consent": false,
+        "runtime_ready": false,
+        "selected_profile": "private_zdr",
+        "zero_data_retention": "unverified"
+      },
+      "primary_catalog": null,
+      "primary_catalog_available": false,
+      "provider_endpoints": null,
+      "surface": "videos",
+      "zdr_provider_tags": []
+    },
+    {
+      "api_contract_available": true,
+      "api_path": "/audio/transcriptions",
+      "approved_slug": "openai/whisper-large-v3",
+      "availability": "documented_only",
+      "canonical_slug": null,
+      "dedicated_catalog": null,
+      "dedicated_catalog_available": false,
+      "dedicated_endpoints": null,
+      "key": "whisper_large_v3",
+      "name": "Whisper Large V3",
+      "openapi_documented": true,
+      "policy_profile": "private_zdr",
+      "policy_readiness": {
+        "allowed_contexts": [
+          "group",
+          "inline",
+          "private"
+        ],
+        "blockers": [
+          "catalog_unavailable"
+        ],
+        "private_zdr": {
+          "blockers": [
+            "catalog_unavailable"
+          ],
+          "runtime_ready": false,
+          "zero_data_retention": "not_evaluable"
+        },
+        "requires_versioned_consent": false,
+        "runtime_ready": false,
+        "selected_profile": "private_zdr",
+        "zero_data_retention": "not_evaluable"
+      },
+      "primary_catalog": null,
+      "primary_catalog_available": false,
+      "provider_endpoints": null,
+      "surface": "transcriptions",
+      "zdr_provider_tags": [
+        "groq",
+        "together"
+      ]
+    }
+  ],
+  "policy_profiles": {
+    "consented_non_zdr_free": {
+      "allow_fallbacks": true,
+      "allowed_contexts": [
+        "inline",
+        "private"
+      ],
+      "data_collection": "allow",
+      "require_parameters": true,
+      "requires_versioned_consent": true,
+      "zero_data_retention": false
+    },
+    "private_zdr": {
+      "allow_fallbacks": true,
+      "allowed_contexts": [
+        "group",
+        "inline",
+        "private"
+      ],
+      "data_collection": "deny",
+      "require_parameters": true,
+      "requires_versioned_consent": false,
+      "zero_data_retention": true
+    }
+  },
+  "primary_catalog_missing": [
+    "google/gemini-3.1-flash-tts-preview",
+    "google/veo-3.1",
+    "google/veo-3.1-fast",
+    "openai/whisper-large-v3"
+  ],
+  "private_zdr_unavailable": [
+    "google/gemini-3.1-flash-tts-preview",
+    "google/gemma-4-31b-it:free",
+    "google/veo-3.1",
+    "google/veo-3.1-fast",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "openai/whisper-large-v3"
+  ],
+  "provider": "openrouter",
+  "retrieved_at": "2026-07-28T11:36:50Z",
+  "runtime_unavailable": [
+    "google/gemini-3.1-flash-tts-preview",
+    "google/veo-3.1",
+    "google/veo-3.1-fast",
+    "openai/whisper-large-v3"
+  ],
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "data-collection",
+      "response_bytes": 2464,
+      "response_sha256": "sha256:af6354747b1e4dc4c1fa84f34de8205d7e2578764341aa06ccd9c4998a4dde17",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:af6354747b1e4dc4c1fa84f34de8205d7e2578764341aa06ccd9c4998a4dde17",
+      "url": "https://openrouter.ai/docs/guides/privacy/data-collection.md"
+    },
+    {
+      "id": "docs-index",
+      "response_bytes": 40708,
+      "response_sha256": "sha256:68f377d1bd0777b83868b888f6a429739bf2bf4cbd6a76494c2ed71eafba582c",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:34e7647b93cda7b98cea6226c2175bdf3033221acd43afd73d497f6827a2a85b",
+      "url": "https://openrouter.ai/docs/llms.txt"
+    },
+    {
+      "id": "free-variant",
+      "response_bytes": 789,
+      "response_sha256": "sha256:d5cdec2c1c71776c94b9a26417662120d2978b1fc9149963d49ef6b977d7c3d5",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:d5cdec2c1c71776c94b9a26417662120d2978b1fc9149963d49ef6b977d7c3d5",
+      "url": "https://openrouter.ai/docs/guides/routing/model-variants/free.md"
+    },
+    {
+      "id": "image-endpoints:google/gemini-3.1-flash-image",
+      "response_bytes": 1183,
+      "response_sha256": "sha256:be9d700ee208a564ac7aa4b36a014195320b191a6571e54a7bcdd3be1b26984e",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:59b70b7f2536aa3f3c42b385493efe31eb16faa90fa68aa262043abff483dcef",
+      "url": "https://openrouter.ai/api/v1/images/models/google/gemini-3.1-flash-image/endpoints"
+    },
+    {
+      "id": "image-guide",
+      "response_bytes": 21713,
+      "response_sha256": "sha256:4d0cd4a9da98efb0f9f763b21e99f95a84759b7cd5ab59f3563ec7d0fe6f2576",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:4d0cd4a9da98efb0f9f763b21e99f95a84759b7cd5ab59f3563ec7d0fe6f2576",
+      "url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation.md"
+    },
+    {
+      "id": "image-models",
+      "response_bytes": 29289,
+      "response_sha256": "sha256:c99a9d47e67fe816ad8585b30857f062b7b1b09098c9b283087d7c946a3ff064",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:28be8eaf8a859e89d79d7d63dc48484ddc3445c5ad953b90b22a739b1cd51e76",
+      "url": "https://openrouter.ai/api/v1/images/models"
+    },
+    {
+      "id": "model-endpoints:anthropic/claude-sonnet-5",
+      "response_bytes": 6404,
+      "response_sha256": "sha256:8fb32ec7914cd8bced4c2462ecfee09ddc0948bf054a8558d41d7f3c174eb7a7",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:35087d6ea22b9a4a8178e43e718745e2d6ffc8d66a841ce84c6925ff5fae15db",
+      "url": "https://openrouter.ai/api/v1/models/anthropic/claude-sonnet-5/endpoints"
+    },
+    {
+      "id": "model-endpoints:google/gemini-3.1-flash-image",
+      "response_bytes": 2096,
+      "response_sha256": "sha256:757649a55b9a2747253eb0e5ecb4ba116b7b9ecbd82e79553b4ad713289cadca",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:8f9ef1812643223381359c5661dc9fb8fd6ebd932dc9f67f944fc9c310213e9c",
+      "url": "https://openrouter.ai/api/v1/models/google/gemini-3.1-flash-image/endpoints"
+    },
+    {
+      "id": "model-endpoints:google/gemini-3.1-flash-lite",
+      "response_bytes": 6450,
+      "response_sha256": "sha256:3d9e575444f1b201d5daa2717cec02c9a3ad7e919b199516fb8c33cf6e08ac80",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:e3ef951a2ce089f96f2bb6765f9aa7b6d6c24c7c7db15cb8e831c934639eb03d",
+      "url": "https://openrouter.ai/api/v1/models/google/gemini-3.1-flash-lite/endpoints"
+    },
+    {
+      "id": "model-endpoints:google/gemini-3.5-flash",
+      "response_bytes": 6272,
+      "response_sha256": "sha256:36f36eccfb8c89068a63e4f8a00f448d8d38bb52e4878f36dd60757271b404bb",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:42420ff31f58bf9694c8aece18c2074da9297009a6bbddc47f3b2ea8fe831e08",
+      "url": "https://openrouter.ai/api/v1/models/google/gemini-3.5-flash/endpoints"
+    },
+    {
+      "id": "model-endpoints:google/gemma-4-31b-it:free",
+      "response_bytes": 1201,
+      "response_sha256": "sha256:d8f6aafc0d4ddb30c5c445e53b1552b5f6c153ef2b7e67548d7cae0460f743b7",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:cb81b468a5b4bcb9db0983ab76050c0fd2e6110bfd628bb6eb72fd25a587e5ce",
+      "url": "https://openrouter.ai/api/v1/models/google/gemma-4-31b-it:free/endpoints"
+    },
+    {
+      "id": "model-endpoints:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "response_bytes": 1233,
+      "response_sha256": "sha256:47840de664875ecfab1621565f6277f9107302f14ada7fc4993116bfe82f1a15",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:853dbea2c887973ec07f23b82bfd73d900d6279862e83602fbdabcdec54fe839",
+      "url": "https://openrouter.ai/api/v1/models/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free/endpoints"
+    },
+    {
+      "id": "model-endpoints:nvidia/nemotron-3-ultra-550b-a55b:free",
+      "response_bytes": 1207,
+      "response_sha256": "sha256:3ae28a911ca185589c692f4cd2c5989b3536e01b34ba394e3e911ba6a8cdf675",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:6ddf049e57d1ce66747efb6839348574f9bc748e1383945e04b9428ebe7376a1",
+      "url": "https://openrouter.ai/api/v1/models/nvidia/nemotron-3-ultra-550b-a55b:free/endpoints"
+    },
+    {
+      "id": "model-endpoints:openai/gpt-5.6-sol",
+      "response_bytes": 4931,
+      "response_sha256": "sha256:5d8fba0ffe541f06a4cb80667b4fbc8e1a4041a02b0c6f4926cf53833393523a",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:364bc7a1f1780dfb561a19a09b5494fd05f5c3576135c8cae464cd14a046637e",
+      "url": "https://openrouter.ai/api/v1/models/openai/gpt-5.6-sol/endpoints"
+    },
+    {
+      "id": "model-fallbacks",
+      "response_bytes": 7174,
+      "response_sha256": "sha256:b4dac9acb2da6a7569d0dbab781976d3bbb663a94f22cb175789efa960f84415",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:b4dac9acb2da6a7569d0dbab781976d3bbb663a94f22cb175789efa960f84415",
+      "url": "https://openrouter.ai/docs/guides/routing/model-fallbacks.md"
+    },
+    {
+      "id": "models",
+      "response_bytes": 533098,
+      "response_sha256": "sha256:d8a9bbd09bf57e75b004e32c7767b12250924b3765113c85e3c1ad61ee66f45b",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:6cdd32bebfefb379b8cfd9c68699aa5a719a3b41c872b11bedd6556c3dc1d222",
+      "url": "https://openrouter.ai/api/v1/models"
+    },
+    {
+      "id": "models-guide",
+      "response_bytes": 15099,
+      "response_sha256": "sha256:ec41ee9720a8587a68ed4c674f7d6a2a6e23384e8b56101107d1b85d0c514b21",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:ec41ee9720a8587a68ed4c674f7d6a2a6e23384e8b56101107d1b85d0c514b21",
+      "url": "https://openrouter.ai/docs/guides/overview/models.md"
+    },
+    {
+      "id": "openapi",
+      "response_bytes": 1660091,
+      "response_sha256": "sha256:987ad9f27842d7cba1b503e3c7aa8130f90372aadaa8ac8aa04f0ae463a48cde",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:7939c9a02da74dde2ca6afa28b3bf0cbf3fc817e491c4488484c9975dbbae586",
+      "url": "https://openrouter.ai/openapi.json"
+    },
+    {
+      "id": "provider-logging",
+      "response_bytes": 4921,
+      "response_sha256": "sha256:17eb88c4b1b75cf436564ff18eefe172648e46ad412dda8f7220dec8e89cc7f8",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:17eb88c4b1b75cf436564ff18eefe172648e46ad412dda8f7220dec8e89cc7f8",
+      "url": "https://openrouter.ai/docs/guides/privacy/provider-logging.md"
+    },
+    {
+      "id": "provider-selection",
+      "response_bytes": 67805,
+      "response_sha256": "sha256:b02ab4c1a439c184a4ce71682dde66917cdf87dcd2b51d8c75b81921bd1dac63",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:b02ab4c1a439c184a4ce71682dde66917cdf87dcd2b51d8c75b81921bd1dac63",
+      "url": "https://openrouter.ai/docs/guides/routing/provider-selection.md"
+    },
+    {
+      "id": "stt-guide",
+      "response_bytes": 14313,
+      "response_sha256": "sha256:0cbf317b514570a939f47d4f174ddecbb541ddbfe2660344890605b37840ba75",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:0cbf317b514570a939f47d4f174ddecbb541ddbfe2660344890605b37840ba75",
+      "url": "https://openrouter.ai/docs/guides/overview/multimodal/stt.md"
+    },
+    {
+      "id": "tts-guide",
+      "response_bytes": 13999,
+      "response_sha256": "sha256:961964e59da4ab131dc36fdf2123603f07857ac73bc2984472209fef47a773cd",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:961964e59da4ab131dc36fdf2123603f07857ac73bc2984472209fef47a773cd",
+      "url": "https://openrouter.ai/docs/guides/overview/multimodal/tts.md"
+    },
+    {
+      "id": "video-guide",
+      "response_bytes": 22450,
+      "response_sha256": "sha256:67659b2ffcb3432614cc9689321284521a8e89f4f3a5e662bdd6cc7ca7d6bed5",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:67659b2ffcb3432614cc9689321284521a8e89f4f3a5e662bdd6cc7ca7d6bed5",
+      "url": "https://openrouter.ai/docs/guides/overview/multimodal/video-generation.md"
+    },
+    {
+      "id": "video-models",
+      "response_bytes": 15967,
+      "response_sha256": "sha256:b67137c25712a319ade4268270bf5dd0605dd01d2a6f1fe3bce97befe57607e7",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:0d29517297cd9e04e197bf9d651001df7e6f34654bad9d80b45d6bc08fc171a9",
+      "url": "https://openrouter.ai/api/v1/videos/models"
+    },
+    {
+      "id": "zdr-endpoints",
+      "response_bytes": 552692,
+      "response_sha256": "sha256:26d73139b4c35b1328920a1bd745acff055723582df9ef4412ba93f69035302c",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:3d8e29cef621b6d68d4ec5bb8afdfa454003326f0b36ccfe5937cf1d69927d01",
+      "url": "https://openrouter.ai/api/v1/endpoints/zdr"
+    },
+    {
+      "id": "zero-data-retention",
+      "response_bytes": 8473,
+      "response_sha256": "sha256:750c7cdc46efba63a68f95be6c7b9e4db748568025b206755e7a55ead33efdf2",
+      "retrieved_at": "2026-07-28T11:36:50Z",
+      "review_sha256": "sha256:750c7cdc46efba63a68f95be6c7b9e4db748568025b206755e7a55ead33efdf2",
+      "url": "https://openrouter.ai/docs/guides/features/zdr.md"
+    }
+  ]
+}

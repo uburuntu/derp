@@ -11,18 +11,27 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from derp.db.history import (
+    acknowledge_context_notice,
+    claim_member_notice,
+    clear_history_scope,
+    purge_expired_history,
+    set_ambient_history,
+    set_history_retention,
+    tombstone_user_messages,
+)
 from derp.db.queries import (
     get_chat_by_telegram_id,
-    get_chat_settings,
     get_recent_messages,
     get_user_by_telegram_id,
     mark_message_deleted,
-    update_chat_memory,
     upsert_chat,
     upsert_message,
     upsert_user,
 )
 from derp.models import Message
+
+pytestmark = pytest.mark.database
 
 
 class TestUserQueries:
@@ -226,70 +235,255 @@ class TestChatQueries:
         assert private_no_username.display_name == "Jane Doe"
 
 
-class TestChatMemoryQueries:
-    """Tests for chat memory (LLM context) operations."""
-
+class TestContextPolicyQueries:
     @pytest.mark.asyncio
-    async def test_update_chat_memory_sets_memory(self, db_session):
-        """Should set llm_memory for a chat."""
+    async def test_disabling_context_purges_only_ambient_history(self, db_session):
+        chat_id = -1007777777778
         await upsert_chat(
             db_session,
-            telegram_id=-1005555555555,
+            telegram_id=chat_id,
             chat_type="supergroup",
-            title="Memory Test",
+            title="Privacy Test",
         )
+        for message_id, capture in ((1, "ambient"), (2, "explicit")):
+            await upsert_message(
+                db_session,
+                chat_telegram_id=chat_id,
+                user_telegram_id=None,
+                telegram_message_id=message_id,
+                thread_id=None,
+                direction="in",
+                capture_kind=capture,
+                content_type="text",
+                text=capture,
+                telegram_date=datetime.now(UTC),
+            )
 
-        await update_chat_memory(
+        purged = await set_ambient_history(
             db_session,
-            telegram_id=-1005555555555,
-            llm_memory="Remember: User prefers Python over JavaScript",
+            chat_telegram_id=chat_id,
+            enabled=False,
+        )
+        rows = list(
+            (
+                await db_session.execute(
+                    select(Message)
+                    .join(Message.chat)
+                    .where(Message.chat.has(telegram_id=chat_id))
+                )
+            ).scalars()
         )
 
-        chat = await get_chat_settings(db_session, -1005555555555)
-        assert chat is not None
-        assert chat.llm_memory == "Remember: User prefers Python over JavaScript"
+        assert purged == 1
+        assert [(row.telegram_message_id, row.capture_kind) for row in rows] == [
+            (2, "explicit")
+        ]
 
     @pytest.mark.asyncio
-    async def test_update_chat_memory_clears_memory(self, db_session):
-        """Should clear llm_memory when set to None."""
+    async def test_member_disclosure_claim_is_atomic_and_rate_limited(self, db_session):
+        chat_id = -1007777777779
         await upsert_chat(
             db_session,
-            telegram_id=-1006666666666,
+            telegram_id=chat_id,
             chat_type="supergroup",
-            title="Clear Test",
+            title="Notice Test",
         )
-
-        # Set memory
-        await update_chat_memory(
-            db_session, telegram_id=-1006666666666, llm_memory="Some memory"
+        await acknowledge_context_notice(
+            db_session,
+            chat_telegram_id=chat_id,
+            ambient_enabled=True,
         )
+        now = datetime.now(UTC)
 
-        # Clear memory
-        await update_chat_memory(
-            db_session, telegram_id=-1006666666666, llm_memory=None
+        assert await claim_member_notice(db_session, chat_telegram_id=chat_id, now=now)
+        assert not await claim_member_notice(
+            db_session, chat_telegram_id=chat_id, now=now
         )
-
-        chat = await get_chat_settings(db_session, -1006666666666)
-        assert chat is not None
-        assert chat.llm_memory is None
+        assert await claim_member_notice(
+            db_session,
+            chat_telegram_id=chat_id,
+            now=now + timedelta(hours=13),
+        )
 
     @pytest.mark.asyncio
-    async def test_get_chat_settings_returns_memory(self, db_session):
-        """Should return chat with llm_memory field."""
+    async def test_retention_accepts_only_product_periods(self, db_session):
+        chat_id = -1007777777780
+        chat = await upsert_chat(
+            db_session,
+            telegram_id=chat_id,
+            chat_type="supergroup",
+            title="Retention Test",
+        )
+        await set_history_retention(
+            db_session,
+            chat_telegram_id=chat_id,
+            retention_days=7,
+        )
+        await db_session.refresh(chat)
+        assert chat.retention_days == 7
+
+        with pytest.raises(ValueError, match="7, 30, or 90"):
+            await set_history_retention(
+                db_session,
+                chat_telegram_id=chat_id,
+                retention_days=14,
+            )
+
+    @pytest.mark.asyncio
+    async def test_retention_rebases_live_rows_and_purges_expired_data(
+        self, db_session
+    ):
+        chat_id = -1007777777781
         await upsert_chat(
             db_session,
-            telegram_id=-1007777777777,
+            telegram_id=chat_id,
             chat_type="supergroup",
-            title="Settings Test",
+            title="Retention Enforcement",
         )
-        await update_chat_memory(
-            db_session, telegram_id=-1007777777777, llm_memory="Context: coding help"
+        now = datetime.now(UTC)
+        for message_id, age_days in ((1, 8), (2, 2)):
+            await upsert_message(
+                db_session,
+                chat_telegram_id=chat_id,
+                user_telegram_id=None,
+                telegram_message_id=message_id,
+                thread_id=None,
+                direction="in",
+                content_type="text",
+                text=str(message_id),
+                telegram_date=now - timedelta(days=age_days),
+                retention_expires_at=now + timedelta(days=30),
+            )
+
+        await set_history_retention(
+            db_session,
+            chat_telegram_id=chat_id,
+            retention_days=7,
+        )
+        rows = await get_recent_messages(
+            db_session,
+            chat_telegram_id=chat_id,
+            thread_id=None,
+            active_at=now,
         )
 
-        settings = await get_chat_settings(db_session, -1007777777777)
+        assert [row.telegram_message_id for row in rows] == [2]
+        assert abs(rows[0].retention_expires_at - (now + timedelta(days=5))) < (
+            timedelta(seconds=1)
+        )
 
-        assert settings is not None
-        assert settings.llm_memory == "Context: coding help"
+    @pytest.mark.asyncio
+    async def test_user_deletion_is_anonymous_irreversible_tombstone(self, db_session):
+        chat_id = -1007777777782
+        user_id = 7777782
+        await upsert_chat(
+            db_session,
+            telegram_id=chat_id,
+            chat_type="supergroup",
+            title="Deletion",
+        )
+        await upsert_user(
+            db_session,
+            telegram_id=user_id,
+            is_bot=False,
+            first_name="Private",
+        )
+        expiry = datetime.now(UTC) + timedelta(days=30)
+        message = await upsert_message(
+            db_session,
+            chat_telegram_id=chat_id,
+            user_telegram_id=user_id,
+            telegram_message_id=10,
+            thread_id=44,
+            direction="in",
+            content_type="photo",
+            text="private caption",
+            source_snapshot={"secret": "source", "file_id": "sensitive"},
+            history_dto={"text": "private caption", "attachments": ["sensitive"]},
+            canonical_projection={"text": "private caption"},
+            attachment_type="photo",
+            attachment_file_id="sensitive",
+            reply_to_message_id=9,
+            telegram_date=datetime.now(UTC),
+            retention_expires_at=expiry,
+        )
+
+        removed = await tombstone_user_messages(
+            db_session,
+            chat_telegram_id=chat_id,
+            actor_telegram_id=user_id,
+            telegram_message_id=10,
+        )
+        await db_session.refresh(message)
+
+        assert removed == 1
+        assert message.is_tombstone
+        assert message.user_id is None
+        assert message.text == "[message deleted]"
+        assert message.source_snapshot == {}
+        assert message.history_dto["attachments"] == []
+        assert message.attachment_file_id is None
+        assert message.reply_to_message_id == 9
+        assert message.retention_expires_at == expiry
+        assert "private caption" not in repr(message.history_dto)
+        assert "sensitive" not in repr(message.source_snapshot)
+
+        resurrected = await upsert_message(
+            db_session,
+            chat_telegram_id=chat_id,
+            user_telegram_id=user_id,
+            telegram_message_id=10,
+            thread_id=44,
+            direction="in",
+            content_type="text",
+            text="edited secret",
+            telegram_date=datetime.now(UTC),
+        )
+        await db_session.refresh(message)
+        assert resurrected is None
+        assert message.text == "[message deleted]"
+
+    @pytest.mark.asyncio
+    async def test_scope_clear_and_expiry_purge_are_exact(self, db_session):
+        chat_id = -1007777777783
+        await upsert_chat(
+            db_session,
+            telegram_id=chat_id,
+            chat_type="supergroup",
+            title="Scopes",
+        )
+        now = datetime.now(UTC)
+        for message_id, thread_id, expired in (
+            (1, None, False),
+            (2, 10, False),
+            (3, 11, True),
+        ):
+            await upsert_message(
+                db_session,
+                chat_telegram_id=chat_id,
+                user_telegram_id=None,
+                telegram_message_id=message_id,
+                thread_id=thread_id,
+                direction="in",
+                content_type="text",
+                text=str(message_id),
+                telegram_date=now,
+                retention_expires_at=(
+                    now - timedelta(seconds=1) if expired else now + timedelta(days=1)
+                ),
+            )
+
+        assert (
+            await clear_history_scope(
+                db_session,
+                chat_telegram_id=chat_id,
+                thread_id=10,
+            )
+            == 1
+        )
+        assert await purge_expired_history(db_session, now=now) == 1
+        remaining = list((await db_session.execute(select(Message))).scalars())
+        assert [row.telegram_message_id for row in remaining] == [1]
 
 
 class TestMessageQueries:
@@ -328,6 +522,45 @@ class TestMessageQueries:
         assert message.telegram_message_id == 1
         assert message.text == "Hello world!"
         assert message.direction == "in"
+        assert message.role == "user"
+        assert message.capture_kind == "explicit"
+        assert message.source_schema_version == 1
+        assert message.source_snapshot == {}
+
+    @pytest.mark.asyncio
+    async def test_upsert_message_persists_versioned_projections(self, db_session):
+        await upsert_chat(
+            db_session,
+            telegram_id=-1008888888887,
+            chat_type="supergroup",
+            title="Projection Test",
+        )
+        source = {"schema_version": 1, "message_id": 7}
+        history = {"schema_version": 1, "kind": "assistant_text"}
+        canonical = {"schema_version": 1, "role": "assistant"}
+
+        message = await upsert_message(
+            db_session,
+            chat_telegram_id=-1008888888887,
+            user_telegram_id=None,
+            telegram_message_id=7,
+            thread_id=44,
+            direction="out",
+            role="assistant",
+            capture_kind="explicit",
+            content_type="text",
+            text="Result",
+            source_snapshot=source,
+            history_dto=history,
+            canonical_projection=canonical,
+            telegram_date=datetime.now(UTC),
+        )
+
+        assert message is not None
+        assert message.role == "assistant"
+        assert message.source_snapshot == source
+        assert message.history_dto == history
+        assert message.canonical_projection == canonical
 
     @pytest.mark.asyncio
     async def test_upsert_message_updates_existing(self, db_session):
@@ -479,13 +712,61 @@ class TestGetRecentMessages:
             )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001212121212, limit=10
+            db_session,
+            chat_telegram_id=-1001212121212,
+            thread_id=None,
+            limit=10,
         )
 
         assert len(messages) == 5
         # Should be oldest first
         assert messages[0].text == "Message 1"
         assert messages[4].text == "Message 5"
+
+    @pytest.mark.asyncio
+    async def test_cursor_excludes_current_event_and_later_messages(self, db_session):
+        await upsert_chat(
+            db_session,
+            telegram_id=-1001212121213,
+            chat_type="supergroup",
+            title="Cursor Test",
+        )
+        await upsert_user(
+            db_session, telegram_id=12121213, is_bot=False, first_name="Cursor"
+        )
+        base_time = datetime.now(UTC)
+        for message_id in range(1, 5):
+            await upsert_message(
+                db_session,
+                chat_telegram_id=-1001212121213,
+                user_telegram_id=12121213,
+                telegram_message_id=message_id,
+                thread_id=None,
+                direction="in",
+                content_type="text",
+                text=f"Message {message_id}",
+                telegram_date=base_time,
+            )
+
+        messages = await get_recent_messages(
+            db_session,
+            chat_telegram_id=-1001212121213,
+            thread_id=None,
+            before_telegram_date=base_time,
+            before_telegram_message_id=3,
+        )
+
+        assert [message.telegram_message_id for message in messages] == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_cursor_requires_date_and_message_id(self, db_session):
+        with pytest.raises(ValueError, match="requires both"):
+            await get_recent_messages(
+                db_session,
+                chat_telegram_id=-1,
+                thread_id=None,
+                before_telegram_message_id=1,
+            )
 
     @pytest.mark.asyncio
     async def test_excludes_deleted_messages(self, db_session):
@@ -522,7 +803,10 @@ class TestGetRecentMessages:
         )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001313131313, limit=10
+            db_session,
+            chat_telegram_id=-1001313131313,
+            thread_id=None,
+            limit=10,
         )
 
         assert len(messages) == 2
@@ -557,7 +841,10 @@ class TestGetRecentMessages:
             )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001414141414, limit=5
+            db_session,
+            chat_telegram_id=-1001414141414,
+            thread_id=None,
+            limit=5,
         )
 
         assert len(messages) == 5
@@ -595,7 +882,10 @@ class TestGetRecentMessages:
         )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001515151515, limit=10
+            db_session,
+            chat_telegram_id=-1001515151515,
+            thread_id=None,
+            limit=10,
         )
 
         assert len(messages) == 1
@@ -607,7 +897,10 @@ class TestGetRecentMessages:
     async def test_returns_empty_for_nonexistent_chat(self, db_session):
         """Should return empty list for chat that doesn't exist."""
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-999999999999, limit=10
+            db_session,
+            chat_telegram_id=-999999999999,
+            thread_id=None,
+            limit=10,
         )
 
         assert messages == []
@@ -655,7 +948,10 @@ class TestGetRecentMessages:
         )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001616161616, limit=10
+            db_session,
+            chat_telegram_id=-1001616161616,
+            thread_id=None,
+            limit=10,
         )
 
         assert len(messages) == 2
@@ -730,7 +1026,10 @@ class TestMessageWithAttachments:
             )
 
         messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001818181818, limit=10
+            db_session,
+            chat_telegram_id=-1001818181818,
+            thread_id=None,
+            limit=10,
         )
 
         assert len(messages) == 3
@@ -779,10 +1078,18 @@ class TestThreadedMessages:
             telegram_date=datetime.now(UTC),
         )
 
-        messages = await get_recent_messages(
-            db_session, chat_telegram_id=-1001919191919, limit=10
+        topic_one = await get_recent_messages(
+            db_session,
+            chat_telegram_id=-1001919191919,
+            thread_id=100,
+            limit=10,
+        )
+        topic_two = await get_recent_messages(
+            db_session,
+            chat_telegram_id=-1001919191919,
+            thread_id=200,
+            limit=10,
         )
 
-        assert len(messages) == 2
-        thread_ids = {m.thread_id for m in messages}
-        assert thread_ids == {100, 200}
+        assert [message.text for message in topic_one] == ["Message in topic 1"]
+        assert [message.text for message in topic_two] == ["Message in topic 2"]

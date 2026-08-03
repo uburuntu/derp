@@ -1,108 +1,48 @@
 from __future__ import annotations
 
-import random
 from typing import Literal
 
 import logfire
 from aiogram import Bot, F, Router, html
 from aiogram.types import LabeledPrice, Message, PreCheckoutQuery
 from aiogram.utils.i18n import gettext as _
-from aiogram.utils.i18n import lazy_gettext as __
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..config import settings
 from ..filters.meta import MetaCommand, MetaInfo
+from ..observability import report_exception
+from ..operator import OperatorControlConfig
 
 router = Router(name="donations")
 
 
 DEFAULT_STARS = 20
-
-
-# --- Randomized copy helpers -------------------------------------------------
-EMOJIS = [
-    "⭐️",
-    "✨",
-    "🚀",
-    "☕️",
-    "🍕",
-    "💡",
-    "🧠",
-    "🛠️",
-    "🎁",
-    "🍩",
-    "🌈",
-    "🧃",
-    "🪄",
-    "🎉",
-]
-
-PURPOSES = [
-    __("keep Derp caffeinated"),
-    __("pay the server bills"),
-    __("speed up image magic"),
-    __("train the tiny gremlins"),
-    __("fuel new features"),
-    __("keep logs tidy and shiny"),
-    __("bribe the RNG for better rolls"),
-    __("teach Derp a new trick"),
-    __("banish heisenbugs into the void"),
-    __("keep the hamster wheel spinning"),
-]
-
-TITLES_LEFT = [
-    __("Support Derp"),
-    __("Power Up Derp"),
-    __("Boost Derp"),
-    __("Derp Fuel"),
-    __("Derp Snacks"),
-    __("Shiny Upgrades"),
-]
-
-TITLES_RIGHT = [
-    __("Coffee Run"),
-    __("Server Snacks"),
-    __("Feature Juice"),
-    __("Good Vibes"),
-    __("Bug Zapper"),
-    __("Gremlin School"),
-]
-
-DESCRIPTIONS_MAIN = [
-    __("Every star helps {purpose}."),
-    __("Your stars directly help us {purpose}."),
-    __("Tiny bit of stardust to {purpose}."),
-    __("Stars today, fewer bugs tomorrow — {purpose}."),
-    __("A sprinkle of ✨ to {purpose}."),
-]
-
-DESCRIPTIONS_TAIL = [
-    __("You rock."),
-    __("Thank you for being awesome!"),
-    __("High‑five from the team ✋"),
-    __("We'll spend it wisely."),
-    __("Much love from Derp HQ 💙"),
-    __("Deploying instant good karma…"),
-]
-
-
-def _pick(seq: list[str]) -> str:
-    return random.choice(seq)
+DONATION_TIERS = (DEFAULT_STARS, 200, 500)
 
 
 def make_title() -> str:
-    left = _pick(TITLES_LEFT)
-    right = _pick(TITLES_RIGHT)
-    emoji = _pick(EMOJIS)
-    sep = " • " if random.random() < 0.5 else " — "
-    return f"{emoji} {left}{sep}{right}"
+    return _("Support Derp")
 
 
 def make_description() -> str:
-    purpose = _pick(PURPOSES)
-    main = _pick(DESCRIPTIONS_MAIN).format(purpose=purpose)
-    tail = _pick(DESCRIPTIONS_TAIL)
-    return f"{main} {tail}"
+    return _("A voluntary donation to support Derp's hosting and development.")
+
+
+def _invoice_retry_text(stars: int) -> str:
+    return _(
+        "I couldn't open the invoice for {stars} Star. "
+        "You won't be charged. Use /donate {stars} to try again.",
+        "I couldn't open the invoice for {stars} Stars. "
+        "You won't be charged. Use /donate {stars} to try again.",
+        stars,
+    ).format(stars=stars)
+
+
+def _donation_thanks(donor: str, stars: int) -> str:
+    return _(
+        "Thanks, {name}. Your {stars} Star is keeping Derp sharp.",
+        "Thanks, {name}. Your {stars} Stars are keeping Derp sharp.",
+        stars,
+    ).format(name=donor, stars=stars)
 
 
 def _coerce_amount(arg: str | None) -> int:
@@ -152,14 +92,8 @@ async def donate(message: Message, meta: MetaInfo) -> None:
         )
         return
 
-    # Price notes: 1000 Stars ≈ £15 GBP (approx; varies by region)
-    # Suggest tiers: keep a low entry option (10–50), with median 200 and top 500
-    low_options = [10, 20, 30, 50]
-    low = random.choice(low_options)
-    tiers = [low, 200, 500]
-
     # Send three invoices sequentially for user to pick
-    for amount in tiers:
+    for amount in DONATION_TIERS:
         try:
             await message.answer_invoice(
                 title=make_title(),
@@ -174,7 +108,7 @@ async def donate(message: Message, meta: MetaInfo) -> None:
             )
         except Exception:
             # Degrade gracefully if something goes wrong with one invoice
-            await message.answer(_("Use /donate {n} to donate {n}⭐️.").format(n=amount))
+            await message.answer(_invoice_retry_text(amount))
 
 
 @router.pre_checkout_query(F.invoice_payload.contains('"k":"donate"'))
@@ -183,7 +117,6 @@ async def handle_pre_checkout(query: PreCheckoutQuery) -> None:
     await query.answer(ok=True)
     logfire.info(
         "pre_checkout_ok",
-        payload=query.invoice_payload,
         currency=query.currency,
         total_amount=query.total_amount,
         user_id=(query.from_user and query.from_user.id),
@@ -193,7 +126,11 @@ async def handle_pre_checkout(query: PreCheckoutQuery) -> None:
 @router.message(
     F.successful_payment, F.successful_payment.invoice_payload.contains('"k":"donate"')
 )
-async def handle_successful_payment(message: Message, bot: Bot) -> None:
+async def handle_successful_payment(
+    message: Message,
+    bot: Bot,
+    operator_config: OperatorControlConfig,
+) -> None:
     sp = message.successful_payment
     # For Star payments, total_amount is the Stars count
     stars = sp.total_amount
@@ -201,109 +138,56 @@ async def handle_successful_payment(message: Message, bot: Bot) -> None:
     try:
         payload_model = DonationPayload.model_validate_json(sp.invoice_payload)
     except Exception:
-        logfire.exception("donation_payload_decode_failed", payload=sp.invoice_payload)
+        report_exception("donation_payload_decode_failed")
         payload_model = None
     target_chat_id = (payload_model and payload_model.chat_id) or message.chat.id
     target_thread_id = payload_model and payload_model.thread_id
 
-    def _animal_image_url(seed: str) -> tuple[str, str]:
-        """Return a random (url, kind) pair for a cat or a dog image."""
-        if random.choice((True, False)):
-            return (f"https://cataas.com/cat?seed={seed}", "cat")
-
-        return (f"https://placedog.net/640/420?random&seed={seed}", "dog")
-
-    seed = sp.telegram_payment_charge_id or str(stars)
-    url, kind = _animal_image_url(seed)
-
     donor = message.from_user and html.quote(message.from_user.full_name) or _("friend")
-    thanks_options = [
-        _("🙏 Thank you, {name}, for donating {stars}⭐️! Here's a {kind} for you."),
-        _("You absolute legend, {name}! {stars}⭐️ delivered. {kind} unlocked."),
-        _("{name}, you fed the Derp! +{stars}⭐️ {kind} time."),
-        _("{stars}⭐️ received — karma++ for {name}! Enjoy a {kind}."),
-        _("{name}, your {stars}⭐️ keeps the servers toasty. {kind} incoming!"),
-    ]
-    caption = random.choice(thanks_options).format(
-        name=donor, stars=stars, kind=("🐱" if kind == "cat" else "🐶")
-    )
+    thanks = _donation_thanks(donor, stars)
 
     # Acknowledge publicly where the donation was initiated (no cross-chat replies)
     try:
-        await bot.send_photo(
+        await bot.send_message(
             chat_id=target_chat_id,
-            photo=url,
-            caption=caption,
+            text=thanks,
             message_thread_id=target_thread_id,
         )
         logfire.info(
-            "donation_ack_photo",
+            "donation_ack_sent",
             stars=stars,
             chat_id=target_chat_id,
             thread_id=target_thread_id,
-            payload=sp.invoice_payload,
             user_id=(message.from_user and message.from_user.id),
-            tpcid=sp.telegram_payment_charge_id,
-            ppcid=sp.provider_payment_charge_id,
         )
-    except Exception:
-        logfire.exception("donation_ack_photo_failed")
+    except Exception as exc:
+        report_exception(
+            "donation_ack_failed",
+            exception=exc,
+            level="warning",
+        )
+
+    if not operator_config.operator_ids:
+        return
+
+    notice = _("<b>Donation received</b>\nStars: {stars}").format(stars=stars)
+    for operator_id in sorted(operator_config.operator_ids):
         try:
             await bot.send_message(
-                chat_id=target_chat_id,
-                text=_(
-                    "🙏 Thank you, {name}, for donating {stars}⭐️ to support Derp!"
-                ).format(name=donor, stars=stars),
-                message_thread_id=target_thread_id,
+                chat_id=operator_id,
+                text=notice,
+                protect_content=True,
             )
-            logfire.info(
-                "donation_ack_text",
-                stars=stars,
-                chat_id=target_chat_id,
-                thread_id=target_thread_id,
-                payload=sp.invoice_payload,
-                user_id=(message.from_user and message.from_user.id),
+        except Exception as exc:
+            report_exception(
+                "donation_operator_notify_failed",
+                exception=exc,
+                level="warning",
+                operator_id=operator_id,
             )
-        except Exception:
-            logfire.exception("donation_ack_text_failed")
-
-    # Notify admin with full details using plain HTML helpers
-    try:
-        chat = message.chat
-        user = message.from_user
-        payload = sp.invoice_payload
-        from_name = user and html.quote(user.full_name) or "—"
-        from_username = user and user.username and ("@" + user.username) or ""
-        from_id = user and user.id or None
-        chat_title = chat.title and html.quote(chat.title) or ""
-
-        lines: list[str] = [
-            html.bold("⭐️ Donation received"),
-            f"{html.bold('Amount:')} {stars} XTR",
-            f"{html.bold('From:')} {from_name} {from_username} {('#u' + str(from_id)) if from_id else ''}",
-            f"{html.bold('Origin:')} {chat.type} id={chat.id}{(' ' + chat_title) if chat_title else ''}",
-            f"{html.bold('Target:')} {target_chat_id}{(' topic ' + str(target_thread_id)) if target_thread_id else ''}",
-            f"{html.bold('Message ID:')} {message.message_id}",
-            f"{html.bold('Payload:')} {html.code(payload)}",
-        ]
-        if sp.telegram_payment_charge_id:
-            lines.append(
-                f"{html.bold('Telegram charge:')} {html.code(sp.telegram_payment_charge_id)}"
-            )
-        if sp.provider_payment_charge_id:
-            lines.append(
-                f"{html.bold('Provider charge:')} {html.code(sp.provider_payment_charge_id)}"
-            )
-
-        await bot.send_message(settings.rmbk_id, "\n".join(lines))
-        logfire.info(
-            "donation_admin_notified",
-            stars=stars,
-            payload=payload,
-            chat_id=chat.id,
-            thread_id=message.message_thread_id,
-            user_id=(user and user.id),
-        )
-    except Exception:
-        # Silent: admin notification failures should not affect user flow
-        logfire.exception("donation_admin_notify_failed")
+    logfire.info(
+        "donation_operators_notified",
+        operator_count=len(operator_config.operator_ids),
+        stars=stars,
+        origin_chat_type=message.chat.type,
+    )

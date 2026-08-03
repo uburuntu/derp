@@ -1,0 +1,400 @@
+"""Immutable values and state vocabulary for every paid operation."""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
+from enum import StrEnum
+from typing import Final, Self
+
+from derp.catalog import InferenceProvider, ModelRole
+from derp.execution import Feature
+
+_OPERATION_NAMESPACE: Final = uuid.UUID("84eeeaac-25bb-4b87-a239-1236076990dc")
+
+
+def _require_aware(value: datetime, name: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class OperationId:
+    """Stable idempotency identity for one billable side effect."""
+
+    value: uuid.UUID
+
+    @classmethod
+    def for_command(
+        cls,
+        *,
+        feature: Feature,
+        chat_id: int,
+        message_id: int,
+    ) -> Self:
+        """Derive the same ID for retries of one Telegram command."""
+        if message_id <= 0:
+            raise ValueError("message_id must be positive")
+        return cls(
+            uuid.uuid5(
+                _OPERATION_NAMESPACE,
+                f"command:{feature.value}:{chat_id}:{message_id}",
+            )
+        )
+
+    @classmethod
+    def for_tool(
+        cls,
+        *,
+        feature: Feature,
+        chat_id: int,
+        message_id: int,
+        tool_call_id: str,
+    ) -> Self:
+        """Derive one ID per Pydantic AI tool call, including repeated tools."""
+        if message_id <= 0:
+            raise ValueError("message_id must be positive")
+        if not tool_call_id.strip():
+            raise ValueError("tool_call_id must not be blank")
+        return cls(
+            uuid.uuid5(
+                _OPERATION_NAMESPACE,
+                f"tool:{feature.value}:{chat_id}:{message_id}:{tool_call_id}",
+            )
+        )
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteId:
+    """Opaque identity for one immutable quote."""
+
+    value: uuid.UUID
+
+    @classmethod
+    def new(cls) -> Self:
+        return cls(uuid.uuid4())
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+
+class ContextBand(StrEnum):
+    """Fixed pricing bands for bounded model input and finishing work."""
+
+    SMALL = "small"
+    MEDIUM = "medium"
+    LARGE = "large"
+    MAXIMUM = "maximum"
+
+    @classmethod
+    def for_input_tokens(cls, tokens: int) -> Self:
+        if tokens < 0:
+            raise ValueError("input tokens must not be negative")
+        if tokens <= 8_000:
+            return cls.SMALL
+        if tokens <= 32_000:
+            return cls.MEDIUM
+        if tokens <= 128_000:
+            return cls.LARGE
+        return cls.MAXIMUM
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteKey:
+    """Pricing identity independent from provider request variance."""
+
+    feature: Feature
+    model_key: ModelRole
+    context_band: ContextBand
+    variant: str = "default"
+
+    def __post_init__(self) -> None:
+        if not self.variant.strip():
+            raise ValueError("quote variant must not be blank")
+
+
+@dataclass(frozen=True, slots=True)
+class Quote:
+    """One exact fixed credit price with a bounded approval lifetime."""
+
+    id: QuoteId
+    operation_id: OperationId
+    key: QuoteKey
+    provider: InferenceProvider
+    provider_model_id: str
+    credits: int
+    estimated_provider_cost_usd: Decimal
+    created_at: datetime
+    expires_at: datetime
+    pricing_version: str
+    catalog_verified_on: date
+
+    def __post_init__(self) -> None:
+        if self.credits < 0:
+            raise ValueError("quoted credits must not be negative")
+        if not isinstance(self.provider, InferenceProvider):
+            raise TypeError("provider must be an InferenceProvider")
+        if not self.provider_model_id.strip():
+            raise ValueError("provider_model_id must not be blank")
+        if self.estimated_provider_cost_usd < 0:
+            raise ValueError("provider cost must not be negative")
+        _require_aware(self.created_at, "created_at")
+        _require_aware(self.expires_at, "expires_at")
+        if self.expires_at <= self.created_at:
+            raise ValueError("quote expiry must follow creation")
+        if not self.pricing_version.strip():
+            raise ValueError("pricing_version must not be blank")
+
+    def is_active_at(self, timestamp: datetime) -> bool:
+        _require_aware(timestamp, "timestamp")
+        return self.created_at <= timestamp < self.expires_at
+
+
+class WalletOwnerKind(StrEnum):
+    """Exactly one owner funds an operation."""
+
+    USER = "user"
+    CHAT = "chat"
+
+
+@dataclass(frozen=True, slots=True)
+class WalletOwner:
+    """Typed owner coordinate for a personal or shared wallet."""
+
+    kind: WalletOwnerKind
+    id: uuid.UUID
+
+
+class InventoryKind(StrEnum):
+    """Wallet inventories with distinct expiry semantics."""
+
+    ALLOWANCE = "allowance"
+    PURCHASED = "purchased"
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryAllocation:
+    """One reservation split within one wallet, allowance before purchased."""
+
+    owner: WalletOwner
+    allowance_credits: int
+    purchased_credits: int
+
+    def __post_init__(self) -> None:
+        if self.allowance_credits < 0 or self.purchased_credits < 0:
+            raise ValueError("inventory allocations must not be negative")
+        if self.total_credits <= 0:
+            raise ValueError("an inventory allocation must reserve credits")
+
+    @property
+    def total_credits(self) -> int:
+        return self.allowance_credits + self.purchased_credits
+
+
+class FundingAuthorization(StrEnum):
+    """Why one operation may use its selected wallet."""
+
+    CHAT = "chat"
+    PRIVATE = "private"
+    ONCE = "once"
+    ALWAYS = "always"
+
+
+class ReservationRejection(StrEnum):
+    """Actionable reasons a quote could not be reserved."""
+
+    QUOTE_EXPIRED = "quote_expired"
+    PERSONAL_CONSENT_REQUIRED = "personal_consent_required"
+    INSUFFICIENT_FUNDS = "insufficient_funds"
+    WALLET_IN_DEBT = "wallet_in_debt"
+    OPERATION_TERMINAL = "operation_terminal"
+
+
+@dataclass(frozen=True, slots=True)
+class ReservedOperation:
+    """A successful atomic reservation from exactly one wallet."""
+
+    operation_id: OperationId
+    allocation: InventoryAllocation
+    authorization: FundingAuthorization
+    idempotent: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ReservationRejected:
+    """A reservation that performed no billable movement."""
+
+    operation_id: OperationId
+    reason: ReservationRejection
+
+
+type ReservationResult = ReservedOperation | ReservationRejected
+
+
+@dataclass(frozen=True, slots=True)
+class SettlementResult:
+    """Result of an idempotent operation-state transition."""
+
+    operation_id: OperationId
+    state: OperationState
+    changed: bool
+
+    @property
+    def execution_claimed(self) -> bool:
+        """Return whether this result grants permission to call the provider."""
+        return self.state is OperationState.EXECUTING and self.changed
+
+
+@dataclass(frozen=True, slots=True)
+class OperationSnapshot:
+    """Read-only operation state used to resume work after retries or restarts."""
+
+    operation_id: OperationId
+    quote: Quote
+    provider_model_id: str
+    request_key: str
+    requester_id: uuid.UUID
+    chat_id: uuid.UUID
+    thread_id: int | None
+    pricing_input: Mapping[str, object]
+    state: OperationState
+    delivery_state: DeliveryState
+    wallet_owner: WalletOwner | None
+    funding_authorization: FundingAuthorization | None
+    result_metadata: Mapping[str, object]
+    terminal_reason: str | None
+    reserved_at: datetime | None
+    execution_started_at: datetime | None
+    captured_at: datetime | None
+    released_at: datetime | None
+    reversed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    @property
+    def can_claim_execution(self) -> bool:
+        """Return whether a worker may atomically try to claim provider work."""
+        return self.state is OperationState.RESERVED
+
+    @property
+    def provider_execution_claimed(self) -> bool:
+        """Return whether provider work may already have happened."""
+        return self.execution_started_at is not None
+
+
+@dataclass(frozen=True, slots=True)
+class WalletBalance:
+    """Spendable and committed inventory shown to a wallet owner."""
+
+    owner: WalletOwner
+    allowance_available: int
+    purchased_available: int
+    reserved: int
+    consumed: int
+    debt: int
+
+    @property
+    def spendable(self) -> int:
+        return self.allowance_available + self.purchased_available
+
+
+class WalletActivityKind(StrEnum):
+    """User-visible balance movements that are useful outside routine receipts."""
+
+    CHARGE = "charge"
+    REFUND = "refund"
+    PAYMENT_CLAWBACK = "payment_clawback"
+    DEBT_INCURRED = "debt_incurred"
+
+
+@dataclass(frozen=True, slots=True)
+class WalletActivity:
+    """One content-free, lot-aggregated wallet movement."""
+
+    kind: WalletActivityKind
+    credits: int
+    occurred_at: datetime
+    feature: Feature | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, WalletActivityKind):
+            raise TypeError("wallet activity kind must be a WalletActivityKind")
+        if isinstance(self.credits, bool) or not isinstance(self.credits, int):
+            raise TypeError("wallet activity credits must be an integer")
+        if self.credits <= 0:
+            raise ValueError("wallet activity credits must be positive")
+        _require_aware(self.occurred_at, "occurred_at")
+        if self.feature is not None and not isinstance(self.feature, Feature):
+            raise TypeError("wallet activity feature must be a Feature")
+
+
+@dataclass(frozen=True, slots=True)
+class WalletStatement:
+    """A balance plus bounded subscription and exceptional activity context."""
+
+    balance: WalletBalance
+    allowance_period_end: datetime | None = None
+    renewal_enabled: bool | None = None
+    recent_activity: tuple[WalletActivity, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.balance, WalletBalance):
+            raise TypeError("statement balance must be a WalletBalance")
+        if self.allowance_period_end is not None:
+            _require_aware(self.allowance_period_end, "allowance_period_end")
+            if self.balance.owner.kind is not WalletOwnerKind.USER:
+                raise ValueError("only personal wallets have allowance periods")
+        if self.renewal_enabled is not None and self.allowance_period_end is None:
+            raise ValueError("renewal state requires an active allowance period")
+        if not isinstance(self.recent_activity, tuple) or any(
+            not isinstance(item, WalletActivity) for item in self.recent_activity
+        ):
+            raise TypeError("recent activity must be an immutable activity tuple")
+
+
+class OperationState(StrEnum):
+    """Durable settlement lifecycle; terminal states never reopen."""
+
+    QUOTED = "quoted"
+    RESERVED = "reserved"
+    EXECUTING = "executing"
+    CAPTURED = "captured"
+    RELEASED = "released"
+    REVERSED = "reversed"
+    CANCELED = "canceled"
+    FAILED = "failed"
+
+    @property
+    def terminal(self) -> bool:
+        return self in {
+            OperationState.RELEASED,
+            OperationState.REVERSED,
+            OperationState.CANCELED,
+            OperationState.FAILED,
+        }
+
+
+class DeliveryState(StrEnum):
+    """Provider success is independent from Telegram delivery."""
+
+    NOT_READY = "not_ready"
+    PENDING = "pending"
+    DELIVERING = "delivering"
+    DELIVERED = "delivered"
+    UNCERTAIN = "uncertain"
+    FAILED = "failed"
+    EXPIRED = "expired"
+
+    @property
+    def terminal(self) -> bool:
+        return self in {
+            DeliveryState.DELIVERED,
+            DeliveryState.FAILED,
+            DeliveryState.EXPIRED,
+        }

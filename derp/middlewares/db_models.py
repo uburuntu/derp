@@ -3,7 +3,6 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import logfire
 from aiogram import BaseMiddleware
 from aiogram.dispatcher.middlewares.user_context import (
     EVENT_CHAT_KEY,
@@ -15,6 +14,7 @@ from derp.db import DatabaseManager, get_chat_settings
 from derp.db.queries import get_user_by_telegram_id
 from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.observability import report_exception
 
 
 class DatabaseModelMiddleware(BaseMiddleware):
@@ -38,12 +38,8 @@ class DatabaseModelMiddleware(BaseMiddleware):
     def __init__(self, db: DatabaseManager):
         self.db = db
 
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
+    async def inject(self, data: dict[str, Any]) -> None:
+        """Load the models represented by aiogram's resolved event context."""
         user: User | None = data.get(EVENT_FROM_USER_KEY)
         chat: Chat | None = data.get(EVENT_CHAT_KEY)
 
@@ -62,10 +58,18 @@ class DatabaseModelMiddleware(BaseMiddleware):
                     data["chat_model"] = chat_model
 
         except Exception:
-            logfire.exception(
+            report_exception(
                 "db_model_load_failed",
                 user_id=user.id if user else None,
                 chat_id=chat.id if chat else None,
             )
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        await self.inject(data)
 
         return await handler(event, data)

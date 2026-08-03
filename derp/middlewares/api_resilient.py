@@ -16,6 +16,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.methods import SendMediaGroup, TelegramMethod
 
 from derp.common.sanitize import strip_html_tags
+from derp.observability import report_exception
 
 
 def _create_plain_text_method(
@@ -97,10 +98,11 @@ class ResilientRequestMiddleware(BaseRequestMiddleware):
                 if plain_method is None:
                     raise
 
-                logfire.warning(
+                report_exception(
                     "html_parse_failed_fallback",
+                    exception=exc,
+                    level="warning",
                     method=type(method).__name__,
-                    _exc_info=True,
                 )
                 return await make_request(bot, plain_method)
 

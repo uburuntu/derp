@@ -6,10 +6,10 @@ Queries are optimized for parallel execution with minimal round-trips.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import logfire
-from sqlalchemy import ScalarSelect, select, update
+from sqlalchemy import ScalarSelect, and_, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -144,23 +144,8 @@ async def get_chat_by_telegram_id(
 
 
 async def get_chat_settings(session: AsyncSession, telegram_id: int) -> Chat | None:
-    """Get chat with settings by Telegram ID.
-
-    Returns the Chat which includes llm_memory.
-    """
+    """Get chat with structured settings by Telegram ID."""
     return await get_chat_by_telegram_id(session, telegram_id)
-
-
-async def update_chat_memory(
-    session: AsyncSession, telegram_id: int, llm_memory: str | None
-) -> None:
-    """Update the LLM memory for a chat."""
-    stmt = (
-        update(Chat)
-        .where(Chat.telegram_id == telegram_id)
-        .values(llm_memory=llm_memory, updated_at=datetime.now(UTC))
-    )
-    await session.execute(stmt)
 
 
 # -----------------------------------------------------------------------------
@@ -176,8 +161,14 @@ async def upsert_message(
     telegram_message_id: int,
     thread_id: int | None,
     direction: str,
+    role: str = "user",
+    capture_kind: str = "explicit",
     content_type: str | None,
     text: str | None,
+    source_snapshot: dict[str, object] | None = None,
+    history_dto: dict[str, object] | None = None,
+    canonical_projection: dict[str, object] | None = None,
+    retention_expires_at: datetime | None = None,
     media_group_id: str | None = None,
     attachment_type: str | None = None,
     attachment_file_id: str | None = None,
@@ -194,6 +185,7 @@ async def upsert_message(
     # Use subqueries to resolve IDs inline (single round-trip)
     chat_id = _chat_id_subquery(chat_telegram_id)
     user_id = _user_id_subquery(user_telegram_id) if user_telegram_id else None
+    retention_expires_at = retention_expires_at or telegram_date + timedelta(days=30)
 
     stmt = insert(Message).values(
         chat_id=chat_id,
@@ -201,8 +193,14 @@ async def upsert_message(
         telegram_message_id=telegram_message_id,
         thread_id=thread_id,
         direction=direction,
+        role=role,
+        capture_kind=capture_kind,
         content_type=content_type,
         text=text,
+        source_snapshot=source_snapshot or {},
+        history_dto=history_dto or {},
+        canonical_projection=canonical_projection or {},
+        retention_expires_at=retention_expires_at,
         media_group_id=media_group_id,
         attachment_type=attachment_type,
         attachment_file_id=attachment_file_id,
@@ -214,8 +212,13 @@ async def upsert_message(
         constraint="uq_messages_chat_message",
         set_={
             "direction": stmt.excluded.direction,
+            "role": stmt.excluded.role,
+            "capture_kind": stmt.excluded.capture_kind,
             "content_type": stmt.excluded.content_type,
             "text": stmt.excluded.text,
+            "source_snapshot": stmt.excluded.source_snapshot,
+            "history_dto": stmt.excluded.history_dto,
+            "canonical_projection": stmt.excluded.canonical_projection,
             "media_group_id": stmt.excluded.media_group_id,
             "attachment_type": stmt.excluded.attachment_type,
             "attachment_file_id": stmt.excluded.attachment_file_id,
@@ -224,6 +227,7 @@ async def upsert_message(
             "edited_at": stmt.excluded.edited_at,
             "updated_at": datetime.now(UTC),
         },
+        where=Message.privacy_deleted_at.is_(None),
     ).returning(Message)
 
     result = await session.execute(stmt, execution_options={"populate_existing": True})
@@ -256,31 +260,65 @@ async def mark_message_deleted(
 
 async def get_recent_messages(
     session: AsyncSession,
+    *,
     chat_telegram_id: int,
+    thread_id: int | None,
     limit: int = 100,
+    before_telegram_date: datetime | None = None,
+    before_telegram_message_id: int | None = None,
+    active_at: datetime | None = None,
 ) -> list[Message]:
-    """Get recent non-deleted messages for a chat.
+    """Get prior non-deleted messages for one chat/topic scope.
 
     Returns messages in chronological order (oldest first) for building
-    LLM context. Joins directly on telegram_id to avoid N+1 queries.
+    LLM context. A cursor excludes the current event and anything after it.
     """
+    if limit <= 0:
+        raise ValueError("History limit must be positive")
+    if (before_telegram_date is None) != (before_telegram_message_id is None):
+        raise ValueError("History cursor requires both date and message ID")
+    active_at = active_at or datetime.now(UTC)
+
     with logfire.span(
         "db.get_recent_messages",
         **{
             "db.operation": "select",
             "telegram.chat_id": chat_telegram_id,
+            "telegram.thread_id": thread_id,
             "db.limit": limit,
         },
     ) as span:
-        # Single query joining Chat and Message to avoid extra round-trip
+        scope = (
+            Message.thread_id.is_(None)
+            if thread_id is None
+            else Message.thread_id == thread_id
+        )
         stmt = (
             select(Message)
             .join(Chat, Message.chat_id == Chat.id)
-            .where(Chat.telegram_id == chat_telegram_id, Message.deleted_at.is_(None))
-            .order_by(Message.created_at.desc(), Message.telegram_message_id.desc())
+            .where(
+                Chat.telegram_id == chat_telegram_id,
+                scope,
+                Message.deleted_at.is_(None),
+                Message.retention_expires_at > active_at,
+            )
+            .order_by(
+                Message.telegram_date.desc(),
+                Message.telegram_message_id.desc(),
+            )
             .limit(limit)
             .options(selectinload(Message.user))
         )
+        if before_telegram_date is not None and before_telegram_message_id is not None:
+            stmt = stmt.where(
+                or_(
+                    Message.telegram_date < before_telegram_date,
+                    and_(
+                        Message.telegram_date == before_telegram_date,
+                        Message.telegram_message_id < before_telegram_message_id,
+                    ),
+                )
+            )
 
         result = await session.execute(stmt)
         messages = list(result.scalars().all())

@@ -9,10 +9,23 @@ from derp.handlers import donations as donations_module
 from derp.handlers.donations import (
     DonationPayload,
     _coerce_amount,
+    _donation_thanks,
+    _invoice_retry_text,
     donate,
     handle_pre_checkout,
     handle_successful_payment,
 )
+from derp.operator import OperatorControlConfig
+
+
+def _operator_config(*operator_ids: int) -> OperatorControlConfig:
+    return OperatorControlConfig(
+        environment="dev",
+        service_version="test",
+        public_purchases_enabled=False,
+        ai_content_capture_enabled=False,
+        operator_ids=operator_ids,
+    )
 
 
 def test_donation_payload_compact_json_under_limit():
@@ -29,7 +42,7 @@ def test_donation_payload_compact_json_under_limit():
 
 
 @pytest.mark.asyncio
-async def test_donate_single_amount_builds_payload_and_answers_invoice(monkeypatch):
+async def test_donate_single_amount_builds_payload_and_answers_invoice():
     message = SimpleNamespace()
     message.chat = SimpleNamespace(id=-10042)
     message.message_thread_id = 777
@@ -50,7 +63,7 @@ async def test_donate_single_amount_builds_payload_and_answers_invoice(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_successful_payment_routes_ack_to_target_chat(monkeypatch):
+async def test_successful_payment_routes_ack_to_target_chat():
     # Arrange
     bot = MagicMock()
     bot.send_photo = AsyncMock()
@@ -71,21 +84,28 @@ async def test_successful_payment_routes_ack_to_target_chat(monkeypatch):
     )
 
     # Act
-    await handle_successful_payment(message, bot)
+    await handle_successful_payment(message, bot, _operator_config())
 
     # Assert
-    bot.send_photo.assert_awaited_once()
-    _, kwargs = bot.send_photo.await_args
+    bot.send_photo.assert_not_awaited()
+    user_calls = [
+        call
+        for call in bot.send_message.await_args_list
+        if call.kwargs.get("chat_id") == -100999
+    ]
+    assert len(user_calls) == 1
+    kwargs = user_calls[0].kwargs
     assert kwargs["chat_id"] == -100999
     assert kwargs["message_thread_id"] == 123
+    assert kwargs["text"] == "Thanks, Alice. Your 50 Stars are keeping Derp sharp."
     assert "reply_to_message_id" not in kwargs
 
 
 @pytest.mark.asyncio
-async def test_successful_payment_fallback_to_text_on_photo_failure(monkeypatch):
+async def test_successful_payment_ack_failure_does_not_block_private_notice():
     bot = MagicMock()
-    bot.send_photo = AsyncMock(side_effect=Exception("boom"))
-    bot.send_message = AsyncMock()
+    bot.send_photo = AsyncMock()
+    bot.send_message = AsyncMock(side_effect=[Exception("boom"), None])
 
     target = DonationPayload(a=10, c=-1001, t=None)
     message = SimpleNamespace()
@@ -96,26 +116,36 @@ async def test_successful_payment_fallback_to_text_on_photo_failure(monkeypatch)
     message.successful_payment = SimpleNamespace(
         total_amount=10,
         invoice_payload=target.model_dump_json(by_alias=True, exclude_none=True),
-        telegram_payment_charge_id="",
-        provider_payment_charge_id="",
+        telegram_payment_charge_id="telegram-secret-charge",
+        provider_payment_charge_id="provider-secret-charge",
     )
 
-    await handle_successful_payment(message, bot)
+    await handle_successful_payment(message, bot, _operator_config(42))
 
-    # At least one send_message is the fallback ack to the user
-    assert bot.send_message.await_count >= 1
-    user_calls = [
-        c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == -1001
-    ]
-    assert user_calls, "expected a user ack call to target chat"
-    # And one admin notification
-    admin_id = donations_module.settings.rmbk_id
-    admin_calls = [
+    assert bot.send_message.await_count == 2
+    assert bot.send_message.await_args_list[0].kwargs["chat_id"] == -1001
+    operator_calls = [
         c
         for c in bot.send_message.await_args_list
-        if (c.args and c.args[0] == admin_id) or c.kwargs.get("chat_id") == admin_id
+        if (c.args and c.args[0] == 42) or c.kwargs.get("chat_id") == 42
     ]
-    assert admin_calls, "expected an admin notification call"
+    assert len(operator_calls) == 1
+    operator_notice = operator_calls[0].kwargs
+    assert operator_notice["text"] == "<b>Donation received</b>\nStars: 10"
+    assert operator_notice["protect_content"] is True
+    assert all(
+        secret not in operator_notice["text"]
+        for secret in (
+            "Bob",
+            "bob",
+            "12345",
+            "telegram-secret-charge",
+            "provider-secret-charge",
+            '"k":"donate"',
+            "-1001",
+            "-1002",
+        )
+    )
 
 
 def test_coerce_amount_various_cases():
@@ -128,10 +158,7 @@ def test_coerce_amount_various_cases():
 
 
 @pytest.mark.asyncio
-async def test_donate_tiers_sends_three_invoices(monkeypatch):
-    # Make random.choice deterministic: always first element
-    monkeypatch.setattr("derp.handlers.donations.random.choice", lambda seq: seq[0])
-
+async def test_donate_tiers_sends_three_invoices():
     message = SimpleNamespace()
     message.chat = SimpleNamespace(id=-555)
     message.message_thread_id = 42
@@ -148,14 +175,11 @@ async def test_donate_tiers_sends_three_invoices(monkeypatch):
         amounts.append(p.amount)
         assert p.chat_id == -555
         assert p.thread_id == 42
-    assert amounts == [10, 200, 500]
+    assert amounts == [20, 200, 500]
 
 
 @pytest.mark.asyncio
-async def test_donate_tiers_invoice_failure_fallbacks(monkeypatch):
-    # Deterministic low tier = 10
-    monkeypatch.setattr("derp.handlers.donations.random.choice", lambda seq: seq[0])
-
+async def test_donate_tiers_invoice_failure_fallbacks():
     message = SimpleNamespace()
     message.chat = SimpleNamespace(id=-777)
     message.message_thread_id = 7
@@ -168,7 +192,10 @@ async def test_donate_tiers_invoice_failure_fallbacks(monkeypatch):
     # Fallback text sent once for the failing tier (second: 200)
     message.answer.assert_awaited()
     text = message.answer.await_args.args[0]
-    assert "200" in text and "⭐️" in text
+    assert text == (
+        "I couldn't open the invoice for 200 Stars. You won't be charged. "
+        "Use /donate 200 to try again."
+    )
 
 
 @pytest.mark.asyncio
@@ -201,14 +228,37 @@ async def test_successful_payment_decode_failure_falls_back_to_message_chat():
         provider_payment_charge_id="p",
     )
 
-    await handle_successful_payment(message, bot)
-    bot.send_photo.assert_awaited_once()
-    _, kwargs = bot.send_photo.await_args
+    await handle_successful_payment(message, bot, _operator_config())
+    bot.send_photo.assert_not_awaited()
+    user_calls = [
+        call
+        for call in bot.send_message.await_args_list
+        if call.kwargs.get("chat_id") == -991
+    ]
+    assert len(user_calls) == 1
+    kwargs = user_calls[0].kwargs
     assert kwargs["chat_id"] == -991
     assert kwargs.get("message_thread_id") is None
 
 
-def test_translations_ru_title_description_and_labels(monkeypatch):
+def test_donation_copy_handles_singular_and_plural():
+    assert _invoice_retry_text(1) == (
+        "I couldn't open the invoice for 1 Star. You won't be charged. "
+        "Use /donate 1 to try again."
+    )
+    assert _invoice_retry_text(2) == (
+        "I couldn't open the invoice for 2 Stars. You won't be charged. "
+        "Use /donate 2 to try again."
+    )
+    assert _donation_thanks("Alice", 1) == (
+        "Thanks, Alice. Your 1 Star is keeping Derp sharp."
+    )
+    assert _donation_thanks("Alice", 2) == (
+        "Thanks, Alice. Your 2 Stars are keeping Derp sharp."
+    )
+
+
+def test_translations_ru_title_description_and_labels():
     # Set i18n context to Russian
     i18n = I18n(path="derp/locales", default_locale="en", domain="messages")
     with i18n.context():
@@ -226,33 +276,17 @@ def test_translations_ru_title_description_and_labels(monkeypatch):
                     return self.m.get(s, s) if n == 1 else self.m.get(p, p)
 
             mapping = {
-                # Titles
                 "Support Derp": "Поддержать Derp",
-                "Coffee Run": "Забег за кофе",
-                # Purposes + description bits
-                "keep Derp caffeinated": "напоить Derp кофе",
-                "Every star helps {purpose}.": "Каждая звезда помогает {purpose}.",
-                "You rock.": "Ты классный.",
-                # Label
+                "A voluntary donation to support Derp's hosting and development.": (
+                    "Добровольное пожертвование на хостинг и развитие Derp."
+                ),
                 "Donation": "Пожертвование",
             }
             i18n.locales["ru"] = DummyTranslations(mapping)
-            # Make deterministic choices
-            monkeypatch.setattr(
-                "derp.handlers.donations.random.choice", lambda seq: seq[0]
-            )
-            monkeypatch.setattr("derp.handlers.donations.random.random", lambda: 0.1)
 
             title = donations_module.make_title()
             desc = donations_module.make_description()
 
-            assert "Поддержать Derp" in title
-            assert "Забег за кофе" in title
-            # Purpose + main + tail should be translated
-            assert "Каждая звезда помогает" in desc
-            assert (
-                "кофе" in desc or "сервер" in desc
-            )  # purpose text contains translation
-
-            # Label translation
+            assert title == "Поддержать Derp"
+            assert desc == "Добровольное пожертвование на хостинг и развитие Derp."
             assert i18n.gettext("Donation") == "Пожертвование"

@@ -9,147 +9,153 @@ Provides factory functions for different agent types:
 from __future__ import annotations
 
 import logfire
-from pydantic_ai import Agent, BinaryImage
-from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
+from pydantic_ai import Agent, BinaryImage, DeferredToolRequests, RunContext
+from pydantic_ai.capabilities import ProcessHistory
 
+from derp.catalog import ModelRole, ModelSpec
+from derp.execution import ExecutionPlan, Feature, plan_execution
+from derp.history.service import process_native_history
 from derp.llm.deps import AgentDeps
 from derp.llm.prompts import (
-    BASE_SYSTEM_PROMPT,
     IMAGE_SYSTEM_PROMPT,
     INLINE_SYSTEM_PROMPT,
     build_chat_system_prompt,
 )
-from derp.llm.providers import ModelTier, create_image_model, create_model
-
-# Module-level agent instances (lazy initialization)
-_chat_agent: Agent[AgentDeps, str] | None = None
-_image_agent: Agent[None, BinaryImage | str] | None = None
-_inline_agent: Agent[None, str] | None = None
+from derp.llm.providers import create_image_model, create_model
 
 
-def create_chat_agent(tier: ModelTier = ModelTier.STANDARD) -> Agent[AgentDeps, str]:
+def _resolve_plan(
+    model: ExecutionPlan | ModelSpec | ModelRole,
+    *,
+    default_feature: Feature,
+    allowed_features: frozenset[Feature],
+) -> ExecutionPlan:
+    """Resolve a plan and reject plans intended for a different agent kind."""
+    plan = (
+        model
+        if isinstance(model, ExecutionPlan)
+        else plan_execution(default_feature, model)
+    )
+    if plan.feature not in allowed_features:
+        raise ValueError(f"{plan.feature.value} cannot use this agent factory")
+    return plan
+
+
+def create_chat_agent(
+    model: ExecutionPlan | ModelSpec | ModelRole = ModelRole.CHAT_STANDARD,
+) -> Agent[AgentDeps, str | DeferredToolRequests]:
     """Create the main chat agent with tools and context.
 
     The chat agent is the primary agent for handling messages in chats.
-    It has access to tools (memory, DuckDuckGo search) and full conversation context.
+    Tools are attached by the caller so all capabilities share the same policy layer.
 
     Args:
-        tier: The model tier to use (affects quality and cost).
+        model: Exact catalog model or semantic catalog key.
 
     Returns:
         A configured Agent instance for chat interactions.
     """
-    model = create_model(tier)
-
-    # Include DuckDuckGo search tool by default (free, no API key)
-    search_tool = duckduckgo_search_tool()
-
-    agent: Agent[AgentDeps, str] = Agent(
+    plan = _resolve_plan(
         model,
+        default_feature=Feature.CHAT,
+        allowed_features=frozenset({Feature.CHAT}),
+    )
+    spec = plan.model
+    provider_model = create_model(spec)
+
+    agent: Agent[AgentDeps, str | DeferredToolRequests] = Agent(
+        provider_model,
+        name="chat",
         deps_type=AgentDeps,
-        output_type=str,
-        instructions=BASE_SYSTEM_PROMPT,
-        tools=[search_tool],
+        output_type=[str, DeferredToolRequests],
+        capabilities=[ProcessHistory(process_native_history)],
     )
 
-    # Add dynamic system prompt for chat memory
-    @agent.system_prompt
-    def add_chat_context(ctx) -> str:
+    @agent.instructions
+    def add_chat_context(ctx: RunContext[AgentDeps]) -> str:
         return build_chat_system_prompt(ctx)
 
-    logfire.debug("chat_agent_created", tier=tier.value, has_search=True)
+    logfire.debug(
+        "chat_agent_created",
+        feature=plan.feature.value,
+        model_key=spec.key.value,
+        model=spec.provider_model_id,
+    )
 
     return agent
 
 
-def create_image_agent() -> Agent[None, BinaryImage | str]:
+def create_image_agent(
+    model: ExecutionPlan | ModelSpec | ModelRole = ModelRole.IMAGE,
+) -> Agent[object, BinaryImage | str]:
     """Create an agent for image generation and editing.
 
-    Uses the IMAGE tier model which supports native image generation.
+    Uses the catalog image model which supports native image generation.
     Returns either a BinaryImage or text (if image generation fails/is refused).
 
     Returns:
         A configured Agent instance for image generation.
     """
-    model = create_image_model()
-
-    agent: Agent[None, BinaryImage | str] = Agent(
+    plan = _resolve_plan(
         model,
+        default_feature=Feature.IMAGE_GENERATE,
+        allowed_features=frozenset({Feature.IMAGE_GENERATE, Feature.IMAGE_EDIT}),
+    )
+    spec = plan.model
+    provider_model = create_image_model(spec)
+
+    agent: Agent[object, BinaryImage | str] = Agent(
+        provider_model,
+        name="image",
         output_type=BinaryImage | str,
         instructions=IMAGE_SYSTEM_PROMPT,
-        retries=2,  # Image models may need more attempts for output validation
+        retries=0,
     )
 
-    logfire.debug("image_agent_created")
+    logfire.debug(
+        "image_agent_created",
+        feature=plan.feature.value,
+        model_key=spec.key.value,
+        model=spec.provider_model_id,
+    )
 
     return agent
 
 
-def create_inline_agent(tier: ModelTier = ModelTier.CHEAP) -> Agent[None, str]:
+def create_inline_agent(
+    model: ExecutionPlan | ModelSpec | ModelRole = ModelRole.CHAT_ECONOMY,
+) -> Agent[object, str]:
     """Create a lightweight agent for inline queries.
 
-    Uses the CHEAP tier by default for cost efficiency on high-volume
+    Uses the economy catalog model by default for cost efficiency on high-volume
     inline queries. No tools or complex context.
 
     Args:
-        tier: The model tier to use (defaults to CHEAP for cost efficiency).
+        model: Exact catalog model or semantic catalog key.
 
     Returns:
         A configured Agent instance for inline queries.
     """
-    model = create_model(tier)
-
-    agent: Agent[None, str] = Agent(
+    plan = _resolve_plan(
         model,
+        default_feature=Feature.INLINE_CHAT,
+        allowed_features=frozenset({Feature.INLINE_CHAT}),
+    )
+    spec = plan.model
+    provider_model = create_model(spec)
+
+    agent: Agent[object, str] = Agent(
+        provider_model,
+        name="inline",
         output_type=str,
         instructions=INLINE_SYSTEM_PROMPT,
     )
 
-    logfire.debug("inline_agent_created", tier=tier.value)
+    logfire.debug(
+        "inline_agent_created",
+        feature=plan.feature.value,
+        model_key=spec.key.value,
+        model=spec.provider_model_id,
+    )
 
     return agent
-
-
-def get_chat_agent(tier: ModelTier = ModelTier.STANDARD) -> Agent[AgentDeps, str]:
-    """Get or create a cached chat agent instance.
-
-    For most use cases, use this instead of create_chat_agent()
-    to reuse the same agent instance.
-
-    Args:
-        tier: The model tier to use.
-
-    Returns:
-        A cached or newly created chat agent.
-    """
-    global _chat_agent
-    if _chat_agent is None:
-        _chat_agent = create_chat_agent(tier)
-    return _chat_agent
-
-
-def get_image_agent() -> Agent[None, BinaryImage | str]:
-    """Get or create a cached image agent instance.
-
-    Returns:
-        A cached or newly created image agent.
-    """
-    global _image_agent
-    if _image_agent is None:
-        _image_agent = create_image_agent()
-    return _image_agent
-
-
-def get_inline_agent(tier: ModelTier = ModelTier.CHEAP) -> Agent[None, str]:
-    """Get or create a cached inline agent instance.
-
-    Args:
-        tier: The model tier to use.
-
-    Returns:
-        A cached or newly created inline agent.
-    """
-    global _inline_agent
-    if _inline_agent is None:
-        _inline_agent = create_inline_agent(tier)
-    return _inline_agent

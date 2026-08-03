@@ -12,22 +12,26 @@ This directory contains localization files for the bot, managed using `pybabel` 
     await message.answer(_("Hello, {name}!").format(name=user_name))
     ```
 
-2. **Extract Strings**: Run the extraction script to scan the code and update the template file (`messages.pot`).
+2. **Extract Strings**: Scan the code and update the template file (`messages.pot`).
 
     ```bash
-    ./scripts/i18n_extract.sh
+    make i18n-extract
     ```
 
 3. **Update Language Files**: Update the language-specific `.po` files based on the new template.
 
     ```bash
-    ./scripts/i18n_update.sh
+    make i18n-update
     ```
+
+    The update command disables fuzzy matching. Changed source strings stay
+    untranslated until a person reviews them instead of inheriting a similar,
+    potentially incorrect translation.
 
     * **New Language?**: If adding a new language (e.g., `fr` for French), initialize its `.po` file first:
 
         ```bash
-        ./scripts/i18n_init.sh fr
+        make i18n-init LOCALE=fr
         ```
 
     * **Translate**: Edit the `.po` files (e.g., `en/LC_MESSAGES/messages.po`, `ru/LC_MESSAGES/messages.po`) using a text editor or a specialized tool like Poedit. Fill in the `msgstr "..."` lines corresponding to each `msgid "..."`.
@@ -35,8 +39,10 @@ This directory contains localization files for the bot, managed using `pybabel` 
 4. **Compile Translations**: Compile the `.po` files into binary `.mo` files, which are used by the bot at runtime.
 
     ```bash
-    ./scripts/i18n_compile.sh
+    make i18n-compile
     ```
+
+Run `make i18n` to extract, update, and compile in one step.
 
 ## File Structure
 
@@ -48,4 +54,6 @@ This directory contains localization files for the bot, managed using `pybabel` 
 
 * Keep `.po` files in version control so translations are tracked.
 * Regularly run the `extract`, `update`, and `compile` steps as you modify the code.
+* Keep the Russian catalog complete and free of fuzzy entries; `tests/test_locales.py`
+  enforces this together with placeholder validity and the `Дерп` persona name.
 * Use descriptive comments in the code for translators if necessary (e.g., `# Translators: ...`). They can be extracted using `pybabel extract --add-comments=Translators: ...`.

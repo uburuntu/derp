@@ -4,6 +4,7 @@
 # Database URLs for different environments
 DATABASE_URL_DEV ?= postgresql+asyncpg://derp:derp@localhost:5432/derp
 DATABASE_URL_TEST ?= postgresql+asyncpg://derp_test:derp_test@localhost:5433/derp_test
+COMPOSE ?= $(shell if docker compose version >/dev/null 2>&1; then echo "docker compose"; else echo "docker-compose"; fi)
 
 ## =============================================================================
 ## ENVIRONMENT & DEPENDENCIES
@@ -32,14 +33,15 @@ run:
 ## CODE QUALITY
 ## =============================================================================
 
-## Lint and format code with Ruff
-lint format f:
-	uv run ruff format .
-	uv run ruff check . --fix
+## Check lint and formatting without modifying files
+lint check:
+	uv run ruff format --check .
+	uv run ruff check .
 
-## Run type checking (optional, may have errors)
-typecheck:
-	uv run mypy derp --ignore-missing-imports || true
+## Format code and apply safe Ruff fixes
+format f:
+	uv run ruff check . --fix
+	uv run ruff format .
 
 ## =============================================================================
 ## TESTING
@@ -47,26 +49,31 @@ typecheck:
 
 ## Run tests (quick, no database)
 t test:
-	uv run pytest -q --ignore=tests/test_db_queries.py --ignore=tests/test_models.py
+	uv run pytest -q -m "not database and not telegram_e2e"
 
-## Run tests verbosely
+## Run ordinary tests verbosely (excludes Telegram E2E)
 test-verbose:
-	uv run pytest -v
+	uv run pytest -v -m "not telegram_e2e"
 
-## Run ALL tests including database tests (requires PostgreSQL)
+## Run ordinary tests including database tests (requires PostgreSQL)
 test-all: db-test-up
-	DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v
-	$(MAKE) db-test-down
+	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v -m "not telegram_e2e"
 
-## Run only database tests (requires PostgreSQL)
+## Run ordinary database tests (requires PostgreSQL)
 test-db: db-test-up
-	DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v tests/test_db_queries.py tests/test_models.py
-	$(MAKE) db-test-down
+	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v -m "database and not telegram_e2e"
 
-## Run tests with coverage
+## Run Telegram E2E journeys against the mocked Bot API (requires PostgreSQL)
+test-e2e: db-test-up
+	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v -m telegram_e2e tests/e2e
+
+## Run ordinary tests with coverage (excludes Telegram E2E)
 test-cov: db-test-up
-	DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v --cov=derp --cov-report=html --cov-report=term-missing
-	$(MAKE) db-test-down
+	@set -eu; trap '$(MAKE) db-test-down' EXIT; \
+		DATABASE_URL=$(DATABASE_URL_TEST) uv run pytest -v -m "not telegram_e2e" --cov=derp --cov-report=html --cov-report=term-missing
 	@echo "Coverage report: htmlcov/index.html"
 
 ## =============================================================================
@@ -75,25 +82,22 @@ test-cov: db-test-up
 
 ## Start development PostgreSQL (persistent data)
 db-up:
-	docker compose up -d db
-	@echo "Waiting for PostgreSQL to be ready..."
-	@sleep 2
+	$(COMPOSE) up -d --wait db
 	@echo "PostgreSQL is ready at localhost:5432"
 
 ## Stop development PostgreSQL
 db-down:
-	docker compose down db
+	$(COMPOSE) stop db
 
 ## Start test PostgreSQL (ephemeral, in-memory)
 db-test-up:
-	docker compose up -d db-test
-	@echo "Waiting for test PostgreSQL to be ready..."
-	@sleep 2
+	@$(COMPOSE) --profile test rm -sf db-test >/dev/null
+	$(COMPOSE) --profile test up -d --wait --force-recreate db-test
 	@echo "Test PostgreSQL is ready at localhost:5433"
 
 ## Stop test PostgreSQL
 db-test-down:
-	docker compose down db-test
+	$(COMPOSE) --profile test rm -sf db-test
 
 ## Run database migrations (development)
 db-migrate:
@@ -141,7 +145,7 @@ i18n-extract:
 
 ## Update .po files from messages.pot
 i18n-update:
-	uv run pybabel update -d derp/locales -D messages -i derp/locales/messages.pot
+	uv run pybabel update --ignore-obsolete --no-fuzzy-matching -d derp/locales -D messages -i derp/locales/messages.pot
 
 ## Compile .po to .mo
 i18n-compile:
@@ -158,26 +162,26 @@ i18n-init:
 
 ## Build and start all services with Docker
 docker-up:
-	docker compose up --build -d
+	$(COMPOSE) up --build -d
 
 ## Stop all services
 docker-down:
-	docker compose down
+	$(COMPOSE) down
 
 ## View logs from all services
 docker-logs:
-	docker compose logs -f
+	$(COMPOSE) logs -f
 
 ## Rebuild and restart just the bot
 docker-restart-bot:
-	docker compose up --build -d bot
+	$(COMPOSE) up --build -d bot
 
 ## =============================================================================
 ## DEVELOPMENT HELPERS
 ## =============================================================================
 
 ## Set up complete development environment
-dev-setup: venv db-up db-migrate
+dev-setup: venv i18n-compile db-up db-migrate
 	@echo ""
 	@echo "Development environment is ready!"
 	@echo ""
@@ -189,7 +193,7 @@ dev-setup: venv db-up db-migrate
 
 ## Clean up development environment
 dev-clean:
-	docker compose down -v
+	$(COMPOSE) down -v
 	rm -rf .venv htmlcov .coverage .pytest_cache __pycache__
 
 ## =============================================================================
@@ -208,14 +212,15 @@ help:
 	@echo "    run               Run the bot locally"
 	@echo ""
 	@echo "  Code Quality:"
-	@echo "    lint/format/f     Lint and format with Ruff"
-	@echo "    typecheck         Run mypy type checking"
+	@echo "    lint/check        Check lint and formatting"
+	@echo "    format/f          Format code and apply safe fixes"
 	@echo ""
 	@echo "  Testing:"
 	@echo "    test              Run tests (quick, no database)"
 	@echo "    test-verbose      Run tests verbosely"
-	@echo "    test-all          Run ALL tests including database"
-	@echo "    test-db           Run only database tests"
+	@echo "    test-all          Run ordinary tests including database"
+	@echo "    test-db           Run ordinary database tests"
+	@echo "    test-e2e          Run Telegram E2E journeys"
 	@echo "    test-cov          Run tests with coverage report"
 	@echo ""
 	@echo "  Database:"
@@ -243,8 +248,8 @@ help:
 	@echo "    dev-setup         Set up complete dev environment"
 	@echo "    dev-clean         Clean up dev environment"
 
-.PHONY: venv install run lint format f typecheck \
-        test test-verbose test-all test-db test-cov \
+.PHONY: venv install run lint check format f \
+        test test-verbose test-all test-db test-e2e test-cov \
         db-up db-down db-test-up db-test-down db-migrate db-migrate-test \
         db-revision db-status db-downgrade db-reset db-shell \
         i18n i18n-extract i18n-update i18n-compile i18n-init \

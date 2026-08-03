@@ -1,7 +1,7 @@
 """Credit service for checking and deducting credits.
 
 This is the main entry point for credit operations. It handles:
-- Tier selection based on credit balance
+- Chat model selection based on credit balance
 - Tool access checking with daily limits
 - Credit deduction after successful operations
 - Credit purchases
@@ -9,16 +9,12 @@ This is the main entry point for credit operations. It handles:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import logfire
 
-from derp.credits.models import (
-    ModelTier,
-    ModelType,
-    get_default_model,
-    get_model,
-)
+from derp.catalog import GoogleModelKey
 from derp.credits.tools import TOOL_REGISTRY, get_tool
 from derp.credits.types import CreditCheckResult
 from derp.db.credits import (
@@ -31,19 +27,14 @@ from derp.db.credits import (
     get_transaction_by_idempotency_key,
     increment_daily_usage,
 )
+from derp.execution import ExecutionPlan, Feature, plan_execution
+from derp.history.service import HISTORY_WINDOWS, HistoryWindow
+from derp.observability import telemetry_fingerprint
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from derp.models import Chat, User
-
-
-# Context limits by tier
-CONTEXT_LIMITS: dict[ModelTier, int] = {
-    ModelTier.CHEAP: 10,  # Free tier: limited context
-    ModelTier.STANDARD: 100,  # Paid tier: full context
-    ModelTier.PREMIUM: 100,  # Premium: full context
-}
 
 
 class CreditService:
@@ -54,8 +45,8 @@ class CreditService:
     Usage:
         service = CreditService(session)
 
-        # Get orchestrator config (which model/tier to use)
-        tier, model_id, context_limit = await service.get_orchestrator_config(user, chat)
+        # Get the exact orchestrator plan and context policy.
+        plan, history_window = await service.get_orchestrator_config(user, chat)
 
         # Check tool access
         result = await service.check_tool_access(user, chat, "image_generate")
@@ -73,7 +64,7 @@ class CreditService:
         self,
         user: User,
         chat: Chat,
-    ) -> tuple[ModelTier, str, int]:
+    ) -> tuple[ExecutionPlan, HistoryWindow]:
         """Get orchestrator configuration based on credit balance.
 
         Args:
@@ -81,40 +72,39 @@ class CreditService:
             chat: Database Chat model.
 
         Returns:
-            Tuple of (tier, model_id, context_limit).
-            - Free tier (no credits): CHEAP model, 10 message context
-            - Paid tier (has credits): STANDARD model, 100 message context
+            Validated chat execution plan plus its product history window.
         """
         chat_credits, user_credits = await get_balances(
             self.session, user.telegram_id, chat.telegram_id
         )
 
         if chat_credits > 0 or user_credits > 0:
-            model = get_default_model(ModelType.TEXT, ModelTier.STANDARD)
-            tier = ModelTier.STANDARD
+            model_key = GoogleModelKey.CHAT_STANDARD
         else:
-            model = get_default_model(ModelType.TEXT, ModelTier.CHEAP)
-            tier = ModelTier.CHEAP
+            model_key = GoogleModelKey.CHAT_ECONOMY
 
-        context_limit = CONTEXT_LIMITS[tier]
+        plan = plan_execution(Feature.CHAT, model_key)
+        history_window = HISTORY_WINDOWS[plan.model.key]
 
         logfire.debug(
             "orchestrator_config",
-            tier=tier.value,
-            model=model.id,
-            context_limit=context_limit,
+            model_key=plan.model.key.value,
+            model=plan.model.provider_model_id,
+            history_max_turns=history_window.max_turns,
+            history_max_tokens=history_window.max_tokens,
             chat_credits=chat_credits,
             user_credits=user_credits,
         )
 
-        return tier, model.id, context_limit
+        return plan, history_window
 
     async def check_tool_access(
         self,
         user: User,
         chat: Chat,
         tool_name: str,
-        model_id: str | None = None,
+        *,
+        arguments: Mapping[str, object] | None = None,
     ) -> CreditCheckResult:
         """Check if a tool can be used, considering credits and daily limits.
 
@@ -128,23 +118,15 @@ class CreditService:
             user: Database User model.
             chat: Database Chat model.
             tool_name: Name of the tool to check.
-            model_id: Optional specific model to use (defaults to tool's default).
+            arguments: Validated tool arguments used for model variants.
 
         Returns:
             CreditCheckResult with access decision and details.
         """
         tool = get_tool(tool_name)
-
-        # Resolve model
-        if model_id:
-            model = get_model(model_id)
-        elif tool.default_model_id:
-            model = get_model(tool.default_model_id)
-        else:
-            # Use default for the tool's model type
-            model = get_default_model(tool.model_type, ModelTier.STANDARD)
-
-        total_cost = tool.total_cost(model.credit_cost)
+        resolved_arguments = arguments or {}
+        plan = tool.resolve_plan(resolved_arguments)
+        total_cost = tool.total_cost(tool.model_credit_cost(plan, resolved_arguments))
 
         # Get balances
         chat_credits, user_credits = await get_balances(
@@ -157,20 +139,29 @@ class CreditService:
             if used < tool.free_daily_limit:
                 return CreditCheckResult(
                     allowed=True,
-                    tier=model.tier,
-                    model_id=model.id,
+                    plan=plan,
                     source="free",
                     credits_to_deduct=0,
                     credits_remaining=None,
                     free_remaining=tool.free_daily_limit - used - 1,
                 )
 
+        if total_cost == 0:
+            return CreditCheckResult(
+                allowed=False,
+                plan=plan,
+                source="rejected",
+                credits_to_deduct=0,
+                credits_remaining=None,
+                free_remaining=0,
+                reject_reason=f"Daily limit reached for {tool.name}",
+            )
+
         # Check chat credits
         if chat_credits >= total_cost:
             return CreditCheckResult(
                 allowed=True,
-                tier=model.tier,
-                model_id=model.id,
+                plan=plan,
                 source="chat",
                 credits_to_deduct=total_cost,
                 credits_remaining=chat_credits - total_cost,
@@ -181,8 +172,7 @@ class CreditService:
         if user_credits >= total_cost:
             return CreditCheckResult(
                 allowed=True,
-                tier=model.tier,
-                model_id=model.id,
+                plan=plan,
                 source="user",
                 credits_to_deduct=total_cost,
                 credits_remaining=user_credits - total_cost,
@@ -192,8 +182,7 @@ class CreditService:
         # Rejected
         return CreditCheckResult(
             allowed=False,
-            tier=model.tier,
-            model_id=model.id,
+            plan=plan,
             source="rejected",
             credits_to_deduct=0,
             credits_remaining=0,
@@ -224,6 +213,16 @@ class CreditService:
             idempotency_key: Optional key to prevent duplicate charges.
             metadata: Optional additional context.
         """
+        if not result.allowed:
+            raise ValueError("Cannot deduct a rejected credit check")
+        tool = get_tool(tool_name)
+        if (result.plan is None) != (tool.feature is None):
+            raise ValueError(f"{tool_name} received an incompatible execution plan")
+        if result.plan and result.plan.feature is not tool.feature:
+            raise ValueError(
+                f"{result.plan.feature.value} cannot settle as {tool_name}"
+            )
+
         # Check idempotency
         if idempotency_key:
             existing = await get_transaction_by_idempotency_key(
@@ -307,7 +306,7 @@ class CreditService:
         if existing:
             logfire.info(
                 "purchase_skipped_duplicate",
-                telegram_charge_id=telegram_charge_id,
+                charge_fingerprint=telemetry_fingerprint(telegram_charge_id),
             )
             # Return the balance from the existing transaction
             return existing.balance_after
@@ -370,14 +369,15 @@ class CreditService:
         )
         if not original:
             logfire.warn(
-                "refund_failed_not_found", telegram_charge_id=telegram_charge_id
+                "refund_failed_not_found",
+                charge_fingerprint=telemetry_fingerprint(telegram_charge_id),
             )
             return False
 
         if original.type != "purchase":
             logfire.warn(
                 "refund_failed_not_purchase",
-                telegram_charge_id=telegram_charge_id,
+                charge_fingerprint=telemetry_fingerprint(telegram_charge_id),
                 type=original.type,
             )
             return False
@@ -389,7 +389,8 @@ class CreditService:
         )
         if existing_refund:
             logfire.info(
-                "refund_already_processed", telegram_charge_id=telegram_charge_id
+                "refund_already_processed",
+                charge_fingerprint=telemetry_fingerprint(telegram_charge_id),
             )
             return True
 
@@ -415,7 +416,7 @@ class CreditService:
 
         logfire.info(
             "refund_processed",
-            telegram_charge_id=telegram_charge_id,
+            charge_fingerprint=telemetry_fingerprint(telegram_charge_id),
             amount=original.amount,
         )
         return True
@@ -433,5 +434,5 @@ def get_placeholder_message(tool_name: str, reject_reason: str) -> str:
 
     return (
         f"[TOOL_UNAVAILABLE: {tool.description} requires credits. "
-        f"{reject_reason}. Suggest the user purchase credits with /buy.]"
+        f"{reject_reason}. Do not suggest a purchase; credit purchases are unavailable.]"
     )

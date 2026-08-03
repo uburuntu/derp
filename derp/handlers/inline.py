@@ -1,7 +1,6 @@
-"""Inline query handler using Pydantic-AI.
+"""Telegram adapters for unlimited governed inline answers.
 
-This handler processes inline queries for quick AI responses,
-using the CHEAP tier for cost efficiency on high-volume queries.
+Consent, accounting, and execution live in the inline feature service.
 """
 
 from __future__ import annotations
@@ -9,7 +8,6 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-import logfire
 from aiogram import Bot, F, Router, html
 from aiogram.types import (
     ChosenInlineResult,
@@ -21,13 +19,23 @@ from aiogram.types import (
     InputTextMessageContent,
 )
 from aiogram.utils.i18n import gettext as _
-from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
 from derp.common.sender import MessageSender
 from derp.config import settings
-from derp.llm import ModelTier, create_inline_agent
+from derp.features.inline_chat import (
+    InlineChatCompleted,
+    InlineChatFailed,
+    InlineChatFailureReason,
+    InlineChatFeatureService,
+    InlineChatInvalid,
+    InlineChatInvocation,
+)
+from derp.inference.privacy import project_inference_privacy
+from derp.models import User as UserModel
+from derp.observability import report_exception
 
 router = Router(name="inline")
+_INLINE_REQUEST_NAMESPACE = uuid.UUID("a14fc0e4-cc5c-4d91-ae24-8aa260b680de")
 
 
 @router.inline_query(F.query == "")
@@ -36,10 +44,10 @@ async def inline_query_empty(query: InlineQuery) -> Any:
     result_id = str(uuid.uuid4())
     result = InlineQueryResultArticle(
         id=result_id,
-        title=_("🤖 Ask Derp"),
-        description=_("Start typing to get an AI-powered response."),
+        title=_("Ask Derp"),
+        description=_("Ask a question in this chat."),
         input_message_content=InputTextMessageContent(
-            message_text=html.italic(_("🤖 Please enter a prompt for Derp AI."))
+            message_text=html.italic(_("Type a question for Derp."))
         ),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -52,7 +60,7 @@ async def inline_query_empty(query: InlineQuery) -> Any:
             ]
         ),
     )
-    await query.answer([result], cache_time=300)
+    await query.answer([result], cache_time=300, is_personal=True)
 
 
 @router.inline_query(F.query != "")
@@ -63,13 +71,11 @@ async def inline_query_with_text(query: InlineQuery) -> Any:
 
     result = InlineQueryResultArticle(
         id=result_id,
-        title=_("🤖 Ask Derp"),
-        description=_("Get an AI-powered response for: {user_input}").format(
-            user_input=user_input
-        ),
+        title=_("Ask Derp"),
+        description=_("Ask Derp: {user_input}").format(user_input=user_input),
         input_message_content=InputTextMessageContent(
             message_text=html.italic(
-                _("🧠 Thinking about: {user_input}").format(user_input=user_input)
+                _("Derp is thinking about: {user_input}").format(user_input=user_input)
             )
         ),
         reply_markup=InlineKeyboardMarkup(
@@ -90,100 +96,161 @@ async def inline_query_with_text(query: InlineQuery) -> Any:
             start_parameter="start",
         ),
         cache_time=300,
+        is_personal=True,
     )
 
 
 @router.chosen_inline_result()
-async def chosen_inline_result(chosen_result: ChosenInlineResult, bot: Bot) -> None:
-    """Handle chosen inline results - generate and update with AI response.
-
-    Note: Inline results don't have a Message, so middleware can't inject sender.
-    We create MessageSender manually for inline message editing.
-    """
+async def chosen_inline_result(
+    chosen_result: ChosenInlineResult,
+    bot: Bot,
+    inline_chat_service: InlineChatFeatureService,
+    user_model: UserModel | None = None,
+) -> None:
+    """Translate one typed inline outcome into an edit of the chosen result."""
     if not chosen_result.inline_message_id:
         return
 
-    # Build prompt with user info
-    user_info = chosen_result.from_user.model_dump_json(
-        exclude_defaults=True, exclude_none=True, exclude_unset=True
-    )
-    prompt = f"User: {user_info}\nQuery: {chosen_result.query}"
-
-    # Create sender manually for inline editing (no Message available)
     sender = MessageSender(bot=bot, chat_id=0)  # chat_id unused for inline
-
-    try:
-        with logfire.span(
-            "inline_agent_run",
-            _tags=["agent", "inline"],
-            telegram_user_id=chosen_result.from_user.id,
-            query_length=len(chosen_result.query),
-        ):
-            # Use CHEAP tier for inline queries (high volume, low cost)
-            agent = create_inline_agent(ModelTier.CHEAP)
-            result = await agent.run(prompt)
-
-            if result.output:
-                response_text = (
-                    f"Prompt: {chosen_result.query}\n\nResponse:\n{result.output}"
-                )
-                await sender.edit_inline(
-                    chosen_result.inline_message_id,
-                    response_text,
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=_("Add Derp to your chat"),
-                                    url=f"https://t.me/{settings.bot_username}?startgroup=true",
-                                )
-                            ]
-                        ]
-                    ),
-                )
-                logfire.info("inline_response_sent", length=len(result.output))
-            else:
-                await sender.edit_inline(
-                    chosen_result.inline_message_id,
-                    _(
-                        "🤯 My circuits are a bit tangled. "
-                        "I couldn't generate a response."
-                    ),
-                )
-                logfire.warning("inline_empty_response")
-
-    except ModelHTTPError as exc:
-        if exc.status_code == 429:
-            logfire.warning(
-                "inline_rate_limited",
-                status_code=exc.status_code,
-                model=exc.model_name,
-            )
-            await sender.edit_inline(
-                chosen_result.inline_message_id,
-                _(
-                    "⏳ The AI service is overloaded right now.\n\n"
-                    "Please wait 30-60 seconds and try again."
-                ),
-            )
-        else:
-            logfire.exception("inline_model_http_error", status_code=exc.status_code)
-            await sender.edit_inline(
-                chosen_result.inline_message_id,
-                _("😅 Something went wrong. I couldn't process that."),
-            )
-    except UnexpectedModelBehavior:
-        logfire.warning("inline_unexpected_behavior")
+    if user_model is None:
         await sender.edit_inline(
             chosen_result.inline_message_id,
-            _(
-                "⏳ I'm getting too many requests right now. "
-                "Please try again in about 30 seconds."
+            _("I couldn't verify this request. Open Derp and try again."),
+            reply_markup=_start_personal_chat_markup(),
+        )
+        return
+    try:
+        request_id = _inline_request_id(
+            user_model.id,
+            chosen_result.result_id,
+            chosen_result.inline_message_id,
+        )
+    except TypeError, ValueError, AttributeError:
+        await sender.edit_inline(
+            chosen_result.inline_message_id,
+            _("I couldn't verify this request. Open Derp and try again."),
+            reply_markup=_start_personal_chat_markup(),
+        )
+        return
+    try:
+        outcome = await inline_chat_service.answer(
+            InlineChatInvocation(
+                request_id=request_id,
+                user_id=user_model.id,
+                query=chosen_result.query,
+                privacy=project_inference_privacy(user_model),
+            )
+        )
+    except Exception as exc:
+        report_exception(
+            "inline_handler_failed",
+            exception=exc,
+            telegram_user_id=chosen_result.from_user.id,
+        )
+        await sender.edit_inline(
+            chosen_result.inline_message_id,
+            _("I couldn't answer that here. Try again."),
+            reply_markup=_retry_inline_markup(),
+        )
+        return
+
+    if isinstance(outcome, InlineChatCompleted):
+        await sender.edit_inline(
+            chosen_result.inline_message_id,
+            outcome.text,
+            reply_markup=_add_to_chat_markup(),
+        )
+        return
+    if isinstance(outcome, InlineChatInvalid):
+        await sender.edit_inline(
+            chosen_result.inline_message_id,
+            _("That question is empty or too long. Shorten it and try again."),
+            reply_markup=_retry_inline_markup(),
+        )
+        return
+    if isinstance(outcome, InlineChatFailed):
+        await sender.edit_inline(
+            chosen_result.inline_message_id,
+            _inline_failure_text(outcome.reason),
+            reply_markup=(
+                _start_personal_chat_markup()
+                if outcome.reason
+                in {
+                    InlineChatFailureReason.ACCOUNTING_UNAVAILABLE,
+                    InlineChatFailureReason.FREE_MODE_REQUIRED,
+                }
+                else _retry_inline_markup()
             ),
         )
-    except Exception:
-        logfire.exception("inline_handler_failed")
-        await sender.edit_inline(
-            chosen_result.inline_message_id,
-            _("😅 Something went wrong. I couldn't process that."),
-        )
+        return
+    raise TypeError(f"unsupported inline outcome: {type(outcome).__name__}")
+
+
+def _inline_failure_text(reason: InlineChatFailureReason) -> str:
+    if reason is InlineChatFailureReason.FREE_MODE_REQUIRED:
+        return _("Enable free models in Derp settings, or use paid private chat.")
+    if reason is InlineChatFailureReason.ACCOUNTING_UNAVAILABLE:
+        return _("I couldn't verify this request. Open Derp and try again.")
+    if reason is InlineChatFailureReason.PROVIDER_TIMEOUT:
+        return _("That took too long. Try again.")
+    if reason is InlineChatFailureReason.PROVIDER_REJECTED:
+        return _("I couldn't answer that question. Try wording it differently.")
+    if reason is InlineChatFailureReason.UNUSABLE_OUTPUT:
+        return _("I couldn't produce a useful answer. Try wording it differently.")
+    return _("I couldn't answer that here. Try again.")
+
+
+def _inline_request_id(
+    user_id: uuid.UUID,
+    result_id: str,
+    inline_message_id: str,
+) -> uuid.UUID:
+    """Derive one opaque idempotency key per sent inline message."""
+    if not isinstance(user_id, uuid.UUID):
+        raise TypeError("user_id must be a UUID")
+    template_id = uuid.UUID(result_id)
+    if not isinstance(inline_message_id, str) or not inline_message_id.strip():
+        raise ValueError("inline_message_id must not be blank")
+    return uuid.uuid5(
+        _INLINE_REQUEST_NAMESPACE,
+        f"{user_id}:{template_id}:{inline_message_id}",
+    )
+
+
+def _add_to_chat_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_("Add Derp to your chat"),
+                    url=f"https://t.me/{settings.bot_username}?startgroup=true",
+                )
+            ]
+        ]
+    )
+
+
+def _start_personal_chat_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_("Start personal chat"),
+                    url=f"https://t.me/{settings.bot_username}?start=inline",
+                )
+            ]
+        ]
+    )
+
+
+def _retry_inline_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_("Ask another question"),
+                    switch_inline_query_current_chat="",
+                )
+            ]
+        ]
+    )

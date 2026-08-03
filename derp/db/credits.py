@@ -7,7 +7,6 @@ to prevent race conditions and double-spending.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING
 from uuid import UUID
 
 import logfire
@@ -18,56 +17,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.models import Chat, CreditTransaction, DailyUsage, User
 
-if TYPE_CHECKING:
-    pass
-
-
 # -----------------------------------------------------------------------------
 # Balance Queries
 # -----------------------------------------------------------------------------
 
 
-async def get_user_credits(session: AsyncSession, user_id: UUID) -> int:
-    """Get user's credit balance."""
-    result = await session.execute(select(User.credits).where(User.id == user_id))
-    return result.scalar_one_or_none() or 0
-
-
-async def get_chat_credits(session: AsyncSession, chat_id: UUID) -> int:
-    """Get chat's credit balance."""
-    result = await session.execute(select(Chat.credits).where(Chat.id == chat_id))
-    return result.scalar_one_or_none() or 0
-
-
 async def get_balances(
     session: AsyncSession,
     user_telegram_id: int,
-    chat_telegram_id: int,
+    chat_telegram_id: int | None,
 ) -> tuple[int, int]:
     """Get both chat and user credit balances.
 
     Returns:
         Tuple of (chat_credits, user_credits).
     """
-    # Single query to get both balances
-    user_credits = 0
-    chat_credits = 0
-
-    user_result = await session.execute(
-        select(User.id, User.credits).where(User.telegram_id == user_telegram_id)
+    user_credits = (
+        select(User.credits)
+        .where(User.telegram_id == user_telegram_id)
+        .scalar_subquery()
     )
-    user_row = user_result.one_or_none()
-    if user_row:
-        user_credits = user_row.credits
-
-    chat_result = await session.execute(
-        select(Chat.id, Chat.credits).where(Chat.telegram_id == chat_telegram_id)
+    chat_credits = (
+        select(Chat.credits)
+        .where(Chat.telegram_id == chat_telegram_id)
+        .scalar_subquery()
+        if chat_telegram_id is not None
+        else literal(0)
     )
-    chat_row = chat_result.one_or_none()
-    if chat_row:
-        chat_credits = chat_row.credits
 
-    return chat_credits, user_credits
+    result = await session.execute(
+        select(func.coalesce(chat_credits, 0), func.coalesce(user_credits, 0))
+    )
+    chat_balance, user_balance = result.one()
+    return chat_balance, user_balance
 
 
 # -----------------------------------------------------------------------------
@@ -425,18 +407,3 @@ async def get_transaction_by_idempotency_key(
         )
     )
     return result.scalar_one_or_none()
-
-
-async def get_user_transactions(
-    session: AsyncSession,
-    user_id: UUID,
-    limit: int = 50,
-) -> list[CreditTransaction]:
-    """Get recent transactions for a user."""
-    result = await session.execute(
-        select(CreditTransaction)
-        .where(CreditTransaction.user_id == user_id)
-        .order_by(CreditTransaction.created_at.desc())
-        .limit(limit)
-    )
-    return list(result.scalars().all())

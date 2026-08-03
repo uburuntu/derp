@@ -1,285 +1,291 @@
-"""Guardrail tests for credit system.
-
-These tests ensure:
-- Model pricing follows expected tier hierarchy
-- Credit costs are computed correctly from pricing
-- Tools require appropriate credits
-"""
+"""Guardrails for the shared Google model catalog and legacy credit checks."""
 
 from __future__ import annotations
 
-from derp.credits.models import (
-    MODEL_REGISTRY,
-    ModelConfig,
-    ModelTier,
-    ModelType,
+from dataclasses import FrozenInstanceError
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from derp.catalog import (
+    CATALOG_VERIFIED_ON,
+    GOOGLE_MODEL_CATALOG,
+    GOOGLE_PRICING_URL,
+    AudioPricing,
+    GoogleModelKey,
+    ImagePricing,
+    ModelCapability,
+    ModelLifecycle,
+    TokenPriceBand,
+    TokenPricing,
+    VideoPricing,
     calculate_credit_cost,
-    get_default_model,
+    get_google_model,
+    get_google_model_by_id,
+    get_openrouter_model,
 )
+from derp.credits import service as service_module
+from derp.credits.service import CreditService
 from derp.credits.tools import TOOL_REGISTRY, get_tool
+from derp.credits.types import CreditCheckResult
+from derp.execution import Feature, plan_execution
+from derp.llm.providers import create_model
+
+EXPECTED_MODELS = {
+    GoogleModelKey.CHAT_ECONOMY: "gemini-3.1-flash-lite",
+    GoogleModelKey.CHAT_STANDARD: "gemini-3.5-flash",
+    GoogleModelKey.CHAT_REASONING: "gemini-3.1-pro-preview",
+    GoogleModelKey.IMAGE: "gemini-3.1-flash-image",
+    GoogleModelKey.TTS: "gemini-3.1-flash-tts-preview",
+    GoogleModelKey.VIDEO_FAST: "veo-3.1-fast-generate-preview",
+    GoogleModelKey.VIDEO_STANDARD: "veo-3.1-generate-preview",
+}
 
 
-class TestModelPricingGuardrails:
-    """Ensure expensive models can't be used cheaply."""
+class TestGoogleModelCatalog:
+    def test_catalog_contains_only_current_product_models(self) -> None:
+        assert {
+            key: model.provider_model_id for key, model in GOOGLE_MODEL_CATALOG.items()
+        } == EXPECTED_MODELS
 
-    def test_all_models_have_positive_credit_cost(self) -> None:
-        """Every model must cost at least 1 credit."""
-        for model in MODEL_REGISTRY.values():
-            assert model.credit_cost >= 1, f"{model.id} has credit_cost < 1"
+    @pytest.mark.parametrize(
+        ("key", "provider_id"),
+        [
+            (key, EXPECTED_MODELS[key])
+            for key in (
+                GoogleModelKey.CHAT_ECONOMY,
+                GoogleModelKey.CHAT_STANDARD,
+                GoogleModelKey.CHAT_REASONING,
+                GoogleModelKey.IMAGE,
+            )
+        ],
+    )
+    def test_provider_factory_executes_catalog_model(
+        self, key: GoogleModelKey, provider_id: str
+    ) -> None:
+        assert create_model(get_google_model(key)).model_name == provider_id
 
-    def test_premium_costs_more_than_standard(self) -> None:
-        """Premium tier must cost significantly more than standard."""
-        premium = get_default_model(ModelType.TEXT, ModelTier.PREMIUM)
-        standard = get_default_model(ModelType.TEXT, ModelTier.STANDARD)
+    def test_reverse_lookup_returns_same_spec_object(self) -> None:
+        for model in GOOGLE_MODEL_CATALOG.values():
+            assert get_google_model_by_id(model.provider_model_id) is model
 
-        # Premium should be at least 3x standard
-        assert premium.credit_cost >= standard.credit_cost * 3, (
-            f"Premium ({premium.credit_cost}) should be >= 3x Standard ({standard.credit_cost})"
+    def test_catalog_and_specs_are_immutable(self) -> None:
+        model = get_google_model(GoogleModelKey.CHAT_STANDARD)
+        with pytest.raises(TypeError):
+            GOOGLE_MODEL_CATALOG[GoogleModelKey.CHAT_STANDARD] = model  # type: ignore[index]
+        with pytest.raises(FrozenInstanceError):
+            model.display_name = "changed"  # type: ignore[misc]
+
+    def test_catalog_has_a_durable_verification_date_and_sources(self) -> None:
+        assert CATALOG_VERIFIED_ON.isoformat() == "2026-07-20"
+        for model in GOOGLE_MODEL_CATALOG.values():
+            assert model.pricing_verified_on == CATALOG_VERIFIED_ON
+            assert model.documentation_url.startswith("https://ai.google.dev/")
+            assert model.pricing_url == GOOGLE_PRICING_URL
+
+    def test_retired_and_duplicate_models_are_absent(self) -> None:
+        provider_ids = {
+            model.provider_model_id for model in GOOGLE_MODEL_CATALOG.values()
+        }
+        assert "gemini-3-pro-preview" not in provider_ids
+        assert "gemini-2.5-flash" not in provider_ids
+        assert "gemini-2.5-flash-lite" not in provider_ids
+        assert "dall-e-3" not in provider_ids
+
+    def test_text_models_have_exact_limits_and_required_capabilities(self) -> None:
+        for key in (
+            GoogleModelKey.CHAT_ECONOMY,
+            GoogleModelKey.CHAT_STANDARD,
+            GoogleModelKey.CHAT_REASONING,
+        ):
+            model = get_google_model(key)
+            assert model.input_token_limit == 1_048_576
+            assert model.output_token_limit == 65_536
+            assert ModelCapability.TEXT_INPUT in model.capabilities
+            assert model.supports_tools
+            assert ModelCapability.THINKING in model.capabilities
+
+    def test_media_models_describe_text_inputs_and_veo_limits(self) -> None:
+        for key in (
+            GoogleModelKey.IMAGE,
+            GoogleModelKey.TTS,
+            GoogleModelKey.VIDEO_FAST,
+            GoogleModelKey.VIDEO_STANDARD,
+        ):
+            assert ModelCapability.TEXT_INPUT in get_google_model(key).capabilities
+        for key in (GoogleModelKey.VIDEO_FAST, GoogleModelKey.VIDEO_STANDARD):
+            model = get_google_model(key)
+            assert model.input_token_limit == 1_024
+            assert model.output_token_limit is None
+
+    def test_only_current_preview_models_are_marked_preview(self) -> None:
+        preview_keys = {
+            model.key
+            for model in GOOGLE_MODEL_CATALOG.values()
+            if model.lifecycle is ModelLifecycle.PREVIEW
+        }
+        assert preview_keys == {
+            GoogleModelKey.CHAT_REASONING,
+            GoogleModelKey.TTS,
+            GoogleModelKey.VIDEO_FAST,
+            GoogleModelKey.VIDEO_STANDARD,
+        }
+
+
+class TestCurrentPricing:
+    def test_text_prices_match_current_standard_paid_rates(self) -> None:
+        economy = get_google_model(GoogleModelKey.CHAT_ECONOMY).pricing
+        standard = get_google_model(GoogleModelKey.CHAT_STANDARD).pricing
+        reasoning = get_google_model(GoogleModelKey.CHAT_REASONING).pricing
+        assert isinstance(economy, TokenPricing)
+        assert isinstance(standard, TokenPricing)
+        assert isinstance(reasoning, TokenPricing)
+        assert (
+            economy.bands[0].input_per_million,
+            economy.bands[0].output_per_million,
+        ) == (
+            Decimal("0.25"),
+            Decimal("1.50"),
+        )
+        assert (
+            standard.bands[0].input_per_million,
+            standard.bands[0].output_per_million,
+        ) == (
+            Decimal("1.50"),
+            Decimal("9.00"),
+        )
+        assert reasoning.bands == (
+            TokenPriceBand(Decimal("2.00"), Decimal("12.00"), 200_000),
+            TokenPriceBand(Decimal("4.00"), Decimal("18.00")),
         )
 
-    def test_standard_costs_more_than_cheap(self) -> None:
-        """Standard tier must cost more than cheap tier."""
-        standard = get_default_model(ModelType.TEXT, ModelTier.STANDARD)
-        cheap = get_default_model(ModelType.TEXT, ModelTier.CHEAP)
+    def test_reasoning_uses_long_context_band_above_200k(self) -> None:
+        pricing = get_google_model(GoogleModelKey.CHAT_REASONING).pricing
+        assert isinstance(pricing, TokenPricing)
+        short = pricing.estimate_usd(input_tokens=200_000, output_tokens=1_000)
+        long = pricing.estimate_usd(input_tokens=200_001, output_tokens=1_000)
+        assert short == Decimal("0.412")
+        assert long == Decimal("0.818004")
 
-        # Standard should be at least 2x cheap
-        assert standard.credit_cost >= cheap.credit_cost * 2, (
-            f"Standard ({standard.credit_cost}) should be >= 2x Cheap ({cheap.credit_cost})"
+    def test_image_price_is_explicit_for_default_1k_output(self) -> None:
+        pricing = get_google_model(GoogleModelKey.IMAGE).pricing
+        assert isinstance(pricing, ImagePricing)
+        assert pricing.estimate_usd(input_tokens=0) == Decimal("0.067")
+
+    def test_tts_price_uses_audio_tokens_per_second(self) -> None:
+        pricing = get_google_model(GoogleModelKey.TTS).pricing
+        assert isinstance(pricing, AudioPricing)
+        assert pricing.audio_tokens_per_second == 25
+        assert pricing.estimate_usd(input_tokens=0, output_seconds=30) == Decimal(
+            "0.015"
         )
 
-    def test_tier_hierarchy_for_text_models(self) -> None:
-        """Text models should follow CHEAP < STANDARD < PREMIUM."""
-        cheap = get_default_model(ModelType.TEXT, ModelTier.CHEAP)
-        standard = get_default_model(ModelType.TEXT, ModelTier.STANDARD)
-        premium = get_default_model(ModelType.TEXT, ModelTier.PREMIUM)
+    def test_veo_prices_are_per_generated_second(self) -> None:
+        fast = get_google_model(GoogleModelKey.VIDEO_FAST).pricing
+        standard = get_google_model(GoogleModelKey.VIDEO_STANDARD).pricing
+        assert isinstance(fast, VideoPricing)
+        assert isinstance(standard, VideoPricing)
+        assert fast.estimate_usd(duration_seconds=6) == Decimal("0.60")
+        assert standard.estimate_usd(duration_seconds=6) == Decimal("2.40")
+        assert fast.default_duration_seconds == 6
+        assert fast.supported_durations_seconds == frozenset({4, 6, 8})
 
-        assert cheap.credit_cost < standard.credit_cost < premium.credit_cost, (
-            f"Tier hierarchy violated: CHEAP({cheap.credit_cost}) < "
-            f"STANDARD({standard.credit_cost}) < PREMIUM({premium.credit_cost})"
-        )
+    def test_legacy_credit_estimates_round_up(self) -> None:
+        expected = {
+            GoogleModelKey.CHAT_ECONOMY: 5,
+            GoogleModelKey.CHAT_STANDARD: 30,
+            GoogleModelKey.CHAT_REASONING: 40,
+            GoogleModelKey.IMAGE: 98,
+            GoogleModelKey.TTS: 25,
+            GoogleModelKey.VIDEO_FAST: 858,
+            GoogleModelKey.VIDEO_STANDARD: 3429,
+        }
+        actual = {
+            key: (
+                calculate_credit_cost(
+                    get_google_model(key),
+                    audio_input_tokens=2_000,
+                    audio_output_seconds=30,
+                )
+                if key is GoogleModelKey.TTS
+                else calculate_credit_cost(get_google_model(key))
+            )
+            for key in expected
+        }
+        assert actual == expected
 
-    def test_credit_cost_reflects_actual_cost(self) -> None:
-        """Credit cost should match calculated cost from pricing (within tolerance)."""
-        for model in MODEL_REGISTRY.values():
-            calculated = calculate_credit_cost(model)
-            # Allow 20% tolerance for any manual adjustments
-            ratio = model.credit_cost / calculated if calculated > 0 else 1.0
-            assert 0.8 <= ratio <= 1.2, (
-                f"{model.id}: credit_cost={model.credit_cost}, calculated={calculated}"
+    def test_invalid_margin_fails_fast(self) -> None:
+        model = get_google_model(GoogleModelKey.CHAT_STANDARD)
+        with pytest.raises(ValueError, match="Margin"):
+            calculate_credit_cost(model, margin=Decimal("1"))
+
+    def test_pricing_types_reject_invalid_usage_and_configuration(self) -> None:
+        audio = get_google_model(GoogleModelKey.TTS).pricing
+        video = get_google_model(GoogleModelKey.VIDEO_FAST).pricing
+        assert isinstance(audio, AudioPricing)
+        assert isinstance(video, VideoPricing)
+        with pytest.raises(ValueError, match="duration"):
+            audio.estimate_usd(input_tokens=0, output_seconds=0)
+        with pytest.raises(ValueError, match="duration"):
+            video.estimate_usd(duration_seconds=0)
+        with pytest.raises(ValueError, match="final"):
+            TokenPricing(
+                bands=(
+                    TokenPriceBand(Decimal("1"), Decimal("1")),
+                    TokenPriceBand(Decimal("2"), Decimal("2")),
+                )
             )
 
-    def test_image_models_have_per_request_cost(self) -> None:
-        """Image models should have per-request cost (not token-based)."""
-        image_models = [
-            m for m in MODEL_REGISTRY.values() if m.model_type == ModelType.IMAGE
-        ]
-        for model in image_models:
-            # Either per_request_cost or token costs should be set
-            has_pricing = (
-                model.per_request_cost > 0
-                or model.input_cost_per_1m > 0
-                or model.output_cost_per_1m > 0
-            )
-            assert has_pricing, f"Image model {model.id} has no pricing"
 
-
-class TestModelRegistryCompleteness:
-    """Ensure registry has all required defaults."""
-
-    def test_text_tiers_have_defaults(self) -> None:
-        """All text tiers must have a default model."""
-        for tier in [ModelTier.CHEAP, ModelTier.STANDARD, ModelTier.PREMIUM]:
-            model = get_default_model(ModelType.TEXT, tier)
-            assert model is not None, f"No default text model for {tier}"
-            assert model.is_default, f"{model.id} not marked as default"
-
-    def test_image_has_default(self) -> None:
-        """Image generation must have a default model."""
-        model = get_default_model(ModelType.IMAGE, ModelTier.STANDARD)
-        assert model is not None, "No default image model"
-
-    def test_no_duplicate_defaults(self) -> None:
-        """Each type+tier combination should have exactly one default."""
-        defaults: dict[tuple[ModelType, ModelTier], list[str]] = {}
-        for model in MODEL_REGISTRY.values():
-            if model.is_default:
-                key = (model.model_type, model.tier)
-                defaults.setdefault(key, []).append(model.id)
-
-        for key, models in defaults.items():
-            assert len(models) == 1, f"Multiple defaults for {key}: {models}"
-
-
-class TestToolRegistryGuardrails:
-    """Ensure tools have sensible configurations."""
-
-    def test_all_tools_have_valid_model_type(self) -> None:
-        """Every tool must reference a valid model type."""
+class TestToolCatalogParity:
+    def test_every_tool_resolves_to_the_shared_catalog(self) -> None:
         for tool in TOOL_REGISTRY.values():
-            assert tool.model_type in ModelType, f"{tool.name} has invalid model_type"
+            plan = tool.resolve_plan({})
+            if plan is None:
+                assert tool.feature is None
+                continue
+            assert plan.feature is tool.feature
+            assert plan.model is get_openrouter_model(tool.model_key)
 
-    def test_premium_tools_flagged_correctly(self) -> None:
-        """Premium tools should have is_premium=True."""
-        for tool in TOOL_REGISTRY.values():
-            # If base_credit_cost > 0 and free_daily_limit == 0, should be premium
-            if tool.base_credit_cost > 0 and tool.free_daily_limit == 0:
-                assert tool.is_premium, (
-                    f"{tool.name} has cost but no free limit, should be is_premium=True"
-                )
+    def test_provider_free_tools_never_carry_model_cost(self) -> None:
+        for tool_name in ("web_search",):
+            tool = get_tool(tool_name)
+            assert tool.resolve_plan({}) is None
+            assert tool.model_credit_cost(None, {}) == 0
 
-    def test_free_tools_have_no_base_cost(self) -> None:
-        """Tools with high free limits shouldn't have base cost."""
-        for tool in TOOL_REGISTRY.values():
-            # If free_daily_limit is high (>10), base_credit_cost should be 0
-            if tool.free_daily_limit > 10:
-                assert tool.base_credit_cost == 0, (
-                    f"{tool.name} has high free limit ({tool.free_daily_limit}) "
-                    f"but charges {tool.base_credit_cost} credits"
-                )
-
-    def test_default_models_exist(self) -> None:
-        """If a tool specifies a default model, it must exist."""
-        for tool in TOOL_REGISTRY.values():
-            if tool.default_model_id:
-                assert tool.default_model_id in MODEL_REGISTRY, (
-                    f"{tool.name} references non-existent model {tool.default_model_id}"
-                )
-
-    def test_tool_model_type_matches_default(self) -> None:
-        """Default model type should match tool's model_type."""
-        for tool in TOOL_REGISTRY.values():
-            if tool.default_model_id:
-                model = MODEL_REGISTRY[tool.default_model_id]
-                assert model.model_type == tool.model_type, (
-                    f"{tool.name} has model_type={tool.model_type} but "
-                    f"default model {model.id} is {model.model_type}"
-                )
-
-
-class TestCreditCostCalculation:
-    """Test the credit cost calculation function."""
-
-    def test_zero_cost_returns_minimum(self) -> None:
-        """Models with zero pricing should still cost 1 credit."""
-        model = ModelConfig(
-            id="test-free",
-            provider="test",
-            display_name="Test Free",
-            model_type=ModelType.TEXT,
-            tier=ModelTier.CHEAP,
-            # No pricing set
-        )
-        assert model.credit_cost == 1
-
-    def test_expensive_model_costs_more(self) -> None:
-        """Higher API costs should result in higher credit costs."""
-        cheap = ModelConfig(
-            id="test-cheap",
-            provider="test",
-            display_name="Test Cheap",
-            model_type=ModelType.TEXT,
-            tier=ModelTier.CHEAP,
-            input_cost_per_1m=0,
-            output_cost_per_1m=0,
-            per_request_cost=0,
-        )
-        expensive = ModelConfig(
-            id="test-expensive",
-            provider="test",
-            display_name="Test Expensive",
-            model_type=ModelType.TEXT,
-            tier=ModelTier.PREMIUM,
-            input_cost_per_1m=10,
-            output_cost_per_1m=30,
-        )
-        assert expensive.credit_cost > cheap.credit_cost
-
-    def test_per_request_cost_factored_in(self) -> None:
-        """Per-request costs should be included in credit calculation."""
-        base = ModelConfig(
-            id="test-base",
-            provider="test",
-            display_name="Test Base",
-            model_type=ModelType.IMAGE,
-            tier=ModelTier.STANDARD,
-            per_request_cost=0,
-        )
-        with_cost = ModelConfig(
-            id="test-with-cost",
-            provider="test",
-            display_name="Test With Cost",
-            model_type=ModelType.IMAGE,
-            tier=ModelTier.STANDARD,
-            per_request_cost=100,  # $0.10 per request
-        )
-        assert with_cost.credit_cost > base.credit_cost
-
-
-class TestToolCostCalculation:
-    """Test tool total cost calculation."""
-
-    def test_total_cost_includes_model(self) -> None:
-        """Tool's total_cost should add base + model cost."""
+    def test_tool_total_cost_includes_current_catalog_estimate(self) -> None:
         tool = get_tool("image_generate")
-        model = MODEL_REGISTRY[tool.default_model_id]
+        plan = tool.resolve_plan({})
+        assert plan
+        model_cost = calculate_credit_cost(plan.model)
+        assert tool.total_cost(model_cost) == tool.base_credit_cost + model_cost
 
-        expected = tool.base_credit_cost + model.credit_cost
-        assert tool.total_cost(model.credit_cost) == expected
-
-    def test_free_tool_still_charges_model(self) -> None:
-        """Free tools (base_credit_cost=0) should still account for model cost."""
-        tool = get_tool("web_search")
-        assert tool.base_credit_cost == 0
-
-        # When used with a model that costs 5 credits
-        assert tool.total_cost(5) == 5
+    def test_paid_only_tools_are_marked_premium(self) -> None:
+        for tool in TOOL_REGISTRY.values():
+            if tool.base_credit_cost > 0 and tool.free_daily_limit == 0:
+                assert tool.is_premium
 
 
 class TestCreditCheckResult:
-    """Test CreditCheckResult type behavior."""
-
     def test_free_use_properties(self) -> None:
-        """Free tier uses should have correct properties."""
-        from derp.credits.types import CreditCheckResult
-
         result = CreditCheckResult(
             allowed=True,
-            tier=ModelTier.CHEAP,
-            model_id="test",
+            plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
             source="free",
             credits_to_deduct=0,
             credits_remaining=None,
-            free_remaining=5,
+            free_remaining=0,
         )
         assert result.is_free_use
         assert not result.is_paid
-        assert result.allowed
-
-    def test_paid_use_properties(self) -> None:
-        """Paid uses should have correct properties."""
-        from derp.credits.types import CreditCheckResult
-
-        result = CreditCheckResult(
-            allowed=True,
-            tier=ModelTier.STANDARD,
-            model_id="test",
-            source="chat",
-            credits_to_deduct=10,
-            credits_remaining=90,
-            free_remaining=None,
-        )
-        assert not result.is_free_use
-        assert result.is_paid
-        assert result.allowed
+        assert result.model_id == "google/gemini-3.1-flash-image"
+        assert result.require_plan().model is result.model
 
     def test_rejected_has_reason(self) -> None:
-        """Rejected results should have a reason."""
-        from derp.credits.types import CreditCheckResult
-
         result = CreditCheckResult(
             allowed=False,
-            tier=ModelTier.STANDARD,
-            model_id="test",
+            plan=plan_execution(Feature.TTS, GoogleModelKey.TTS),
             source="rejected",
             credits_to_deduct=0,
             credits_remaining=0,
@@ -289,27 +295,62 @@ class TestCreditCheckResult:
         assert not result.allowed
         assert result.reject_reason == "Not enough credits"
 
+    @pytest.mark.asyncio
+    async def test_deduction_rejects_illegal_result_and_feature_states(self) -> None:
+        service = CreditService(MagicMock())
+        user = MagicMock()
+        chat = MagicMock()
+        rejected = CreditCheckResult(
+            allowed=False,
+            plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
+            source="rejected",
+            credits_to_deduct=0,
+            credits_remaining=0,
+            free_remaining=0,
+            reject_reason="No access",
+        )
+        with pytest.raises(ValueError, match="rejected"):
+            await service.deduct(rejected, user, chat, "image_generate")
 
-class TestContextLimits:
-    """Test context limit configuration."""
+        image_generation = CreditCheckResult(
+            allowed=True,
+            plan=plan_execution(Feature.IMAGE_GENERATE, GoogleModelKey.IMAGE),
+            source="free",
+            credits_to_deduct=0,
+            credits_remaining=None,
+            free_remaining=0,
+        )
+        with pytest.raises(ValueError, match="cannot settle"):
+            await service.deduct(image_generation, user, chat, "image_edit")
 
-    def test_context_limits_defined(self) -> None:
-        """All tiers should have context limits defined."""
-        from derp.credits.service import CONTEXT_LIMITS
 
-        assert ModelTier.CHEAP in CONTEXT_LIMITS
-        assert ModelTier.STANDARD in CONTEXT_LIMITS
-        assert ModelTier.PREMIUM in CONTEXT_LIMITS
+@pytest.mark.asyncio
+async def test_provider_free_daily_limit_rejects_without_fake_model_charge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        service_module, "get_balances", AsyncMock(return_value=(100, 100))
+    )
+    monkeypatch.setattr(service_module, "get_daily_usage", AsyncMock(return_value=10))
+    result = await CreditService(MagicMock()).check_tool_access(
+        MagicMock(telegram_id=1, id="user"),
+        MagicMock(telegram_id=2, id="chat"),
+        "web_search",
+    )
 
-    def test_cheap_has_lower_context(self) -> None:
-        """Cheap tier should have lower context limit."""
-        from derp.credits.service import CONTEXT_LIMITS
+    assert not result.allowed
+    assert result.plan is None
+    assert result.model is None
+    assert result.credits_to_deduct == 0
+    assert result.reject_reason == "Daily limit reached for web_search"
 
-        assert CONTEXT_LIMITS[ModelTier.CHEAP] < CONTEXT_LIMITS[ModelTier.STANDARD]
 
-    def test_context_limits_positive(self) -> None:
-        """All context limits should be positive."""
-        from derp.credits.service import CONTEXT_LIMITS
+def test_history_windows_are_product_policy_for_chat_models() -> None:
+    from derp.history.service import HISTORY_WINDOWS
 
-        for tier, limit in CONTEXT_LIMITS.items():
-            assert limit > 0, f"{tier} has non-positive context limit: {limit}"
+    assert HISTORY_WINDOWS[GoogleModelKey.CHAT_ECONOMY].max_turns == 10
+    assert HISTORY_WINDOWS[GoogleModelKey.CHAT_STANDARD].max_turns == 100
+    assert HISTORY_WINDOWS[GoogleModelKey.CHAT_REASONING].max_turns == 100
+    assert HISTORY_WINDOWS[GoogleModelKey.CHAT_STANDARD].max_tokens > (
+        HISTORY_WINDOWS[GoogleModelKey.CHAT_ECONOMY].max_tokens
+    )

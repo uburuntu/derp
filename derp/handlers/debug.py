@@ -1,605 +1,242 @@
-"""Debug commands for admin-only production testing.
-
-These commands are thin proxies to real handlers to ensure production code paths
-are tested. They use reduced pricing (1 star) for safe payment testing.
-
-Only available to admins defined in settings.admin_ids.
-"""
+"""Operator-only durable one-Star purchase validation."""
 
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass
-from typing import Literal
+from typing import Final
 
 import logfire
-from aiogram import Bot, F, Router
+from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
+from aiogram.filters.callback_data import CallbackData
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    LabeledPrice,
     Message,
-    PreCheckoutQuery,
 )
 from aiogram.utils.i18n import gettext as _
-from pydantic import BaseModel, ConfigDict, Field
 
+from derp.billing import (
+    DEFAULT_PRODUCT_CATALOG,
+    PurchaseIntentService,
+    PurchaseTarget,
+)
+from derp.billing.telegram import PurchaseTargetCode, create_stars_invoice_link
 from derp.common.sender import MessageSender
-from derp.config import settings
-from derp.credits import CreditService, ModelTier
-from derp.db.credits import get_balances
-from derp.models import Chat as ChatModel
 from derp.models import User as UserModel
+from derp.observability import report_exception
+from derp.operator import OperatorOnlyFilter
+
+DEBUG_PURCHASE_COMMANDS: Final = ("debug_buy", "dbuy")
+RETIRED_DEBUG_COMMANDS: Final = (
+    "debug_credits",
+    "dcredits",
+    "debug_reset",
+    "dreset",
+    "debug_refund",
+    "drefund",
+    "debug_status",
+    "dstatus",
+    "debug_tools",
+    "dtools",
+    "debug_help",
+    "dhelp",
+)
+ALL_DEBUG_COMMANDS: Final = (*DEBUG_PURCHASE_COMMANDS, *RETIRED_DEBUG_COMMANDS)
 
 router = Router(name="debug")
+router.message.filter(OperatorOnlyFilter())
+router.callback_query.filter(OperatorOnlyFilter())
 
-# Only process messages from admins
-router.message.filter(
-    lambda msg: msg.from_user and msg.from_user.id in settings.admin_ids
-)
-router.callback_query.filter(lambda cb: cb.from_user.id in settings.admin_ids)
-
-
-# --- Debug Credit Packs (1 star each for testing) ---
-@dataclass(frozen=True, slots=True)
-class DebugCreditPack:
-    """A debug credit pack with minimal cost."""
-
-    id: str
-    name: str
-    stars: int  # Always 1 for testing
-    credits: int
+# This router must immediately follow ``router`` so unauthorized control input
+# is consumed before the conversational catch-all.
+rejection_router = Router(name="debug_rejection")
 
 
-DEBUG_PACKS: dict[str, DebugCreditPack] = {
-    "test_small": DebugCreditPack("test_small", "Test Small", 1, 10),
-    "test_medium": DebugCreditPack("test_medium", "Test Medium", 1, 50),
-    "test_large": DebugCreditPack("test_large", "Test Large", 1, 100),
-}
+class DebugPurchaseCallback(CallbackData, prefix="debug-buy"):
+    """Operator-only selector backed by immutable catalog terms."""
+
+    product_id: str
+    target: PurchaseTargetCode
 
 
-class DebugPayload(BaseModel):
-    """Validated payload for debug invoices."""
-
-    kind: Literal["debug_credits"] = Field(default="debug_credits", alias="k")
-    pack_id: str = Field(alias="p")
-    target_type: Literal["user", "chat"] = Field(alias="tt")
-    target_id: int = Field(alias="ti")
-
-    model_config = ConfigDict(populate_by_name=True)
-
-
-def _build_debug_buy_keyboard(chat_id: int | None = None) -> InlineKeyboardMarkup:
-    """Build inline keyboard with debug buy buttons."""
-    buttons = []
-
-    # User credits buttons
-    for pack in DEBUG_PACKS.values():
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text=f"👤 {pack.stars}⭐ → {pack.credits} credits (user)",
-                    callback_data=f"dbuy:{pack.id}:user",
-                )
-            ]
-        )
-
-    # Chat credits buttons (if in a chat)
-    if chat_id:
-        for pack in DEBUG_PACKS.values():
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        text=f"💬 {pack.stars}⭐ → {pack.credits} credits (chat)",
-                        callback_data=f"dbuy:{pack.id}:chat:{chat_id}",
-                    )
-                ]
-            )
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-@router.message(Command("debug_buy", "dbuy"))
+@router.message(Command(*DEBUG_PURCHASE_COMMANDS))
 async def debug_buy_command(
     message: Message,
     sender: MessageSender,
-    chat_model: ChatModel | None = None,
 ) -> Message:
-    """Show debug credit purchase options (1 star each).
-
-    Usage:
-    - /debug_buy - Shows test packs for both user and chat credits
-    """
-    chat_id = chat_model.telegram_id if chat_model else None
-
-    text = _(
-        "🛠 **Debug Buy Menu**\n\n"
-        "All packs cost 1⭐ for testing.\n"
-        "Choose user or chat credits:"
+    """Present the hidden one-Star product for safe live Stars validation."""
+    sender.protect_content = True
+    if (
+        message.chat.type != "private"
+        or message.from_user is None
+        or message.chat.id != message.from_user.id
+    ):
+        return await sender.reply(
+            _("Operator controls are private. Open /operator in your private chat.")
+        )
+    product = DEFAULT_PRODUCT_CATALOG.debug_top_up
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=_("Personal wallet · {stars} Star").format(stars=product.stars),
+                callback_data=DebugPurchaseCallback(
+                    product_id=product.id,
+                    target=PurchaseTargetCode.USER,
+                ).pack(),
+            )
+        ]
+    ]
+    return await sender.reply(
+        _(
+            "<b>Live Stars test</b>\n"
+            "{credits} test credits for {stars} Star. Uses the production "
+            "purchase and settlement flow."
+        ).format(credits=product.credits, stars=product.stars),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
-    return await sender.reply(
-        text,
-        reply_markup=_build_debug_buy_keyboard(chat_id),
+
+@router.callback_query(DebugPurchaseCallback.filter())
+async def handle_debug_buy_callback(
+    callback: CallbackQuery,
+    callback_data: DebugPurchaseCallback,
+    purchase_intents: PurchaseIntentService,
+    user_model: UserModel | None = None,
+) -> None:
+    """Create an opaque durable intent for the selected live wallet target."""
+    product = DEFAULT_PRODUCT_CATALOG.debug_top_up
+    if not isinstance(callback.message, Message) or not user_model:
+        return await callback.answer(_("Stars test unavailable"), show_alert=True)
+    if (
+        callback.message.chat.type != "private"
+        or callback.message.chat.id != callback.from_user.id
+    ):
+        return await callback.answer(
+            _("Operator controls are private. Open /operator in your private chat."),
+            show_alert=True,
+        )
+    if user_model.telegram_id != callback.from_user.id:
+        return await callback.answer(
+            _("Stars test identity changed"),
+            show_alert=True,
+        )
+    if callback_data.product_id != product.id:
+        return await callback.answer(
+            _("This option expired. Run /debug_buy again."),
+            show_alert=True,
+        )
+
+    if callback_data.target is PurchaseTargetCode.CHAT:
+        return await callback.answer(
+            _("This chat is unavailable"),
+            show_alert=True,
+        )
+    target = PurchaseTarget.user(user_model.id)
+
+    try:
+        handle = await purchase_intents.create_operator_debug_top_up_intent(
+            payer_user_id=user_model.id,
+            target=target,
+        )
+        invoice_link = await create_stars_invoice_link(
+            callback.bot,
+            handle,
+            business_connection_id=callback.message.business_connection_id,
+        )
+    except LookupError, ValueError:
+        return await callback.answer(
+            _("This Stars test is no longer available"),
+            show_alert=True,
+        )
+    except TelegramAPIError as exc:
+        report_exception(
+            "operator.debug_purchase_invoice_link_failed",
+            exception=exc,
+            level="warning",
+            product_id=product.id,
+            user_id=user_model.telegram_id,
+        )
+        return await callback.answer(
+            _("Telegram could not prepare the invoice. Try again."),
+            show_alert=True,
+        )
+
+    owner = _("this chat") if target.kind.value == "chat" else _("your wallet")
+    await callback.message.answer(
+        _(
+            "<b>{credits} test credits for {owner}</b>\n"
+            "Telegram shows the final {stars}-Star confirmation before charging."
+        ).format(
+            credits=handle.credits,
+            owner=owner,
+            stars=handle.stars,
+        ),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=_("Pay {stars} Star").format(stars=handle.stars),
+                        url=invoice_link,
+                    )
+                ]
+            ]
+        ),
+        protect_content=True,
+    )
+    await callback.answer(_("Invoice ready"))
+    logfire.info(
+        "operator.debug_purchase_intent_presented",
+        intent_id=str(handle.intent_id),
+        product_id=handle.product_id,
+        product_version=handle.product_version,
+        target=target.kind.value,
+        user_id=user_model.telegram_id,
     )
 
 
 @router.callback_query(F.data.startswith("dbuy:"))
-async def handle_debug_buy_callback(
-    callback: CallbackQuery,
-    bot: Bot,
-) -> None:
-    """Handle debug buy button press - create invoice with 1 star."""
-    if not callback.data or not callback.message:
-        return
-
-    parts = callback.data.split(":")
-    if len(parts) < 3:
-        await callback.answer("Invalid debug purchase request", show_alert=True)
-        return
-
-    pack_id = parts[1]
-    target_type = parts[2]
-
-    pack = DEBUG_PACKS.get(pack_id)
-    if not pack:
-        await callback.answer("Unknown debug pack", show_alert=True)
-        return
-
-    # Build payload
-    if target_type == "chat" and len(parts) >= 4:
-        target_id = int(parts[3])
-        payload = DebugPayload(
-            pack_id=pack_id,
-            target_type="chat",
-            target_id=target_id,
-        )
-        description = f"DEBUG: {pack.credits} credits for chat {target_id}"
-    else:
-        target_id = callback.from_user.id
-        payload = DebugPayload(
-            pack_id=pack_id,
-            target_type="user",
-            target_id=target_id,
-        )
-        description = f"DEBUG: {pack.credits} credits for user"
-
-    logfire.info(
-        "debug_invoice_created",
-        pack_id=pack_id,
-        target_type=target_type,
-        target_id=target_id,
-        user_id=callback.from_user.id,
+async def reject_legacy_debug_buy_callback(callback: CallbackQuery) -> None:
+    """Fail closed for legacy selectors that embedded commercial pack data."""
+    await callback.answer(
+        _("This option expired. Run /debug_buy again."),
+        show_alert=True,
     )
 
-    # Send invoice directly (1 star)
-    try:
-        await callback.message.answer_invoice(
-            title=f"🛠 Debug: {pack.name}",
-            description=description,
-            payload=payload.model_dump_json(by_alias=True, exclude_none=True),
-            currency="XTR",
-            prices=[LabeledPrice(label="Debug Credits", amount=pack.stars)],
-        )
-        await callback.answer()
-    except Exception:
-        logfire.exception("debug_invoice_failed", pack_id=pack_id)
-        await callback.answer("Failed to create invoice", show_alert=True)
 
-
-@router.pre_checkout_query(F.invoice_payload.contains('"k":"debug_credits"'))
-async def handle_debug_pre_checkout(pre_checkout: PreCheckoutQuery) -> None:
-    """Approve debug payment pre-checkout."""
-    logfire.info(
-        "debug_pre_checkout_ok",
-        payload=pre_checkout.invoice_payload,
-        total_amount=pre_checkout.total_amount,
-        user_id=pre_checkout.from_user.id,
-    )
-    await pre_checkout.answer(ok=True)
-
-
-@router.message(
-    F.successful_payment,
-    F.successful_payment.invoice_payload.contains('"k":"debug_credits"'),
-)
-async def handle_debug_successful_payment(
-    message: Message,
-    sender: MessageSender,
-    credit_service: CreditService,
-    user_model: UserModel | None = None,
-    chat_model: ChatModel | None = None,
-) -> None:
-    """Handle successful debug payment - add credits via real CreditService."""
-    if not message.successful_payment or not message.from_user:
-        return
-
-    payment = message.successful_payment
-
-    try:
-        payload = DebugPayload.model_validate_json(payment.invoice_payload)
-    except Exception:
-        logfire.exception(
-            "debug_payload_decode_failed", payload=payment.invoice_payload
-        )
-        await message.answer("❌ Failed to decode payment payload")
-        return
-
-    pack = DEBUG_PACKS.get(payload.pack_id)
-    if not pack:
-        logfire.error("debug_unknown_pack", pack_id=payload.pack_id)
-        await message.answer("❌ Unknown debug pack")
-        return
-
-    if not user_model:
-        logfire.error("debug_no_user", user_id=message.from_user.id)
-        await message.answer("❌ User not found")
-        return
-
-    try:
-        if payload.target_type == "chat" and chat_model:
-            new_balance = await credit_service.purchase_credits(
-                user_model,
-                chat_model,
-                pack.credits,
-                payment.telegram_payment_charge_id,
-                pack_name=f"DEBUG:{pack.name}",
-            )
-            await sender.send(
-                f"✅ **DEBUG Payment OK**\n\n"
-                f"Added **{pack.credits}** credits to chat.\n"
-                f"New chat balance: **{new_balance}** credits\n"
-                f"Charge ID: `{payment.telegram_payment_charge_id}`",
-            )
-        else:
-            new_balance = await credit_service.purchase_credits(
-                user_model,
-                None,
-                pack.credits,
-                payment.telegram_payment_charge_id,
-                pack_name=f"DEBUG:{pack.name}",
-            )
-            await sender.send(
-                f"✅ **DEBUG Payment OK**\n\n"
-                f"Added **{pack.credits}** credits to your account.\n"
-                f"New balance: **{new_balance}** credits\n"
-                f"Charge ID: `{payment.telegram_payment_charge_id}`",
-            )
-
-        logfire.info(
-            "debug_payment_processed",
-            pack_id=pack.id,
-            credits=pack.credits,
-            user_id=user_model.telegram_id,
-            target_type=payload.target_type,
-            charge_id=payment.telegram_payment_charge_id,
-        )
-
-    except Exception:
-        logfire.exception("debug_payment_processing_failed")
-        await sender.send(
-            f"❌ Payment processing failed.\n"
-            f"Charge ID: `{payment.telegram_payment_charge_id}`",
-        )
-
-
-@router.message(Command("debug_credits", "dcredits"))
-async def debug_add_credits(
-    message: Message,
-    sender: MessageSender,
-    credit_service: CreditService,
-    user_model: UserModel | None = None,
-    chat_model: ChatModel | None = None,
-) -> Message:
-    """Directly add credits without payment (for testing).
-
-    Usage:
-    - /debug_credits 100 - Add 100 credits to your account
-    - /debug_credits 100 chat - Add 100 credits to this chat
-    """
-    if not user_model:
-        return await message.reply("❌ User not found")
-
-    args = (message.text or "").split()[1:] if message.text else []
-    amount = 100  # Default
-    target = "user"
-
-    if args:
-        try:
-            amount = int(args[0])
-        except ValueError:
-            return await message.reply(
-                "❌ Invalid amount. Usage: /debug_credits <amount> [chat]"
-            )
-
-        if len(args) > 1 and args[1].lower() == "chat":
-            target = "chat"
-
-    if target == "chat" and not chat_model:
-        return await message.reply("❌ Not in a chat context")
-
-    fake_charge_id = f"debug-{int(time.time())}"
-
-    try:
-        if target == "chat" and chat_model:
-            new_balance = await credit_service.purchase_credits(
-                user_model,
-                chat_model,
-                amount,
-                fake_charge_id,
-                pack_name="DEBUG:manual",
-            )
-            logfire.info(
-                "debug_credits_added",
-                amount=amount,
-                target="chat",
-                chat_id=chat_model.telegram_id,
-                charge_id=fake_charge_id,
-            )
-            return await sender.reply(
-                f"✅ Added **{amount}** credits to chat.\n"
-                f"New balance: **{new_balance}**\n"
-                f"Charge ID: `{fake_charge_id}`",
-            )
-        else:
-            new_balance = await credit_service.purchase_credits(
-                user_model,
-                None,
-                amount,
-                fake_charge_id,
-                pack_name="DEBUG:manual",
-            )
-            logfire.info(
-                "debug_credits_added",
-                amount=amount,
-                target="user",
-                user_id=user_model.telegram_id,
-                charge_id=fake_charge_id,
-            )
-            return await sender.reply(
-                f"✅ Added **{amount}** credits to your account.\n"
-                f"New balance: **{new_balance}**\n"
-                f"Charge ID: `{fake_charge_id}`",
-            )
-    except Exception:
-        logfire.exception("debug_credits_failed")
-        return await message.reply("❌ Failed to add credits")
-
-
-@router.message(Command("debug_reset", "dreset"))
-async def debug_reset_credits(
-    message: Message,
-    sender: MessageSender,
-    credit_service: CreditService,
-    user_model: UserModel | None = None,
-    chat_model: ChatModel | None = None,
-) -> Message:
-    """Reset credits to 0 for testing.
-
-    Usage:
-    - /debug_reset - Reset your credits to 0
-    - /debug_reset chat - Reset chat credits to 0
-    """
-    if not user_model:
-        return await message.reply("❌ User not found")
-
-    args = (message.text or "").split()[1:] if message.text else []
-    target = "user"
-
-    if args and args[0].lower() == "chat":
-        target = "chat"
-
-    if target == "chat" and not chat_model:
-        return await message.reply("❌ Not in a chat context")
-
-    # Get current balance first (use credit_service.session for raw query)
-    if target == "chat" and chat_model:
-        chat_credits, _ = await get_balances(
-            credit_service.session, user_model.telegram_id, chat_model.telegram_id
-        )
-        if chat_credits > 0:
-            fake_charge_id = f"debug-reset-{int(time.time())}"
-            await credit_service.purchase_credits(
-                user_model,
-                chat_model,
-                -chat_credits,  # Negative to subtract
-                fake_charge_id,
-                pack_name="DEBUG:reset",
-            )
-        logfire.info(
-            "debug_credits_reset",
-            target="chat",
-            chat_id=chat_model.telegram_id,
-            previous_balance=chat_credits,
-        )
-        return await sender.reply(
-            f"✅ Chat credits reset.\nPrevious: **{chat_credits}** → Now: **0**",
-        )
-    else:
-        _, user_credits = await get_balances(
-            credit_service.session, user_model.telegram_id, None
-        )
-        if user_credits > 0:
-            fake_charge_id = f"debug-reset-{int(time.time())}"
-            await credit_service.purchase_credits(
-                user_model,
-                None,
-                -user_credits,
-                fake_charge_id,
-                pack_name="DEBUG:reset",
-            )
-        logfire.info(
-            "debug_credits_reset",
-            target="user",
-            user_id=user_model.telegram_id,
-            previous_balance=user_credits,
-        )
-        return await sender.reply(
-            f"✅ Your credits reset.\nPrevious: **{user_credits}** → Now: **0**",
-        )
-
-
-@router.message(Command("debug_status", "dstatus"))
-async def debug_status(
-    message: Message,
-    sender: MessageSender,
-    credit_service: CreditService,
-    user_model: UserModel | None = None,
-    chat_model: ChatModel | None = None,
-) -> Message:
-    """Show detailed debug status for credits and tier detection.
-
-    Usage:
-    - /debug_status - Show full diagnostic info
-    """
-    if not user_model:
-        return await message.reply("❌ User not found")
-
-    # Get balances
-    chat_id = chat_model.telegram_id if chat_model else None
-    chat_credits, user_credits = await get_balances(
-        credit_service.session, user_model.telegram_id, chat_id
-    )
-
-    # Get orchestrator config (requires both models for the new API)
-    if chat_model:
-        tier, model_id, context_limit = await credit_service.get_orchestrator_config(
-            user_model, chat_model
-        )
-    else:
-        # No chat model, use defaults
-        tier = ModelTier.CHEAP if user_credits == 0 else ModelTier.STANDARD
-        model_id = "default"
-        context_limit = 10 if tier == ModelTier.CHEAP else 100
-
-    # Build status report
-    lines = [
-        "🛠 **Debug Status**\n",
-        f"**User ID:** `{user_model.telegram_id}`",
-        f"**User DB ID:** `{user_model.id}`",
-        f"**User Credits:** {user_credits}",
-    ]
-
-    if chat_model:
-        lines.extend(
-            [
-                "",
-                f"**Chat ID:** `{chat_model.telegram_id}`",
-                f"**Chat DB ID:** `{chat_model.id}`",
-                f"**Chat Credits:** {chat_credits}",
-                f"**Chat Memory:** {len(chat_model.llm_memory or '')} chars",
-            ]
-        )
-
-    lines.extend(
-        [
-            "",
-            "**Tier Detection:**",
-            f"• Tier: `{tier.value}`",
-            f"• Model: `{model_id}`",
-            f"• Context Limit: {context_limit} messages",
-            "",
-            f"**Is Paid Tier:** {'✅ Yes' if (chat_credits + user_credits) > 0 else '❌ No (free)'}",
-            f"**Premium Tools:** {'✅ Available' if tier != ModelTier.CHEAP else '❌ Not available'}",
-        ]
-    )
-
-    logfire.info(
-        "debug_status_shown",
-        user_id=user_model.telegram_id,
-        chat_id=chat_id,
-        tier=tier.value,
-        user_credits=user_credits,
-        chat_credits=chat_credits,
-    )
-
-    return await sender.reply("\n".join(lines))
-
-
-@router.message(Command("debug_refund", "drefund"))
-async def debug_refund(
-    message: Message,
-    sender: MessageSender,
-    credit_service: CreditService,
-) -> Message:
-    """Test refund flow with a charge ID.
-
-    Usage:
-    - /debug_refund <charge_id> - Attempt to refund a transaction
-    """
-    args = (message.text or "").split()[1:] if message.text else []
-    if not args:
-        return await message.reply(
-            "❌ Usage: /debug_refund <charge_id>\n\n"
-            "Get charge IDs from /debug_status or payment confirmations."
-        )
-
-    charge_id = args[0]
-
-    success = await credit_service.refund_credits(charge_id)
-
-    if success:
-        logfire.info("debug_refund_success", charge_id=charge_id)
-        return await sender.reply(
-            f"✅ Refund processed for `{charge_id}`",
-        )
-    else:
-        logfire.warn("debug_refund_failed", charge_id=charge_id)
-        return await sender.reply(
-            f"❌ Refund failed for `{charge_id}`\n"
-            f"Transaction not found or already refunded.",
-        )
-
-
-@router.message(Command("debug_tools", "dtools"))
-async def debug_tools(
-    message: Message,
+@router.message(Command(*RETIRED_DEBUG_COMMANDS))
+async def retired_debug_command(
+    _message: Message,
     sender: MessageSender,
 ) -> Message:
-    """List available tools with their credit costs.
-
-    Usage:
-    - /debug_tools - Show all tools and their pricing
-    """
-    from derp.credits.tools import TOOL_REGISTRY
-
-    lines = ["🛠 **Available Tools**\n"]
-
-    for tool_id, tool in TOOL_REGISTRY.items():
-        premium_badge = "💎" if tool.is_premium else "🆓"
-        lines.append(
-            f"{premium_badge} **{tool.name}** (`{tool_id}`)\n"
-            f"   Cost: {tool.base_credit_cost} credits | "
-            f"Free daily: {tool.free_daily_limit}\n"
-            f"   {tool.description}"
-        )
-
-    return await sender.reply("\n".join(lines))
+    """Redirect retired, non-authoritative controls to the operator console."""
+    return await sender.reply(_("Use /operator for diagnostics and controls."))
 
 
-@router.message(Command("debug_help", "dhelp"))
-async def debug_help(
-    message: Message,
-    sender: MessageSender,
-) -> Message:
-    """Show all debug commands.
+@rejection_router.message(Command(*ALL_DEBUG_COMMANDS))
+async def reject_unauthorized_debug_command(_message: Message) -> None:
+    """Consume unauthorized debug commands without disclosing operator access."""
 
-    Usage:
-    - /debug_help - Show this help
-    """
-    help_text = _(
-        "🛠 **Debug Commands** (admin only)\n\n"
-        "**Payment Testing:**\n"
-        "• /debug_buy - Buy credits with 1⭐ test packs\n"
-        "• /debug_credits <n> [chat] - Add credits directly\n"
-        "• /debug_reset [chat] - Reset credits to 0\n"
-        "• /debug_refund <charge_id> - Test refund flow\n\n"
-        "**Diagnostics:**\n"
-        "• /debug_status - Show tier, balances, model config\n"
-        "• /debug_tools - List tools with pricing\n"
-        "• /debug_help - This help message"
-    )
 
-    return await sender.reply(help_text)
+@rejection_router.callback_query(F.data.startswith("debug-buy:"))
+@rejection_router.callback_query(F.data.startswith("dbuy:"))
+async def reject_unauthorized_debug_callback(callback: CallbackQuery) -> None:
+    """Clear unauthorized or malformed debug callback spinners."""
+    await callback.answer(_("This action is unavailable"), show_alert=True)
+
+
+__all__ = [
+    "ALL_DEBUG_COMMANDS",
+    "DEBUG_PURCHASE_COMMANDS",
+    "RETIRED_DEBUG_COMMANDS",
+    "DebugPurchaseCallback",
+    "debug_buy_command",
+    "handle_debug_buy_callback",
+    "rejection_router",
+    "reject_legacy_debug_buy_callback",
+    "reject_unauthorized_debug_callback",
+    "reject_unauthorized_debug_command",
+    "retired_debug_command",
+    "router",
+]

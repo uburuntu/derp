@@ -8,10 +8,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from derp.models import Chat, Message, User
+
+pytestmark = pytest.mark.database
 
 
 class TestUserModel:
@@ -90,33 +92,31 @@ class TestUserModel:
         assert user.display_name == "Bob Smith"
 
     @pytest.mark.asyncio
-    async def test_user_telegram_id_unique(self, db_session_committed):
+    async def test_user_telegram_id_unique(self, db_session):
         """telegram_id must be unique."""
         user1 = User(telegram_id=100, is_bot=False, first_name="First")
-        db_session_committed.add(user1)
-        await db_session_committed.commit()
+        db_session.add(user1)
+        await db_session.commit()
 
         user2 = User(telegram_id=100, is_bot=False, first_name="Second")
-        db_session_committed.add(user2)
+        db_session.add(user2)
 
         with pytest.raises(IntegrityError):
-            await db_session_committed.commit()
+            await db_session.commit()
 
     @pytest.mark.asyncio
     async def test_user_timestamps_auto_set(self, db_session):
         """created_at and updated_at should be auto-set."""
-        before = datetime.now(UTC)
-
         user = User(telegram_id=6, is_bot=False, first_name="Timestamp")
         db_session.add(user)
         await db_session.flush()
 
-        after = datetime.now(UTC)
+        database_now = await db_session.scalar(select(func.now()))
 
         assert user.created_at is not None
         assert user.updated_at is not None
-        # Timestamps should be between before and after
-        assert before <= user.created_at.replace(tzinfo=UTC) <= after
+        assert user.created_at == database_now
+        assert user.updated_at == database_now
 
 
 class TestChatModel:
@@ -136,6 +136,12 @@ class TestChatModel:
         assert chat.id is not None
         assert chat.type == "supergroup"
         assert chat.title == "Test Group"
+        assert chat.ambient_history_enabled is False
+        assert chat.context_notice_version == 0
+        assert chat.retention_days == 30
+        assert chat.shared_facts_member_edit is False
+        assert chat.shared_credit_spending_enabled is True
+        assert chat.expensive_tools_enabled is True
 
     @pytest.mark.asyncio
     async def test_create_private_chat(self, db_session):
@@ -206,31 +212,30 @@ class TestChatModel:
         assert chat.display_name == str(-1003333333333)
 
     @pytest.mark.asyncio
-    async def test_chat_llm_memory_max_length(self, db_session_committed):
-        """llm_memory should enforce 1024 character limit."""
+    async def test_chat_policy_constraints(self, db_session):
         chat = Chat(
-            telegram_id=-1004444444444,
+            telegram_id=-1004444444445,
             type="supergroup",
-            title="Memory Limit Test",
-            llm_memory="x" * 1025,  # Over limit
+            retention_days=14,
+            admin_policy="x" * 2049,
         )
-        db_session_committed.add(chat)
+        db_session.add(chat)
 
         with pytest.raises(IntegrityError):
-            await db_session_committed.commit()
+            await db_session.commit()
 
     @pytest.mark.asyncio
-    async def test_chat_telegram_id_unique(self, db_session_committed):
+    async def test_chat_telegram_id_unique(self, db_session):
         """telegram_id must be unique."""
         chat1 = Chat(telegram_id=-1005555555555, type="group", title="First")
-        db_session_committed.add(chat1)
-        await db_session_committed.commit()
+        db_session.add(chat1)
+        await db_session.commit()
 
         chat2 = Chat(telegram_id=-1005555555555, type="group", title="Second")
-        db_session_committed.add(chat2)
+        db_session.add(chat2)
 
         with pytest.raises(IntegrityError):
-            await db_session_committed.commit()
+            await db_session.commit()
 
 
 class TestMessageModel:
@@ -345,14 +350,14 @@ class TestMessageModel:
         assert message2.message_key == f"{chat.id}:789:456"
 
     @pytest.mark.asyncio
-    async def test_message_unique_constraint(self, db_session_committed):
+    async def test_message_unique_constraint(self, db_session):
         """Should enforce unique (chat_id, telegram_message_id)."""
-        # Create entities directly in the committed session
+        # Commit through the savepoint-backed test session.
         chat = Chat(telegram_id=-1001010101010, type="supergroup", title="Test")
         user = User(telegram_id=10101010, is_bot=False, first_name="Test")
-        db_session_committed.add(chat)
-        db_session_committed.add(user)
-        await db_session_committed.commit()
+        db_session.add(chat)
+        db_session.add(user)
+        await db_session.commit()
 
         message1 = Message(
             chat_id=chat.id,
@@ -363,8 +368,8 @@ class TestMessageModel:
             text="First",
             telegram_date=datetime.now(UTC),
         )
-        db_session_committed.add(message1)
-        await db_session_committed.commit()
+        db_session.add(message1)
+        await db_session.commit()
 
         message2 = Message(
             chat_id=chat.id,
@@ -375,10 +380,29 @@ class TestMessageModel:
             text="Duplicate",
             telegram_date=datetime.now(UTC),
         )
-        db_session_committed.add(message2)
+        db_session.add(message2)
 
         with pytest.raises(IntegrityError):
-            await db_session_committed.commit()
+            await db_session.commit()
+
+    @pytest.mark.asyncio
+    async def test_message_projection_invariants(self, db_session, chat_factory):
+        chat = await chat_factory(telegram_id=-1009876543210)
+        message = Message(
+            chat_id=chat.id,
+            telegram_message_id=999,
+            direction="in",
+            role="system",
+            capture_kind="unknown",
+            source_schema_version=0,
+            content_type="text",
+            text="invalid",
+            telegram_date=datetime.now(UTC),
+        )
+        db_session.add(message)
+
+        with pytest.raises(IntegrityError):
+            await db_session.commit()
 
 
 class TestModelRelationships:

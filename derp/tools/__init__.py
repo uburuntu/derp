@@ -1,28 +1,37 @@
 """Tools for Pydantic-AI agents.
 
-This module provides tools that can be attached to agents via FunctionToolset.
-All premium tools are wrapped with @credit_aware_tool for automatic
-access checking and credit deduction.
+Concrete tools are exposed lazily so importing tool policy does not initialize
+the agent and provider graph.
 """
 
-from derp.tools.chat_memory import update_chat_memory
-from derp.tools.gemini_image import generate_image
-from derp.tools.gemini_think import think_deep
-from derp.tools.toolsets import create_chat_toolset, create_free_toolset
-from derp.tools.web_search import web_search
-from derp.tools.wrapper import credit_aware_tool, get_tool_cost, is_premium_tool
+from typing import Any
 
 __all__ = [
-    # Tool functions
-    "update_chat_memory",
     "web_search",
     "generate_image",
-    "think_deep",
-    # Toolset factories
     "create_chat_toolset",
-    "create_free_toolset",
-    # Wrapper utilities
     "credit_aware_tool",
-    "is_premium_tool",
-    "get_tool_cost",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve compatibility exports without creating import cycles."""
+    match name:
+        case "web_search":
+            from derp.tools.web_search import web_search
+
+            return web_search
+        case "generate_image":
+            from derp.tools.gemini_image import generate_image
+
+            return generate_image
+        case "create_chat_toolset":
+            from derp.tools.toolsets import create_chat_toolset
+
+            return create_chat_toolset
+        case "credit_aware_tool":
+            from derp.tools.wrapper import credit_aware_tool
+
+            return credit_aware_tool
+        case _:
+            raise AttributeError(name)

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Self
 
 import logfire
@@ -86,7 +86,7 @@ def _filename_from_mime(mime_type: str, idx: int = 1, prefix: str = "file") -> s
     return f"{prefix}_{idx}.bin"
 
 
-class MediaType(str, Enum):
+class MediaType(StrEnum):
     """Supported media types for sending."""
 
     PHOTO = "photo"
@@ -674,6 +674,7 @@ class MessageSender:
                     parse_mode="HTML",
                     reply_markup=reply_markup if is_last else None,
                     disable_notification=self.disable_notification,
+                    protect_content=self.protect_content,
                 )
             else:
                 last_message = await self._send_single_message(

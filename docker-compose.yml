@@ -1,11 +1,54 @@
 services:
+  db:
+    image: postgres:18.4-alpine3.24@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    container_name: derp-postgres
+    environment:
+      POSTGRES_DB: derp
+      POSTGRES_USER: derp
+      POSTGRES_PASSWORD: derp
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data-v18:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U derp -d derp"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+  db-test:
+    image: postgres:18.4-alpine3.24@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    container_name: derp-postgres-test
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: derp_test
+      POSTGRES_USER: derp_test
+      POSTGRES_PASSWORD: derp_test
+    ports:
+      - "127.0.0.1:5433:5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U derp_test -d derp_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
   bot:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: derp-bot
     env_file:
-      - .env.prod
+      - path: .env
+        required: false
     environment:
-      - IS_DOCKER=true
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql+asyncpg://derp:derp@db:5432/derp}
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  postgres-data-v18:

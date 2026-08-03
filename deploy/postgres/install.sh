@@ -8,8 +8,10 @@ set -euo pipefail
 # Re-runnable: Yes - safely updates config on existing installations
 #
 # Usage:
-#   sudo ./install.sh                    # Install or reconfigure
-#   sudo ./install.sh --public           # Enable public access
+#   sudo ./install.sh                    # Loopback-only (default)
+#   sudo ./install.sh --remote-cidr 10.0.0.0/24 --listen 10.0.0.5 \
+#       --ssl-cert /etc/postgresql/tls/server.crt \
+#       --ssl-key /etc/postgresql/tls/server.key
 #   sudo ./install.sh --yes              # Skip confirmation
 #   sudo ./install.sh --fix              # Fix common issues only
 # =============================================================================
@@ -17,8 +19,12 @@ set -euo pipefail
 # Default Configuration
 PG_VERSION="${PG_VERSION:-18}"
 PG_PORT="${PG_PORT:-5432}"
-PG_ENABLE_REMOTE="${PG_ENABLE_REMOTE:-true}"
+PG_ENABLE_REMOTE="${PG_ENABLE_REMOTE:-false}"
 PG_PUBLIC_HOST="${PG_PUBLIC_HOST:-}"
+PG_REMOTE_CIDR="${PG_REMOTE_CIDR:-}"
+PG_LISTEN_ADDRESSES="${PG_LISTEN_ADDRESSES:-localhost}"
+PG_SSL_CERT_FILE="${PG_SSL_CERT_FILE:-}"
+PG_SSL_KEY_FILE="${PG_SSL_KEY_FILE:-}"
 PG_DATA_DIR="/var/lib/postgresql"
 PG_BACKUP_DIR="/var/backups/postgresql"
 PG_LOG_DIR="/var/log/postgresql"
@@ -43,7 +49,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --public) PG_ENABLE_REMOTE="true"; shift ;;
+        --remote-cidr) PG_ENABLE_REMOTE="true"; PG_REMOTE_CIDR="$2"; shift 2 ;;
+        --listen) PG_LISTEN_ADDRESSES="$2"; shift 2 ;;
+        --ssl-cert) PG_SSL_CERT_FILE="$2"; shift 2 ;;
+        --ssl-key) PG_SSL_KEY_FILE="$2"; shift 2 ;;
         --yes|-y) SKIP_CONFIRM=true; shift ;;
         --fix) FIX_ONLY=true; SKIP_CONFIRM=true; shift ;;
         --version) PG_VERSION="$2"; shift 2 ;;
@@ -52,7 +61,10 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: sudo ./install.sh [options]"
             echo ""
             echo "Options:"
-            echo "  --public     Enable remote access"
+            echo "  --remote-cidr CIDR  Enable TLS-only access from one restricted CIDR"
+            echo "  --listen ADDRESS    Explicit private interface (default: localhost)"
+            echo "  --ssl-cert PATH     Trusted server certificate for remote access"
+            echo "  --ssl-key PATH      Private key for the server certificate"
             echo "  --yes, -y    Skip confirmation prompts"
             echo "  --fix        Fix common issues only (no reinstall)"
             echo "  --version V  PostgreSQL version (default: 18)"
@@ -62,6 +74,33 @@ while [[ $# -gt 0 ]]; do
         *) log_error "Unknown option: $1"; exit 1 ;;
     esac
 done
+
+if [[ "$PG_ENABLE_REMOTE" == "true" ]]; then
+    if [[ -z "$PG_REMOTE_CIDR" || "$PG_REMOTE_CIDR" == "0.0.0.0/0" || "$PG_REMOTE_CIDR" == "::/0" ]]; then
+        log_error "Remote access requires a restricted --remote-cidr"
+        exit 1
+    fi
+    if [[ -z "$PG_LISTEN_ADDRESSES" || "$PG_LISTEN_ADDRESSES" == "*" || "$PG_LISTEN_ADDRESSES" == "0.0.0.0" || "$PG_LISTEN_ADDRESSES" == "::" ]]; then
+        log_error "Remote access requires an explicit private --listen address"
+        exit 1
+    fi
+    if [[ ! "$PG_LISTEN_ADDRESSES" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|127\.|localhost$|::1$|[fF][cCdD]) ]]; then
+        log_error "Remote --listen must name a loopback or private-network interface"
+        exit 1
+    fi
+    if [[ -z "$PG_SSL_CERT_FILE" || -z "$PG_SSL_KEY_FILE" ]]; then
+        log_error "Remote access requires --ssl-cert and --ssl-key"
+        exit 1
+    fi
+    if [[ ! -f "$PG_SSL_CERT_FILE" || ! -f "$PG_SSL_KEY_FILE" ]]; then
+        log_error "The configured TLS certificate and key must already exist"
+        exit 1
+    fi
+    if id postgres &>/dev/null && { ! runuser -u postgres -- test -r "$PG_SSL_CERT_FILE" || ! runuser -u postgres -- test -r "$PG_SSL_KEY_FILE"; }; then
+        log_error "The postgres user must be able to read the TLS certificate and key"
+        exit 1
+    fi
+fi
 
 # Pre-flight checks
 if [[ $EUID -ne 0 ]]; then
@@ -85,10 +124,8 @@ if command -v psql &> /dev/null && [[ -d "/etc/postgresql/${PG_VERSION}" ]]; the
     PG_INSTALLED=true
 fi
 
-# Auto-detect public IP
-if [[ -z "$PG_PUBLIC_HOST" ]]; then
-    PG_PUBLIC_HOST=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo "localhost")
-fi
+# Helper scripts use localhost unless an explicit application host is supplied.
+PG_PUBLIC_HOST="${PG_PUBLIC_HOST:-localhost}"
 
 # Get system resources
 TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
@@ -195,7 +232,10 @@ echo "  RAM:             ${TOTAL_RAM_GB}GB (${CPU_COUNT} CPUs)"
 echo "  shared_buffers:  $SHARED_BUFFERS"
 echo "  effective_cache: $EFFECTIVE_CACHE"
 echo "  Remote access:   $PG_ENABLE_REMOTE"
-echo "  Public host:     $PG_PUBLIC_HOST"
+echo "  Listen address:  $PG_LISTEN_ADDRESSES"
+if [[ "$PG_ENABLE_REMOTE" == "true" ]]; then
+    echo "  Allowed CIDR:    $PG_REMOTE_CIDR"
+fi
 if [[ "$PG_INSTALLED" == true ]]; then
     echo -e "  Status:          ${YELLOW}Already installed - will reconfigure${NC}"
 fi
@@ -233,6 +273,11 @@ else
     log_info "PostgreSQL ${PG_VERSION} already installed, reconfiguring..."
 fi
 
+if [[ "$PG_ENABLE_REMOTE" == "true" ]] && { ! runuser -u postgres -- test -r "$PG_SSL_CERT_FILE" || ! runuser -u postgres -- test -r "$PG_SSL_KEY_FILE"; }; then
+    log_error "The postgres user must be able to read the TLS certificate and key"
+    exit 1
+fi
+
 # =============================================================================
 # Stop PostgreSQL for reconfiguration
 # =============================================================================
@@ -268,7 +313,7 @@ unix_socket_directories = '/var/run/postgresql'
 # =============================================================================
 # Connection Settings
 # =============================================================================
-listen_addresses = '*'
+listen_addresses = '${PG_LISTEN_ADDRESSES}'
 port = ${PG_PORT}
 max_connections = 100
 superuser_reserved_connections = 3
@@ -312,10 +357,13 @@ max_parallel_maintenance_workers = 2
 # =============================================================================
 logging_collector = on
 log_directory = '${PG_LOG_DIR}'
-log_filename = 'postgresql-%Y-%m-%d.log'
+log_filename = 'postgresql-%a.log'
+log_truncate_on_rotation = on
 log_rotation_age = 1d
-log_rotation_size = 100MB
+log_rotation_size = 0
 log_min_duration_statement = 1000
+log_parameter_max_length = 0
+log_parameter_max_length_on_error = 0
 log_checkpoints = on
 log_connections = on
 log_disconnections = on
@@ -333,9 +381,9 @@ autovacuum_analyze_scale_factor = 0.01
 # =============================================================================
 # Security
 # =============================================================================
-ssl = on
-ssl_cert_file = '/etc/ssl/certs/ssl-cert-snakeoil.pem'
-ssl_key_file = '/etc/ssl/private/ssl-cert-snakeoil.key'
+ssl = ${PG_ENABLE_REMOTE}
+ssl_cert_file = '${PG_SSL_CERT_FILE}'
+ssl_key_file = '${PG_SSL_KEY_FILE}'
 password_encryption = scram-sha-256
 
 # =============================================================================
@@ -377,9 +425,8 @@ EOF
 if [[ "$PG_ENABLE_REMOTE" == "true" ]]; then
     cat >> "${PG_HBA}" << EOF
 
-# Remote connections (all IPs - use firewall to restrict)
-hostssl all             all             0.0.0.0/0               scram-sha-256
-hostssl all             all             ::/0                    scram-sha-256
+# Remote connections are TLS-only and restricted at both PostgreSQL and firewall.
+hostssl all             all             ${PG_REMOTE_CIDR}        scram-sha-256
 EOF
     log_info "Enabled remote access via SSL"
 fi
@@ -393,8 +440,8 @@ chmod 640 "${PG_CONF}" "${PG_HBA}"
 # =============================================================================
 if [[ "$PG_ENABLE_REMOTE" == "true" ]]; then
     if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
-        ufw allow ${PG_PORT}/tcp > /dev/null 2>&1 || true
-        log_info "Opened firewall port ${PG_PORT}"
+        ufw allow from "${PG_REMOTE_CIDR}" to any port "${PG_PORT}" proto tcp > /dev/null
+        log_info "Allowed ${PG_REMOTE_CIDR} to reach PostgreSQL"
     fi
 fi
 

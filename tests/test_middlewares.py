@@ -5,8 +5,82 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram.types import Update
 
+from derp.billing import (
+    PaymentSettlementService,
+    PurchaseIntentService,
+    SubscriptionManagementService,
+)
+from derp.credits.gateway import CreditServiceGateway
+from derp.middlewares.commerce import CommerceDependency, CommerceMiddleware
+from derp.middlewares.credit_service import CreditServiceMiddleware
 from derp.middlewares.db_models import DatabaseModelMiddleware
 from derp.middlewares.event_context import EventContextMiddleware
+from derp.middlewares.operation_ledger import OperationLedgerMiddleware
+from derp.operations import OperationLedger
+
+
+@pytest.mark.asyncio
+async def test_credit_service_middleware_injects_without_opening_transaction(
+    mock_db_client,
+) -> None:
+    middleware = CreditServiceMiddleware(mock_db_client)
+    handler = AsyncMock(return_value="handled")
+    event = MagicMock(spec=Update)
+    data = {}
+
+    result = await middleware(handler, event, data)
+
+    assert result == "handled"
+    assert isinstance(data["credit_service"], CreditServiceGateway)
+    mock_db_client.session.assert_not_called()
+    handler.assert_awaited_once_with(event, data)
+
+
+@pytest.mark.asyncio
+async def test_commerce_middleware_injects_without_opening_transaction(
+    mock_db_client,
+) -> None:
+    middleware = CommerceMiddleware(mock_db_client)
+    handler = AsyncMock(return_value="handled")
+    event = MagicMock(spec=Update)
+    data = {}
+
+    result = await middleware(handler, event, data)
+
+    assert result == "handled"
+    assert isinstance(data["purchase_intents"], PurchaseIntentService)
+    assert isinstance(data["payment_settlement"], PaymentSettlementService)
+    assert isinstance(data["subscription_management"], SubscriptionManagementService)
+    mock_db_client.session.assert_not_called()
+    handler.assert_awaited_once_with(event, data)
+
+
+def test_commerce_middleware_can_inject_one_boundary(mock_db_client) -> None:
+    middleware = CommerceMiddleware(mock_db_client)
+    data = {}
+
+    middleware.inject(data, frozenset({CommerceDependency.PAYMENT_SETTLEMENT}))
+
+    assert set(data) == {"payment_settlement"}
+    assert isinstance(data["payment_settlement"], PaymentSettlementService)
+    mock_db_client.session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_operation_ledger_middleware_injects_without_opening_transaction(
+    mock_db_client,
+) -> None:
+    middleware = OperationLedgerMiddleware(mock_db_client)
+    handler = AsyncMock(return_value="handled")
+    event = MagicMock(spec=Update)
+    data = {}
+
+    result = await middleware(handler, event, data)
+
+    assert result == "handled"
+    assert isinstance(data["operation_ledger"], OperationLedger)
+    mock_db_client.session.assert_not_called()
+    handler.assert_awaited_once_with(event, data)
 
 
 class TestEventContextMiddleware:
@@ -216,7 +290,7 @@ class TestDatabaseModelMiddleware:
 
         # Mock the get_chat_settings query
         mock_settings = MagicMock()
-        mock_settings.llm_memory = "test memory"
+        mock_settings.retention_days = 30
 
         with patch(
             "derp.middlewares.db_models.get_chat_settings",
@@ -266,7 +340,7 @@ class TestDatabaseModelMiddleware:
             "derp.middlewares.db_models.get_chat_settings",
             new=AsyncMock(side_effect=Exception("Database error")),
         ):
-            with patch("derp.middlewares.db_models.logfire.exception") as mock_logfire:
+            with patch("derp.middlewares.db_models.report_exception") as mock_logfire:
                 handler = AsyncMock()
                 event = MagicMock()
                 data = {EVENT_CHAT_KEY: chat}
@@ -316,7 +390,7 @@ class TestDatabaseModelMiddleware:
         chat = make_chat(id=12345, type="private")
 
         mock_settings = MagicMock()
-        mock_settings.llm_memory = "private memory"
+        mock_settings.retention_days = 30
 
         with patch(
             "derp.middlewares.db_models.get_chat_settings",
@@ -343,9 +417,9 @@ class TestDatabaseModelMiddleware:
         chat2 = make_chat(id=-100222)
 
         settings1 = MagicMock()
-        settings1.llm_memory = "memory1"
+        settings1.retention_days = 7
         settings2 = MagicMock()
-        settings2.llm_memory = "memory2"
+        settings2.retention_days = 90
 
         with patch(
             "derp.middlewares.db_models.get_chat_settings",

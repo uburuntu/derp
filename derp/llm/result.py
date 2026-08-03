@@ -14,6 +14,31 @@ from aiogram.utils.i18n import gettext as _
 from pydantic_ai import AgentRunResult, BinaryImage
 
 from derp.common.sender import MessageSender
+from derp.observability import report_exception
+
+
+@dataclass(frozen=True, slots=True)
+class AgentContentDelivered:
+    """Telegram acknowledged delivery of actual model-produced content."""
+
+    message: Message
+    message_ids: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.message_ids:
+            object.__setattr__(self, "message_ids", (self.message.message_id,))
+        if any(message_id <= 0 for message_id in self.message_ids):
+            raise ValueError("delivered Telegram message IDs must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentContentUnavailable:
+    """Only a failure notice was delivered; model content was not delivered."""
+
+    notice: Message
+
+
+type AgentDeliveryOutcome = AgentContentDelivered | AgentContentUnavailable
 
 
 @dataclass
@@ -51,17 +76,17 @@ class AgentResult:
 
         for code in self.code_blocks:
             # Use markdown code block syntax - MessageSender will convert to HTML
-            parts.append(f"**{_('Generated Code:')}**\n```\n{code}\n```")
+            parts.append(f"**{_('Code:')}**\n```\n{code}\n```")
 
         for result in self.execution_results:
             # Use markdown quote syntax - MessageSender will convert to HTML
-            parts.append(f"**{_('Execution Result:')}**\n```\n{result}\n```")
+            parts.append(f"**{_('Result:')}**\n```\n{result}\n```")
 
         return "\n\n".join(parts)
 
     async def reply_to(
         self, message: Message, *, max_length: int = 4000
-    ) -> Message | None:
+    ) -> AgentDeliveryOutcome | None:
         """Send the result as a reply to the given message.
 
         Uses MessageSender's ContentBuilder for automatic handling of:
@@ -75,7 +100,7 @@ class AgentResult:
             max_length: Deprecated, kept for backward compatibility.
 
         Returns:
-            The sent message, or None if nothing was sent.
+            A typed delivery outcome, or None if there was no content to send.
         """
         if not self.has_content:
             # React with 👌 if no content to send
@@ -102,15 +127,34 @@ class AgentResult:
             result = await builder.reply()
             if self.images:
                 logfire.info("images_sent", count=len(self.images))
-            return result if isinstance(result, Message) else result[-1]
-        except Exception:
-            logfire.warning("send_content_failed", _exc_info=True)
-            # Fallback: try text only if we had images
-            if self.images and text_response:
-                return await sender.reply(text_response)
-            return await message.reply(
-                _("📊 Generated content, but couldn't display it.")
+            messages = (result,) if isinstance(result, Message) else tuple(result)
+            delivered = messages[-1]
+            return AgentContentDelivered(
+                delivered,
+                tuple(item.message_id for item in messages),
             )
+        except Exception as exc:
+            report_exception(
+                "send_content_failed",
+                exception=exc,
+                level="warning",
+            )
+
+            # A complete text fallback still delivers model-produced content.
+            if self.images and text_response:
+                try:
+                    return AgentContentDelivered(await sender.reply(text_response))
+                except Exception as fallback_exc:
+                    report_exception(
+                        "send_text_fallback_failed",
+                        exception=fallback_exc,
+                        level="warning",
+                    )
+
+            notice = await message.reply(
+                _("I couldn't deliver that response. You weren't charged. Try again.")
+            )
+            return AgentContentUnavailable(notice)
 
     @classmethod
     def from_run_result(cls, result: AgentRunResult) -> AgentResult:

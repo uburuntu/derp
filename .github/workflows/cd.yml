@@ -5,25 +5,119 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      force_deploy:
-        description: 'Force deployment even if no changes'
+      mode:
+        description: 'Build only, or deploy the exact selected main commit'
+        required: true
+        default: build_only
+        type: choice
+        options:
+          - build_only
+          - deploy
+      expected_sha:
+        description: 'Full 40-character SHA of the selected main commit'
+        required: true
+        type: string
+      backup_reference:
+        description: 'Completed, restorable backup reference (required for deploy)'
         required: false
-        default: 'false'
+        type: string
+      expected_legacy_group_history_purge_count:
+        description: 'Exact preflight count reviewed during backup rehearsal'
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  gate:
+    name: Validate release request
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      expected_sha: ${{ steps.request.outputs.expected_sha }}
+      release_mode: ${{ steps.request.outputs.release_mode }}
+      expected_purge_count: ${{ steps.request.outputs.expected_purge_count }}
+
+    steps:
+      - name: Validate immutable release inputs
+        id: request
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          REQUESTED_MODE: ${{ inputs.mode }}
+          REQUESTED_SHA: ${{ inputs.expected_sha }}
+          BACKUP_REFERENCE: ${{ inputs.backup_reference }}
+          EXPECTED_PURGE_COUNT: ${{ inputs.expected_legacy_group_history_purge_count }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = "push" ]; then
+            RELEASE_MODE=build_only
+            EXPECTED_SHA=$EVENT_SHA
+          else
+            RELEASE_MODE=$REQUESTED_MODE
+            EXPECTED_SHA=$REQUESTED_SHA
+            test "$EVENT_REF" = "refs/heads/main" || {
+              echo "Manual release runs must select the main branch" >&2
+              exit 1
+            }
+            test "$EXPECTED_SHA" = "$EVENT_SHA" || {
+              echo "expected_sha must exactly match the selected main commit" >&2
+              exit 1
+            }
+          fi
+
+          printf '%s\n' "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "expected_sha must be a full lowercase commit SHA" >&2
+            exit 1
+          }
+          case "$RELEASE_MODE" in
+            build_only) ;;
+            deploy)
+              test -n "$(printf '%s' "$BACKUP_REFERENCE" | tr -d '[:space:]')" || {
+                echo "backup_reference is required for deployment" >&2
+                exit 1
+              }
+              printf '%s\n' "$EXPECTED_PURGE_COUNT" | grep -Eq '^[0-9]+$' || {
+                echo "expected purge count must be a non-negative integer" >&2
+                exit 1
+              }
+              ;;
+            *)
+              echo "Unsupported release mode" >&2
+              exit 1
+              ;;
+          esac
+
+          {
+            printf 'expected_sha=%s\n' "$EXPECTED_SHA"
+            printf 'release_mode=%s\n' "$RELEASE_MODE"
+            printf 'expected_purge_count=%s\n' "${EXPECTED_PURGE_COUNT:-0}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.request.outputs.expected_sha }}
+
+      - name: Confirm checkout identity
+        env:
+          EXPECTED_SHA: ${{ steps.request.outputs.expected_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
   # Run CI checks first
   ci:
+    needs: gate
     uses: ./.github/workflows/ci.yml
 
   # Build and push Docker image
   build:
     name: Build & Push
-    runs-on: ubuntu-latest
-    needs: ci
+    runs-on: ubuntu-24.04
+    needs: [gate, ci]
     permissions:
       contents: read
       packages: write
@@ -35,13 +129,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.expected_sha }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.35.0
+          driver-opts: image=moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -49,7 +148,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -58,7 +157,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           push: true
@@ -68,8 +167,18 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+      - name: Scan exact release image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
       - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -78,128 +187,332 @@ jobs:
   # Deploy to production server
   deploy:
     name: Deploy
-    runs-on: ubuntu-latest
-    needs: build
+    runs-on: ubuntu-24.04
+    needs: [gate, build]
+    if: needs.gate.outputs.release_mode == 'deploy'
     environment: production
+    timeout-minutes: 25
     concurrency:
       group: production-deploy
       cancel-in-progress: false
 
     steps:
+      - name: Record deployment artifact
+        run: |
+          {
+            echo "### Deployment artifact"
+            echo ""
+            echo "**Commit:** \`${{ needs.gate.outputs.expected_sha }}\`"
+            echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}\`"
+            echo "**Digest:** \`${{ needs.build.outputs.image_digest }}\`"
+            echo "**Backup gate:** confirmed"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Deploy to server
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.image_digest }}
+          EXPECTED_SHA: ${{ needs.gate.outputs.expected_sha }}
+          EXPECTED_PURGE_COUNT: ${{ needs.gate.outputs.expected_purge_count }}
+          DEPLOYMENT_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          DEPLOY_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.DEPLOY_GHCR_TOKEN }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          fingerprint: ${{ secrets.SSH_HOST_FINGERPRINT }}
           port: 22
-          envs: IMAGE,GITHUB_TOKEN
-          command_timeout: 10m
+          version: "1.8.4"
+          envs: IMAGE,IMAGE_DIGEST,EXPECTED_SHA,EXPECTED_PURGE_COUNT,DEPLOYMENT_ID,DEPLOY_ACTOR,GITHUB_TOKEN
+          command_timeout: 18m
           script: |
-            set -e
-            echo "=== Deployment starting ==="
-            
-            # Authenticate with GitHub Container Registry
-            echo "$GITHUB_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            
-            # Pull new image FIRST (before stopping anything)
-            echo "Pulling: $IMAGE"
-            docker pull "$IMAGE"
-            
-            # Check if current container exists
-            CURRENT_EXISTS=$(docker ps -a -q --filter "name=^derp-bot$" 2>/dev/null || echo "")
-            
-            if [ -n "$CURRENT_EXISTS" ]; then
-              echo "=== Stopping current container (prevents dual polling) ==="
-              
-              # Remove any leftover previous container
-              docker rm -f derp-bot-previous 2>/dev/null || true
-              
-              # Rename current to previous (for rollback)
-              docker rename derp-bot derp-bot-previous 2>/dev/null || true
-              
-              # Stop and WAIT for complete stop (critical for Telegram polling)
-              docker stop derp-bot-previous --time 10 2>/dev/null || true
-              
-              # Verify it's stopped
-              for i in 1 2 3; do
-                if docker ps -q --filter "name=derp-bot-previous" | grep -q .; then
-                  echo "  Waiting for stop... ($i)"
-                  sleep 2
+            set -eu
+
+            PHASE=initialization
+            PREVIOUS_RETAINED=0
+            CANDIDATE_STARTED=0
+
+            on_exit() {
+              status=$?
+              trap - EXIT
+              docker logout ghcr.io >/dev/null 2>&1 || true
+              if [ "$status" -ne 0 ]; then
+                echo "=== Deployment failed during: $PHASE ===" >&2
+                docker ps -a \
+                  --filter "name=derp-bot" \
+                  --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" >&2 || true
+                if docker container inspect derp-bot-failed >/dev/null 2>&1; then
+                  echo "=== Failed candidate logs ===" >&2
+                  docker logs --tail 100 derp-bot-failed >&2 2>&1 || true
+                elif [ "$CANDIDATE_STARTED" -eq 1 ] \
+                  && docker container inspect derp-bot >/dev/null 2>&1; then
+                  echo "=== Candidate logs ===" >&2
+                  docker logs --tail 100 derp-bot >&2 2>&1 || true
+                fi
+                if [ "$PREVIOUS_RETAINED" -eq 1 ]; then
+                  PREVIOUS_STATE=$(docker inspect \
+                    --format '{{.State.Status}}' derp-bot-previous 2>/dev/null || echo unknown)
+                  echo "The previous container is retained as derp-bot-previous (state=$PREVIOUS_STATE)." >&2
+                elif [ "$CANDIDATE_STARTED" -eq 0 ] \
+                  && docker container inspect derp-bot >/dev/null 2>&1; then
+                  echo "The active container was not changed." >&2
                 else
-                  echo "  Previous container stopped ✓"
-                  break
+                  echo "No previous container is available for automatic recovery." >&2
                 fi
-              done
+                echo "Use the explicit recovery procedure in docs/deployment.md." >&2
+              fi
+              exit "$status"
+            }
+
+            quarantine_candidate() {
+              if ! docker container inspect derp-bot >/dev/null 2>&1; then
+                return
+              fi
+              timeout -k 10s 40s docker stop --time 20 derp-bot >/dev/null 2>&1 || true
+              docker rename derp-bot derp-bot-failed >/dev/null 2>&1 || true
+            }
+
+            trap on_exit EXIT
+
+            command -v docker >/dev/null 2>&1 || {
+              echo "docker is required on the deployment host" >&2
+              exit 1
+            }
+            command -v timeout >/dev/null 2>&1 || {
+              echo "timeout is required on the deployment host" >&2
+              exit 1
+            }
+            if ! printf '%s\n' "$IMAGE_DIGEST" \
+              | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+              echo "Invalid image digest: $IMAGE_DIGEST" >&2
+              exit 1
             fi
-            
-            # Run database migrations
-            echo "=== Running database migrations ==="
-            docker run --rm \
-              --env-file /opt/derp/.env.prod \
+            if ! printf '%s\n' "$EXPECTED_SHA" \
+              | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "Invalid expected commit SHA" >&2
+              exit 1
+            fi
+
+            echo "=== Deployment $DEPLOYMENT_ID starting ==="
+            echo "Image: $IMAGE"
+
+            PHASE=registry-login
+            printf '%s' "$GITHUB_TOKEN" \
+              | timeout -k 5s 30s docker login ghcr.io -u "$DEPLOY_ACTOR" --password-stdin
+
+            PHASE=image-pull
+            timeout -k 15s 5m docker pull "$IMAGE"
+            PULLED_REFERENCES=$(docker image inspect \
+              --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE")
+            if ! printf '%s\n' "$PULLED_REFERENCES" | grep -F -x "$IMAGE" >/dev/null; then
+              echo "Pulled image does not expose the expected immutable reference" >&2
+              echo "Expected: $IMAGE" >&2
+              echo "Actual references: $PULLED_REFERENCES" >&2
+              exit 1
+            fi
+            echo "Verified pulled digest: $IMAGE_DIGEST"
+
+            PHASE=artifact-store-preparation
+            echo "=== Preparing persistent artifact store ==="
+            ARTIFACT_METADATA=$(timeout -k 10s 1m docker run --rm \
+              --user 0:0 \
+              --volume /opt/derp/artifacts:/artifacts \
               "$IMAGE" \
-              alembic upgrade head
-            
-            # Start new container (old one is FULLY stopped now)
-            echo "=== Starting new container ==="
-            docker run -d \
-              --name derp-bot \
-              --restart unless-stopped \
+              sh -c 'chown 1000:1000 /artifacts && chmod 0700 /artifacts && stat -c "%u:%g:%a" /artifacts')
+            if [ "$ARTIFACT_METADATA" != "1000:1000:700" ]; then
+              echo "Artifact store ownership or mode is invalid: $ARTIFACT_METADATA" >&2
+              exit 1
+            fi
+            echo "Artifact store ready: /opt/derp/artifacts ($ARTIFACT_METADATA)"
+
+            PHASE=database-preflight
+            echo "=== Database migration preflight ==="
+            timeout -k 15s 2m docker run --rm \
+              --add-host host.docker.internal:host-gateway \
               --env-file /opt/derp/.env.prod \
-              -e IS_DOCKER=true \
-              "$IMAGE"
-            
-            # Health check - wait for container to stabilize
-            echo "=== Health check ==="
-            sleep 5
-            
-            for i in 1 2 3 4 5 6; do
-              if docker ps --filter "name=^derp-bot$" --filter "status=running" | grep -q derp-bot; then
-                echo "  Check $i/6: Running ✓"
-              else
-                echo "  Check $i/6: Not running ✗"
-                echo "=== ROLLBACK ==="
-                docker stop derp-bot 2>/dev/null || true
-                docker rm derp-bot 2>/dev/null || true
-                
-                # Restore previous container
-                if docker ps -a -q --filter "name=derp-bot-previous" | grep -q .; then
-                  docker rename derp-bot-previous derp-bot
-                  docker start derp-bot
-                  echo "Rolled back to previous version"
-                fi
+              --env ARTIFACT_STORE_PATH=/var/lib/derp/artifacts \
+              "$IMAGE" \
+              python -m derp.release preflight \
+                --expected-legacy-group-history-purge-count "$EXPECTED_PURGE_COUNT"
+
+            PHASE=stop-current-container
+            if docker container inspect derp-bot >/dev/null 2>&1; then
+              CURRENT_STATE=$(docker inspect --format '{{.State.Status}}' derp-bot)
+              if [ "$CURRENT_STATE" != "running" ]; then
+                echo "Current container is $CURRENT_STATE; refusing to discard recovery state" >&2
                 exit 1
               fi
+              docker rm -f derp-bot-previous derp-bot-failed >/dev/null 2>&1 || true
+              docker rename derp-bot derp-bot-previous
+              PREVIOUS_RETAINED=1
+              if [ "$(docker inspect --format '{{.State.Running}}' derp-bot-previous)" = "true" ]; then
+                timeout -k 10s 40s docker stop --time 20 derp-bot-previous >/dev/null
+              fi
+              if [ "$(docker inspect --format '{{.State.Running}}' derp-bot-previous)" = "true" ]; then
+                echo "Previous container did not stop; refusing to start a second poller" >&2
+                exit 1
+              fi
+              echo "Previous container is stopped and retained as derp-bot-previous"
+            elif docker container inspect derp-bot-previous >/dev/null 2>&1 \
+              || docker container inspect derp-bot-failed >/dev/null 2>&1; then
+              echo "A prior failed deployment needs manual recovery before redeploying" >&2
+              exit 1
+            fi
+
+            PHASE=database-migration
+            echo "=== Applying database migrations ==="
+            if ! timeout -k 30s 5m docker run --rm \
+              --add-host host.docker.internal:host-gateway \
+              --env-file /opt/derp/.env.prod \
+              --env ARTIFACT_STORE_PATH=/var/lib/derp/artifacts \
+              "$IMAGE" \
+              alembic upgrade head; then
+              echo "Migration failed; leaving the previous application stopped." >&2
+              exit 1
+            fi
+
+            PHASE=database-head-verification
+            timeout -k 15s 2m docker run --rm \
+              --add-host host.docker.internal:host-gateway \
+              --env-file /opt/derp/.env.prod \
+              --env ARTIFACT_STORE_PATH=/var/lib/derp/artifacts \
+              "$IMAGE" \
+              python -m derp.release verify
+
+            PHASE=start-candidate
+            echo "=== Starting immutable candidate ==="
+            if ! CANDIDATE_ID=$(timeout -k 15s 1m docker run -d \
+              --name derp-bot \
+              --restart unless-stopped \
+              --label "io.derp.deployment=$DEPLOYMENT_ID" \
+              --label "io.derp.image-digest=$IMAGE_DIGEST" \
+              --label "io.derp.commit=$EXPECTED_SHA" \
+              --add-host host.docker.internal:host-gateway \
+              --env-file /opt/derp/.env.prod \
+              --env ARTIFACT_STORE_PATH=/var/lib/derp/artifacts \
+              --mount type=bind,source=/opt/derp/artifacts,target=/var/lib/derp/artifacts \
+              "$IMAGE"); then
+              echo "Candidate did not start; the previous application remains stopped." >&2
+              exit 1
+            fi
+            CANDIDATE_STARTED=1
+            echo "Candidate container: $CANDIDATE_ID"
+
+            PHASE=candidate-readiness
+            echo "=== Readiness window ==="
+            i=1
+            while [ "$i" -le 12 ]; do
               sleep 5
+              if ! STATE=$(timeout -k 2s 10s docker inspect \
+                --format '{{.State.Status}}' derp-bot); then
+                echo "Cannot inspect candidate state" >&2
+                quarantine_candidate
+                exit 1
+              fi
+              RESTARTS=$(timeout -k 2s 10s docker inspect \
+                --format '{{.RestartCount}}' derp-bot)
+              HEALTH=$(timeout -k 2s 10s docker inspect \
+                --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+                derp-bot)
+
+              echo "Readiness $i/12: state=$STATE health=$HEALTH restarts=$RESTARTS"
+              if [ "$STATE" != "running" ] || [ "$RESTARTS" != "0" ]; then
+                quarantine_candidate
+                exit 1
+              fi
+              case "$HEALTH" in
+                none|healthy) ;;
+                starting)
+                  if [ "$i" -eq 12 ]; then
+                    quarantine_candidate
+                    exit 1
+                  fi
+                  ;;
+                *)
+                  quarantine_candidate
+                  exit 1
+                  ;;
+              esac
+              i=$((i + 1))
             done
-            
-            echo "=== SUCCESS ==="
-            # Cleanup old container and images
-            docker rm derp-bot-previous 2>/dev/null || true
-            docker image prune -f
-            
-            # Show status
-            docker ps --filter "name=derp-bot" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+
+            PHASE=final-verification
+            ACTIVE_IMAGE=$(docker inspect --format '{{.Config.Image}}' derp-bot)
+            ACTIVE_DIGEST=$(docker inspect \
+              --format '{{index .Config.Labels "io.derp.image-digest"}}' derp-bot)
+            ACTIVE_COMMIT=$(docker inspect \
+              --format '{{index .Config.Labels "io.derp.commit"}}' derp-bot)
+            ACTIVE_ARTIFACT_SOURCE=$(docker inspect \
+              --format '{{range .Mounts}}{{if eq .Destination "/var/lib/derp/artifacts"}}{{.Source}}{{end}}{{end}}' \
+              derp-bot)
+            if [ "$ACTIVE_IMAGE" != "$IMAGE" ] \
+              || [ "$ACTIVE_DIGEST" != "$IMAGE_DIGEST" ] \
+              || [ "$ACTIVE_COMMIT" != "$EXPECTED_SHA" ]; then
+              echo "Active container identity does not match the built artifact" >&2
+              quarantine_candidate
+              exit 1
+            fi
+            if [ "$ACTIVE_ARTIFACT_SOURCE" != "/opt/derp/artifacts" ]; then
+              echo "Active container is missing the persistent artifact mount" >&2
+              quarantine_candidate
+              exit 1
+            fi
+            ACTIVE_ENVIRONMENT=$(docker inspect \
+              --format '{{range .Config.Env}}{{println .}}{{end}}' derp-bot)
+            if ! printf '%s\n' "$ACTIVE_ENVIRONMENT" \
+              | grep -F -x 'ARTIFACT_STORE_PATH=/var/lib/derp/artifacts' >/dev/null; then
+              echo "Active container is missing ARTIFACT_STORE_PATH" >&2
+              quarantine_candidate
+              exit 1
+            fi
+
+            echo "=== Deployment successful ==="
+            docker ps --filter "name=^/derp-bot$" \
+              --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+            echo "The stopped derp-bot-previous container is retained for explicit recovery."
 
       - name: Verify deployment
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.image_digest }}
+          EXPECTED_SHA: ${{ needs.gate.outputs.expected_sha }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          fingerprint: ${{ secrets.SSH_HOST_FINGERPRINT }}
+          version: "1.8.4"
+          envs: IMAGE,IMAGE_DIGEST,EXPECTED_SHA
+          command_timeout: 2m
           script: |
+            set -eu
             echo "=== Container Status ==="
             docker ps --filter "name=derp-bot" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
-            echo ""
-            echo "=== Recent Logs ==="
-            docker logs derp-bot --tail 15 2>&1 || echo "No logs available"
+            ACTIVE_IMAGE=$(timeout -k 2s 10s docker inspect --format '{{.Config.Image}}' derp-bot)
+            ACTIVE_DIGEST=$(timeout -k 2s 10s docker inspect \
+              --format '{{index .Config.Labels "io.derp.image-digest"}}' derp-bot)
+            ACTIVE_COMMIT=$(timeout -k 2s 10s docker inspect \
+              --format '{{index .Config.Labels "io.derp.commit"}}' derp-bot)
+            ACTIVE_ARTIFACT_SOURCE=$(timeout -k 2s 10s docker inspect \
+              --format '{{range .Mounts}}{{if eq .Destination "/var/lib/derp/artifacts"}}{{.Source}}{{end}}{{end}}' \
+              derp-bot)
+            STATE=$(timeout -k 2s 10s docker inspect --format '{{.State.Status}}' derp-bot)
+            test "$ACTIVE_IMAGE" = "$IMAGE"
+            test "$ACTIVE_DIGEST" = "$IMAGE_DIGEST"
+            test "$ACTIVE_COMMIT" = "$EXPECTED_SHA"
+            test "$ACTIVE_ARTIFACT_SOURCE" = "/opt/derp/artifacts"
+            test "$STATE" = "running"
+            echo "Verified active digest: $ACTIVE_DIGEST"
 
       - name: Deployment summary
         run: |
-          echo "### ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Digest:** \`${{ needs.build.outputs.image_digest }}\`" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### Deployment successful"
+            echo ""
+            echo "**Commit:** \`${{ needs.gate.outputs.expected_sha }}\`"
+            echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image_digest }}\`"
+            echo "**Digest:** \`${{ needs.build.outputs.image_digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
