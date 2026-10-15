@@ -10,3 +10,4 @@
 - `deps.py`: `RunDeps` (chat, asker, reply target, funding, delivered outputs) and `Funding` → model role. `toolsets.py`: tool families register a `FunctionToolset[RunDeps]` with the tiers allowed to use them.
 - `handler.py` is the last router: any invocation no command claimed goes to the runtime.
 - Tests: e2e journeys swap the chat model through `Services.model_factory` (`tests/e2e/model.py` `ScriptedModel`); nothing in the offline suite calls a real model.
+- `tools/`: one module per tool family, listed in `tools/__init__.py` `FAMILIES`. `tools/history.py`: `search_history`, `read_messages`, `chat_query`, `chat_info` (free, all tiers; current topic unless `whole_chat`). Tool output is capped and rendered with the same transcript lines as the window.

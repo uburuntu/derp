@@ -11,3 +11,4 @@
 - `thread_id` is set only for forum-topic messages, so "this topic" queries never mix topics.
 - Full-text search uses the `simple` configuration over `text` + `extra_text` (transcripts, media descriptions) via the generated `tsv` column; always pass `'simple'` to query functions (the server default config drops stop words). Trigram index on `text` covers fuzzy matches.
 - Rows are always scoped by `chat_id`; query helpers take the chat from the run context, never from tool arguments.
+- `queries.py` is the read side: `search` (ranked FTS `simple` + trigram top-up), `around` / `id_range`, `resolve_members` (current and past names, @username) and `ChatQuery` — a typed request (presets, filters, group_by, order, limit ≤ 200) compiled to SQL here. Model input never becomes SQL text, and the chat id always comes from the caller.

@@ -26,6 +26,7 @@ from derp.agent.context import Window, build_window
 from derp.agent.deps import Funding, RunDeps
 from derp.agent.persona import PERSONA, situation
 from derp.agent.runs import finish_run, record_output, start_run
+from derp.agent.tools import FAMILIES
 from derp.agent.toolsets import toolsets_for
 from derp.config import Settings
 from derp.db.engine import Database
@@ -150,7 +151,7 @@ class Runtime:
                         usage_limits=UsageLimits(
                             request_limit=caps.tool_calls + 2, tool_calls_limit=caps.tool_calls
                         ),
-                        toolsets=toolsets_for(deps),
+                        toolsets=toolsets_for(deps, FAMILIES),
                     )
                 output = result.output
             except Exception as exc:  # noqa: BLE001 - any failure closes the run and gets an apology

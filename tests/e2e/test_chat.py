@@ -97,3 +97,31 @@ async def test_model_failure_apologizes_and_records_failed_run(
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun))
         assert run is not None and (run.status, run.error_type) == ("failed", "RuntimeError")
+
+
+async def test_model_searches_history_with_a_tool(conversation: Conversation, model: ScriptedModel) -> None:
+    from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+
+    conversation.meet(BOB, Room(-1006, title="Food"))
+    food = Room(-1006, title="Food")
+    old = await conversation.send(BOB, food, "best shawarma is at Joe's")
+    await conversation.settle(old)
+
+    def call(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        assert {t.name for t in info.function_tools} >= {
+            "search_history",
+            "read_messages",
+            "chat_query",
+            "chat_info",
+        }
+        return ModelResponse(parts=[ToolCallPart("search_history", {"query": "shawarma"}, tool_call_id="c1")])
+
+    def answer(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        result = next(p for m in messages for p in m.parts if isinstance(p, ToolReturnPart))
+        assert "Bob: best shawarma is at Joe's" in result.model_response_str()
+        return ModelResponse(parts=[TextPart("Joe's, says Bob")])
+
+    model.reply(call, answer)
+    asked = await conversation.send(BOB, food, "derp where's the shawarma?")
+    reply = await conversation.expect_reply(asked)
+    assert reply["rich_message"]["markdown"] == "Joe's, says Bob"
