@@ -136,3 +136,12 @@ cython_debug/
 
 # Git files
 **/.git
+references
+node_modules
+TODO.md
+.env.*
+tests
+.git
+.local
+*.dump
+*.sql.gz

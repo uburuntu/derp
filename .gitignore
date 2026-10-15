@@ -165,3 +165,8 @@ secrets.yml
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Derp local workspace (dumps, scratch, runtime files)
+.local/
+*.dump
+*.sql.gz
