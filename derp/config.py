@@ -23,7 +23,7 @@ class MissingIntegrationError(Exception):
 
 
 class Pack(BaseModel, frozen=True):
-    """A one-off Derpcoin pack bought with Stars (D54)."""
+    """A one-off Derpcoin pack bought with Stars."""
 
     id: str
     stars: int = Field(gt=0)
@@ -31,7 +31,7 @@ class Pack(BaseModel, frozen=True):
 
 
 class Plan(BaseModel, frozen=True):
-    """Derp+ — a 30-day Stars subscription granting a monthly allowance (D30, D83)."""
+    """Derp+ — a 30-day Stars subscription granting a monthly allowance (no other perks)."""
 
     id: str = "derp_plus_v1"
     stars: int = Field(default=500, gt=0, le=10_000)
@@ -40,7 +40,7 @@ class Plan(BaseModel, frozen=True):
 
 
 class RunCaps(BaseModel, frozen=True):
-    """Hard per-run limits (D51, D54, D92)."""
+    """Hard per-run limits — the abuse guard alongside the global sponsored cap and owner blocks."""
 
     tool_calls: int = 8
     visible_outputs: int = 3
@@ -50,7 +50,7 @@ class RunCaps(BaseModel, frozen=True):
 
 
 class ContextWindows(BaseModel, frozen=True):
-    """Recent-history token budgets per funding tier (D81)."""
+    """Recent-history token budgets per funding tier; deeper context comes from tools and digests."""
 
     paid: int = 16_000
     sponsored: int = 8_000
@@ -58,7 +58,7 @@ class ContextWindows(BaseModel, frozen=True):
 
 
 class Retention(BaseModel, frozen=True):
-    """Raw-history retention in days (D55, D80) and digest lifetime (D44)."""
+    """Raw-history retention in days and digest lifetime (digests outlive raw messages)."""
 
     options: tuple[int, ...] = (1, 7, 30, 365)
     group_days: int = 30
@@ -67,7 +67,7 @@ class Retention(BaseModel, frozen=True):
 
 
 class MediaLimits(BaseModel, frozen=True):
-    """Local media worker caps (D98)."""
+    """Local media worker caps (CPU-bound effects on a shared VPS)."""
 
     workers: int = 2
     queue: int = 8
@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_api_base: str = ""  # local Bot API server or the e2e fake; empty = api.telegram.org
     owner_ids: list[int] = Field(default_factory=list)
-    ops_chat_id: int | None = None  # error digests (D88); other owner pings go to owner DMs
+    ops_chat_id: int | None = None  # error digests; other owner pings go to owner DMs
     heartbeat_path: Path = Path("/tmp/derp.poll")  # noqa: S108 - container-local liveness file
 
     # Storage
@@ -122,7 +122,7 @@ class Settings(BaseSettings):
         "elevenlabs/",
     )
 
-    # Money (D54) — 1 Derpcoin = usd_per_credit of charged value
+    # Money — 1 Derpcoin = usd_per_credit of charged value; markup covers fees and sponsored usage
     usd_per_credit: float = 0.001
     markup: float = 1.2
     credits_per_star: int = 13
@@ -141,10 +141,10 @@ class Settings(BaseSettings):
     retention: Retention = Retention()
     media: MediaLimits = MediaLimits()
 
-    # Telemetry (D113: optional, fails soft)
+    # Telemetry — optional, fails soft
     logfire_token: str = Field(default="", repr=False)
 
-    # Third-party tools (D101) — optional; tools disable themselves when missing
+    # Third-party tools — optional; tools disable themselves when missing
     wolfram_app_id: str = Field(default="", repr=False)
     jdoodle_client_id: str = Field(default="", repr=False)
     jdoodle_client_secret: str = Field(default="", repr=False)
@@ -174,7 +174,7 @@ class Settings(BaseSettings):
         return getattr(self, names[0]) if len(names) == 1 else tuple(getattr(self, name) for name in names)
 
     def credits_for_usd(self, usd: float) -> int:
-        """Charged Derpcoins for a provider cost: ``ceil(cost × markup / usd_per_credit)`` (D5)."""
+        """Charged Derpcoins for a provider cost: ``ceil(cost × markup / usd_per_credit)``."""
         return ceil(round(usd * self.markup / self.usd_per_credit, 9))
 
     def secret_values(self) -> list[str]:

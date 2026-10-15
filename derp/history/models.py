@@ -1,4 +1,4 @@
-"""Chat knowledge tables (see TODO §Storage design)."""
+"""Chat knowledge tables: what Derp knows about each chat, always scoped by chat."""
 
 from datetime import datetime
 from typing import Any
@@ -22,7 +22,7 @@ class Chat(Base):
     title: Mapped[str | None]
     username: Mapped[str | None]
     is_forum: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
-    # Policy (D12, D13, D55, D61, D70); null means "use the default for this chat type".
+    # Policy: ambient capture, notes mode, retention, locale, free-model fallback; null means "use the default for this chat type".
     locale: Mapped[str | None] = mapped_column(String(8))
     timezone: Mapped[str | None] = mapped_column(String(64))
     ambient: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
@@ -48,7 +48,7 @@ class User(Base):
     language_code: Mapped[str | None] = mapped_column(String(16))
     is_premium: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     timezone: Mapped[str | None] = mapped_column(String(64))
-    # Free-model consent (D70): when and under which policy text version.
+    # Free-model consent (free providers may store prompts): when and under which policy text version.
     free_models_consent_at: Mapped[datetime | None]
     free_models_consent_version: Mapped[str | None] = mapped_column(String(16))
     blocked_at: Mapped[datetime | None]

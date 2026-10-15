@@ -1,8 +1,8 @@
 """Logging and Logfire, owned by this module alone.
 
 Content-free by default (numeric IDs, kinds, counts, durations, outcomes). The
-only content export is a redacted, truncated exchange when an agent run fails
-(D16). Logfire is optional and fails soft (D113); HTTPX is never instrumented
+only content export is a redacted, truncated exchange when an agent run fails.
+Logfire is optional and fails soft; HTTPX is never instrumented
 globally because Telegram file URLs embed the bot token.
 """
 

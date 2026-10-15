@@ -1,4 +1,4 @@
-"""Hidden model roles (D28) and their launch pins (D75)."""
+"""Hidden model roles and their launch pins. Users never pick models."""
 
 from enum import StrEnum
 
@@ -15,7 +15,7 @@ class ModelRole(StrEnum):
 
 
 class RolePin(BaseModel, frozen=True):
-    """A role's primary model plus ordered fallbacks; ``zdr`` is per request (D66)."""
+    """A role's primary model plus ordered fallbacks; ``zdr`` is sent per request."""
 
     model: str
     fallbacks: tuple[str, ...] = Field(default=(), max_length=2)
