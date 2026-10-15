@@ -7,6 +7,7 @@ from derp.config import Settings
 from derp.db.engine import Database
 from tests.e2e.fake_api import FakeBotAPI
 from tests.e2e.harness import Conversation
+from tests.e2e.model import ScriptedModel
 
 BOT_ID = 777000111
 
@@ -35,13 +36,18 @@ async def api(settings: Settings) -> AsyncIterator[FakeBotAPI]:
 
 
 @pytest.fixture
+def model() -> ScriptedModel:
+    return ScriptedModel()
+
+
+@pytest.fixture
 async def conversation(
-    settings: Settings, database: Database, api: FakeBotAPI, tmp_path: Path
+    settings: Settings, database: Database, api: FakeBotAPI, model: ScriptedModel, tmp_path: Path
 ) -> AsyncIterator[Conversation]:
     configured = settings.model_copy(
         update={"telegram_api_base": api.base_url, "heartbeat_path": tmp_path / "poll"}
     )
-    conv = Conversation(settings=configured, db=database, api=api)
+    conv = Conversation(settings=configured, db=database, api=api, overrides={"model_factory": model.factory})
     await conv.start()
     try:
         yield conv

@@ -8,9 +8,14 @@ from aiogram import Dispatcher
 
 
 def include_routers(dispatcher: Dispatcher) -> None:
+    from derp.agent import handler
     from derp.history import members, polls, reactions
     from derp.settings import start
 
     dispatcher.include_routers(
-        members.build_router(), reactions.build_router(), polls.build_router(), start.build_router()
+        members.build_router(),
+        reactions.build_router(),
+        polls.build_router(),
+        start.build_router(),
+        handler.build_router(),  # last: invocations that no command claimed
     )

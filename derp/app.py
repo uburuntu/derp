@@ -5,11 +5,13 @@ Importing this module creates nothing; ``main`` and ``build_dispatcher`` do.
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from aiogram import Bot, Dispatcher
+from pydantic_ai.models import Model
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
+from derp.agent.runtime import ModelFactory, Runtime
 from derp.config import Settings, get_settings
 from derp.db.engine import Database
 from derp.history.members import refresh_stale_profiles
@@ -17,6 +19,7 @@ from derp.history.middleware import CaptureMiddleware
 from derp.inference.api import OpenRouterAPI
 from derp.inference.openrouter import build_provider, chat_model
 from derp.inference.pins import PinStore
+from derp.inference.roles import RolePin
 from derp.inference.scout import run_scout
 from derp.ops import observability
 from derp.ops.periodic import every
@@ -35,6 +38,13 @@ class Services:
     provider: OpenRouterProvider
     api: OpenRouterAPI
     pins: PinStore
+    model_factory: ModelFactory = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.model_factory = self.chat_model
+
+    def chat_model(self, pin: RolePin) -> Model:
+        return chat_model(pin, self.provider)
 
     @classmethod
     def create(cls, settings: Settings, db: Database, bot: Bot) -> Services:
@@ -54,7 +64,14 @@ class Services:
 
 
 def build_dispatcher(services: Services) -> Dispatcher:
-    dispatcher = Dispatcher(services=services, settings=services.settings, db=services.db)
+    runtime = Runtime(
+        db=services.db,
+        bot=services.bot,
+        settings=services.settings,
+        pins=services.pins,
+        model_factory=services.model_factory,
+    )
+    dispatcher = Dispatcher(services=services, settings=services.settings, db=services.db, runtime=runtime)
     dispatcher.update.outer_middleware(UpdateSpanMiddleware())
     dispatcher.message.outer_middleware(CaptureMiddleware())
     dispatcher.edited_message.outer_middleware(CaptureMiddleware(edits=True))
@@ -71,7 +88,7 @@ def background_tasks(services: Services) -> list[asyncio.Task[None]]:
             services.api,
             services.pins,
             services.settings,
-            lambda pin: chat_model(pin, services.provider),
+            services.model_factory,
         )
 
     async def profiles() -> None:
