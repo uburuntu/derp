@@ -4,3 +4,22 @@ private = "**Derp** is waking up. Say something."
 [agent]
 failed = "Something broke on my side. Try again in a moment — you weren't charged."
 timeout = "That took too long and I gave up. Try again, maybe simpler — you weren't charged."
+
+[memory]
+title = "🧠 **What I remember here**"
+rules = "**Chat rules** (from the admins)"
+chat_notes = "**Chat notes** · _{mode}_"
+my_notes = "**Your notes**"
+proposed = "**Waiting for an admin**"
+empty = "_nothing yet_"
+hint = "_Ask me to remember or forget something, e.g. “derp, forget #12”._"
+gone = "That proposal is already handled."
+admins_only = "Only chat admins can approve notes."
+approved = "Note #{id} saved."
+rejected = "Note #{id} dropped."
+
+[memory.mode]
+auto = "I save what seems worth keeping"
+members = "saved when someone asks"
+admins = "admins approve new notes"
+off = "off"

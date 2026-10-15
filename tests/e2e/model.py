@@ -74,3 +74,12 @@ class ScriptedModel:
                 )
         if calls:
             yield calls
+
+
+def tool_call(tool: str, **args: object) -> Responder:
+    """A model turn that calls one tool."""
+
+    def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[ToolCallPart(tool, dict(args), tool_call_id=f"{tool}-call")])
+
+    return respond

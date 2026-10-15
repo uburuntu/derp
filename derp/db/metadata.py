@@ -8,5 +8,6 @@ from derp.agent import models as _agent  # noqa: F401
 from derp.db.base import Base
 from derp.history import models as _history  # noqa: F401
 from derp.inference import models as _inference  # noqa: F401
+from derp.memory import models as _memory  # noqa: F401
 
 metadata = Base.metadata

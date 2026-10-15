@@ -1,0 +1,7 @@
+# Memory
+
+- `models.py`: `notes` — chat notes (`user_id` null) and each member's own notes in one chat (`user_id` set). Nothing crosses chats. `chats.rules` (in history models) holds admin-written rules.
+- `notes.py`: limits (300-char notes, 50 chat / 20 personal per chat, 2000-char rules), `load_memory`, `notes_block` (prompt block framed as untrusted data, newest first, capped) and `is_admin` (live `getChatMember`; private chats: the user is the admin).
+- Permission model: chat notes follow `chats.notes_mode` — `auto` / `members` (saved freely) / `admins` (non-admin requests become `proposed`, approved via `/memory` buttons) / `off`. Personal notes are always on; only their owner removes them. Rules are admin-only and the only chat text in the trusted part of the prompt.
+- `command.py`: `/memory` lists rules, chat notes, the caller's notes and pending proposals (approve/reject buttons, admin-checked on press).
+- Agent tools live in `derp/agent/tools/memory.py` (`remember`, `forget_note`, `set_chat_rules`; paid and sponsored runs only).

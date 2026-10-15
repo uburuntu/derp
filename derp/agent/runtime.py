@@ -55,6 +55,7 @@ from derp.inference.openrouter import chat_settings
 from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
+from derp.memory.notes import load_memory, notes_block
 from derp.ops.observability import record_run_failure
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import Target, send_markdown
@@ -139,6 +140,7 @@ class Runtime:
             reply_to = message.reply_to_message.message_id if message.reply_to_message else None
             images = await referenced_media(session, chat.id, message.message_id, reply_to)
             topic = await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
+            memory = await load_memory(session, chat.id, asker.id)
         inspected = await inspect(self.gateway, images)
         model = self.model_factory(pin)
         deps = RunDeps(
@@ -165,6 +167,8 @@ class Runtime:
             now=datetime.now(UTC),
             tz=tz,
             topic=topic.name if topic else None,
+            rules=chat.rules,
+            notes=notes_block(memory, asker.full_name),
         )
         caps = self.settings.run_caps
         progress: Progress = (
