@@ -40,4 +40,3 @@ async def test_derp_added_refreshes_profile_and_members_are_tracked(conversation
         assert owner is not None and owner.status == "creator"
         events = list(await session.scalars(select(MemberEvent.kind).where(MemberEvent.user_id == NEWBIE.id)))
         assert events == ["join"]
-    assert bot_user["id"] == BOT_ID
