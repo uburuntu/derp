@@ -23,3 +23,11 @@ auto = "I save what seems worth keeping"
 members = "saved when someone asks"
 admins = "admins approve new notes"
 off = "off"
+
+[onboarding]
+title = "👋 **Derp is here**"
+summon = "Call me with @{username}, by name (derp, дерп) or by replying to me. I stay quiet otherwise."
+context_on = "I read this chat to keep up with the conversation; messages are kept for {days} days and never leave this chat. Admins can switch me to mentions only."
+context_off = "Mentions only: I see just the messages addressed to me, so I won't know what was said before."
+settings = "_Settings: /settings · what I remember: /memory_"
+make_admin = "Make me admin (optional)"

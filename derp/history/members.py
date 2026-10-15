@@ -206,7 +206,8 @@ async def refresh_stale_profiles(bot: Bot, db: Database, *, limit: int = 50) -> 
 
 
 def build_router() -> Router:
+    """``chat_member`` updates; Derp's own ``my_chat_member`` goes through onboarding, which calls
+    ``on_my_chat_member`` first."""
     router = Router(name="members")
     router.chat_member.register(on_chat_member)
-    router.my_chat_member.register(on_my_chat_member)
     return router

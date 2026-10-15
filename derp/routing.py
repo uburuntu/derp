@@ -11,10 +11,11 @@ def include_routers(dispatcher: Dispatcher) -> None:
     from derp.agent import handler
     from derp.history import members, polls, reactions
     from derp.memory import command as memory
-    from derp.settings import start
+    from derp.settings import onboarding, start
 
     dispatcher.include_routers(
         members.build_router(),
+        onboarding.build_router(),
         reactions.build_router(),
         polls.build_router(),
         start.build_router(),

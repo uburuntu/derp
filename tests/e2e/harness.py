@@ -168,10 +168,14 @@ class Conversation:
         return await self.api.push_update({"update_id": next(self._update_ids), kind: dict(payload)})
 
     async def expect_reply(self, sent: Sent, method: str = "sendRichMessage", timeout: float = 5) -> Call:
+        """The first message sent in reply to ``sent`` (notices posted without a reply are skipped)."""
         chat_id = int(sent.message["chat"]["id"])
-        return await self.api.wait_call(
-            method, after=sent.after, where=lambda c: int(c["chat_id"]) == chat_id, timeout=timeout
-        )
+
+        def replies(call: Call) -> bool:
+            target = call.fields.get("reply_parameters") or {}
+            return int(call["chat_id"]) == chat_id and int(target.get("message_id", 0)) == sent.message_id
+
+        return await self.api.wait_call(method, after=sent.after, where=replies, timeout=timeout)
 
     async def settle(self, sent: Sent | int, timeout: float = 5) -> None:
         """Wait until the update's handler finished (the next poll confirms its offset)."""
