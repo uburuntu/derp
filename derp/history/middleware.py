@@ -10,10 +10,13 @@ from derp.agent.invocation import detect_trigger
 from derp.db.engine import Database
 from derp.history.capture import store_message, upsert_chat, upsert_user
 from derp.history.members import track_message
+from derp.history.transcription import Transcriber
 
 
 class CaptureMiddleware(BaseMiddleware):
     """Stores invocations always, ambient messages when the chat allows it, and edits in place.
+
+    Stored voice messages and video notes are transcribed before handlers run.
 
     Adds ``trigger`` (or None) and ``chat_row`` to handler data. Guest-mode
     messages pass through untouched: they are never stored.
@@ -43,6 +46,9 @@ class CaptureMiddleware(BaseMiddleware):
                 stored = await store_message(session, event, capture="invocation" if trigger else "ambient")
             if not self.edits:
                 await track_message(session, event, stored=stored)
+        transcriber: Transcriber | None = data.get("transcriber")
+        if stored and not self.edits and transcriber is not None and (event.voice or event.video_note):
+            await transcriber.transcribe_message(event.chat.id, event.message_id)
         data["trigger"] = trigger
         data["chat_row"] = chat
         return await handler(event, data)

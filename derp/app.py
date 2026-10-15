@@ -16,6 +16,7 @@ from derp.config import Settings, get_settings
 from derp.db.engine import Database
 from derp.history.members import refresh_stale_profiles
 from derp.history.middleware import CaptureMiddleware
+from derp.history.transcription import Transcriber
 from derp.inference.api import OpenRouterAPI
 from derp.inference.openrouter import build_provider, chat_model
 from derp.inference.pins import PinStore
@@ -41,6 +42,7 @@ class Services:
     api: OpenRouterAPI
     pins: PinStore
     media: MediaGateway
+    transcriber: Transcriber
     model_factory: ModelFactory = field(init=False)
 
     def __post_init__(self) -> None:
@@ -51,14 +53,18 @@ class Services:
 
     @classmethod
     def create(cls, settings: Settings, db: Database, bot: Bot) -> Services:
+        api = OpenRouterAPI(settings)
+        pins = PinStore(db, settings)
+        media = MediaGateway(bot)
         return cls(
             settings=settings,
             db=db,
             bot=bot,
             provider=build_provider(settings),
-            api=OpenRouterAPI(settings),
-            pins=PinStore(db, settings),
-            media=MediaGateway(bot),
+            api=api,
+            pins=pins,
+            media=media,
+            transcriber=Transcriber(db=db, api=api, gateway=media, pins=pins, settings=settings),
         )
 
     async def close(self) -> None:
@@ -76,7 +82,13 @@ def build_dispatcher(services: Services) -> Dispatcher:
         model_factory=services.model_factory,
         gateway=services.media,
     )
-    dispatcher = Dispatcher(services=services, settings=services.settings, db=services.db, runtime=runtime)
+    dispatcher = Dispatcher(
+        services=services,
+        settings=services.settings,
+        db=services.db,
+        runtime=runtime,
+        transcriber=services.transcriber,
+    )
     dispatcher.update.outer_middleware(UpdateSpanMiddleware())
     dispatcher.message.outer_middleware(CaptureMiddleware())
     dispatcher.edited_message.outer_middleware(CaptureMiddleware(edits=True))

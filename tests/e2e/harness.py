@@ -2,7 +2,7 @@
 
 import asyncio
 import itertools
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +15,13 @@ from derp.db.engine import Database
 from derp.telegram.bot import create_bot
 from derp.telegram.updates import ALLOWED_UPDATES
 from tests.e2e.fake_api import Call, FakeBotAPI
+
+
+@dataclass(frozen=True, slots=True)
+class Derived:
+    """An override computed from the freshly created services (e.g. a component wired to a fake)."""
+
+    build: Callable[[Services], Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +89,7 @@ class Conversation:
         bot = create_bot(self.settings)
         self.services = Services.create(self.settings, self.db, bot)
         for name, value in self.overrides.items():
-            setattr(self.services, name, value)
+            setattr(self.services, name, value.build(self.services) if isinstance(value, Derived) else value)
         self.dispatcher = build_dispatcher(self.services)
         polls = len(self.api.calls_of("getUpdates"))
         self.task = asyncio.create_task(
