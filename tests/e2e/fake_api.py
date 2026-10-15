@@ -370,6 +370,17 @@ class FakeBotAPI:
         rich = fields["rich_message"]
         return self._new_message(fields, text=str(rich.get("markdown") or rich.get("html") or ""))
 
+    def _m_sendRichMessageDraft(self, fields: JsonObject) -> bool:  # noqa: N802
+        chat = self.chats.get(int(fields["chat_id"]), {})
+        if chat.get("type") != "private":
+            raise ValueError("drafts can be sent only to private chats")
+        if int(fields["draft_id"]) == 0:
+            raise ValueError("draft_id must be non-zero")
+        return True
+
+    def _m_sendChatAction(self, fields: JsonObject) -> bool:  # noqa: N802
+        return True
+
     def _m_sendDice(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         return self._new_message(fields, dice={"emoji": fields.get("emoji", "🎲"), "value": 4})
 

@@ -1,7 +1,7 @@
 """Route invocations (not commands) to the agent runtime."""
 
 from aiogram import Router
-from aiogram.types import Message
+from aiogram.types import Message, MessageGenerationStopped
 
 from derp.agent.invocation import Trigger, TriggerKind
 from derp.agent.runtime import Runtime
@@ -16,7 +16,12 @@ async def on_invocation(message: Message, chat_row: Chat, runtime: Runtime) -> N
     await runtime.answer(message, chat_row)
 
 
+async def on_stop(update: MessageGenerationStopped, runtime: Runtime) -> None:
+    runtime.stop(update.chat.id, update.draft_id)
+
+
 def build_router() -> Router:
     router = Router(name="agent")
     router.message.register(on_invocation, invoked)
+    router.stopped_message_generation.register(on_stop)
     return router

@@ -81,6 +81,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         pins=services.pins,
         model_factory=services.model_factory,
         gateway=services.media,
+        api=services.api,
     )
     dispatcher = Dispatcher(
         services=services,
