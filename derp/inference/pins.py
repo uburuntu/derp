@@ -1,5 +1,6 @@
 """Live model pins: DB-backed, seeded from settings, cached briefly in-process."""
 
+import logging
 import time
 from datetime import UTC, datetime
 
@@ -11,6 +12,7 @@ from derp.db.engine import Database
 from derp.inference.models import ModelPin
 from derp.inference.roles import ModelRole, RolePin
 
+log = logging.getLogger("derp.pins")
 CACHE_SECONDS = 300
 
 
@@ -36,9 +38,14 @@ class PinStore:
         return self._cache.get(role) or self.defaults[role]
 
     async def refresh(self) -> None:
+        cache: dict[ModelRole, RolePin] = {}
         async with self.db.session() as session:
-            rows = await session.scalars(select(ModelPin))
-            self._cache = {ModelRole(row.role): RolePin.model_validate(row.pin) for row in rows}
+            for row in await session.scalars(select(ModelPin)):
+                try:  # a role retired from code or a malformed pin must not break the other roles
+                    cache[ModelRole(row.role)] = RolePin.model_validate(row.pin)
+                except ValueError:
+                    log.warning("ignoring unusable model pin for role %r", row.role)
+        self._cache = cache
         self._loaded_at = time.monotonic()
 
     async def all(self) -> dict[ModelRole, RolePin]:

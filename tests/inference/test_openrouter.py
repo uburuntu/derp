@@ -74,6 +74,8 @@ async def test_generate_image_pins_providers_and_decodes() -> None:
     assert image.data == b"PNG" and image.cost_usd == Decimal("0.039") and image.media_type == "image/png"
     assert seen["provider"] == {"only": ["google-vertex"], "allow_fallbacks": False}
     assert seen["input_references"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,")  # type: ignore[index]
+    with pytest.raises(ValueError, match="no ZDR host"):
+        await api.generate_image("m/y", "a dog")
 
 
 async def test_transcribe_requests_zdr_and_reports_errors() -> None:

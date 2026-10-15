@@ -125,3 +125,36 @@ async def test_model_searches_history_with_a_tool(conversation: Conversation, mo
     asked = await conversation.send(BOB, food, "derp where's the shawarma?")
     reply = await conversation.expect_reply(asked)
     assert reply["rich_message"]["markdown"] == "Joe's, says Bob"
+
+
+async def test_consecutive_plain_derp_messages_keep_the_run_record_exact(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    from datetime import UTC, datetime
+
+    from derp.agent.runs import load_messages
+    from derp.history.models import Chat
+
+    carl = Person(503, "Carl")
+    conversation.meet(carl)
+    async with conversation.db.transaction() as session:
+        session.add(Chat(id=carl.id, type="private"))
+        await session.flush()
+        for _ in range(3):  # Derp messages with no replayable run (e.g. command replies)
+            message_id = conversation.api.take_message_id(carl.id)
+            session.add(
+                Message(
+                    chat_id=carl.id, message_id=message_id, date=datetime.now(UTC), kind="text",
+                    text=f"note {message_id}", capture="derp", is_derp=True, payload={},
+                )
+            )  # fmt: skip
+    model.reply("fresh answer")
+    sent = await conversation.send(carl, text="hello?")
+    await conversation.expect_reply(sent)
+    await conversation.settle(sent)
+    async with conversation.db.session() as session:
+        run = await session.scalar(select(AgentRun))
+        assert run is not None
+        stored = load_messages(run.messages)
+    assert [type(m).__name__ for m in stored] == ["ModelRequest", "ModelResponse"]
+    assert stored[-1].parts == [TextPart("fresh answer")]

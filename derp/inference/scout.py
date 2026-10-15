@@ -13,14 +13,17 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, capture_run_messages
+from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models import Model
 from sqlalchemy import select
 
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.inference.api import OpenRouterAPI
+from derp.inference.ledger import record_usage
 from derp.inference.models import ModelPin, ScoutProposal
+from derp.inference.openrouter import chat_settings, response_usage, responses
 from derp.inference.pins import PinStore, apply_pin
 from derp.inference.roles import ModelRole, RolePin
 
@@ -87,6 +90,8 @@ def build_catalog(
     catalog = Catalog(images=set(images))
     for model in models:
         pricing = model.get("pricing") or {}
+        if pricing.get("prompt") is None or pricing.get("completion") is None:
+            continue  # unknown price is not "free"
         analysis = (model.get("benchmarks") or {}).get("artificial_analysis") or {}
         catalog.models[str(model["id"])] = Candidate(
             id=str(model["id"]),
@@ -98,6 +103,8 @@ def build_catalog(
         )
     for endpoint in zdr:
         pricing = endpoint.get("pricing") or {}
+        if pricing.get("prompt") is None or pricing.get("completion") is None:
+            continue
         catalog.zdr.setdefault(str(endpoint["model_id"]), []).append(
             Route(
                 tag=str(endpoint.get("tag") or ""),
@@ -198,10 +205,15 @@ def _challenger(
 ModelFactory = Callable[[RolePin], Model]
 
 
-async def passes_smoke(model: Model) -> bool:
-    """Two tiny live checks; a challenger that fails either never reaches the owner."""
+async def passes_smoke(model: Model, pin: RolePin) -> tuple[bool, list[ModelResponse]]:
+    """Two tiny live checks under the pin's real settings (ZDR, fallbacks); returns the paid responses too.
+
+    A challenger that fails either never reaches the owner.
+    """
     called: list[str] = []
-    agent = Agent(model, instructions="You are a helpful assistant.")
+    agent = Agent(
+        model, instructions="You are a helpful assistant.", model_settings=chat_settings(pin, max_tokens=300)
+    )
 
     @agent.tool_plain
     def current_time() -> str:
@@ -209,13 +221,15 @@ async def passes_smoke(model: Model) -> bool:
         called.append("current_time")
         return "12:00"
 
-    try:
-        russian = await agent.run("Ответь по-русски одним коротким предложением: какого цвета небо?")
-        timed = await agent.run("What time is it? Use the tool.")
-    except Exception:  # noqa: BLE001 - any provider failure disqualifies the challenger
-        return False
+    with capture_run_messages() as captured:
+        try:
+            russian = await agent.run("Ответь по-русски одним коротким предложением: какого цвета небо?")
+            timed = await agent.run("What time is it? Use the tool.")
+        except Exception:  # noqa: BLE001 - any provider failure disqualifies the challenger
+            return False, responses(captured)
+    paid = responses(russian.all_messages()) + responses(timed.new_messages())
     cyrillic = sum("а" <= ch.lower() <= "я" for ch in russian.output)
-    return cyrillic >= 5 and bool(called) and bool(timed.output)
+    return cyrillic >= 5 and bool(called) and bool(timed.output), paid
 
 
 async def run_scout(
@@ -235,26 +249,48 @@ async def run_scout(
         ModelRole.CHAT_SPONSORED: settings.context_windows.sponsored,
     }
     changes = plan(await store.all(), catalog, allowlist=settings.model_family_allowlist, windows=windows)
+
+    # Live checks run outside any transaction: they take seconds and cost money.
+    async with db.session() as session:
+        pending = {
+            str(model)
+            for model in await session.scalars(
+                select(ScoutProposal.proposed["model"].astext).where(ScoutProposal.status != "applied")
+            )
+        }
+    passed: list[Change] = []
+    probes: list[tuple[Change, list[ModelResponse]]] = []
+    for change in changes:
+        if change.safe or change.pin.model in pending:
+            continue
+        ok, paid = await passes_smoke(model_factory(change.pin), change.pin)
+        probes.append((change, paid))
+        if ok:
+            passed.append(change)
+
     notes: list[str] = []
     async with db.transaction() as session:
         for change in changes:
-            if change.safe:
-                await apply_pin(session, change.role, change.pin, source="scout")
-                if change.price is not None and (row := await session.get(ModelPin, change.role.value)):
-                    row.price_prompt, row.price_completion = change.price
-                if change.reason != "price snapshot":
-                    notes.append(f"{change.role}: {change.reason}")
+            if not change.safe:
                 continue
-            duplicate = await session.scalar(
-                select(ScoutProposal.id).where(
-                    ScoutProposal.role == change.role.value,
-                    ScoutProposal.status != "applied",
-                    ScoutProposal.proposed["model"].astext == change.pin.model,
+            await apply_pin(session, change.role, change.pin, source="scout")
+            if change.price is not None and (row := await session.get(ModelPin, change.role.value)):
+                row.price_prompt, row.price_completion = change.price
+            if change.reason != "price snapshot":
+                notes.append(f"{change.role}: {change.reason}")
+        for change, paid in probes:
+            for response in paid:
+                record_usage(
+                    session,
+                    response_usage(response),
+                    kind="scout",
+                    funding="creator",
+                    role=change.role.value,
+                    requested_model=change.pin.model,
                 )
-            )
-            if duplicate is not None or not await passes_smoke(model_factory(change.pin)):
-                continue
-            current = (await store.get(change.role)).model_dump(mode="json")
+        for change in passed:
+            row = await session.get(ModelPin, change.role.value)
+            current = row.pin if row is not None else (await store.get(change.role)).model_dump(mode="json")
             session.add(
                 ScoutProposal(
                     role=change.role.value,

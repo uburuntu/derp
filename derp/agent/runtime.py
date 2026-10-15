@@ -17,7 +17,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message as TgMessage
 from pydantic_ai import Agent, capture_run_messages
-from pydantic_ai.messages import InstructionPart, ModelMessage
+from pydantic_ai.messages import InstructionPart, ModelMessage, repair_messages
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -138,12 +138,16 @@ class Runtime:
         caps = self.settings.run_caps
         output = ""
         error: BaseException | None = None
+        # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing here
+        # keeps the captured list aligned so the run's own messages slice out exactly.
+        history = repair_messages(window.messages)
+        new_messages: list[ModelMessage] = []
         with capture_run_messages() as captured:
             try:
                 async with asyncio.timeout(caps.timeout_seconds):
                     result = await self.agent.run(
                         prompt,
-                        message_history=window.messages,
+                        message_history=history,
                         deps=deps,
                         model=self.model_factory(pin),
                         instructions=InstructionPart(brief, dynamic=True),
@@ -154,9 +158,11 @@ class Runtime:
                         toolsets=toolsets_for(deps, FAMILIES),
                     )
                 output = result.output
+                new_messages = result.new_messages()
             except Exception as exc:  # noqa: BLE001 - any failure closes the run and gets an apology
                 error = exc
-        new_messages: list[ModelMessage] = list(captured[len(window.messages) :])
+        if error is not None:
+            new_messages = list(captured[len(history) :])
         if error is None and (output.strip() or not deps.delivered):
             try:
                 sent = await send_markdown(self.bot, target, output, trusted=False)

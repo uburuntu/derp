@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.inference.models import ModelPin, ScoutProposal
+from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
 from derp.inference.pins import PinStore, rollback_pin
 from derp.inference.roles import ModelRole, RolePin
 from derp.inference.scout import build_catalog, passes_smoke, plan, run_scout
@@ -89,9 +89,19 @@ def scripted(*, russian: str, call_tool: bool) -> FunctionModel:
 
 
 async def test_smoke_check() -> None:
-    assert await passes_smoke(scripted(russian="Небо голубое.", call_tool=True))
-    assert not await passes_smoke(scripted(russian="The sky is blue.", call_tool=True))
-    assert not await passes_smoke(scripted(russian="Небо голубое.", call_tool=False))
+    pin = RolePin(model="acme/smart")
+    ok, paid = await passes_smoke(scripted(russian="Небо голубое.", call_tool=True), pin)
+    assert ok and len(paid) == 3  # russian answer + tool call + final answer, all ledgered by the caller
+    assert not (await passes_smoke(scripted(russian="The sky is blue.", call_tool=True), pin))[0]
+    assert not (await passes_smoke(scripted(russian="Небо голубое.", call_tool=False), pin))[0]
+
+
+def test_missing_prices_are_not_free() -> None:
+    priced = model("acme/a", 50, "0.0000001", "0.0000005")
+    unpriced = {**model("acme/b", 60, "0", "0"), "pricing": {}}
+    catalog = build_catalog([priced, unpriced], [{"model_id": "acme/b", "pricing": {"prompt": "0"}}], [])
+    assert set(catalog.models) == {"acme/a"}
+    assert catalog.zdr == {}
 
 
 class FakeAPI:
@@ -146,3 +156,17 @@ async def test_run_scout_applies_safe_changes_and_files_one_proposal(
     await store.refresh()
     assert (await store.get(ModelRole.CHAT)).model == "openai/a"
     assert notes and "promoted openai/b" in notes[0]
+    async with database.session() as session:
+        probes = list(await session.scalars(select(ProviderCall).where(ProviderCall.kind == "scout")))
+        assert probes and {p.funding for p in probes} == {
+            "creator"
+        }  # one probe run; the repeat was deduplicated
+
+
+@pytest.mark.db
+async def test_unknown_pin_roles_are_ignored(database: Database, settings: Settings) -> None:
+    store = PinStore(database, settings)
+    await store.seed()
+    async with database.transaction() as session:
+        session.add(ModelPin(role="retired_role", pin={"model": "x/y"}, source="seed"))
+    assert (await store.get(ModelRole.CHAT)).model == settings.model_pins[ModelRole.CHAT].model

@@ -95,9 +95,12 @@ class OpenRouterAPI:
         prompt: str,
         *,
         only: Sequence[str] = (),
+        zdr: bool = True,
         references: Sequence[tuple[bytes, str]] = (),
         aspect_ratio: str | None = None,
     ) -> GeneratedImage:
+        if zdr and not only:
+            raise ValueError(f"no ZDR host pinned for {model}; refusing an unrestricted image request")
         body: Json = {"model": model, "prompt": prompt}
         if only:
             body["provider"] = {"only": list(only), "allow_fallbacks": False}

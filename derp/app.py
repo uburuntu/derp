@@ -22,6 +22,7 @@ from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
 from derp.inference.scout import run_scout
 from derp.ops import observability
+from derp.ops.owner import notify_owners
 from derp.ops.periodic import every
 from derp.telegram.bot import create_bot
 from derp.telegram.middleware import UpdateSpanMiddleware
@@ -89,6 +90,7 @@ def background_tasks(services: Services) -> list[asyncio.Task[None]]:
             services.pins,
             services.settings,
             services.model_factory,
+            notify=lambda text: notify_owners(services.bot, services.settings, text),
         )
 
     async def profiles() -> None:
