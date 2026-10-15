@@ -12,6 +12,7 @@ from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from derp.config import Settings, get_settings
 from derp.db.engine import Database
+from derp.history.middleware import CaptureMiddleware
 from derp.inference.api import OpenRouterAPI
 from derp.inference.openrouter import build_provider, chat_model
 from derp.inference.pins import PinStore
@@ -54,6 +55,8 @@ class Services:
 def build_dispatcher(services: Services) -> Dispatcher:
     dispatcher = Dispatcher(services=services, settings=services.settings, db=services.db)
     dispatcher.update.outer_middleware(UpdateSpanMiddleware())
+    dispatcher.message.outer_middleware(CaptureMiddleware())
+    dispatcher.edited_message.outer_middleware(CaptureMiddleware(edits=True))
     from derp.routing import include_routers
 
     include_routers(dispatcher)

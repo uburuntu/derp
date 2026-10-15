@@ -42,6 +42,7 @@ markers = [
     "live: spends real money or calls real services; never in CI",
 ]
 addopts = "-m 'not live'"
+filterwarnings = ["ignore:Computed default on:UserWarning"]
 
 [tool.ruff]
 target-version = "py314"

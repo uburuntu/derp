@@ -1,5 +1,9 @@
 # History — chat knowledge
 
-- Owns everything Derp knows about a chat: chats, users, members, messages and media, reactions, polls, stickers, digests.
+- Owns everything Derp knows about a chat: `chats`, `users`, `forum_topics`, `messages` + `message_media` (more tables join as features land: members, reactions, polls, stickers, digests).
+- Storage shape: normalized core columns for what queries filter on, a typed `payload` JSONB per message kind (dice, location, contact, checklist, poll, service event…), and `raw` JSON only for kinds without a typed shape. Contacts and precise locations are stored in full and follow retention.
+- `capture.py` upserts by Telegram IDs, so redelivery and edits are idempotent; edits replace text/payload in place. `message_id == 0` (ephemeral) and guest-mode messages are never stored. Only agent outputs are recorded as Derp's messages (`capture='derp'`), not UI/system copy.
+- `middleware.py` runs before handlers: invocations are always stored; other group messages only while the chat's ambient context is on. It hands `trigger` and `chat_row` to handlers.
+- `thread_id` is set only for forum-topic messages, so "this topic" queries never mix topics.
+- Full-text search uses the `simple` configuration over `text` + `extra_text` (transcripts, media descriptions) via the generated `tsv` column; always pass `'simple'` to query functions (the server default config drops stop words). Trigram index on `text` covers fuzzy matches.
 - Rows are always scoped by `chat_id`; query helpers take the chat from the run context, never from tool arguments.
-- Raw content follows the chat's retention window; privacy actions tombstone and scrub instead of leaving copies behind.
