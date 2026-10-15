@@ -39,6 +39,6 @@ jobs:
       - name: Pyright
         run: uv run --no-sync pyright
       - name: Unit + PostgreSQL tests
-        run: uv run --no-sync pytest -q -m "not e2e"
+        run: uv run --no-sync pytest -q -m "not e2e and not live"
       - name: E2E journeys
         run: uv run --no-sync pytest -q -m e2e

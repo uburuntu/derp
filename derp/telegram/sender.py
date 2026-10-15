@@ -53,7 +53,10 @@ class Target:
 
 
 def sanitize_untrusted(markdown: str) -> str:
-    return _INTERACTIVE_TAGS.sub("", markdown)
+    # Repeat until stable: removing an inner tag must not assemble an outer one.
+    while (cleaned := _INTERACTIVE_TAGS.sub("", markdown)) != markdown:
+        markdown = cleaned
+    return markdown
 
 
 def split_rich(markdown: str, limit: int = RICH_CHUNK) -> list[str]:
@@ -83,7 +86,7 @@ async def send_markdown(
     """Send Markdown as one or more rich messages; the keyboard goes on the last one."""
     if not trusted:
         markdown = sanitize_untrusted(markdown)
-    chunks = split_rich(markdown) or ["…"]
+    chunks = split_rich(markdown) if markdown.strip() else ["…"]
     sent: list[Message] = []
     for index, chunk in enumerate(chunks):
         last = index == len(chunks) - 1
@@ -108,7 +111,7 @@ async def send_markdown(
 async def send_plain(
     bot: Bot, target: Target, text: str, *, reply_markup: InlineKeyboardMarkup | None = None
 ) -> list[Message]:
-    chunks = split_text(text, PLAIN_LIMIT) or ["…"]
+    chunks = split_text(text, PLAIN_LIMIT) if text.strip() else ["…"]
     sent: list[Message] = []
     for index, chunk in enumerate(chunks):
         last = index == len(chunks) - 1
@@ -127,15 +130,33 @@ async def send_plain(
 async def send_album(
     bot: Bot, target: Target, media: Sequence[InputMediaPhoto | InputMediaVideo]
 ) -> list[Message]:
-    """Send up to 10 photos/videos as one album per batch."""
+    """Photos/videos as albums of 2–10 (balanced batches); a lone item is sent on its own."""
+    if not media:
+        return []
+    if len(media) == 1:
+        return [await _send_single(bot, target, media[0])]
+    batches = -(-len(media) // 10)
+    size = -(-len(media) // batches)
     sent: list[Message] = []
-    for start in range(0, len(media), 10):
+    for start in range(0, len(media), size):
         sent.extend(
             await bot.send_media_group(
                 chat_id=target.chat_id,
                 message_thread_id=target.thread_id,
-                media=list(media[start : start + 10]),
+                media=list(media[start : start + size]),
                 reply_parameters=target.reply_parameters if start == 0 else None,
             )
         )
     return sent
+
+
+async def _send_single(bot: Bot, target: Target, item: InputMediaPhoto | InputMediaVideo) -> Message:
+    common = {
+        "chat_id": target.chat_id,
+        "message_thread_id": target.thread_id,
+        "caption": item.caption,
+        "reply_parameters": target.reply_parameters,
+    }
+    if isinstance(item, InputMediaPhoto):
+        return await bot.send_photo(photo=item.media, **common)
+    return await bot.send_video(video=item.media, **common)

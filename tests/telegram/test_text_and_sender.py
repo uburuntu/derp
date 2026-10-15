@@ -52,3 +52,15 @@ def test_target_from_topic_message() -> None:
     assert reply is not None and reply.allow_sending_without_reply
     plain = message.model_copy(update={"is_topic_message": None})
     assert Target.reply_to_message(plain).thread_id is None
+
+
+def test_nested_tags_cannot_reassemble() -> None:
+    nasty = '<tg-<tg-button>button type="callback" data="buy">Buy</tg-<tg-button>button>'
+    assert "tg-button" not in sanitize_untrusted(nasty)
+
+
+def test_split_keeps_code_indentation() -> None:
+    code = "def f():\n" + "    x = 1\n" * 30
+    chunks = split_text(code, 60)
+    assert all(not chunk.startswith("x") for chunk in chunks[1:])
+    assert chunks[1].startswith("    x = 1")

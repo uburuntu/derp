@@ -2,7 +2,8 @@
 
 Content-free by default (numeric IDs, kinds, counts, durations, outcomes). The
 only content export is a redacted, truncated exchange when an agent run fails.
-Logfire is optional and fails soft; HTTPX is never instrumented
+Pydantic AI is deliberately not auto-instrumented (its spans record exception
+messages and prompts); runs emit their own content-free spans. Logfire is optional and fails soft; HTTPX is never instrumented
 globally because Telegram file URLs embed the bot token.
 """
 
@@ -43,7 +44,6 @@ def configure(settings: Settings) -> Redactor:
             inspect_arguments=False,
             metrics=False,
         )
-        logfire.instrument_pydantic_ai(include_content=False, include_binary_content=False)
     except Exception as error:  # noqa: BLE001 - telemetry must never stop the bot
         log.warning("telemetry disabled: %s", type(error).__name__)
     return _redactor
@@ -73,8 +73,18 @@ def update_attributes(update: Update) -> dict[str, Any]:
 
 @contextmanager
 def update_span(update: Update) -> Iterator[None]:
-    with logfire.span("telegram.update", **update_attributes(update)):
-        yield
+    """Span per update. Exceptions are recorded by type only: Logfire would otherwise
+    export the exception message and traceback, which can carry content."""
+    error: Exception | None = None
+    with logfire.span("telegram.update", **update_attributes(update)) as span:
+        try:
+            yield
+        except Exception as exc:  # noqa: BLE001 - re-raised below, outside the span
+            error = exc
+            span.set_attribute("error_type", type(exc).__name__)
+            span.set_level("error")
+    if error is not None:
+        raise error
 
 
 def record_run_failure(run_id: int, error: BaseException, exchange: str) -> None:

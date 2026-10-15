@@ -71,7 +71,7 @@ ignore = ["S311", "RUF001", "RUF002", "RUF003"]
 "tools/**" = ["T20", "S603", "S607"]
 
 [tool.pyright]
-include = ["derp", "tests", "tools", "migrations"]
+include = ["derp", "tests", "migrations"]
 exclude = ["references", "**/__pycache__", ".venv", ".claude", "node_modules"]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"

@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import typing
 from collections import defaultdict, deque
 from collections.abc import Callable, Mapping
 from copy import deepcopy
@@ -268,6 +269,8 @@ class FakeBotAPI:
         for name, value in form.items():
             if isinstance(value, FileField):
                 attachments.append(Attachment(name, value.filename, value.content_type, value.file.read()))
+            elif _is_text_field(model, name):
+                fields[name] = str(value)
             else:
                 fields[name] = self._decode_value(str(value))
         unknown = set(fields) - set(model.model_fields)
@@ -465,6 +468,17 @@ class FakeBotAPI:
         if parameters:
             payload["parameters"] = dict(parameters)
         return web.json_response(payload, status=code)
+
+
+def _is_text_field(model: type[TelegramMethod[Any]], name: str) -> bool:
+    """String-typed fields are sent verbatim; only structured fields are JSON-encoded."""
+    field = model.model_fields.get(name)
+    if field is None:
+        return False
+    members = typing.get_args(field.annotation) or (field.annotation,)
+    return all(
+        member in (str, type(None)) or getattr(member, "__name__", "") == "Default" for member in members
+    )
 
 
 _NO_GIFTS = {

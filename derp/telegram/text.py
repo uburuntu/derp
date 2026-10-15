@@ -22,7 +22,7 @@ def split_text(text: str, limit: int = PLAIN_LIMIT, measure: Callable[[str], int
     rest = text
     while measure(rest) > limit:
         cut = _cut(rest, limit, measure)
-        chunk, rest = rest[:cut].rstrip(), rest[cut:].lstrip()
+        chunk, rest = rest[:cut].rstrip(), rest[cut:].lstrip("\n")  # keep indentation
         if chunk:
             chunks.append(chunk)
     if rest:

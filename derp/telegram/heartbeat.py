@@ -6,17 +6,20 @@ container healthcheck and the deploy's post-cutover check use it.
 
 import os
 import time
+from contextlib import suppress
 from pathlib import Path
 
 MAX_AGE_SECONDS = 180
 
 
 def heartbeat_path() -> Path:
-    return Path(os.environ.get("DERP_HEARTBEAT_PATH") or os.environ.get("HEARTBEAT_PATH") or "/tmp/derp.poll")  # noqa: S108
+    return Path(os.environ.get("HEARTBEAT_PATH") or "/tmp/derp.poll")  # noqa: S108 - same env as Settings
 
 
 def mark_poll_success(path: Path | None = None) -> None:
-    (path or heartbeat_path()).write_text(str(time.time()))
+    # Liveness reporting must never break polling; a stale file makes the healthcheck fail instead.
+    with suppress(OSError):
+        (path or heartbeat_path()).write_text(str(time.time()))
 
 
 def ready(path: Path | None = None, max_age: float = MAX_AGE_SECONDS) -> bool:
