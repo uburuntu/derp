@@ -452,6 +452,14 @@ class FakeBotAPI:
         chat = dict(self.chats[int(fields["chat_id"])])
         return {"accent_color_id": 0, "max_reaction_count": 11, "accepted_gift_types": _NO_GIFTS, **chat}
 
+    def _m_getChatMemberCount(self, fields: JsonObject) -> int:  # noqa: N802
+        chat_id = int(fields["chat_id"])
+        return sum(
+            1
+            for (cid, _), status in self.member_statuses.items()
+            if cid == chat_id and status not in {"left", "kicked"}
+        )
+
     def _m_getFile(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         file_id = str(fields["file_id"])
         path, data = self.files[file_id]

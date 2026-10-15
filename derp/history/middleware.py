@@ -9,6 +9,7 @@ from aiogram.types import Message, TelegramObject
 from derp.agent.invocation import detect_trigger
 from derp.db.engine import Database
 from derp.history.capture import store_message, upsert_chat, upsert_user
+from derp.history.members import track_message
 
 
 class CaptureMiddleware(BaseMiddleware):
@@ -37,8 +38,11 @@ class CaptureMiddleware(BaseMiddleware):
             chat = await upsert_chat(session, event.chat)
             if event.from_user is not None:
                 await upsert_user(session, event.from_user)
+            stored = False
             if trigger is not None or chat.type == "private" or chat.ambient:
-                await store_message(session, event, capture="invocation" if trigger else "ambient")
+                stored = await store_message(session, event, capture="invocation" if trigger else "ambient")
+            if not self.edits:
+                await track_message(session, event, stored=stored)
         data["trigger"] = trigger
         data["chat_row"] = chat
         return await handler(event, data)

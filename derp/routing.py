@@ -8,6 +8,7 @@ from aiogram import Dispatcher
 
 
 def include_routers(dispatcher: Dispatcher) -> None:
+    from derp.history import members
     from derp.settings import start
 
-    dispatcher.include_routers(start.build_router())
+    dispatcher.include_routers(members.build_router(), start.build_router())

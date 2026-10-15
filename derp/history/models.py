@@ -153,3 +153,40 @@ class MessageMedia(Base):
     transcript_model: Mapped[str | None]
     description: Mapped[str | None]
     description_run_id: Mapped[int | None]
+
+
+class ChatMember(Base):
+    """A person seen in a chat: status, activity and the names they used there."""
+
+    __tablename__ = "chat_members"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('creator', 'administrator', 'member', 'restricted', 'left', 'kicked')", name="status"
+        ),
+    )
+
+    chat_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    user_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    status: Mapped[str] = mapped_column(String(13), default="member")
+    tag: Mapped[str | None]  # admin custom title or member tag
+    names: Mapped[list[Any]] = mapped_column(default=list, server_default=sql("'[]'::jsonb"))
+    message_count: Mapped[int] = mapped_column(default=0, server_default="0")
+    first_seen: Mapped[datetime] = mapped_column(server_default=func.now())
+    last_seen: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class MemberEvent(Base):
+    __tablename__ = "member_events"
+    __table_args__ = (
+        CheckConstraint(
+            "kind in ('join', 'leave', 'promote', 'demote', 'ban', 'unban', 'restrict', 'title')", name="kind"
+        ),
+        Index("ix_member_events_chat_at", "chat_id", "at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int]
+    user_id: Mapped[int]
+    kind: Mapped[str] = mapped_column(String(8))
+    actor_id: Mapped[int | None]
+    at: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -12,6 +12,7 @@ from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from derp.config import Settings, get_settings
 from derp.db.engine import Database
+from derp.history.members import refresh_stale_profiles
 from derp.history.middleware import CaptureMiddleware
 from derp.inference.api import OpenRouterAPI
 from derp.inference.openrouter import build_provider, chat_model
@@ -73,7 +74,13 @@ def background_tasks(services: Services) -> list[asyncio.Task[None]]:
             lambda pin: chat_model(pin, services.provider),
         )
 
-    return [asyncio.create_task(every("model-scout", 24 * 3600, scout, initial_delay=600))]
+    async def profiles() -> None:
+        await refresh_stale_profiles(services.bot, services.db)
+
+    return [
+        asyncio.create_task(every("model-scout", 24 * 3600, scout, initial_delay=600)),
+        asyncio.create_task(every("chat-profiles", 3600, profiles, initial_delay=120)),
+    ]
 
 
 async def run(settings: Settings) -> None:
