@@ -21,9 +21,9 @@ def test_zdr_is_per_request_except_free() -> None:
 def test_chat_settings_carry_fallbacks_and_max_price() -> None:
     pin = RolePin(model="a/b", fallbacks=("c/d",), max_price_prompt=1.5, max_price_completion=6)
     settings = chat_settings(pin, max_tokens=2000)
-    assert settings["openrouter_models"] == ["c/d"]
-    assert settings["max_tokens"] == 2000
-    assert settings["openrouter_provider"]["max_price"] == {"prompt": 1.5, "completion": 6}  # type: ignore[typeddict-item]
+    assert settings.get("openrouter_models") == ["c/d"]
+    assert settings.get("max_tokens") == 2000
+    assert settings.get("openrouter_provider", {}).get("max_price") == {"prompt": 1.5, "completion": 6}
     assert "openrouter_models" not in chat_settings(RolePin(model="a/b"), max_tokens=10)
 
 
