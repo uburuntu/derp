@@ -33,11 +33,14 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.context import Window, build_window
 from derp.agent.deps import Funding, RunDeps
+from derp.agent.lanes import Lanes
 from derp.agent.media import as_content, inspect, note_images, referenced_media
+from derp.agent.models import AgentRun
 from derp.agent.persona import PERSONA, situation
 from derp.agent.progress import DraftProgress, Progress, ReactionProgress, stage_for_tool
 from derp.agent.runs import finish_run, record_output, start_run
@@ -99,6 +102,7 @@ class Runtime:
         self.funder = funder
         self.gateway = gateway
         self.api = api
+        self.lanes = Lanes(settings.run_concurrency)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.agent = Agent[RunDeps, str](output_type=str, deps_type=RunDeps, instructions=PERSONA)
 
@@ -108,7 +112,27 @@ class Runtime:
             funding
         ]
 
-    async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome:
+    async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome | None:
+        """Answer an invocation, queued per chat topic. None when merged into a newer trigger or a duplicate."""
+        if message.from_user is None:
+            raise ValueError("an invocation needs a sender")
+        key = (chat.id, Target.reply_to_message(message).thread_id)
+        async with self.lanes.turn(key, message.from_user.id, message.message_id) as go:
+            if not go or (message.message_id and await self._answered(chat.id, message.message_id)):
+                return None
+            return await self._answer(message, chat, trigger=trigger)
+
+    async def _answered(self, chat_id: int, message_id: int) -> bool:
+        """A redelivered update (e.g. after a restart) must not be answered twice."""
+        async with self.db.session() as session:
+            found = await session.scalar(
+                select(AgentRun.id).where(
+                    AgentRun.chat_id == chat_id, AgentRun.trigger_message_id == message_id
+                )
+            )
+        return found is not None
+
+    async def _answer(self, message: TgMessage, chat: Chat, *, trigger: str) -> Outcome:
         asker = message.from_user
         if asker is None:
             raise ValueError("an invocation needs a sender")

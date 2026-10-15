@@ -158,3 +158,15 @@ async def test_consecutive_plain_derp_messages_keep_the_run_record_exact(
         stored = load_messages(run.messages)
     assert [type(m).__name__ for m in stored] == ["ModelRequest", "ModelResponse"]
     assert stored[-1].parts == [TextPart("fresh answer")]
+
+
+async def test_redelivered_trigger_is_answered_once(conversation: Conversation, model: ScriptedModel) -> None:
+    sent = await conversation.send(BOB, text="only once please")
+    await conversation.expect_reply(sent)
+    await conversation.settle(sent)
+    again = await conversation.push("message", sent.message)  # same message, new update id
+    await conversation.settle(again)
+    assert len(model.requests) == 1
+    async with conversation.db.session() as session:
+        runs = list(await session.scalars(select(AgentRun)))
+    assert len(runs) == 1

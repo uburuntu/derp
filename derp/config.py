@@ -137,6 +137,7 @@ class Settings(BaseSettings):
     approval_credits: int = 60
     approval_balance_fraction: float = 0.25
     run_caps: RunCaps = RunCaps()
+    run_concurrency: int = 12  # agent runs in flight at once, across all chats
     context_windows: ContextWindows = ContextWindows()
     retention: Retention = Retention()
     media: MediaLimits = MediaLimits()
