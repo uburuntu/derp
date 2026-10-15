@@ -20,6 +20,6 @@ COPY --from=builder --chown=app:app /app/derp /app/derp
 COPY --from=builder --chown=app:app /app/migrations /app/migrations
 COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini
 USER app
-ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 DERP_HEARTBEAT_PATH=/tmp/derp.poll
+ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYDANTIC_AI_NO_BANNER=1 DERP_HEARTBEAT_PATH=/tmp/derp.poll
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD ["python", "-m", "derp.telegram.heartbeat"]
 CMD ["python", "-m", "derp"]
