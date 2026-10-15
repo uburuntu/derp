@@ -1,0 +1,10 @@
+"""Import every model module so ``Base.metadata`` describes the full schema.
+
+Alembic autogenerate and the schema-drift test read this; add new model
+modules here when a package gains tables.
+"""
+
+from derp.db.base import Base
+from derp.history import models as _history  # noqa: F401
+
+metadata = Base.metadata
