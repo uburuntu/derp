@@ -1,0 +1,148 @@
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from sqlalchemy import select
+
+from derp.config import Settings
+from derp.db.engine import Database
+from derp.inference.models import ModelPin, ScoutProposal
+from derp.inference.pins import PinStore, rollback_pin
+from derp.inference.roles import ModelRole, RolePin
+from derp.inference.scout import build_catalog, passes_smoke, plan, run_scout
+
+ALLOW = ("openai/", "deepseek/", "acme/")
+WINDOWS = {ModelRole.CHAT: 16_000, ModelRole.CHAT_SPONSORED: 8_000}
+
+
+def model(id_: str, iq: float | None, prompt: str, completion: str, *, image: bool = True) -> dict[str, Any]:
+    return {
+        "id": id_,
+        "pricing": {"prompt": prompt, "completion": completion},
+        "supported_parameters": ["tools"],
+        "architecture": {"input_modalities": ["text", "image"] if image else ["text"]},
+        "benchmarks": {"artificial_analysis": {"intelligence_index": iq}},
+    }
+
+
+def route(id_: str, prompt: str, completion: str, uptime: float | None = 100) -> dict[str, Any]:
+    return {
+        "model_id": id_,
+        "tag": "host",
+        "pricing": {"prompt": prompt, "completion": completion},
+        "uptime_last_1d": uptime,
+        "supported_parameters": ["tools"],
+    }
+
+
+def test_dead_primary_promotes_live_fallback() -> None:
+    pins = {ModelRole.CHAT: RolePin(model="openai/a", fallbacks=("openai/b",))}
+    catalog = build_catalog(
+        [model("openai/a", 30, "0.0000001", "0.0000005"), model("openai/b", 30, "0.0000001", "0.0000005")],
+        [route("openai/a", "0.0000001", "0.0000005", uptime=50), route("openai/b", "0.0000001", "0.0000005")],
+        [],
+    )
+    changes = plan(pins, catalog, allowlist=ALLOW, windows=WINDOWS)
+    promoted = next(c for c in changes if c.reason != "price snapshot")
+    assert promoted.safe and promoted.pin.model == "openai/b" and promoted.pin.fallbacks == ("openai/a",)
+    price = next(c for c in changes if c.reason == "price snapshot")
+    assert price.price == (Decimal("0.1"), Decimal("0.5"))
+
+
+def test_challenger_needs_more_intelligence_at_no_higher_turn_cost() -> None:
+    pins = {ModelRole.CHAT: RolePin(model="openai/a")}
+    models = [
+        model("openai/a", 38, "0.0000001", "0.0000005"),
+        model("acme/smart", 45, "0.00000009", "0.0000006"),
+        model("acme/pricey", 60, "0.000002", "0.00001"),
+        model("acme/blind", 70, "0.00000001", "0.0000001", image=False),
+        model("other/smart", 70, "0.00000001", "0.0000001"),
+    ]
+    routes = [route(m["id"], m["pricing"]["prompt"], m["pricing"]["completion"]) for m in models]
+    changes = plan(pins, build_catalog(models, routes, []), allowlist=ALLOW, windows=WINDOWS)
+    proposal = next(c for c in changes if not c.safe)
+    assert proposal.pin.model == "acme/smart"
+    assert proposal.pin.fallbacks == ("openai/a",)
+
+
+def test_free_role_availability_uses_catalog_not_zdr() -> None:
+    pins = {ModelRole.CHAT_FREE: RolePin(model="x/free:free", fallbacks=("y/free:free",), zdr=False)}
+    catalog = build_catalog([model("y/free:free", None, "0", "0")], [], [])
+    (change,) = plan(pins, catalog, allowlist=ALLOW, windows=WINDOWS)
+    assert change.pin.model == "y/free:free"
+
+
+def scripted(*, russian: str, call_tool: bool) -> FunctionModel:
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        last = str(messages[-1].parts[-1])
+        if "tool-return" in last or "ToolReturnPart" in last:
+            return ModelResponse(parts=[TextPart("It is noon.")])
+        if "Use the tool" in last and call_tool:
+            return ModelResponse(parts=[ToolCallPart("current_time", {})])
+        if "по-русски" in last:
+            return ModelResponse(parts=[TextPart(russian)])
+        return ModelResponse(parts=[TextPart("ok")])
+
+    return FunctionModel(respond)
+
+
+async def test_smoke_check() -> None:
+    assert await passes_smoke(scripted(russian="Небо голубое.", call_tool=True))
+    assert not await passes_smoke(scripted(russian="The sky is blue.", call_tool=True))
+    assert not await passes_smoke(scripted(russian="Небо голубое.", call_tool=False))
+
+
+class FakeAPI:
+    def __init__(self, models: list[dict[str, Any]], zdr: list[dict[str, Any]]) -> None:
+        self._models, self._zdr = models, zdr
+
+    async def models(self, **_: str) -> list[dict[str, Any]]:
+        return self._models
+
+    async def zdr_endpoints(self) -> list[dict[str, Any]]:
+        return self._zdr
+
+    async def image_models(self) -> list[dict[str, Any]]:
+        return [{"id": "google/gemini-3.1-flash-lite-image"}, {"id": "bytedance-seed/seedream-5-0-flash"}]
+
+
+@pytest.mark.db
+async def test_run_scout_applies_safe_changes_and_files_one_proposal(
+    database: Database, settings: Settings
+) -> None:
+    pins = {
+        ModelRole.CHAT: RolePin(model="openai/a", fallbacks=("openai/b",)),
+        ModelRole.CHAT_SPONSORED: RolePin(model="deepseek/s", reasoning="none"),
+    }
+    configured = settings.model_copy(update={"model_pins": pins, "model_family_allowlist": ALLOW})
+    store = PinStore(database, configured)
+    await store.seed()
+    models = [
+        model("openai/a", 38, "0.0000001", "0.0000005"),
+        model("openai/b", 38, "0.0000001", "0.0000005"),
+        model("deepseek/s", 30, "0.00000001", "0.0000007"),
+        model("acme/smart", 45, "0.00000009", "0.0000006"),
+    ]
+    zdr = [route(m["id"], m["pricing"]["prompt"], m["pricing"]["completion"]) for m in models[1:]]
+    notes: list[str] = []
+
+    async def notify(text: str) -> None:
+        notes.append(text)
+
+    factory = lambda _pin: scripted(russian="Небо голубое.", call_tool=True)
+    await run_scout(database, FakeAPI(models, zdr), store, configured, factory, notify)  # type: ignore[arg-type]
+    await run_scout(database, FakeAPI(models, zdr), store, configured, factory, notify)  # type: ignore[arg-type]
+
+    assert (await store.get(ModelRole.CHAT)).model == "openai/b"
+    async with database.session() as session:
+        proposals = list(await session.scalars(select(ScoutProposal)))
+        assert [p.proposed["model"] for p in proposals] == ["acme/smart"]
+        row = await session.get(ModelPin, "chat")
+        assert row is not None and row.price_prompt == Decimal("0.1")
+    async with database.transaction() as session:
+        assert await rollback_pin(session, ModelRole.CHAT)
+    await store.refresh()
+    assert (await store.get(ModelRole.CHAT)).model == "openai/a"
+    assert notes and "promoted openai/b" in notes[0]

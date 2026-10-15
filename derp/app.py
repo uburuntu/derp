@@ -8,10 +8,16 @@ import logging
 from dataclasses import dataclass
 
 from aiogram import Bot, Dispatcher
+from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from derp.config import Settings, get_settings
 from derp.db.engine import Database
+from derp.inference.api import OpenRouterAPI
+from derp.inference.openrouter import build_provider, chat_model
+from derp.inference.pins import PinStore
+from derp.inference.scout import run_scout
 from derp.ops import observability
+from derp.ops.periodic import every
 from derp.telegram.bot import create_bot
 from derp.telegram.middleware import UpdateSpanMiddleware
 from derp.telegram.updates import ALLOWED_UPDATES
@@ -24,10 +30,29 @@ class Services:
     settings: Settings
     db: Database
     bot: Bot
+    provider: OpenRouterProvider
+    api: OpenRouterAPI
+    pins: PinStore
+
+    @classmethod
+    def create(cls, settings: Settings, db: Database, bot: Bot) -> Services:
+        return cls(
+            settings=settings,
+            db=db,
+            bot=bot,
+            provider=build_provider(settings),
+            api=OpenRouterAPI(settings),
+            pins=PinStore(db, settings),
+        )
+
+    async def close(self) -> None:
+        await self.api.close()
+        await self.bot.session.close()
+        await self.db.close()
 
 
 def build_dispatcher(services: Services) -> Dispatcher:
-    dispatcher = Dispatcher(settings=services.settings, db=services.db)
+    dispatcher = Dispatcher(services=services, settings=services.settings, db=services.db)
     dispatcher.update.outer_middleware(UpdateSpanMiddleware())
     from derp.routing import include_routers
 
@@ -35,18 +60,36 @@ def build_dispatcher(services: Services) -> Dispatcher:
     return dispatcher
 
 
+def background_tasks(services: Services) -> list[asyncio.Task[None]]:
+    async def scout() -> None:
+        await run_scout(
+            services.db,
+            services.api,
+            services.pins,
+            services.settings,
+            lambda pin: chat_model(pin, services.provider),
+        )
+
+    return [asyncio.create_task(every("model-scout", 24 * 3600, scout, initial_delay=600))]
+
+
 async def run(settings: Settings) -> None:
     db = Database(settings.database_url, pool_size=settings.database_pool_size)
-    bot = create_bot(settings)
-    services = Services(settings=settings, db=db, bot=bot)
+    services = Services.create(settings, db, create_bot(settings))
+    tasks: list[asyncio.Task[None]] = []
     try:
+        await services.pins.seed()
         dispatcher = build_dispatcher(services)
-        me = await bot.get_me()
+        me = await services.bot.get_me()
         log.info("polling as bot %s", me.id)
-        await dispatcher.start_polling(bot, allowed_updates=list(ALLOWED_UPDATES), handle_signals=True)
+        tasks = background_tasks(services)
+        await dispatcher.start_polling(
+            services.bot, allowed_updates=list(ALLOWED_UPDATES), handle_signals=True
+        )
     finally:
-        await bot.session.close()
-        await db.close()
+        for task in tasks:
+            task.cancel()
+        await services.close()
 
 
 def main() -> None:

@@ -80,7 +80,9 @@ class Conversation:
 
     async def start(self) -> None:
         bot = create_bot(self.settings)
-        self.services = Services(settings=self.settings, db=self.db, bot=bot, **self.overrides)
+        self.services = Services.create(self.settings, self.db, bot)
+        for name, value in self.overrides.items():
+            setattr(self.services, name, value)
         self.dispatcher = build_dispatcher(self.services)
         polls = len(self.api.calls_of("getUpdates"))
         self.task = asyncio.create_task(
@@ -100,6 +102,7 @@ class Conversation:
             await asyncio.wait_for(self.task, 5)
         if self.services is not None:
             await self.services.bot.session.close()
+            await self.services.api.close()
         self.task = None
 
     async def restart(self) -> None:

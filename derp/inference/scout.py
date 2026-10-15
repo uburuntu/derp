@@ -1,0 +1,270 @@
+"""Daily model scout: keeps role pins alive and cheap, proposes better models.
+
+Safe changes apply automatically: a dead or delisted primary is replaced by
+its first live fallback, and the price snapshot follows the cheapest live ZDR
+route. Anything else (a smarter or cheaper challenger) becomes an owner
+proposal; challengers must first pass a tiny live check (answers Russian in
+Russian, calls a tool when asked).
+"""
+
+import logging
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Any
+
+from pydantic_ai import Agent
+from pydantic_ai.models import Model
+from sqlalchemy import select
+
+from derp.config import Settings
+from derp.db.engine import Database
+from derp.inference.api import OpenRouterAPI
+from derp.inference.models import ModelPin, ScoutProposal
+from derp.inference.pins import PinStore, apply_pin
+from derp.inference.roles import ModelRole, RolePin
+
+log = logging.getLogger("derp.scout")
+MIN_UPTIME = 95.0
+CHAT_ROLES = (ModelRole.CHAT, ModelRole.CHAT_SPONSORED)
+OUTPUT_TOKENS_PER_TURN = 400
+INTELLIGENCE_MARGIN = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class Route:
+    tag: str
+    prompt: Decimal  # USD per 1M tokens
+    completion: Decimal
+    uptime: float | None
+    tools: bool
+
+    @property
+    def live(self) -> bool:
+        return self.uptime is None or self.uptime >= MIN_UPTIME
+
+
+@dataclass(frozen=True, slots=True)
+class Candidate:
+    id: str
+    intelligence: float | None
+    tools: bool
+    image_input: bool
+    prompt: Decimal
+    completion: Decimal
+
+
+@dataclass(slots=True)
+class Catalog:
+    models: dict[str, Candidate] = field(default_factory=dict[str, Candidate])
+    zdr: dict[str, list[Route]] = field(default_factory=dict[str, list[Route]])
+    images: set[str] = field(default_factory=set[str])
+
+    def live_routes(self, model: str, *, tools: bool = True) -> list[Route]:
+        return [r for r in self.zdr.get(model, []) if r.live and (r.tools or not tools)]
+
+    def cheapest(self, model: str, *, tools: bool = True) -> Route | None:
+        routes = self.live_routes(model, tools=tools)
+        return min(routes, key=lambda r: (r.prompt, r.completion)) if routes else None
+
+
+@dataclass(frozen=True, slots=True)
+class Change:
+    role: ModelRole
+    pin: RolePin
+    reason: str
+    safe: bool
+    price: tuple[Decimal, Decimal] | None = None
+
+
+def per_million(value: object) -> Decimal:
+    return Decimal(str(value or 0)) * 1_000_000
+
+
+def build_catalog(
+    models: Iterable[Mapping[str, Any]], zdr: Iterable[Mapping[str, Any]], images: Iterable[str]
+) -> Catalog:
+    catalog = Catalog(images=set(images))
+    for model in models:
+        pricing = model.get("pricing") or {}
+        analysis = (model.get("benchmarks") or {}).get("artificial_analysis") or {}
+        catalog.models[str(model["id"])] = Candidate(
+            id=str(model["id"]),
+            intelligence=analysis.get("intelligence_index"),
+            tools="tools" in (model.get("supported_parameters") or []),
+            image_input="image" in ((model.get("architecture") or {}).get("input_modalities") or []),
+            prompt=per_million(pricing.get("prompt")),
+            completion=per_million(pricing.get("completion")),
+        )
+    for endpoint in zdr:
+        pricing = endpoint.get("pricing") or {}
+        catalog.zdr.setdefault(str(endpoint["model_id"]), []).append(
+            Route(
+                tag=str(endpoint.get("tag") or ""),
+                prompt=per_million(pricing.get("prompt")),
+                completion=per_million(pricing.get("completion")),
+                uptime=endpoint.get("uptime_last_1d"),
+                tools="tools" in (endpoint.get("supported_parameters") or []),
+            )
+        )
+    return catalog
+
+
+def available(role: ModelRole, model: str, catalog: Catalog) -> bool:
+    if role is ModelRole.IMAGE:
+        return model in catalog.images
+    if role is ModelRole.STT:
+        return bool(catalog.live_routes(model, tools=False))
+    if role is ModelRole.CHAT_FREE:
+        candidate = catalog.models.get(model)
+        return candidate is not None and candidate.tools
+    return bool(catalog.live_routes(model))
+
+
+def turn_cost(prompt: Decimal, completion: Decimal, window: int) -> Decimal:
+    return (prompt * window + completion * OUTPUT_TOKENS_PER_TURN) / 1_000_000
+
+
+def plan(
+    pins: Mapping[ModelRole, RolePin],
+    catalog: Catalog,
+    *,
+    allowlist: tuple[str, ...],
+    windows: Mapping[ModelRole, int],
+) -> list[Change]:
+    changes: list[Change] = []
+    for role, pin in pins.items():
+        if role is ModelRole.CHAT_FRONTIER:
+            continue
+        current = pin
+        if not available(role, pin.model, catalog):
+            live = [m for m in pin.fallbacks if available(role, m, catalog)]
+            if not live:
+                log.warning("scout: no live model for role %s", role)
+                continue
+            rest = [m for m in pin.fallbacks if m != live[0]] + [pin.model]
+            current = pin.model_copy(update={"model": live[0], "fallbacks": tuple(rest[:2])})
+            changes.append(
+                Change(role, current, f"{pin.model} is unavailable; promoted {live[0]}", safe=True)
+            )
+        if role in CHAT_ROLES or role is ModelRole.STT:
+            route = catalog.cheapest(current.model, tools=role is not ModelRole.STT)
+            if route is not None:
+                changes.append(
+                    Change(role, current, "price snapshot", safe=True, price=(route.prompt, route.completion))
+                )
+        if role in CHAT_ROLES and (
+            challenger := _challenger(role, current, catalog, allowlist, windows[role])
+        ):
+            changes.append(challenger)
+    return changes
+
+
+def _challenger(
+    role: ModelRole, pin: RolePin, catalog: Catalog, allowlist: tuple[str, ...], window: int
+) -> Change | None:
+    incumbent = catalog.models.get(pin.model)
+    route = catalog.cheapest(pin.model)
+    if incumbent is None or route is None or incumbent.intelligence is None:
+        return None
+    budget = turn_cost(route.prompt, route.completion, window)
+    best: tuple[float, Candidate, Route] | None = None
+    for candidate in catalog.models.values():
+        if (
+            candidate.id == pin.model
+            or candidate.id.endswith((":batch", ":free"))
+            or not candidate.id.startswith(allowlist)
+            or not (candidate.tools and candidate.image_input)
+            or candidate.intelligence is None
+            or candidate.intelligence < incumbent.intelligence + INTELLIGENCE_MARGIN
+        ):
+            continue
+        cheapest = catalog.cheapest(candidate.id)
+        if cheapest is None or turn_cost(cheapest.prompt, cheapest.completion, window) > budget:
+            continue
+        if best is None or candidate.intelligence > best[0]:
+            best = (candidate.intelligence, candidate, cheapest)
+    if best is None:
+        return None
+    score, candidate, cheapest = best
+    proposed = pin.model_copy(update={"model": candidate.id, "fallbacks": (pin.model, *pin.fallbacks)[:2]})
+    reason = (
+        f"{candidate.id}: intelligence {score:g} vs {incumbent.intelligence:g}, "
+        f"≈${turn_cost(cheapest.prompt, cheapest.completion, window):.5f}/turn vs ${budget:.5f}"
+    )
+    return Change(role, proposed, reason, safe=False)
+
+
+ModelFactory = Callable[[RolePin], Model]
+
+
+async def passes_smoke(model: Model) -> bool:
+    """Two tiny live checks; a challenger that fails either never reaches the owner."""
+    called: list[str] = []
+    agent = Agent(model, instructions="You are a helpful assistant.")
+
+    @agent.tool_plain
+    def current_time() -> str:
+        """Return the current time."""
+        called.append("current_time")
+        return "12:00"
+
+    try:
+        russian = await agent.run("Ответь по-русски одним коротким предложением: какого цвета небо?")
+        timed = await agent.run("What time is it? Use the tool.")
+    except Exception:  # noqa: BLE001 - any provider failure disqualifies the challenger
+        return False
+    cyrillic = sum("а" <= ch.lower() <= "я" for ch in russian.output)
+    return cyrillic >= 5 and bool(called) and bool(timed.output)
+
+
+async def run_scout(
+    db: Database,
+    api: OpenRouterAPI,
+    store: PinStore,
+    settings: Settings,
+    model_factory: ModelFactory,
+    notify: Callable[[str], Awaitable[None]] | None = None,
+) -> list[Change]:
+    models = await api.models(supported_parameters="tools", sort="intelligence-high-to-low")
+    zdr = await api.zdr_endpoints()
+    images = [str(m["id"]) for m in await api.image_models()]
+    catalog = build_catalog(models, zdr, images)  # the tools-capable list includes `:free` variants
+    windows = {
+        ModelRole.CHAT: settings.context_windows.paid,
+        ModelRole.CHAT_SPONSORED: settings.context_windows.sponsored,
+    }
+    changes = plan(await store.all(), catalog, allowlist=settings.model_family_allowlist, windows=windows)
+    notes: list[str] = []
+    async with db.transaction() as session:
+        for change in changes:
+            if change.safe:
+                await apply_pin(session, change.role, change.pin, source="scout")
+                if change.price is not None and (row := await session.get(ModelPin, change.role.value)):
+                    row.price_prompt, row.price_completion = change.price
+                if change.reason != "price snapshot":
+                    notes.append(f"{change.role}: {change.reason}")
+                continue
+            duplicate = await session.scalar(
+                select(ScoutProposal.id).where(
+                    ScoutProposal.role == change.role.value,
+                    ScoutProposal.status != "applied",
+                    ScoutProposal.proposed["model"].astext == change.pin.model,
+                )
+            )
+            if duplicate is not None or not await passes_smoke(model_factory(change.pin)):
+                continue
+            current = (await store.get(change.role)).model_dump(mode="json")
+            session.add(
+                ScoutProposal(
+                    role=change.role.value,
+                    current=current,
+                    proposed=change.pin.model_dump(mode="json"),
+                    reason=change.reason,
+                )
+            )
+            notes.append(f"{change.role}: proposal — {change.reason}")
+    await store.refresh()
+    if notes and notify is not None:
+        await notify("Model scout:\n" + "\n".join(notes))
+    return changes

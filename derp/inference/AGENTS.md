@@ -7,3 +7,5 @@
 - A second provider would add a sibling module behind the same role → model/settings/usage functions; nothing outside this package imports OpenRouter types.
 - `tests/live` holds opt-in smoke tests against the real API (`pytest -m live`, fractions of a cent).
 - `models.py`/`ledger.py`: `provider_calls` is the single ledger of every paid provider call (chat turns, STT, images, digests, scout probes) with who funded it; metering, `/stats` and reconciliation read from it.
+- `pins.py`: live pins live in `model_pins` (seeded from settings on startup, never overwritten by the seed); `PinStore.get(role)` caches for 5 minutes. Every pin change keeps the previous pin for one-step rollback.
+- `scout.py` runs daily: auto-applies only safe changes (dead primary → first live fallback, price snapshot of the cheapest live ZDR route); smarter-or-cheaper challengers must pass a tiny live smoke check (Russian answer, tool call) and become `scout_proposals` for the owner to apply or ignore.

@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -37,3 +38,36 @@ class ProviderCall(Base):
     units: Mapped[int] = mapped_column(default=0)  # images generated / audio seconds
     cost_usd: Mapped[Decimal] = mapped_column(COST, default=Decimal(0))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class ModelPin(Base):
+    """The live pin for a hidden model role; seeded from settings, maintained by the scout."""
+
+    __tablename__ = "model_pins"
+
+    role: Mapped[str] = mapped_column(String(16), primary_key=True)
+    pin: Mapped[dict[str, Any]]  # RolePin JSON
+    previous: Mapped[dict[str, Any] | None]  # rollback target
+    price_prompt: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 6)
+    )  # USD per 1M tokens, cheapest ZDR route
+    price_completion: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
+    source: Mapped[str] = mapped_column(String(8), default="seed")  # seed | scout | owner
+    checked_at: Mapped[datetime | None]
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+
+class ScoutProposal(Base):
+    """A pin change that needs the owner's Apply (anything beyond safe auto-fixes)."""
+
+    __tablename__ = "scout_proposals"
+    __table_args__ = (CheckConstraint("status in ('open', 'applied', 'ignored')", name="status"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    role: Mapped[str] = mapped_column(String(16))
+    current: Mapped[dict[str, Any]]
+    proposed: Mapped[dict[str, Any]]
+    reason: Mapped[str]
+    status: Mapped[str] = mapped_column(String(8), default="open")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    decided_at: Mapped[datetime | None]
