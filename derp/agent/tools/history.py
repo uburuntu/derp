@@ -6,11 +6,12 @@ current forum topic unless the model asks for the whole chat.
 
 from datetime import UTC, datetime, timedelta
 
-from pydantic_ai import RunContext
+from pydantic_ai import BinaryContent, RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
+from derp.agent.media import as_content, inspect, note_images, referenced_media
 from derp.agent.toolsets import Family
 from derp.history.models import ForumTopic, Message, Poll
 from derp.history.queries import ChatQuery, Scope, around, id_range, resolve_members, run_query, search
@@ -149,6 +150,37 @@ async def chat_info(ctx: RunContext[RunDeps]) -> str:
     if stored:  # min(date) exists whenever something is stored
         lines.append(f"stored messages: {stored}, since {describe_time(oldest, ctx.deps.tz)}")
     return "\n".join(lines)
+
+
+@toolset.tool
+async def inspect_media(ctx: RunContext[RunDeps], message_id: int) -> list[str | BinaryContent] | str:
+    """Look at the image of a stored message in this chat (photo, sticker, image file, album).
+
+    Args:
+        message_id: The message id shown as #id in the history.
+    """
+    deps = ctx.deps
+    async with deps.db.session() as session:
+        rows = await referenced_media(session, deps.chat.id, message_id, None)
+    if not rows:
+        return "That message has no image I can open."
+    inspected = await inspect(deps.gateway, rows)
+    if not inspected:
+        return "The image can't be downloaded any more (too big, animated, or expired)."
+    await note_images(
+        deps.db,
+        deps.model,
+        deps.pin,
+        inspected,
+        run_id=deps.run_id,
+        funding=deps.funding.value,
+        chat_id=deps.chat.id,
+        user_id=deps.user_id,
+    )
+    notes = [f"#{item.row.message_id}: {item.row.description or 'image'}" for item in inspected]
+    if not deps.pin.vision:
+        return "\n".join(notes)
+    return [*notes, *as_content(inspected)]
 
 
 family = Family("history", toolset)

@@ -23,6 +23,9 @@ class RolePin(BaseModel, frozen=True):
     zdr: bool = True
     # Reasoning effort for chat roles; banter rarely needs deep thought and reasoning tokens are billed.
     reasoning: Literal["none", "minimal", "low", "medium", "high"] | None = "low"
+    vision: bool = (
+        True  # every model in the pin accepts image input; otherwise images reach it as descriptions
+    )
     max_price_prompt: float | None = None  # USD per 1M tokens
     max_price_completion: float | None = None
     # Provider allowlist per model for APIs without a ``zdr`` routing flag (Images API).
@@ -40,6 +43,7 @@ DEFAULT_PINS: dict[ModelRole, RolePin] = {
         model="thinkingmachines/inkling:free",
         fallbacks=("thinkingmachines/inkling-small:free", "google/gemma-4-26b-a4b-it:free"),
         zdr=False,
+        vision=False,
     ),
     ModelRole.CHAT_FRONTIER: RolePin(model="openai/gpt-6.1-sol"),
     ModelRole.IMAGE: RolePin(

@@ -25,6 +25,7 @@ from derp.ops import observability
 from derp.ops.owner import notify_owners
 from derp.ops.periodic import every
 from derp.telegram.bot import create_bot
+from derp.telegram.media import MediaGateway
 from derp.telegram.middleware import UpdateSpanMiddleware
 from derp.telegram.updates import ALLOWED_UPDATES
 
@@ -39,6 +40,7 @@ class Services:
     provider: OpenRouterProvider
     api: OpenRouterAPI
     pins: PinStore
+    media: MediaGateway
     model_factory: ModelFactory = field(init=False)
 
     def __post_init__(self) -> None:
@@ -56,6 +58,7 @@ class Services:
             provider=build_provider(settings),
             api=OpenRouterAPI(settings),
             pins=PinStore(db, settings),
+            media=MediaGateway(bot),
         )
 
     async def close(self) -> None:
@@ -71,6 +74,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         settings=services.settings,
         pins=services.pins,
         model_factory=services.model_factory,
+        gateway=services.media,
     )
     dispatcher = Dispatcher(services=services, settings=services.settings, db=services.db, runtime=runtime)
     dispatcher.update.outer_middleware(UpdateSpanMiddleware())

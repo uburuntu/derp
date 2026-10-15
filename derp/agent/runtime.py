@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.context import Window, build_window
 from derp.agent.deps import Funding, RunDeps
+from derp.agent.media import as_content, inspect, note_images, referenced_media
 from derp.agent.persona import PERSONA, situation
 from derp.agent.runs import finish_run, record_output, start_run
 from derp.agent.tools import FAMILIES
@@ -38,6 +39,7 @@ from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
 from derp.locales import resolve, t
 from derp.ops.observability import record_run_failure
+from derp.telegram.media import MediaGateway
 from derp.telegram.sender import Target, send_markdown
 
 log = logging.getLogger("derp.agent")
@@ -67,6 +69,7 @@ class Runtime:
         settings: Settings,
         pins: PinStore,
         model_factory: ModelFactory,
+        gateway: MediaGateway,
         funder: Funder = sponsored_funder,
     ) -> None:
         self.db = db
@@ -75,6 +78,7 @@ class Runtime:
         self.pins = pins
         self.model_factory = model_factory
         self.funder = funder
+        self.gateway = gateway
         self.agent = Agent[RunDeps, str](output_type=str, deps_type=RunDeps, instructions=PERSONA)
 
     def window_budget(self, funding: Funding) -> int:
@@ -112,7 +116,11 @@ class Runtime:
                 tz=tz,
             )
             prompt = await current_prompt(session, message, window, tz)
+            reply_to = message.reply_to_message.message_id if message.reply_to_message else None
+            images = await referenced_media(session, chat.id, message.message_id, reply_to)
             topic = await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
+        inspected = await inspect(self.gateway, images)
+        model = self.model_factory(pin)
         deps = RunDeps(
             db=self.db,
             bot=self.bot,
@@ -127,6 +135,9 @@ class Runtime:
             funding=funding,
             target=target,
             tz=tz,
+            gateway=self.gateway,
+            pin=pin,
+            model=model,
         )
         brief = situation(
             chat=chat,
@@ -146,10 +157,10 @@ class Runtime:
             try:
                 async with asyncio.timeout(caps.timeout_seconds):
                     result = await self.agent.run(
-                        prompt,
+                        [prompt, *as_content(inspected)] if pin.vision and inspected else prompt,
                         message_history=history,
                         deps=deps,
-                        model=self.model_factory(pin),
+                        model=model,
                         instructions=InstructionPart(brief, dynamic=True),
                         model_settings=chat_settings(pin, max_tokens=caps.output_tokens),
                         usage_limits=UsageLimits(
@@ -185,6 +196,16 @@ class Runtime:
                 context_tokens=window.tokens,
                 error_type=type(error).__name__ if error else None,
             )
+        await note_images(
+            self.db,
+            model,
+            pin,
+            inspected,
+            run_id=run.id,
+            funding=funding.value,
+            chat_id=chat.id,
+            user_id=asker.id,
+        )
         if error is not None:
             record_run_failure(run.id, error, prompt)
             if not isinstance(error, TelegramAPIError) and not deps.delivered:

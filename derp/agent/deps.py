@@ -9,11 +9,13 @@ from datetime import tzinfo
 from enum import StrEnum
 
 from aiogram import Bot
+from pydantic_ai.models import Model
 
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat
-from derp.inference.roles import ModelRole
+from derp.inference.roles import ModelRole, RolePin
+from derp.telegram.media import MediaGateway
 from derp.telegram.sender import Target
 
 
@@ -46,6 +48,9 @@ class RunDeps:
     funding: Funding
     target: Target
     tz: tzinfo
+    gateway: MediaGateway
+    pin: RolePin
+    model: Model
     delivered: list[int] = field(default_factory=list[int])  # message ids of visible outputs so far
 
     @property
