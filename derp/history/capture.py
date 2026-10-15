@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.history.models import Chat, ForumTopic, Message, MessageMedia, User
+from derp.history.polls import upsert_poll
 
 TYPED_KINDS = {
     "text", "photo", "video", "voice", "video_note", "audio", "document", "sticker", "animation",
@@ -246,6 +247,14 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
                     },
                 )
             )
+    if message.poll is not None:
+        await upsert_poll(
+            session,
+            message.poll,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            by_derp=capture == "derp",
+        )
     await _track_topic(session, message)
     return True
 

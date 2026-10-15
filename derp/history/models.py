@@ -190,3 +190,70 @@ class MemberEvent(Base):
     kind: Mapped[str] = mapped_column(String(8))
     actor_id: Mapped[int | None]
     at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Reaction(Base):
+    """One actor's current reaction on a stored message; the actor's new list replaces the old one."""
+
+    __tablename__ = "reactions"
+
+    chat_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    message_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    actor_id: Mapped[int] = mapped_column(
+        primary_key=True, autoincrement=False
+    )  # user, or chat for anonymous
+    reaction: Mapped[str] = mapped_column(String(64), primary_key=True)  # emoji, "custom:<id>" or "paid"
+    actor_is_chat: Mapped[bool] = mapped_column(default=False, server_default=sql("false"))
+    set_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class ReactionCount(Base):
+    """Anonymous reaction totals per message (Telegram sends these to admins, with a delay)."""
+
+    __tablename__ = "reaction_counts"
+
+    chat_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    message_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    reaction: Mapped[str] = mapped_column(String(64), primary_key=True)
+    count: Mapped[int]
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Poll(Base):
+    """A poll seen in a chat. Live results arrive only for Derp's own polls and stopped polls."""
+
+    __tablename__ = "polls"
+    __table_args__ = (
+        CheckConstraint("type in ('regular', 'quiz')", name="type"),
+        CheckConstraint("origin in ('derp_poll', 'derp_quiz', 'user')", name="origin"),
+        Index("ix_polls_chat_message", "chat_id", "message_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    chat_id: Mapped[int]
+    message_id: Mapped[int]
+    question: Mapped[str]
+    options: Mapped[list[Any]]  # [{"id": persistent_id, "text": ..., "voters": n}]
+    total_voters: Mapped[int] = mapped_column(default=0, server_default="0")
+    type: Mapped[str] = mapped_column(String(8))
+    correct_option_ids: Mapped[list[Any] | None]
+    explanation: Mapped[str | None]
+    is_anonymous: Mapped[bool]
+    multiple: Mapped[bool]
+    closed: Mapped[bool] = mapped_column(default=False, server_default=sql("false"))
+    close_date: Mapped[datetime | None]
+    origin: Mapped[str] = mapped_column(String(9))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+
+class PollVote(Base):
+    """A voter's current choice in one of Derp's non-anonymous polls; a retracted vote is an empty list."""
+
+    __tablename__ = "poll_votes"
+
+    poll_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    voter_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)  # user, or chat
+    option_ids: Mapped[list[Any]]
+    option_persistent_ids: Mapped[list[Any]]  # stable when options are added later
+    voted_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
