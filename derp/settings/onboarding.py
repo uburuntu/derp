@@ -6,7 +6,7 @@ that predates it. It says how to summon Derp, whether Derp can see the chat (hon
 from datetime import UTC, datetime
 
 from aiogram import Bot, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup
 
 from derp.db.engine import Database
@@ -58,7 +58,7 @@ async def ensure_onboarded(bot: Bot, db: Database, chat_id: int, language_code: 
     text, markup = await notice(bot, chat, chat.locale or resolve(None))
     try:
         await send_markdown(bot, Target(chat_id), text, reply_markup=markup)
-    except TelegramAPIError:
+    except TelegramBadRequest, TelegramForbiddenError:  # surely not delivered; anything else might have been
         async with db.transaction() as session:  # try again on the next invocation
             if (row := await session.get(Chat, chat_id)) is not None:
                 row.onboarded_at = None

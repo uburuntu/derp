@@ -52,6 +52,7 @@ class Window:
     tokens: int = 0
     count: int = 0  # chat messages covered
     oldest_message_id: int | None = None
+    ids: set[int] = field(default_factory=set[int])  # chat messages the window shows
 
 
 @dataclass(slots=True)
@@ -64,8 +65,7 @@ class _Members:
 class _Derp:
     messages: list[ModelMessage]
     tokens: int
-    rows: int
-    oldest: int
+    ids: list[int]  # Derp's chat messages this segment stands for, newest first
 
 
 def clip_tool_results(messages: list[ModelMessage]) -> list[ModelMessage]:
@@ -167,8 +167,7 @@ async def build_window(
         if run is not None and run.id in seen_runs:
             last = segments[-1]
             if isinstance(last, _Derp):
-                last.rows += 1
-                last.oldest = row.message_id
+                last.ids.append(row.message_id)
             continue
         if run is not None:
             replay = clip_tool_results(load_messages(run.messages))
@@ -178,7 +177,7 @@ async def build_window(
                 if spent + cost > budget:
                     break
                 spent += cost
-                segments.append(_Derp(replay, cost, 1, row.message_id))
+                segments.append(_Derp(replay, cost, [row.message_id]))
                 continue
         if row.is_derp:  # no replayable run (old or failed): the visible text stands in for it
             text = render_body(view)
@@ -186,7 +185,7 @@ async def build_window(
             if spent + cost > budget:
                 break
             spent += cost
-            segments.append(_Derp([ModelResponse(parts=[TextPart(text)])], cost, 1, row.message_id))
+            segments.append(_Derp([ModelResponse(parts=[TextPart(text)])], cost, [row.message_id]))
             continue
         cost = estimate_tokens(render_line(view, tz)) + 1
         if spent + cost > budget:
@@ -208,8 +207,10 @@ async def build_window(
             window.messages.append(ModelRequest(parts=[UserPromptPart(transcript)]))
             window.count += len(ordered)
             window.oldest_message_id = window.oldest_message_id or ordered[0].row.message_id
+            window.ids.update(v.row.message_id for v in ordered)
         else:
             window.messages.extend(segment.messages)
-            window.count += segment.rows
-            window.oldest_message_id = window.oldest_message_id or segment.oldest
+            window.count += len(segment.ids)
+            window.oldest_message_id = window.oldest_message_id or segment.ids[-1]
+            window.ids.update(segment.ids)
     return window

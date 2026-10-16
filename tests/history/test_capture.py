@@ -116,3 +116,29 @@ async def test_unstorable_and_topics(database: Database) -> None:
         assert topic is not None and topic.name == "Memes" and topic.closed
         media = await session.get(MessageMedia, (-100, 22, 0))
         assert media is not None and media.type == "photo"
+
+
+@pytest.mark.db
+async def test_an_edit_that_swaps_the_photo_drops_notes_about_the_old_one(database: Database) -> None:
+    def shot(unique: str, **extra: Any) -> TgMessage:
+        size = {"file_id": f"f-{unique}", "file_unique_id": unique, "width": 10, "height": 10}
+        return tg(photo=[size], caption="look", **extra)
+
+    async with database.transaction() as session:
+        await upsert_chat(session, shot("a").chat)
+        await store_message(session, shot("a"), capture="ambient")
+        media = await session.get(MessageMedia, (-100, 10, 0))
+        message = await session.get(Message, (-100, 10))
+        assert media is not None and message is not None
+        media.description, message.extra_text = "a cat", "a cat"
+    async with database.transaction() as session:
+        await store_message(session, shot("a", edit_date=1_700_000_100), capture="ambient")  # caption edit
+    async with database.session() as session:
+        assert (await session.get(MessageMedia, (-100, 10, 0))).description == "a cat"  # type: ignore[union-attr]
+    async with database.transaction() as session:
+        await store_message(session, shot("b", edit_date=1_700_000_200), capture="ambient")  # new photo
+    async with database.session() as session:
+        media = await session.get(MessageMedia, (-100, 10, 0))
+        message = await session.get(Message, (-100, 10))
+        assert media is not None and (media.file_unique_id, media.description) == ("b", None)
+        assert message is not None and message.extra_text is None

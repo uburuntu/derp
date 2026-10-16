@@ -21,6 +21,13 @@ gone = "That proposal is already handled."
 admins_only = "Only chat admins can approve notes."
 approved = "Note #{id} saved."
 rejected = "Note #{id} dropped."
+rules_confirm = "**New chat rules** — apply them?"
+rules_clear = "**Clear the chat rules?**"
+rules_apply = "Apply"
+rules_cancel = "Cancel"
+rules_applied = "Chat rules updated."
+rules_cancelled = "Rules left as they were."
+rules_not_yours = "Only the admin who asked for this change can confirm it."
 
 [memory.mode]
 auto = "I save what seems worth keeping"

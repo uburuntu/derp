@@ -32,6 +32,8 @@ class Chat(Base):
     notes_mode: Mapped[str] = mapped_column(String(8), default="auto", server_default="auto")
     free_models: Mapped[bool] = mapped_column(default=False, server_default=sql("false"))
     rules: Mapped[str | None]  # admin-written instructions; the only chat text Derp treats as trusted
+    rules_draft: Mapped[str | None]  # model-worded rules waiting for the admin's confirmation
+    rules_draft_by: Mapped[int | None]
     # Telegram-side state: getChat profile snapshot and Derp's own membership.
     profile: Mapped[dict[str, Any]] = mapped_column(default=dict, server_default=sql("'{}'::jsonb"))
     bot_status: Mapped[str | None] = mapped_column(String(16))

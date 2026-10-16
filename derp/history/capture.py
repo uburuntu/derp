@@ -12,7 +12,7 @@ from typing import Any
 from aiogram.types import Chat as TgChat
 from aiogram.types import Message as TgMessage
 from aiogram.types import User as TgUser
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,7 @@ SERVICE_TYPES = {
     "proximity_alert_triggered", "successful_payment", "refunded_payment", "gift", "unique_gift",
     "checklist_tasks_done", "checklist_tasks_added", "direct_message_price_changed", "paid_message_price_changed",
 }  # fmt: skip
+STALE_NOTES = ("transcript", "transcript_model", "description", "description_run_id")
 RAW_EXCLUDE = {"chat", "from_user", "reply_to_message", "text", "caption", "entities", "caption_entities"}
 
 
@@ -228,6 +229,23 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
     )
     media = media_rows(message)
     if media:
+        existing = {
+            r[0]: r[1]
+            for r in await session.execute(
+                select(MessageMedia.idx, MessageMedia.file_unique_id).where(
+                    MessageMedia.chat_id == message.chat.id, MessageMedia.message_id == message.message_id
+                )
+            )
+        }
+        replaced = {
+            r["idx"] for r in media if existing.get(r["idx"], r["file_unique_id"]) != r["file_unique_id"]
+        }
+        if replaced:  # an edit swapped the file: notes about the old one no longer apply
+            await session.execute(
+                update(Message)
+                .where(Message.chat_id == message.chat.id, Message.message_id == message.message_id)
+                .values(extra_text=None)
+            )
         await session.execute(
             delete(MessageMedia).where(
                 MessageMedia.chat_id == message.chat.id,
@@ -244,7 +262,8 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
                         k: media_statement.excluded[k]
                         for k in row
                         if k not in {"chat_id", "message_id", "idx"}
-                    },
+                    }
+                    | (dict.fromkeys(STALE_NOTES) if row["idx"] in replaced else {}),
                 )
             )
     if message.poll is not None:

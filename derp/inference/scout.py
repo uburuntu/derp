@@ -221,12 +221,17 @@ async def passes_smoke(model: Model, pin: RolePin) -> tuple[bool, list[ModelResp
         called.append("current_time")
         return "12:00"
 
+    # One capture per run: a capture context only records the first run inside it.
     with capture_run_messages() as captured:
         try:
             russian = await agent.run("Ответь по-русски одним коротким предложением: какого цвета небо?")
-            timed = await agent.run("What time is it? Use the tool.")
         except Exception:  # noqa: BLE001 - any provider failure disqualifies the challenger
             return False, responses(captured)
+    with capture_run_messages() as captured:
+        try:
+            timed = await agent.run("What time is it? Use the tool.")
+        except Exception:  # noqa: BLE001
+            return False, responses(russian.all_messages()) + responses(captured)
     paid = responses(russian.all_messages()) + responses(timed.new_messages())
     cyrillic = sum("а" <= ch.lower() <= "я" for ch in russian.output)
     return cyrillic >= 5 and bool(called) and bool(timed.output), paid

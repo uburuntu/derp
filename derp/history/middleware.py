@@ -10,13 +10,16 @@ from derp.agent.invocation import detect_trigger
 from derp.db.engine import Database
 from derp.history.capture import index_sticker, store_message, upsert_chat, upsert_user
 from derp.history.members import track_message
+from derp.history.models import Message as MessageRow
 from derp.history.transcription import Transcriber
 
 
 class CaptureMiddleware(BaseMiddleware):
     """Stores invocations always, ambient messages when the chat allows it, and edits in place.
 
-    Stored voice messages and video notes are transcribed before handlers run.
+    The message an invocation replies to is part of the invocation: stored too if Derp hadn't kept
+    it (privacy mode, ambient off), so its text and media are available to the run. Stored voice
+    messages and video notes are transcribed before handlers run.
 
     Adds ``trigger`` (or None) and ``chat_row`` to handler data. Guest-mode
     messages pass through untouched: they are never stored.
@@ -44,12 +47,22 @@ class CaptureMiddleware(BaseMiddleware):
             stored = False
             if trigger is not None or chat.type == "private" or chat.ambient:
                 stored = await store_message(session, event, capture="invocation" if trigger else "ambient")
+            replied = event.reply_to_message if trigger is not None else None
+            if (
+                replied is not None
+                and await session.get(MessageRow, (chat.id, replied.message_id)) is not None
+            ):
+                replied = None  # already kept, with more detail than the embedded copy
+            if replied is not None and not await store_message(session, replied, capture="invocation"):
+                replied = None
             if not self.edits:
                 await track_message(session, event, stored=stored)
                 await index_sticker(session, event)
         transcriber: Transcriber | None = data.get("transcriber")
-        if stored and not self.edits and transcriber is not None and (event.voice or event.video_note):
-            await transcriber.transcribe_message(event.chat.id, event.message_id)
+        if transcriber is not None and not self.edits:
+            for message in (event if stored else None, replied):
+                if message is not None and (message.voice or message.video_note):
+                    await transcriber.transcribe_message(event.chat.id, message.message_id)
         data["trigger"] = trigger
         data["chat_row"] = chat
         return await handler(event, data)

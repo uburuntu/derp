@@ -9,7 +9,7 @@ from datetime import datetime, tzinfo
 from typing import Any
 
 from derp.history.models import Chat
-from derp.history.render import describe_time
+from derp.history.render import describe_time, neutralize, one_line
 
 PERSONA = """\
 You are Derp (Дерп in Russian) — a chaotic, derpy, meme-aware friend who lives in Telegram chats. \
@@ -39,14 +39,14 @@ search_tools when you need them.\
 def _profile_lines(profile: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     if description := profile.get("description"):
-        lines.append(f"description: {str(description)[:500]}")
+        lines.append(f"description: {neutralize(str(description)[:500])}")
     if count := profile.get("member_count"):
         lines.append(f"members: {count}")
     admins: list[dict[str, Any]] = profile.get("admins") or []
     if admins:
-        lines.append("admins: " + ", ".join(str(a.get("name", "")) for a in admins[:15]))
+        lines.append("admins: " + ", ".join(one_line(str(a.get("name", ""))) for a in admins[:15]))
     if pinned := profile.get("pinned_text"):
-        lines.append(f"pinned: {str(pinned)[:300]}")
+        lines.append(f"pinned: {neutralize(str(pinned)[:300])}")
     return lines
 
 
@@ -60,10 +60,15 @@ def situation(
     rules: str | None = None,
     notes: str | None = None,
 ) -> str:
-    where = "a private chat" if chat.type == "private" else f"the group “{chat.title or 'untitled'}”"
+    # Names, titles and topics are user-controlled: one short quoted line each, never instructions.
+    where = (
+        "a private chat" if chat.type == "private" else f"the group “{one_line(chat.title or 'untitled')}”"
+    )
     if topic:
-        where += f", topic “{topic}”"
-    parts = [f"You are in {where}. Now: {describe_time(now, tz)}. The current message is from {asker}."]
+        where += f", topic “{one_line(topic)}”"
+    parts = [
+        f"You are in {where}. Now: {describe_time(now, tz)}. The current message is from “{one_line(asker)}”."
+    ]
     if rules:
         parts.append(f"Chat rules set by the admins (follow them):\n{rules}")
     profile = _profile_lines(chat.profile) if chat.type != "private" else []

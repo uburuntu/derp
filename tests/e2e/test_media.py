@@ -8,9 +8,9 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from derp.history.models import Message, MessageMedia
+from derp.history.models import Chat, Message, MessageMedia
 from derp.inference.models import ProviderCall
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel
@@ -108,3 +108,30 @@ async def test_inspect_media_tool_opens_an_older_image(
     async with conversation.db.session() as session:
         media = await session.scalar(select(MessageMedia).where(MessageMedia.message_id == posted.message_id))
         assert media is not None and media.description == "a meme with a frog"
+
+
+async def test_replying_to_a_photo_derp_never_kept_still_shows_it(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    quiet = Room(-1008, title="Quiet")
+    eve = Person(602, "Eve")
+    conversation.meet(DORA, quiet)
+    conversation.meet(eve, quiet)
+    hello = await conversation.send(DORA, quiet, "hi all")
+    await conversation.settle(hello)
+    async with conversation.db.transaction() as session:
+        await session.execute(update(Chat).where(Chat.id == quiet.id).values(ambient=False))
+    conversation.api.register_file("cat", PNG)
+    posted = await conversation.send(DORA, quiet, photo=photo("cat"))
+    await conversation.settle(posted)
+    async with conversation.db.session() as session:
+        assert await session.get(Message, (quiet.id, posted.message_id)) is None  # ambient off: not kept
+
+    def answer(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        assert images_in(messages), "the replied-to photo reaches the model"
+        return ModelResponse(parts=[TextPart("a cat, obviously")])
+
+    model.reply(answer, "a grey square")  # the answer, then the image note
+    asked = await conversation.send(eve, quiet, "derp what is this?", reply_to=posted.message_id)
+    reply = await conversation.expect_reply(asked)
+    assert reply["rich_message"]["markdown"] == "a cat, obviously"

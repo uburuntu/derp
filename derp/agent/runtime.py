@@ -51,7 +51,7 @@ from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.capture import record_outgoing
 from derp.history.models import Chat, ForumTopic, Message
-from derp.history.render import chat_time, estimate_tokens, load_views, render_line
+from derp.history.render import chat_time, estimate_tokens, load_views, neutralize, one_line, render_line
 from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.ledger import cancelled_cost, estimate_cost
 from derp.inference.models import ModelPin
@@ -71,6 +71,7 @@ log = logging.getLogger("derp.agent")
 
 ModelFactory = Callable[[RolePin], Model]
 SILENT = {"", ".", "…"}  # final answers that mean "nothing more to say"
+ALBUM_SETTLE = 1.0  # seconds: album siblings arrive as separate updates; let them be stored first
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +130,8 @@ class Runtime:
         if asker is None:
             raise ValueError("an invocation needs a sender")
         locale = resolve(asker.language_code)
+        if message.media_group_id:
+            await asyncio.sleep(ALBUM_SETTLE)
         tz = chat_time(chat)
         target = Target.reply_to_message(message)
         operation_id = (
@@ -437,17 +440,15 @@ async def current_prompt(session: AsyncSession, message: TgMessage, window: Wind
     if row is not None:
         line = render_line((await load_views(session, [row]))[0], tz)
     else:
-        line = f"{asker}: {message.text or message.caption or ''}"
+        line = neutralize(f"{one_line(asker)}: {message.text or message.caption or ''}")
     parts: list[str] = []
     reply = message.reply_to_message
-    if reply is not None and (
-        window.oldest_message_id is None or reply.message_id < window.oldest_message_id
-    ):
+    if reply is not None and (reply.message_id not in window.ids):
         replied = await session.get(Message, (message.chat.id, reply.message_id))
         if replied is not None and replied.deleted_at is None:
             parts.append("Replying to: " + render_line((await load_views(session, [replied]))[0], tz))
         elif reply.text or reply.caption:
             author = reply.from_user.full_name if reply.from_user else "someone"
-            parts.append(f"Replying to {author}: {reply.text or reply.caption}")
+            parts.append(neutralize(f"Replying to {one_line(author)}: {reply.text or reply.caption}"))
     parts.append(f"<current_message>\n{line}\n</current_message>")
     return "\n".join(parts)

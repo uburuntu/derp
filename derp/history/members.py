@@ -26,6 +26,7 @@ log = logging.getLogger("derp.members")
 ADMIN_STATUSES = {"creator", "administrator"}
 NAMES_KEPT = 5
 PROFILE_MAX_AGE = timedelta(hours=24)
+DUPLICATE_WINDOW = 60  # seconds
 
 
 async def touch_member(
@@ -60,7 +61,18 @@ async def record_event(
     actor_id: int | None = None,
     status: str | None = None,
 ) -> None:
-    session.add(MemberEvent(chat_id=chat_id, user_id=user_id, kind=kind, actor_id=actor_id))
+    # While Derp is an admin, a join/leave arrives twice (service message + chat_member update), and
+    # service messages can be redelivered: the same event within a minute is recorded once.
+    duplicate = await session.scalar(
+        select(MemberEvent.id).where(
+            MemberEvent.chat_id == chat_id,
+            MemberEvent.user_id == user_id,
+            MemberEvent.kind == kind,
+            MemberEvent.at > func.now() - timedelta(seconds=DUPLICATE_WINDOW),
+        )
+    )
+    if duplicate is None:
+        session.add(MemberEvent(chat_id=chat_id, user_id=user_id, kind=kind, actor_id=actor_id))
     if status is not None:
         statement = insert(ChatMember).values(chat_id=chat_id, user_id=user_id, status=status)
         await session.execute(

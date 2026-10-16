@@ -6,6 +6,7 @@ Media show their stored description or transcript when one exists; payloads
 Contacts render without phone numbers: the window never needs them.
 """
 
+import re
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -18,6 +19,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from derp.history.models import Chat, Message, MessageMedia, Reaction, ReactionCount, User
+
+_WRAPPER_TAG = re.compile(
+    r"<(?=\s*/?\s*(?:chat_history|current_message|notes|chat_profile)\b)", re.IGNORECASE
+)
+CONTINUATION = "\n  ┆ "
+
+
+def neutralize(text: str) -> str:
+    """Untrusted text can't close Derp's data blocks or start a line that looks like a new message."""
+    return _WRAPPER_TAG.sub("‹", text).replace("\n", CONTINUATION)
+
+
+def one_line(text: str, limit: int = 64) -> str:
+    """A user-controlled name or title for the prompt: one line, short, no wrapper tags."""
+    return neutralize(" ".join(text.split()))[:limit]
+
 
 DERP_NAME = "Derp"
 TEXT_LIMIT = 2000  # characters of one message kept in the window; longer texts are cut with "…"
@@ -158,8 +175,8 @@ def render_line(view: MessageView, tz: tzinfo) -> str:
         else ""
     )
     when = row.date.astimezone(tz).strftime("%H:%M")
-    header = f"[{when}] #{row.message_id} {view.sender}{_forward(row.forward_origin)}{reply}{quote}{edited}"
-    return f"{header}: {render_body(view)}{reactions}"
+    header = f"[{when}] #{row.message_id} {one_line(view.sender)}{_forward(row.forward_origin)}{reply}{quote}{edited}"
+    return neutralize(f"{header}: {render_body(view)}{reactions}")
 
 
 def render_transcript(views: Iterable[MessageView], tz: tzinfo) -> str:

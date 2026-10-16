@@ -1,6 +1,10 @@
-"""/memory: what Derp remembers here, and approval of proposed chat notes."""
+"""/memory: what Derp remembers here, approval of proposed chat notes, confirmation of chat rules."""
+
+import contextlib
+import hashlib
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -16,6 +20,41 @@ from derp.telegram.sender import Target, send_markdown
 class NoteAction(CallbackData, prefix="note"):
     action: str  # approve | reject
     note_id: int
+
+
+class RulesAction(CallbackData, prefix="rules"):
+    action: str  # apply | cancel
+    draft: str  # digest of the draft the buttons were shown for
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:10]
+
+
+def rules_prompt(locale: str, rules: str) -> str:
+    if not rules:
+        return t(locale, "memory.rules_clear")
+    return t(locale, "memory.rules_confirm") + "\n\n" + rules
+
+
+def rules_keyboard(locale: str, rules: str) -> InlineKeyboardMarkup:
+    draft = _digest(rules)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "memory.rules_apply"),
+                    callback_data=RulesAction(action="apply", draft=draft).pack(),
+                    style="success",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "memory.rules_cancel"),
+                    callback_data=RulesAction(action="cancel", draft=draft).pack(),
+                    style="danger",
+                ),
+            ]
+        ]
+    )
 
 
 def _lines(notes: list[Note]) -> list[str]:
@@ -90,8 +129,39 @@ async def on_note_action(query: CallbackQuery, callback_data: NoteAction, bot: B
     await query.answer(answer)
 
 
+async def on_rules_action(query: CallbackQuery, callback_data: RulesAction, bot: Bot, db: Database) -> None:
+    """Only the admin who asked can apply or cancel, and only the draft these buttons showed."""
+    locale = resolve(query.from_user.language_code)
+    message = query.message
+    if message is None:
+        await query.answer()
+        return
+    async with db.session() as session:
+        chat = await session.get(Chat, message.chat.id)
+    if chat is None or chat.rules_draft is None or _digest(chat.rules_draft) != callback_data.draft:
+        await query.answer(t(locale, "memory.gone"))
+        return
+    if chat.rules_draft_by != query.from_user.id or not await is_admin(bot, chat, query.from_user.id):
+        await query.answer(t(locale, "memory.rules_not_yours"), show_alert=True)
+        return
+    async with db.transaction() as session:
+        row = await session.get(Chat, chat.id, with_for_update=True)
+        if row is None or row.rules_draft is None or _digest(row.rules_draft) != callback_data.draft:
+            await query.answer(t(locale, "memory.gone"))
+            return
+        if callback_data.action == "apply":
+            row.rules = row.rules_draft or None
+        row.rules_draft, row.rules_draft_by = None, None
+    with contextlib.suppress(TelegramAPIError):
+        await bot.edit_message_reply_markup(chat_id=chat.id, message_id=message.message_id, reply_markup=None)
+    await query.answer(
+        t(locale, "memory.rules_applied" if callback_data.action == "apply" else "memory.rules_cancelled")
+    )
+
+
 def build_router() -> Router:
     router = Router(name="memory")
+    router.callback_query.register(on_rules_action, RulesAction.filter(F.action.in_({"apply", "cancel"})))
     router.message.register(show_memory, Command("memory"))
     router.callback_query.register(on_note_action, NoteAction.filter(F.action.in_({"approve", "reject"})))
     return router

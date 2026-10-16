@@ -47,12 +47,10 @@ async def test_track_counts_names_and_events(database: Database) -> None:
         await track_message(session, tg(2, renamed, text="hi"), stored=True)
         await track_message(session, tg(3, ann, new_chat_members=[bob]), stored=True)
         await track_message(session, tg(4, bob, left_chat_member=bob), stored=True)
+        await track_message(session, tg(4, bob, left_chat_member=bob), stored=True)  # redelivered
     async with database.session() as session:
         member = await session.get(ChatMember, (-100, 1))
-        assert (
-            member is not None and member.message_count == 3 and member.names == ["Ann", "Anna"][::1][-2:]
-        ) or True
-        assert member is not None and member.names[-1] == "Ann"
+        assert member is not None and (member.message_count, member.names) == (3, ["Anna", "Ann"])
         bob_row = await session.get(ChatMember, (-100, 2))
         assert bob_row is not None and bob_row.status == "left"
         kinds = list(await session.scalars(select(MemberEvent.kind).order_by(MemberEvent.id)))
