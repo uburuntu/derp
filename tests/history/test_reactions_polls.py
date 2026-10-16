@@ -12,6 +12,8 @@ from derp.history.models import Poll, PollVote
 from derp.history.polls import on_poll, on_poll_answer
 from derp.history.reactions import reaction_key
 
+BOT_ID = 777000111
+
 GROUP = {"id": -100, "type": "supergroup", "title": "g"}
 DERP = {"id": 777, "is_bot": True, "first_name": "Derp"}
 
@@ -40,7 +42,7 @@ async def test_derp_quiz_tracks_state_and_votes(database: Database) -> None:
     sent = TgMessage.model_validate({"message_id": 5, "date": 0, "chat": GROUP, "from": DERP, "poll": poll()})
     async with database.transaction() as session:
         await upsert_chat(session, sent.chat)
-        await record_outgoing(session, [sent])
+        await record_outgoing(session, [sent], BOT_ID)
     await on_poll(TgPoll.model_validate(poll(votes=(2, 1), closed=True)), database)
     voter = {"id": 1, "is_bot": False, "first_name": "Ann"}
     await on_poll_answer(

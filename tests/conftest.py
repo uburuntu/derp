@@ -63,7 +63,7 @@ def settings() -> Iterator[Settings]:
     yield Settings(
         _env_file=None,  # type: ignore[call-arg]
         environment="test",
-        telegram_bot_token="123456:TEST_TOKEN_FOR_TESTING_ONLY_0000000",
+        telegram_bot_token="777000111:TEST_TOKEN_FOR_TESTING_ONLY_0000000",
         database_url=TEST_DATABASE_URL or "postgresql+asyncpg://unused/unused",
         openrouter_api_key="sk-or-test",
         owner_ids=[1000],

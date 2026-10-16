@@ -142,8 +142,9 @@ class MessageMedia(Base):
     message_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     idx: Mapped[int] = mapped_column(primary_key=True, autoincrement=False, default=0)
     type: Mapped[str] = mapped_column(String(12))
-    file_id: Mapped[str]
-    file_unique_id: Mapped[str]
+    file_id: Mapped[str]  # usable only by the bot that received it
+    bot_id: Mapped[int]  # that bot
+    file_unique_id: Mapped[str]  # the same for every bot; a key, never downloadable
     mime_type: Mapped[str | None]
     file_size: Mapped[int | None]
     width: Mapped[int | None]
@@ -276,13 +277,17 @@ class GameScore(Base):
 
 
 class Sticker(Base):
-    """A sticker Derp has seen anywhere (public assets, no sender kept); the pool ``send_sticker`` draws from."""
+    """A sticker a bot has seen anywhere (public assets, no sender kept); the pool ``send_sticker`` draws from.
+
+    Keyed per bot: ``file_id`` works only for the bot that received it, while ``file_unique_id`` is shared.
+    """
 
     __tablename__ = "stickers"
-    __table_args__ = (Index("ix_stickers_emoji", "emoji"),)
+    __table_args__ = (Index("ix_stickers_bot_emoji", "bot_id", "emoji"),)
 
+    bot_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     file_unique_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    file_id: Mapped[str]  # valid for this bot only
+    file_id: Mapped[str]
     emoji: Mapped[str | None] = mapped_column(String(16))
     set_name: Mapped[str | None]
     kind: Mapped[str] = mapped_column(String(12), default="regular")  # regular | mask | custom_emoji

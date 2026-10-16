@@ -1,6 +1,7 @@
 # History — chat knowledge
 
 - Owns everything Derp knows about a chat: `chats`, `users`, `forum_topics`, `messages` + `message_media`, `chat_members` + `member_events`, `reactions` + `reaction_counts`, `polls` + `poll_votes`, `game_scores`, `stickers`, `digests`.
+- Bot-specific ids: `message_media.bot_id` and `stickers.bot_id` record which bot received each `file_id` (a test or successor bot can't use another bot's); `file_unique_id` is the cross-bot key. The sticker pool is per bot.
 - Storage shape: normalized core columns for what queries filter on, a typed `payload` JSONB per message kind (dice, location, contact, checklist, poll, service event…), and `raw` JSON only for kinds without a typed shape. Contacts and precise locations are stored in full and follow retention.
 - `capture.py` upserts by Telegram IDs, so redelivery and edits are idempotent; edits replace text/payload in place, and an edit that swaps a file drops that file's transcript/description. Derp's rich messages are stored with the Markdown that was sent (Telegram returns only blocks). `message_id == 0` (ephemeral) and guest-mode messages are never stored. Only agent outputs are recorded as Derp's messages (`capture='derp'`), not UI/system copy.
 - `middleware.py` runs before handlers: invocations are always stored; other group messages only while the chat's ambient context is on. The message an invocation replies to is part of the invocation and is stored too if it wasn't (privacy mode, ambient off). It hands `trigger` and `chat_row` to handlers.

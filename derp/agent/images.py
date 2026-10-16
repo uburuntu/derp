@@ -102,9 +102,13 @@ async def make_image(
             reply_parameters=target.reply_parameters,
         )
     except BaseException:
-        await _ledger(db, image, target.chat_id, user_id, funding="creator", run_id=None)  # absorbed
+        await _ledger(
+            db, image, target.chat_id, user_id, funding="creator", run_id=None, bot_id=bot.id
+        )  # absorbed
         raise
-    await _ledger(db, image, target.chat_id, user_id, funding=funding, run_id=run_id, sent=sent)
+    await _ledger(
+        db, image, target.chat_id, user_id, funding=funding, run_id=run_id, sent=sent, bot_id=bot.id
+    )
     return sent
 
 
@@ -116,6 +120,7 @@ async def _ledger(
     *,
     funding: str,
     run_id: int | None,
+    bot_id: int,
     sent: Message | None = None,
 ) -> None:
     async with db.transaction() as session:
@@ -131,4 +136,4 @@ async def _ledger(
             units=1,
         )
         if sent is not None:
-            await record_outgoing(session, [sent])
+            await record_outgoing(session, [sent], bot_id)

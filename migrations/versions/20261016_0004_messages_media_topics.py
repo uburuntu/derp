@@ -93,6 +93,7 @@ def upgrade() -> None:
         sa.Column("idx", sa.BigInteger(), autoincrement=False, nullable=False),
         sa.Column("type", sa.String(length=12), nullable=False),
         sa.Column("file_id", sa.String(), nullable=False),
+        sa.Column("bot_id", sa.BigInteger(), nullable=False),
         sa.Column("file_unique_id", sa.String(), nullable=False),
         sa.Column("mime_type", sa.String(), nullable=True),
         sa.Column("file_size", sa.BigInteger(), nullable=True),

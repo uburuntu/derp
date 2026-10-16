@@ -78,6 +78,7 @@ async def seed(database: Database) -> None:
                 idx=0,
                 type="photo",
                 file_id="f",
+                bot_id=1,
                 file_unique_id="u",
                 description="a grey cat",
             )

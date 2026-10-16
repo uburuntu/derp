@@ -59,8 +59,12 @@ async def seeded(database: Database) -> Database:
         await session.flush()
         session.add_all(
             [
-                MessageMedia(chat_id=GROUP, message_id=1, type="photo", file_id="f", file_unique_id="u"),
-                MessageMedia(chat_id=GROUP, message_id=3, type="photo", file_id="g", file_unique_id="v"),
+                MessageMedia(
+                    chat_id=GROUP, message_id=1, bot_id=1, type="photo", file_id="f", file_unique_id="u"
+                ),
+                MessageMedia(
+                    chat_id=GROUP, message_id=3, bot_id=1, type="photo", file_id="g", file_unique_id="v"
+                ),
                 Reaction(chat_id=GROUP, message_id=1, actor_id=2, reaction="🔥"),
                 Reaction(chat_id=GROUP, message_id=2, actor_id=1, reaction="👍"),
                 MemberEvent(chat_id=GROUP, user_id=1, kind="join", at=NOW - timedelta(days=40)),

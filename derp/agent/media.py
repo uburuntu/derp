@@ -77,7 +77,9 @@ async def inspect(gateway: MediaGateway, rows: Sequence[MessageMedia]) -> list[I
     inspected: list[Inspected] = []
     for row in rows:
         try:
-            image = await gateway.image(row.file_id, key=row.file_unique_id, size_hint=row.file_size)
+            image = await gateway.image(
+                row.file_id, bot_id=row.bot_id, key=row.file_unique_id, size_hint=row.file_size
+            )
         except MediaUnavailableError as unavailable:
             log.info("media #%s skipped: %s", row.message_id, unavailable.reason)
             continue

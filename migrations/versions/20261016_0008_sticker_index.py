@@ -19,6 +19,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.create_table(
         "stickers",
+        sa.Column("bot_id", sa.BigInteger(), autoincrement=False, nullable=False),
         sa.Column("file_unique_id", sa.String(length=64), nullable=False),
         sa.Column("file_id", sa.String(), nullable=False),
         sa.Column("emoji", sa.String(length=16), nullable=True),
@@ -27,11 +28,11 @@ def upgrade() -> None:
         sa.Column("curated", sa.Boolean(), server_default=sa.text("false"), nullable=False),
         sa.Column("uses", sa.BigInteger(), server_default="1", nullable=False),
         sa.Column("first_seen", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.PrimaryKeyConstraint("file_unique_id", name=op.f("pk_stickers")),
+        sa.PrimaryKeyConstraint("bot_id", "file_unique_id", name=op.f("pk_stickers")),
     )
-    op.create_index("ix_stickers_emoji", "stickers", ["emoji"], unique=False)
+    op.create_index("ix_stickers_bot_emoji", "stickers", ["bot_id", "emoji"], unique=False)
 
 
 def downgrade() -> None:
-    op.drop_index("ix_stickers_emoji", table_name="stickers")
+    op.drop_index("ix_stickers_bot_emoji", table_name="stickers")
     op.drop_table("stickers")

@@ -1,7 +1,9 @@
 """Download Telegram files on demand, with caps and a short in-process cache.
 
-``file_id``s belong to one bot, so nothing here is shared across bots. File
-URLs embed the bot token: they are never logged or returned, and errors carry
+A ``file_id`` works only for the bot that received it (``file_unique_id`` is
+the same for every bot but can't be downloaded), so every fetch names the
+owning bot and a file of another bot — say, rows captured by a test bot — is
+unavailable rather than a Telegram error. File URLs embed the bot token: they are never logged or returned, and errors carry
 only the exception type.
 """
 
@@ -57,8 +59,12 @@ class MediaGateway:
         self._cache: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
         self._cached_bytes = 0
 
-    async def fetch(self, file_id: str, *, key: str | None = None, size_hint: int | None = None) -> bytes:
-        """Bytes of a file; ``key`` (the file_unique_id) makes repeated fetches free for a while."""
+    async def fetch(
+        self, file_id: str, *, bot_id: int, key: str | None = None, size_hint: int | None = None
+    ) -> bytes:
+        """Bytes of a file owned by ``bot_id``; ``key`` (the file_unique_id) makes repeated fetches free for a while."""
+        if bot_id != self.bot.id:
+            raise MediaUnavailableError("received by another bot")
         cache_key = key or file_id
         if (hit := self._cache.get(cache_key)) and time.monotonic() - hit[0] < CACHE_SECONDS:
             self._cache.move_to_end(cache_key)
@@ -86,8 +92,10 @@ class MediaGateway:
         self._remember(cache_key, data)
         return data
 
-    async def image(self, file_id: str, *, key: str | None = None, size_hint: int | None = None) -> Media:
-        data = await self.fetch(file_id, key=key, size_hint=size_hint)
+    async def image(
+        self, file_id: str, *, bot_id: int, key: str | None = None, size_hint: int | None = None
+    ) -> Media:
+        data = await self.fetch(file_id, bot_id=bot_id, key=key, size_hint=size_hint)
         media_type = sniff_image(data)
         if media_type is None:
             raise MediaUnavailableError("not an image")

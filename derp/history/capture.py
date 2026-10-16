@@ -108,10 +108,10 @@ def _service_data(message: TgMessage, event: str) -> Any:
     return _dump(value)
 
 
-def media_rows(message: TgMessage) -> list[dict[str, Any]]:
-    """Media attached to a message; a photo keeps only its largest size."""
+def media_rows(message: TgMessage, bot_id: int) -> list[dict[str, Any]]:
+    """Media attached to a message, with the bot whose file_ids they are; a photo keeps only its largest size."""
     rows: list[dict[str, Any]] = []
-    base = {"chat_id": message.chat.id, "message_id": message.message_id}
+    base = {"chat_id": message.chat.id, "message_id": message.message_id, "bot_id": bot_id}
     if message.photo:
         photo = max(message.photo, key=lambda size: size.width * size.height)
         rows.append(
@@ -187,8 +187,8 @@ def _people(message: TgMessage) -> Iterable[TgUser]:
         yield message.left_chat_member
 
 
-async def store_message(session: AsyncSession, message: TgMessage, *, capture: str) -> bool:
-    """Insert or update (on edit) one message and its media. Returns False when not storable."""
+async def store_message(session: AsyncSession, message: TgMessage, *, capture: str, bot_id: int) -> bool:
+    """Insert or update (on edit) one message and its media, as received by ``bot_id``. False when not storable."""
     if message.message_id <= 0 or message.guest_query_id:
         return False
     for person in _people(message):
@@ -228,7 +228,7 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
             set_={key: statement.excluded[key] for key in updatable},
         )
     )
-    media = media_rows(message)
+    media = media_rows(message, bot_id)
     if media:
         existing = {
             r[0]: r[1]
@@ -306,7 +306,7 @@ async def _track_topic(session: AsyncSession, message: TgMessage) -> None:
         topic.closed = False
 
 
-async def index_sticker(session: AsyncSession, message: TgMessage) -> None:
+async def index_sticker(session: AsyncSession, message: TgMessage, bot_id: int) -> None:
     """Remember every sticker seen (stored message or not): ``send_sticker`` picks from these."""
     sticker = message.sticker
     if sticker is None or sticker.type == "custom_emoji":
@@ -314,13 +314,14 @@ async def index_sticker(session: AsyncSession, message: TgMessage) -> None:
     statement = insert(Sticker).values(
         file_unique_id=sticker.file_unique_id,
         file_id=sticker.file_id,
+        bot_id=bot_id,
         emoji=sticker.emoji,
         set_name=sticker.set_name,
         kind=sticker.type,
     )
     await session.execute(
         statement.on_conflict_do_update(
-            index_elements=[Sticker.file_unique_id],
+            index_elements=[Sticker.bot_id, Sticker.file_unique_id],
             set_={"file_id": statement.excluded.file_id, "uses": Sticker.uses + 1},
         )
     )
@@ -333,7 +334,7 @@ async def is_stored(session: AsyncSession, chat_id: int, message_id: int) -> boo
     return found is not None
 
 
-async def record_outgoing(session: AsyncSession, messages: Iterable[TgMessage]) -> None:
+async def record_outgoing(session: AsyncSession, messages: Iterable[TgMessage], bot_id: int) -> None:
     """Derp's own messages, recorded after Telegram accepted them."""
     for message in messages:
-        await store_message(session, message, capture="derp")
+        await store_message(session, message, capture="derp", bot_id=bot_id)

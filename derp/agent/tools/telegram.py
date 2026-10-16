@@ -81,7 +81,7 @@ def check_budget(deps: RunDeps) -> None:
 async def delivered(deps: RunDeps, sent: TgMessage, kind: str) -> None:
     deps.delivered.append((sent.message_id, kind))
     async with deps.db.transaction() as session:
-        await record_outgoing(session, [sent])
+        await record_outgoing(session, [sent], deps.bot.id)
 
 
 def reply_parameters(message_id: int | None) -> ReplyParameters | None:
@@ -194,14 +194,16 @@ async def send_sticker(
         favorite = await session.scalar(
             select(Sticker.file_id)
             .join(MessageMedia, MessageMedia.file_unique_id == Sticker.file_unique_id)
-            .where(MessageMedia.chat_id == deps.chat.id, Sticker.emoji == emoji)
+            .where(
+                MessageMedia.chat_id == deps.chat.id, Sticker.emoji == emoji, Sticker.bot_id == deps.bot.id
+            )
             .group_by(Sticker.file_id)
             .order_by(func.count().desc())
             .limit(1)
         )
         file_id = favorite or await session.scalar(
             select(Sticker.file_id)
-            .where(Sticker.emoji == emoji)
+            .where(Sticker.emoji == emoji, Sticker.bot_id == deps.bot.id)
             .order_by(Sticker.curated.desc(), Sticker.uses.desc())
             .limit(1)
         )

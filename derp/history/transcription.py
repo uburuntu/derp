@@ -77,7 +77,7 @@ class Transcriber:
             return None
         try:
             data = await self.gateway.fetch(
-                media.file_id, key=media.file_unique_id, size_hint=media.file_size
+                media.file_id, bot_id=media.bot_id, key=media.file_unique_id, size_hint=media.file_size
             )
             audio = await extract_audio(data) if media.type == "video_note" else data
             transcript = await self._transcribe(audio)

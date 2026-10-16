@@ -351,7 +351,7 @@ class Runtime:
                 deps.delivered.extend((m.message_id, "message") for m in sent)
                 if sent:
                     async with self.db.transaction() as session:
-                        await record_outgoing(session, sent)
+                        await record_outgoing(session, sent, self.bot.id)
             status = "failed" if error is not None else "cancelled" if stopped else "completed"
             async with self.db.transaction() as session:
                 stored = await session.merge(run)

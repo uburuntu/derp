@@ -46,18 +46,22 @@ class CaptureMiddleware(BaseMiddleware):
                 await upsert_user(session, event.from_user)
             stored = False
             if trigger is not None or chat.type == "private" or chat.ambient:
-                stored = await store_message(session, event, capture="invocation" if trigger else "ambient")
+                stored = await store_message(
+                    session, event, capture="invocation" if trigger else "ambient", bot_id=me.id
+                )
             replied = event.reply_to_message if trigger is not None else None
             if (
                 replied is not None
                 and await session.get(MessageRow, (chat.id, replied.message_id)) is not None
             ):
                 replied = None  # already kept, with more detail than the embedded copy
-            if replied is not None and not await store_message(session, replied, capture="invocation"):
+            if replied is not None and not await store_message(
+                session, replied, capture="invocation", bot_id=me.id
+            ):
                 replied = None
             if not self.edits:
                 await track_message(session, event, stored=stored)
-                await index_sticker(session, event)
+                await index_sticker(session, event, me.id)
         transcriber: Transcriber | None = data.get("transcriber")
         if transcriber is not None and not self.edits:
             for message in (event if stored else None, replied):

@@ -15,6 +15,8 @@ from derp.history.capture import (
 )
 from derp.history.models import Chat, ForumTopic, Message, MessageMedia, User
 
+BOT_ID = 777000111
+
 GROUP = {"id": -100, "type": "supergroup", "title": "Chat", "is_forum": True}
 ANN = {"id": 1, "is_bot": False, "first_name": "Ann", "language_code": "ru"}
 
@@ -51,13 +53,13 @@ def test_media_keeps_largest_photo_and_sticker_fields() -> None:
         ],
         caption="look",
     )
-    (row,) = media_rows(photo)
-    assert row["file_id"] == "l" and row["idx"] == 0
+    (row,) = media_rows(photo, BOT_ID)
+    assert row["file_id"] == "l" and row["idx"] == 0 and row["bot_id"] == BOT_ID
     sticker = tg(
         sticker={"file_id": "st", "file_unique_id": "ust", "type": "regular", "width": 512, "height": 512,
                  "is_animated": False, "is_video": False, "emoji": "😂", "set_name": "memes"}
     )  # fmt: skip
-    (row,) = media_rows(sticker)
+    (row,) = media_rows(sticker, BOT_ID)
     assert (row["sticker_emoji"], row["sticker_set"]) == ("😂", "memes")
 
 
@@ -68,14 +70,17 @@ async def test_store_edit_and_outgoing(database: Database) -> None:
     async with database.transaction() as session:
         await upsert_chat(session, tg().chat)
         await store_message(
-            session, tg(text="hello derp", message_thread_id=7, is_topic_message=True), capture="invocation"
+            session,
+            tg(text="hello derp", message_thread_id=7, is_topic_message=True),
+            capture="invocation",
+            bot_id=BOT_ID,
         )
-        await store_message(session, tg(message_id=11, text="ambient"), capture="ambient")
+        await store_message(session, tg(message_id=11, text="ambient"), capture="ambient", bot_id=BOT_ID)
     async with database.transaction() as session:
         edited = tg(text="hello again", edit_date=1_700_000_100, message_thread_id=7, is_topic_message=True)
-        await store_message(session, edited, capture="ambient")
+        await store_message(session, edited, capture="ambient", bot_id=BOT_ID)
         derp = tg(message_id=12, text="hi!", **{"from": {"id": 99, "is_bot": True, "first_name": "Derp"}})
-        await record_outgoing(session, [derp])
+        await record_outgoing(session, [derp], BOT_ID)
     async with database.session() as session:
         first = await session.get(Message, (-100, 10))
         assert first is not None
@@ -98,18 +103,24 @@ async def test_store_edit_and_outgoing(database: Database) -> None:
 async def test_unstorable_and_topics(database: Database) -> None:
     async with database.transaction() as session:
         await upsert_chat(session, tg().chat)
-        assert not await store_message(session, tg(message_id=0, text="ephemeral"), capture="derp")
+        assert not await store_message(
+            session, tg(message_id=0, text="ephemeral"), capture="derp", bot_id=BOT_ID
+        )
         created = tg(
             message_id=20, message_thread_id=20, forum_topic_created={"name": "Memes", "icon_color": 1}
         )
-        await store_message(session, created, capture="ambient")
+        await store_message(session, created, capture="ambient", bot_id=BOT_ID)
         await store_message(
-            session, tg(message_id=21, message_thread_id=20, forum_topic_closed={}), capture="ambient"
+            session,
+            tg(message_id=21, message_thread_id=20, forum_topic_closed={}),
+            capture="ambient",
+            bot_id=BOT_ID,
         )
         await store_message(
             session,
             tg(message_id=22, photo=[{"file_id": "p", "file_unique_id": "up", "width": 1, "height": 1}]),
             capture="ambient",
+            bot_id=BOT_ID,
         )
     async with database.session() as session:
         topic = await session.get(ForumTopic, (-100, 20))
@@ -126,17 +137,21 @@ async def test_an_edit_that_swaps_the_photo_drops_notes_about_the_old_one(databa
 
     async with database.transaction() as session:
         await upsert_chat(session, shot("a").chat)
-        await store_message(session, shot("a"), capture="ambient")
+        await store_message(session, shot("a"), capture="ambient", bot_id=BOT_ID)
         media = await session.get(MessageMedia, (-100, 10, 0))
         message = await session.get(Message, (-100, 10))
         assert media is not None and message is not None
         media.description, message.extra_text = "a cat", "a cat"
     async with database.transaction() as session:
-        await store_message(session, shot("a", edit_date=1_700_000_100), capture="ambient")  # caption edit
+        await store_message(
+            session, shot("a", edit_date=1_700_000_100), capture="ambient", bot_id=BOT_ID
+        )  # caption edit
     async with database.session() as session:
         assert (await session.get(MessageMedia, (-100, 10, 0))).description == "a cat"  # type: ignore[union-attr]
     async with database.transaction() as session:
-        await store_message(session, shot("b", edit_date=1_700_000_200), capture="ambient")  # new photo
+        await store_message(
+            session, shot("b", edit_date=1_700_000_200), capture="ambient", bot_id=BOT_ID
+        )  # new photo
     async with database.session() as session:
         media = await session.get(MessageMedia, (-100, 10, 0))
         message = await session.get(Message, (-100, 10))

@@ -8,12 +8,12 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo
-from sqlalchemy import select, update
+from sqlalchemy import insert, select, update
 
-from derp.history.models import Chat, Message, MessageMedia
+from derp.history.models import Chat, Message, MessageMedia, Sticker
 from derp.inference.models import ProviderCall
 from tests.e2e.harness import Conversation, Person, Room
-from tests.e2e.model import ScriptedModel
+from tests.e2e.model import ScriptedModel, tool_call
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 DORA = Person(601, "Dora")
@@ -135,3 +135,33 @@ async def test_replying_to_a_photo_derp_never_kept_still_shows_it(
     asked = await conversation.send(eve, quiet, "derp what is this?", reply_to=posted.message_id)
     reply = await conversation.expect_reply(asked)
     assert reply["rich_message"]["markdown"] == "a cat, obviously"
+
+
+async def test_media_and_stickers_of_another_bot_degrade_instead_of_failing(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    yard = Room(-1019, title="Old yard")
+    conversation.meet(DORA, yard)
+    conversation.api.register_file("old-photo", PNG)
+    shared = await conversation.send(DORA, yard, photo=photo("old-photo"))
+    await conversation.settle(shared)
+    async with conversation.db.transaction() as session:  # as if captured under a previous bot
+        await session.execute(update(MessageMedia).values(bot_id=1))
+        await session.execute(
+            insert(Sticker).values(bot_id=1, file_unique_id="u-st", file_id="old", emoji="😂")
+        )
+
+    def look(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        assert images_in(messages) == []  # never requested from Telegram, so no pixels
+        return ModelResponse(parts=[TextPart("can't see it anymore")])
+
+    model.reply(look, tool_call("send_sticker", emoji="😂"), "fine")
+    asked = await conversation.send(DORA, yard, "derp what is this?", reply_to=shared.message_id)
+    reply = await conversation.expect_reply(asked)
+    assert reply["rich_message"]["markdown"] == "can't see it anymore"
+    assert not conversation.api.calls_of("getFile", after=shared.after)
+    await conversation.settle(asked)
+    again = await conversation.send(DORA, yard, "derp send a 😂 sticker")
+    await conversation.settle(again)
+    assert not conversation.api.calls_of("sendSticker", after=again.after)
+    assert "I don't know a sticker" in str(model.requests[-1][-1])
