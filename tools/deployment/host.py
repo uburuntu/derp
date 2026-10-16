@@ -328,11 +328,13 @@ class Deployer:
             self.run("docker", "rm", CONTAINER)
 
     def stop_legacy(self):
+        """Stopped and never auto-restarted (a host reboot must not bring back a second poller)."""
         info = self.inspect(LEGACY)
-        if not info or not info["State"]["Running"]:
+        if not info:
             return
         self.run("docker", "update", "--restart=no", LEGACY)
-        self.run("docker", "stop", "--time", "30", LEGACY, timeout=60)
+        if info["State"]["Running"]:
+            self.run("docker", "stop", "--time", "30", LEGACY, timeout=60)
 
     def wait_healthy(self, deadline=HEALTH_DEADLINE, interval=3.0):
         until = time.monotonic() + deadline
