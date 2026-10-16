@@ -62,6 +62,11 @@ def day_end(now: datetime) -> datetime:
     return datetime.combine(now.date() + timedelta(days=1), time(), tzinfo=UTC)
 
 
+def sponsored_lot_id(user_id: int, now: datetime) -> str:
+    """Operation id of a user's sponsored allowance for one UTC day."""
+    return f"sponsored:{user_id}:{now.date().isoformat()}"
+
+
 async def sponsored_spent_today(session: AsyncSession, now: datetime) -> Decimal:
     start = datetime.combine(now.date(), time(), tzinfo=UTC)
     spent = await session.scalar(
@@ -124,7 +129,7 @@ class Funder:
                 await credit(
                     session,
                     mine,
-                    f"sponsored:{user_id}:{moment.date().isoformat()}",
+                    sponsored_lot_id(user_id, moment),
                     self.settings.sponsored_daily_credits,
                     "sponsored",
                     expires_at=day_end(moment),

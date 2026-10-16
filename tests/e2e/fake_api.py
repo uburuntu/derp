@@ -360,6 +360,21 @@ class FakeBotAPI:
         if isinstance(markup := fields.get("reply_markup"), Mapping) and "inline_keyboard" in markup:
             message["reply_markup"] = markup
         reply = fields.get("reply_parameters")
+        ephemeral = fields.get("ephemeral_message_parameters")
+        if (
+            isinstance(reply, Mapping)
+            and "ephemeral_message_id" in reply
+            and not isinstance(ephemeral, Mapping)
+        ):
+            raise ValueError("a reply to an ephemeral message must itself be ephemeral")
+        if isinstance(ephemeral, Mapping):  # seen only by the receiver; never a regular chat message
+            receiver = self.users.get(int(ephemeral["receiver_user_id"]))
+            if receiver is None:
+                raise ValueError("ephemeral receiver is not a known user")
+            if not (isinstance(reply, Mapping) and reply.get("ephemeral_message_id")):
+                raise ValueError("non-admin bots send ephemeral messages only as replies to ephemeral ones")
+            message.update(message_id=0, ephemeral_message_id=len(self.calls), receiver_user=receiver)
+            return message
         if isinstance(reply, Mapping):
             target = self.messages.get((chat_id, int(reply["message_id"])))
             if target is not None:

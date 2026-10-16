@@ -33,6 +33,24 @@ already_subscribed_short = "You already have Derp+."
 plan_thanks = "Welcome to Derp+! **+{credits}** Derpcoins until {date}. Your balance: **{balance}**."
 plan_renewed = "Derp+ renewed: **+{credits}** Derpcoins until {date}. Your balance: **{balance}**."
 
+[credits]
+title = "💰 **Your Derpcoins**"
+plan = "Derp+: **{left}** left, until {date}"
+bought = "Bought: **{left}**"
+free = "Free today: **{left}** of {daily} (refills at {time})"
+chat = "This chat: **{left}**"
+usage = "**Spent from this chat, last {days} days:**"
+usage_none = "_Nobody spent this chat's Derpcoins in the last {days} days._"
+hint = "_Answers spend Derp+ first, then bought Derpcoins, then the free daily ones; in groups the chat's go first. /buy for more._"
+
+[info]
+how = "Reply to one of my messages with /info to see what it cost."
+receipt = "🧾 **About this answer**\nModel: `{model}`\nTokens: {input} in · {output} out · {context} of context · {tools} tool calls\nCharged: **{charged}** Derpcoins — {funding}"
+paid_user = "from personal Derpcoins"
+paid_chat = "from this chat's Derpcoins"
+sponsored = "covered by the free daily allowance"
+free = "free model, nothing charged"
+
 [memory]
 title = "🧠 **What I remember here**"
 rules = "**Chat rules** (from the admins)"

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
+    EphemeralMessageParameters,
     InlineKeyboardMarkup,
     InputMediaPhoto,
     InputMediaVideo,
@@ -41,25 +42,40 @@ RICH_CHUNK = RICH_LIMIT - 768  # headroom for fence repair and entity overhead
 
 @dataclass(frozen=True, slots=True)
 class Target:
-    """Where a message goes: chat, forum topic, and the message it replies to (same chat)."""
+    """Where a message goes: chat, forum topic, and the message it replies to (same chat).
+
+    A reply to an ephemeral command (message id 0) is itself ephemeral: only the sender sees it,
+    and Telegram accepts it only within 15 seconds and may not deliver it.
+    """
 
     chat_id: int
     thread_id: int | None = None
     reply_to: int | None = None
+    ephemeral_to: int | None = None  # the user who alone sees the message
+    ephemeral_reply_to: int | None = None  # their ephemeral message being answered
 
     @classmethod
     def reply_to_message(cls, message: Message) -> Target:
         thread = message.message_thread_id if message.is_topic_message else None
+        if message.ephemeral_message_id and message.from_user is not None:
+            return cls(message.chat.id, thread, None, message.from_user.id, message.ephemeral_message_id)
         return cls(message.chat.id, thread, message.message_id or None)
 
     def replying(self, message_id: int | None) -> Target:
-        return Target(self.chat_id, self.thread_id, message_id)
+        # Ephemeral chunks all answer the same command: non-admin bots may only send them as replies.
+        return Target(self.chat_id, self.thread_id, message_id, self.ephemeral_to, self.ephemeral_reply_to)
 
     @property
     def reply_parameters(self) -> ReplyParameters | None:
+        if self.ephemeral_reply_to is not None:
+            return ReplyParameters(ephemeral_message_id=self.ephemeral_reply_to)
         if self.reply_to is None:
             return None
         return ReplyParameters(message_id=self.reply_to, allow_sending_without_reply=True)
+
+    @property
+    def ephemeral(self) -> EphemeralMessageParameters | None:
+        return EphemeralMessageParameters(receiver_user_id=self.ephemeral_to) if self.ephemeral_to else None
 
 
 def _strip_once(markdown: str) -> str:
@@ -113,6 +129,7 @@ async def send_markdown(
                 rich_message=InputRichMessage(markdown=chunk),
                 reply_parameters=target_for_chunk.reply_parameters,
                 reply_markup=reply_markup if last else None,
+                ephemeral_message_parameters=target.ephemeral,
             )
         except TelegramBadRequest:
             sent.extend(
@@ -148,6 +165,7 @@ async def send_plain(
                 text=chunk,
                 link_preview_options=None if previews else LinkPreviewOptions(is_disabled=True),
                 reply_parameters=(target if index == 0 else target.replying(None)).reply_parameters,
+                ephemeral_message_parameters=target.ephemeral,
                 reply_markup=reply_markup if last else None,
             )
         )
