@@ -105,6 +105,8 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_app_url: str = "https://t.me/DerpRobot"
     openrouter_app_title: str = "Derp"
+    source_url: str = "https://github.com/uburuntu/derp"
+    source_revision: str = "main"  # the deployed commit, baked into the image at build
     model_pins: dict[ModelRole, RolePin] = Field(default_factory=lambda: dict(DEFAULT_PINS))
     # Families the scout may propose. No OpenAI or Anthropic chat models: too buttoned-up for Derp's voice.
     model_family_allowlist: tuple[str, ...] = (

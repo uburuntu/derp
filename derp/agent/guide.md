@@ -1,0 +1,96 @@
+# Derp — how it works
+
+This guide is for answering people's questions about Derp. It explains concepts only: every number (prices,
+allowances, limits, retention) is appended from the running configuration, and the commands and tool lists are
+generated from the code, so they are always current. A test rejects digits in this file.
+
+## overview
+
+Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pictures, memes, polls, reminders.
+- Private chat: Derp answers every message. Groups: only when called (see groups).
+- Inline mode: type @username and a question in any chat; the answer is edited into the sent message.
+- Guest mode: a mention in a chat Derp isn't a member of gets one reply. Inline and guest answers see no chat
+  history and nothing from them is stored except accounting.
+- It looks at photos, stickers and albums, listens to voice messages and video notes (transcribed), and opens
+  links. Media tools also take videos, GIFs and audio (memes, reversing, song recognition).
+- People never choose a model: Derp picks one by who pays (see money). Bought and free daily answers go only to
+  AI providers that keep nothing (zero data retention).
+
+## groups
+
+- Call Derp by @mention, by name (derp, дерп and their inflections) or by replying to one of its messages. It
+  stays quiet otherwise and never joins in on its own.
+- Context: while the group allows it, Derp reads the chat to keep up and remembers it for the retention period.
+  Admins can switch to mentions only in /settings (that deletes the stored context). With Telegram's privacy mode
+  on and Derp not an admin, it only sees messages addressed to it anyway.
+- Making Derp an admin is optional: it then sees every message, reactions and members joining or leaving, and can
+  pin messages for admins.
+- In forum groups each topic is its own conversation.
+- It catches people up (day summaries), runs polls and quizzes with a per-chat leaderboard, and keeps notes and
+  the chat's rules (see memory).
+- Commands in groups work as /command@username or from the command menu; the menu's personal commands are
+  ephemeral (only the sender sees the answer). Bare commands may belong to another bot and are ignored.
+
+## money
+
+- Answers cost Derpcoins: what the AI providers actually charged plus a margin, rounded up. If nothing reached
+  the chat, nothing is charged. Reply /info to any answer to see its model, tokens, cost and who paid.
+- Free daily Derpcoins: everyone gets an allowance each UTC day on a cheaper model with fewer tools; it doesn't
+  accumulate. Drawing images needs bought Derpcoins.
+- Packs: bought with Telegram Stars in /buy; bought Derpcoins don't expire.
+- Derp+: a Stars subscription with a monthly allowance that doesn't roll over; nothing else changes. Cancel it in
+  Telegram's Stars settings; it runs to the end of the paid period.
+- Group wallet: anyone can buy Derpcoins for a group; they are spent first in that group.
+- Who pays — private chat: the person's bought Derpcoins (Derp+ first, as it expires), then their free daily ones.
+  Group: the group wallet, then the asker's bought Derpcoins (unless they turned off "my Derpcoins in groups" in
+  /settings), then the asker's free daily ones.
+- When nobody can pay, Derp offers free models: opt-in (an admin turns them on for a group), and their providers
+  may store what they get. Free models get read-only and Telegram tools only.
+- An action that costs more than the approval threshold (or a large share of the payer's balance) shows a
+  Run / Cancel button first; only the asker decides.
+- Balances are private: /credits in a group answers ephemerally or by DM, never in the group.
+- Derpcoins aren't money: no cash-out, no transfers between people. Payment problems: /paysupport. A refund
+  returns the Stars and removes what is left of that purchase's Derpcoins.
+
+## memory
+
+- Notes: "remember that…" saves a short note. Chat notes are shared in that chat; personal notes belong to one
+  person in one chat and only they can remove them. Nothing crosses chats.
+- Admins choose the chat notes mode in /settings: auto, members, admins (others' notes become proposals
+  approved in /memory) or off.
+- Rules: standing instructions an admin sets for how Derp behaves in the chat. Rules quoted word for word apply at
+  once; anything Derp would reword is shown with Apply / Cancel for that admin.
+- /memory lists the rules and notes. Notes and rules need bought or free daily Derpcoins (not free models).
+
+## reminders
+
+- A reminder posts its text at a time; a scheduled prompt makes Derp answer a request at that time ("every
+  morning post a fun fact"). Both can repeat daily, on weekdays, weekly or monthly in the chat's time zone.
+- Anyone can schedule one-offs; repeating jobs in groups need an admin. Creators cancel or resume their own,
+  admins any.
+- A scheduled prompt is paid when it fires, by the usual payer order; after several unpaid firings in a row the
+  job pauses. Removing Derp from a chat pauses its jobs.
+
+## privacy
+
+- Bot commands and inline/guest conversations are never stored. Telemetry holds numbers only, never text.
+- /forget as a reply removes that message; /forget alone removes everything the person said in that chat, with
+  their reactions, votes, notes and reminders there. Day summaries that mention it are redone without it.
+- The full privacy page follows.
+
+## limits
+
+- Each answer has hard caps: tool calls, visible outputs, output length, time and Derpcoins; reaching one ends the
+  answer gracefully. Media effects have size and length limits. Values follow.
+
+## tools
+
+- Tiers: "paid" is bought Derpcoins, Derp+ or the group wallet; "sponsored" is the free daily allowance; "free" is
+  free models. Toolbox tools are found on demand, they work the same.
+- Every answer can also search the web and open links (paid and sponsored) and run exact maths in a Python sandbox
+  with no network or files (every tier).
+
+## source
+
+- Derp is open source. For exactly how something works, its own code and developer notes are readable with
+  search_source and read_source (paid and sponsored answers); cite the lines with the links they return.

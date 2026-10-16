@@ -29,4 +29,5 @@
 - Verify Telegram, aiogram, Pydantic AI and OpenRouter behavior in `references/` (upstream checkouts + scraped docs, gitignored) instead of memory.
 - Tests use synthetic data and never touch the network; `live`-marked tests are opt-in and spend real money. User-facing features land with an e2e journey through the fake Bot API (`tests/e2e/`).
 - Keep modules small and direct; prefer a plain function to a new abstraction until the third repetition.
+- A change people would notice (feature, command, payer rule, privacy) updates `derp/agent/guide.md` in the same change; Derp answers questions about itself from it. Numbers never go there: they are generated from settings in `agent/tools/about.py`.
 - Every package directory has a short `AGENTS.md` (5–15 lines): what it owns, its invariants, where its contracts live. Update it in the same change that alters those facts. No session status, TODOs or progress logs in tracked docs.

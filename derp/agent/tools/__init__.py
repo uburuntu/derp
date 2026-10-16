@@ -7,6 +7,7 @@ from pydantic_ai_harness.tool_output_limits import Band, Truncate, TruncationStr
 
 from derp.agent.deps import RunDeps
 from derp.agent.tools import (
+    about,
     effects,
     games,
     history,
@@ -22,6 +23,8 @@ from derp.agent.tools.web import WEB_CAPABILITIES
 from derp.agent.toolsets import Family
 
 FAMILIES: tuple[Family, ...] = (
+    about.family,
+    about.source_family,
     history.family,
     memory.family,
     telegram.family,
@@ -49,6 +52,7 @@ OUTPUT_LIMITS = ToolOutputLimits[RunDeps](
     bands=[],
     per_tool={
         "run_code": _clamp(4000),
+        "read_source": _clamp(12000),
         **{name: _clamp(8000) for name in ("read_messages", "search_history", "chat_query", "digest")},
     },
 )

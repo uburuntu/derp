@@ -24,5 +24,8 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYDANTIC_AI_NO_BANNER=1 HEART
     BACKGROUND_MODEL=/home/app/.cache/derp/u2netp.onnx
 # Background-removal weights: fetched and checksum-verified once at build, never during a request.
 RUN python -m derp.tools.background fetch "$BACKGROUND_MODEL"
+# Last, so a new revision only adds a metadata layer: Derp links its own source at this commit.
+ARG SOURCE_REVISION=main
+ENV SOURCE_REVISION=$SOURCE_REVISION
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD ["python", "-m", "derp.telegram.heartbeat"]
 CMD ["python", "-m", "derp"]

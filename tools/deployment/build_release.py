@@ -50,7 +50,8 @@ def main() -> None:
     image = host.TAG + revision
     run(
         "docker", "build", "--platform", "linux/amd64",
-        "--label", "org.opencontainers.image.revision=" + revision, "--tag", image, ".",
+        "--label", "org.opencontainers.image.revision=" + revision,
+        "--build-arg", "SOURCE_REVISION=" + revision, "--tag", image, ".",
     )  # fmt: skip
     # The image must import and pass its own healthcheck module without configuration or network.
     run("docker", "run", "--rm", "--network", "none", "--read-only", image, "python", "-c", "import derp.app")
