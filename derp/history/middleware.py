@@ -8,7 +8,7 @@ from aiogram.types import Message, TelegramObject
 
 from derp.agent.invocation import detect_trigger
 from derp.db.engine import Database
-from derp.history.capture import store_message, upsert_chat, upsert_user
+from derp.history.capture import index_sticker, store_message, upsert_chat, upsert_user
 from derp.history.members import track_message
 from derp.history.transcription import Transcriber
 
@@ -46,6 +46,7 @@ class CaptureMiddleware(BaseMiddleware):
                 stored = await store_message(session, event, capture="invocation" if trigger else "ambient")
             if not self.edits:
                 await track_message(session, event, stored=stored)
+                await index_sticker(session, event)
         transcriber: Transcriber | None = data.get("transcriber")
         if stored and not self.edits and transcriber is not None and (event.voice or event.video_note):
             await transcriber.transcribe_message(event.chat.id, event.message_id)

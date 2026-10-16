@@ -99,6 +99,8 @@ class FakeBotAPI:
         self.outstanding_callbacks: set[str] = set()
         self.next_message_ids: dict[int, int] = defaultdict(int)
         self.files: dict[str, tuple[str, bytes]] = {}
+        self.poll_ids = 0
+        self.pinned: dict[int, int] = {}
         self.handlers: dict[str, Callable[[JsonObject], Any]] = {}
         self._runner: web.AppRunner | None = None
         self.base_url = ""
@@ -384,12 +386,50 @@ class FakeBotAPI:
     def _m_sendDice(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         return self._new_message(fields, dice={"emoji": fields.get("emoji", "🎲"), "value": 4})
 
+    def _m_sendPoll(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        self.poll_ids += 1
+        options = [
+            {"text": o["text"], "voter_count": 0, "persistent_id": f"o{i}"}
+            for i, o in enumerate(fields["options"])
+        ]
+        poll: JsonObject = {
+            "id": f"poll-{self.poll_ids}",
+            "question": str(fields["question"]),
+            "options": options,
+            "total_voter_count": 0,
+            "is_closed": False,
+            "is_anonymous": str(fields.get("is_anonymous", "true")).lower() == "true",
+            "type": str(fields.get("type", "regular")),
+            "allows_multiple_answers": str(fields.get("allows_multiple_answers", "false")).lower() == "true",
+            "allows_revoting": True,
+            "members_only": False,
+        }
+        if correct := fields.get("correct_option_ids"):
+            poll["correct_option_ids"] = list(correct)
+        return self._new_message(fields, poll=poll)
+
+    def _m_sendSticker(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        file_id = str(fields["sticker"])
+        sticker = {
+            "file_id": file_id, "file_unique_id": f"u-{file_id}", "type": "regular", "width": 512, "height": 512,
+            "is_animated": False, "is_video": False,
+        }  # fmt: skip
+        return self._new_message(fields, sticker=sticker)
+
+    def _m_pinChatMessage(self, fields: JsonObject) -> bool:  # noqa: N802
+        key = (int(fields["chat_id"]), int(fields["message_id"]))
+        if key not in self.messages:
+            raise ValueError(f"message {key} does not exist")
+        self.pinned[key[0]] = key[1]
+        return True
+
     def _m_editMessageText(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         key = (int(fields["chat_id"]), int(fields["message_id"]))
         message = self.messages.get(key)
         if message is None:
             raise ValueError(f"message {key} does not exist")
-        message["text"] = str(fields["text"])
+        rich = fields.get("rich_message")
+        message["text"] = str(rich.get("markdown") if isinstance(rich, Mapping) else fields["text"])
         message["edit_date"] = int(datetime.now(UTC).timestamp())
         if markup := fields.get("reply_markup"):
             message["reply_markup"] = markup

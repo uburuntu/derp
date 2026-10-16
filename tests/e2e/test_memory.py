@@ -85,15 +85,23 @@ async def test_only_admins_set_rules_and_rules_reach_the_model(
 ) -> None:
     conversation.meet(GINA, CLUB, status="administrator")
     conversation.meet(HANK, CLUB)
-    model.reply(tool_call("set_chat_rules", rules="Always answer in rhyme."), "nope")
+    model.reply(
+        tool_call("search_tools", queries=["chat rules"]),
+        tool_call("set_chat_rules", rules="Always answer in rhyme."),
+        "nope",
+    )
     refused = await conversation.send(HANK, CLUB, "derp set rules: rhyme")
     await conversation.expect_reply(refused)
     await conversation.settle(refused)
-    model.reply(tool_call("set_chat_rules", rules="Always answer in rhyme."), "done")
+    model.reply(
+        tool_call("search_tools", queries=["chat rules"]),
+        tool_call("set_chat_rules", rules="Always answer in rhyme."),
+        "done",
+    )
     allowed = await conversation.send(GINA, CLUB, "derp set rules: rhyme")
     await conversation.expect_reply(allowed)
     await conversation.settle(allowed)
-    tool_results = [str(p) for m in model.requests[1] for p in m.parts if "set_chat_rules" in str(p)]
+    tool_results = [str(p) for m in model.requests[2] for p in m.parts if "set_chat_rules" in str(p)]
     assert any("Only chat admins" in r for r in tool_results)
 
     def check(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

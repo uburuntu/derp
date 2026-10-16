@@ -108,12 +108,9 @@ async def test_model_searches_history_with_a_tool(conversation: Conversation, mo
     await conversation.settle(old)
 
     def call(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        assert {t.name for t in info.function_tools} >= {
-            "search_history",
-            "read_messages",
-            "chat_query",
-            "chat_info",
-        }
+        names = {t.name for t in info.function_tools}
+        assert names >= {"search_history", "read_messages", "chat_query", "search_tools"}
+        assert "chat_info" not in names  # deferred until found
         return ModelResponse(parts=[ToolCallPart("search_history", {"query": "shawarma"}, tool_call_id="c1")])
 
     def answer(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:

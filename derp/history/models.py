@@ -258,3 +258,19 @@ class PollVote(Base):
     option_ids: Mapped[list[Any]]
     option_persistent_ids: Mapped[list[Any]]  # stable when options are added later
     voted_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+
+class Sticker(Base):
+    """A sticker Derp has seen anywhere (public assets, no sender kept); the pool ``send_sticker`` draws from."""
+
+    __tablename__ = "stickers"
+    __table_args__ = (Index("ix_stickers_emoji", "emoji"),)
+
+    file_unique_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    file_id: Mapped[str]  # valid for this bot only
+    emoji: Mapped[str | None] = mapped_column(String(16))
+    set_name: Mapped[str | None]
+    kind: Mapped[str] = mapped_column(String(12), default="regular")  # regular | mask | custom_emoji
+    curated: Mapped[bool] = mapped_column(default=False, server_default=sql("false"))
+    uses: Mapped[int] = mapped_column(default=1, server_default="1")
+    first_seen: Mapped[datetime] = mapped_column(server_default=func.now())

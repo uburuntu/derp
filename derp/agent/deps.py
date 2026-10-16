@@ -51,8 +51,12 @@ class RunDeps:
     gateway: MediaGateway
     pin: RolePin
     model: Model
-    delivered: list[int] = field(default_factory=list[int])  # message ids of visible outputs so far
+    delivered: list[tuple[int, str]] = field(
+        default_factory=list[tuple[int, str]]
+    )  # (message id, kind) so far
+    reacted: set[int] = field(default_factory=set[int])  # messages Derp reacted to with the react tool
 
     @property
-    def outputs_left(self) -> int:
-        return self.settings.run_caps.visible_outputs - len(self.delivered)
+    def tool_outputs_left(self) -> int:
+        """Visible outputs tools may still send; one slot stays free for the final text answer."""
+        return self.settings.run_caps.visible_outputs - 1 - len(self.delivered)

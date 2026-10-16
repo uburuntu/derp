@@ -183,4 +183,4 @@ async def inspect_media(ctx: RunContext[RunDeps], message_id: int) -> list[str |
     return [*notes, *as_content(inspected)]
 
 
-family = Family("history", toolset)
+family = Family("history", toolset, deferred=("chat_info", "inspect_media"))

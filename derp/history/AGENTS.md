@@ -1,6 +1,6 @@
 # History — chat knowledge
 
-- Owns everything Derp knows about a chat: `chats`, `users`, `forum_topics`, `messages` + `message_media`, `chat_members` + `member_events`, `reactions` + `reaction_counts`, `polls` + `poll_votes` (more tables join as features land: stickers, digests).
+- Owns everything Derp knows about a chat: `chats`, `users`, `forum_topics`, `messages` + `message_media`, `chat_members` + `member_events`, `reactions` + `reaction_counts`, `polls` + `poll_votes` `stickers` (more tables join as features land: digests).
 - Storage shape: normalized core columns for what queries filter on, a typed `payload` JSONB per message kind (dice, location, contact, checklist, poll, service event…), and `raw` JSON only for kinds without a typed shape. Contacts and precise locations are stored in full and follow retention.
 - `capture.py` upserts by Telegram IDs, so redelivery and edits are idempotent; edits replace text/payload in place. `message_id == 0` (ephemeral) and guest-mode messages are never stored. Only agent outputs are recorded as Derp's messages (`capture='derp'`), not UI/system copy.
 - `middleware.py` runs before handlers: invocations are always stored; other group messages only while the chat's ambient context is on. It hands `trigger` and `chat_row` to handlers.
@@ -13,3 +13,4 @@
 - Rows are always scoped by `chat_id`; query helpers take the chat from the run context, never from tool arguments.
 - `queries.py` is the read side: `search` (ranked FTS `simple` + trigram top-up), `around` / `id_range`, `resolve_members` (current and past names, @username) and `ChatQuery` — a typed request (presets, filters, group_by, order, limit ≤ 200) compiled to SQL here. Model input never becomes SQL text, and the chat id always comes from the caller.
 - `transcription.py`: every stored voice message / video note is transcribed inline during capture (so voice invocations are answered from the transcript): creator-funded STT (`kind='stt'`, fallback model on any error), video notes via ffmpeg → OGG/Opus, recordings over `media.voice_max_seconds` skipped. The transcript lands in `message_media.transcript` and `messages.extra_text` (searchable); nothing is posted.
+- `stickers` is a global index of regular stickers seen in stored messages (emoji, set, use count, `curated`), the pool `send_sticker` draws from; custom emoji are skipped.

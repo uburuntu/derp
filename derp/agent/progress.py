@@ -55,6 +55,7 @@ class Progress(Protocol):
     async def start(self) -> None: ...
     async def stage(self, stage: str) -> None: ...
     async def text(self, partial: str) -> None: ...
+    def keep_reaction(self) -> None: ...
     async def close(self) -> None: ...
 
 
@@ -114,6 +115,9 @@ class DraftProgress:
         self._partial = partial
         self._status = ""
         self._dirty.set()
+
+    def keep_reaction(self) -> None:
+        return None
 
     def render(self) -> str:
         body = sanitize_untrusted(self._partial)
@@ -176,6 +180,10 @@ class ReactionProgress:
 
     async def text(self, partial: str) -> None:
         return None
+
+    def keep_reaction(self) -> None:
+        self._current = None
+        self._disabled = True  # later stages must not overwrite it either
 
     async def _react(self, reaction: list[ReactionTypeUnion]) -> None:
         if self.target.reply_to is None:

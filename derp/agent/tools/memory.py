@@ -99,4 +99,6 @@ async def set_chat_rules(ctx: RunContext[RunDeps], rules: str) -> str:
     return "Rules cleared." if not text else "Rules updated; they apply from the next message."
 
 
-family = Family("memory", toolset, tiers=frozenset({Funding.PAID, Funding.SPONSORED}))
+family = Family(
+    "memory", toolset, tiers=frozenset({Funding.PAID, Funding.SPONSORED}), deferred=("set_chat_rules",)
+)

@@ -16,7 +16,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from derp.history.models import Chat, ForumTopic, Message, MessageMedia, User
+from derp.history.models import Chat, ForumTopic, Message, MessageMedia, Sticker, User
 from derp.history.polls import upsert_poll
 
 TYPED_KINDS = {
@@ -282,6 +282,26 @@ async def _track_topic(session: AsyncSession, message: TgMessage) -> None:
         topic.closed = True
     elif message.forum_topic_reopened is not None:
         topic.closed = False
+
+
+async def index_sticker(session: AsyncSession, message: TgMessage) -> None:
+    """Remember every sticker seen (stored message or not): ``send_sticker`` picks from these."""
+    sticker = message.sticker
+    if sticker is None or sticker.type == "custom_emoji":
+        return
+    statement = insert(Sticker).values(
+        file_unique_id=sticker.file_unique_id,
+        file_id=sticker.file_id,
+        emoji=sticker.emoji,
+        set_name=sticker.set_name,
+        kind=sticker.type,
+    )
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[Sticker.file_unique_id],
+            set_={"file_id": statement.excluded.file_id, "uses": Sticker.uses + 1},
+        )
+    )
 
 
 async def is_stored(session: AsyncSession, chat_id: int, message_id: int) -> bool:

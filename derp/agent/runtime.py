@@ -66,6 +66,7 @@ from derp.telegram.sender import Target, send_markdown
 log = logging.getLogger("derp.agent")
 
 ModelFactory = Callable[[RolePin], Model]
+SILENT = {"", ".", "…"}  # final answers that mean "nothing more to say"
 Funder = Callable[[TgMessage, Chat], Awaitable[Funding]]
 
 
@@ -246,22 +247,29 @@ class Runtime:
         finally:
             if progress.draft_id is not None:
                 self.active.pop((chat.id, progress.draft_id), None)
+            if target.reply_to in deps.reacted:
+                progress.keep_reaction()  # Derp's own reaction replaced the status one; leave it
             await progress.close()
         await price_interrupted(self.api, self.db, new_messages, funding.role, window.tokens)
-        if error is None and (output.strip() or not (deps.delivered or stopped)):
+        silent = output.strip() in SILENT and bool(
+            deps.delivered or deps.reacted
+        )  # a sticker/poll said it all
+        if error is None and not silent and (output.strip() or not (deps.delivered or stopped)):
             try:
                 sent = await send_markdown(self.bot, target, output, trusted=False)
             except TelegramAPIError as exc:
                 error = exc
             else:
-                deps.delivered.extend(m.message_id for m in sent)
+                deps.delivered.extend((m.message_id, "message") for m in sent)
                 async with self.db.transaction() as session:
                     await record_outgoing(session, sent)
         status = "failed" if error is not None else "cancelled" if stopped else "completed"
         async with self.db.transaction() as session:
             stored = await session.merge(run)
-            for message_id in deps.delivered:
-                record_output(session, stored, message_id, "message")
+            for message_id, kind in deps.delivered:
+                record_output(session, stored, message_id, kind)
+            for message_id in deps.reacted:
+                record_output(session, stored, message_id, "reaction")
             finish_run(
                 session,
                 stored,
@@ -284,7 +292,7 @@ class Runtime:
             record_run_failure(run.id, error, prompt)
             if not isinstance(error, TelegramAPIError) and not deps.delivered:
                 await self._apologize(target, locale, error)
-        return Outcome(run.id, status, tuple(deps.delivered))
+        return Outcome(run.id, status, tuple(message_id for message_id, _ in deps.delivered))
 
     def stop(self, chat_id: int, draft_id: int) -> bool:
         """The user pressed stop on a draft; cancel the run that owns it."""

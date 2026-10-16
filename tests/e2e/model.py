@@ -13,8 +13,13 @@ from dataclasses import dataclass, field
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
+from pydantic_ai.native_tools import WebSearchTool
+from pydantic_ai.profiles import ModelProfile
 
 from derp.inference.roles import RolePin
+
+# Like OpenRouter: no provider-side tool search, so deferred tools are found via local search_tools.
+PROFILE = ModelProfile(supported_native_tools=frozenset({WebSearchTool}))
 
 Responder = Callable[[list[ModelMessage], AgentInfo], ModelResponse]
 
@@ -38,7 +43,9 @@ class ScriptedModel:
 
     def factory(self, pin: RolePin) -> Model:
         self.pins.append(pin)
-        return FunctionModel(self._respond, stream_function=self._stream, model_name=pin.model)
+        return FunctionModel(
+            self._respond, stream_function=self._stream, model_name=pin.model, profile=PROFILE
+        )
 
     def _next(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse | Chunks:
         self.requests.append(list(messages))
