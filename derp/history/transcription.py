@@ -21,7 +21,7 @@ from derp.inference.api import OpenRouterAPI, OpenRouterError, Transcript
 from derp.inference.ledger import record_usage, simple_usage
 from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole
-from derp.telegram.media import MediaGateway, MediaUnavailableError
+from derp.telegram.media import MediaGateway
 
 log = logging.getLogger("derp.transcription")
 SPOKEN = ("voice", "video_note")
@@ -81,7 +81,7 @@ class Transcriber:
             )
             audio = await extract_audio(data) if media.type == "video_note" else data
             transcript = await self._transcribe(audio)
-        except (MediaUnavailableError, OpenRouterError, ValueError, TimeoutError) as error:
+        except Exception as error:  # noqa: BLE001 - capture never fails over a transcript (ffmpeg, network…)
             log.info("no transcript for a %s: %s", media.type, type(error).__name__)
             return None
         async with self.db.transaction() as session:

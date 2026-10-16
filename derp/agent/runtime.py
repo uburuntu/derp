@@ -61,6 +61,7 @@ from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
 from derp.memory.notes import load_memory, notes_block
 from derp.money.funding import Funder, Funds
+from derp.money.wallets import release
 from derp.ops.observability import record_run_failure
 from derp.ops.owner import notify_owners
 from derp.telegram.media import MediaGateway
@@ -167,142 +168,166 @@ class Runtime:
             images = await referenced_media(session, chat.id, message.message_id, reply_to)
             topic = await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
             memory = await load_memory(session, chat.id, asker.id)
-        inspected = await inspect(self.gateway, images)
-        model = self.model_factory(pin)
-        deps = RunDeps(
-            db=self.db,
-            bot=self.bot,
-            settings=self.settings,
-            chat=chat,
-            user_id=asker.id,
-            asker=asker.full_name,
-            locale=locale,
-            thread_id=target.thread_id,
-            trigger_message_id=message.message_id,
-            run_id=run.id,
-            funds=funds,
-            target=target,
-            tz=tz,
-            gateway=self.gateway,
-            pin=pin,
-            model=model,
-        )
-        brief = situation(
-            chat=chat,
-            asker=asker.full_name,
-            now=datetime.now(UTC),
-            tz=tz,
-            topic=topic.name if topic else None,
-            rules=chat.rules,
-            notes=notes_block(memory, asker.full_name),
-        )
-        caps = self.settings.run_caps
-        progress: Progress = (
-            DraftProgress(self.bot, target) if chat.type == "private" else ReactionProgress(self.bot, target)
-        )
-        token = CancellationToken()
-        output = ""
-        error: BaseException | None = None
-        stopped = False
-        # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing here
-        # keeps the captured list aligned so the run's own messages slice out exactly.
-        history = repair_messages(window.messages)
-        new_messages: list[ModelMessage] = []
-        stream = _Stream(progress, token, self.settings, funds, start=len(history))
-        await progress.start()
-        if progress.draft_id is not None:
-            self.active[(chat.id, progress.draft_id)] = token
         try:
-            with capture_run_messages() as captured:
-                try:
-                    async with asyncio.timeout(caps.timeout_seconds):
-                        result = await self.agent.run(
-                            [prompt, *as_content(inspected)] if pin.vision and inspected else prompt,
-                            message_history=history,
-                            deps=deps,
-                            model=model,
-                            instructions=InstructionPart(brief, dynamic=True),
-                            model_settings=chat_settings(pin, max_tokens=caps.output_tokens),
-                            usage_limits=UsageLimits(
-                                request_limit=caps.tool_calls + 2, tool_calls_limit=caps.tool_calls
-                            ),
-                            toolsets=toolsets_for(deps, FAMILIES),
-                            event_stream_handler=stream.handle,
-                            cancellation_token=token,
-                        )
-                    output = result.output
-                    new_messages = result.new_messages()
-                except RunCancelled as cancelled:  # the user pressed stop: keep what was written so far
-                    stopped = True
-                    new_messages = list(cancelled.new_messages())
-                    output = stream.partial
-                except Exception as exc:  # noqa: BLE001 - any failure closes the run and gets an apology
-                    error = exc
-                    cause = (
-                        exc.__cause__ if isinstance(exc, TimeoutError) else None
-                    )  # timeout wraps the cancel
-                    interrupted = RunCancelled.from_cancellation(cause) if cause is not None else None
-                    new_messages = (
-                        list(interrupted.new_messages()) if interrupted else list(captured[len(history) :])
-                    )
-        finally:
-            if progress.draft_id is not None:
-                self.active.pop((chat.id, progress.draft_id), None)
-            if target.reply_to in deps.reacted:
-                progress.keep_reaction()  # Derp's own reaction replaced the status one; leave it
-            await progress.close()
-        await price_interrupted(self.api, self.db, new_messages, funding.role, window.tokens)
-        silent = output.strip() in SILENT and bool(
-            deps.delivered or deps.reacted
-        )  # a sticker/poll said it all
-        if error is None and not silent and (output.strip() or not (deps.delivered or stopped)):
+            inspected = await inspect(self.gateway, images)
+            model = self.model_factory(pin)
+            deps = RunDeps(
+                db=self.db,
+                bot=self.bot,
+                settings=self.settings,
+                chat=chat,
+                user_id=asker.id,
+                asker=asker.full_name,
+                locale=locale,
+                thread_id=target.thread_id,
+                trigger_message_id=message.message_id,
+                run_id=run.id,
+                funds=funds,
+                target=target,
+                tz=tz,
+                gateway=self.gateway,
+                pin=pin,
+                model=model,
+            )
+            brief = situation(
+                chat=chat,
+                asker=asker.full_name,
+                now=datetime.now(UTC),
+                tz=tz,
+                topic=topic.name if topic else None,
+                rules=chat.rules,
+                notes=notes_block(memory, asker.full_name),
+            )
+            caps = self.settings.run_caps
+            progress: Progress = (
+                DraftProgress(self.bot, target)
+                if chat.type == "private"
+                else ReactionProgress(self.bot, target)
+            )
+            token = CancellationToken()
+            output = ""
+            error: BaseException | None = None
+            stopped = False
+            # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing here
+            # keeps the captured list aligned so the run's own messages slice out exactly.
+            history = repair_messages(window.messages)
+            new_messages: list[ModelMessage] = []
+            stream = _Stream(progress, token, self.settings, funds, start=len(history))
+            await progress.start()
+            # Kept locally: the draft id is cleared if drafts fail mid-run.
+            draft_key = (chat.id, progress.draft_id) if progress.draft_id is not None else None
+            if draft_key is not None:
+                self.active[draft_key] = token
             try:
-                sent = await send_markdown(self.bot, target, output, trusted=False)
-            except TelegramAPIError as exc:
-                error = exc
-            else:
-                deps.delivered.extend((m.message_id, "message") for m in sent)
-                async with self.db.transaction() as session:
-                    await record_outgoing(session, sent)
-        status = "failed" if error is not None else "cancelled" if stopped else "completed"
-        async with self.db.transaction() as session:
-            stored = await session.merge(run)
-            for message_id, kind in deps.delivered:
-                record_output(session, stored, message_id, kind)
-            for message_id in deps.reacted:
-                record_output(session, stored, message_id, "reaction")
-            finish_run(
-                session,
-                stored,
-                new_messages,
-                status=status,
-                context_tokens=window.tokens,
-                error_type=type(error).__name__ if error else None,
+                with capture_run_messages() as captured:
+                    try:
+                        async with asyncio.timeout(caps.timeout_seconds):
+                            result = await self.agent.run(
+                                [prompt, *as_content(inspected)] if pin.vision and inspected else prompt,
+                                message_history=history,
+                                deps=deps,
+                                model=model,
+                                instructions=InstructionPart(brief, dynamic=True),
+                                model_settings=chat_settings(pin, max_tokens=caps.output_tokens),
+                                usage_limits=UsageLimits(
+                                    request_limit=caps.tool_calls + 2, tool_calls_limit=caps.tool_calls
+                                ),
+                                toolsets=toolsets_for(deps, FAMILIES),
+                                event_stream_handler=stream.handle,
+                                cancellation_token=token,
+                            )
+                        output = result.output
+                        new_messages = result.new_messages()
+                    except RunCancelled as cancelled:  # the user pressed stop: keep what was written so far
+                        stopped = True
+                        new_messages = list(cancelled.new_messages())
+                        output = stream.partial
+                    except Exception as exc:  # noqa: BLE001 - any failure closes the run and gets an apology
+                        error = exc
+                        cause = (
+                            exc.__cause__ if isinstance(exc, TimeoutError) else None
+                        )  # timeout wraps the cancel
+                        interrupted = RunCancelled.from_cancellation(cause) if cause is not None else None
+                        new_messages = (
+                            list(interrupted.new_messages())
+                            if interrupted
+                            else list(captured[len(history) :])
+                        )
+            finally:
+                if draft_key is not None:
+                    self.active.pop(draft_key, None)
+                if target.reply_to in deps.reacted:
+                    progress.keep_reaction()  # Derp's own reaction replaced the status one; leave it
+                await progress.close()
+            await price_interrupted(self.api, self.db, new_messages, funding.role, window.tokens)
+            silent = output.strip() in SILENT and bool(
+                deps.delivered or deps.reacted
+            )  # a sticker/poll said it all
+            if error is None and not silent and (output.strip() or not (deps.delivered or stopped)):
+                try:
+                    sent = await send_markdown(self.bot, target, output, trusted=False)
+                except TelegramAPIError as exc:
+                    error = exc
+                else:
+                    deps.delivered.extend((m.message_id, "message") for m in sent)
+                    async with self.db.transaction() as session:
+                        await record_outgoing(session, sent)
+            status = "failed" if error is not None else "cancelled" if stopped else "completed"
+            async with self.db.transaction() as session:
+                stored = await session.merge(run)
+                for message_id, kind in deps.delivered:
+                    record_output(session, stored, message_id, kind)
+                for message_id in deps.reacted:
+                    record_output(session, stored, message_id, "reaction")
+                finish_run(
+                    session,
+                    stored,
+                    new_messages,
+                    status=status,
+                    context_tokens=window.tokens,
+                    error_type=type(error).__name__ if error else None,
+                )
+            await note_images(
+                self.db,
+                model,
+                pin,
+                inspected,
+                run_id=run.id,
+                funding=funding.value,
+                chat_id=chat.id,
+                user_id=asker.id,
             )
-        await note_images(
-            self.db,
-            model,
-            pin,
-            inspected,
-            run_id=run.id,
-            funding=funding.value,
-            chat_id=chat.id,
-            user_id=asker.id,
-        )
-        async with self.db.transaction() as session:
-            charged = await self.funder.settle(
-                session, funds, run.id, delivered=bool(deps.delivered or deps.reacted)
-            )
-            await session.execute(
-                update(AgentRun).where(AgentRun.id == run.id).values(charged_credits=charged)
-            )
-        if stream.capped and not deps.delivered:
-            await self._say(target, t(locale, "agent.capped"))
-        if error is not None:
-            record_run_failure(run.id, error, prompt)
-            if not isinstance(error, TelegramAPIError) and not deps.delivered:
-                await self._apologize(target, locale, error)
-        return Outcome(run.id, status, tuple(message_id for message_id, _ in deps.delivered))
+            async with self.db.transaction() as session:
+                charged = await self.funder.settle(
+                    session, funds, run.id, delivered=bool(deps.delivered or deps.reacted)
+                )
+                await session.execute(
+                    update(AgentRun).where(AgentRun.id == run.id).values(charged_credits=charged)
+                )
+            if stream.capped and not deps.delivered:
+                await self._say(target, t(locale, "agent.capped"))
+            if error is not None:
+                record_run_failure(run.id, error, prompt)
+                if not isinstance(error, TelegramAPIError) and not deps.delivered:
+                    await self._apologize(target, locale, error)
+            return Outcome(run.id, status, tuple(message_id for message_id, _ in deps.delivered))
+        except (
+            BaseException
+        ) as exc:  # died outside the model call (network, shutdown): never leave it running
+            await self._abandon(run.id, funds, exc)
+            raise
+
+    async def _abandon(self, run_id: int, funds: Funds, error: BaseException) -> None:
+        """Mark a run that escaped its normal close as failed and return its hold (no-op once settled)."""
+        with contextlib.suppress(Exception):
+            async with self.db.transaction() as session:
+                run = await session.get(AgentRun, run_id, with_for_update=True)
+                if run is not None and run.status == "running":
+                    run.status = "failed"
+                    run.error_type = type(error).__name__
+                    run.finished_at = datetime.now(UTC)
+                if funds.reservation_id is not None:
+                    await release(session, funds.operation_id)
 
     def stop(self, chat_id: int, draft_id: int) -> bool:
         """The user pressed stop on a draft; cancel the run that owns it."""
@@ -364,6 +389,8 @@ class _Stream:
                     log.info("run %s stopped at its money cap", ctx.deps.run_id)
                     self.capped = True
                     self.token.cancel()
+                if ctx.deps.target.reply_to in ctx.deps.reacted:
+                    self.progress.keep_reaction()  # Derp reacted to the trigger itself: don't overwrite it
                 await self.progress.stage(stage_for_tool(event.part.tool_name))
 
 

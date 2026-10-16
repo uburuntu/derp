@@ -1,6 +1,6 @@
 from typing import Any
 
-from aiogram.types import InputMediaPhoto
+from aiogram.types import InputMediaPhoto, Message
 
 from derp.telegram.sender import Target, send_album, send_markdown
 
@@ -17,9 +17,11 @@ class Recorder:
         self.calls.append(("photo", kwargs["photo"]))
         return "m"
 
-    async def send_rich_message(self, **kwargs: Any) -> str:
+    async def send_rich_message(self, **kwargs: Any) -> Message:
         self.calls.append(("rich", kwargs["rich_message"].markdown))
-        return "m"
+        return Message.model_validate(
+            {"message_id": 1, "date": 0, "chat": {"id": 1, "type": "private"}, "rich_message": {"blocks": []}}
+        )
 
 
 async def test_album_batches_are_balanced_and_singles_go_alone() -> None:
@@ -34,5 +36,6 @@ async def test_album_batches_are_balanced_and_singles_go_alone() -> None:
 
 async def test_blank_markdown_degrades_to_ellipsis() -> None:
     bot: Any = Recorder()
-    await send_markdown(bot, Target(1), " \n ")
+    sent = await send_markdown(bot, Target(1), " \n ")
     assert bot.calls == [("rich", "…")]
+    assert sent[0].text == "…"  # the sent Markdown is kept for history

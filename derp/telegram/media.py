@@ -11,6 +11,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 
+import aiohttp
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
@@ -77,6 +78,8 @@ class MediaGateway:
             raise MediaUnavailableError("timed out") from None
         except TelegramAPIError as error:
             raise MediaUnavailableError(f"telegram refused ({type(error).__name__})") from None
+        except (aiohttp.ClientError, OSError) as error:  # file download failures surface from aiohttp
+            raise MediaUnavailableError(f"download failed ({type(error).__name__})") from None
         data = buffer.getvalue()
         if len(data) > self.max_bytes:
             raise MediaUnavailableError("too large")

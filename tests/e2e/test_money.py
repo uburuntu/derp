@@ -98,3 +98,22 @@ async def test_no_allowance_left_says_so_without_running(
         assert await session.scalar(select(func.count()).select_from(AgentRun)) == 0
     pings = [c for c in conversation.api.calls if c.method == "sendMessage" and int(c["chat_id"]) == OWNER.id]
     assert len(pings) == 1 and "cap" in str(pings[0]["text"])
+
+
+async def test_a_run_that_dies_outside_the_model_is_closed_and_released(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    wallet_id = await buy(conversation, CARL, 500)
+
+    def broken(_pin: object) -> object:
+        raise RuntimeError("factory down")
+
+    conversation.overrides["model_factory"] = broken
+    await conversation.restart()
+    sent = await conversation.send(CARL, text="hi derp")
+    await conversation.settle(sent)
+    async with conversation.db.session() as session:
+        run = await session.scalar(select(AgentRun))
+        assert run is not None and (run.status, run.error_type) == ("failed", "RuntimeError")
+        assert await session.scalar(select(Reservation.state)) == "released"
+        assert await balance(session, wallet_id) == 500

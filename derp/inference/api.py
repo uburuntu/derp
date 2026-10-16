@@ -57,7 +57,10 @@ class OpenRouterAPI:
         await self._client.aclose()
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Json:
-        response = await self._client.request(method, path, **kwargs)
+        try:
+            response = await self._client.request(method, path, **kwargs)
+        except httpx.HTTPError as error:  # timeouts and connection failures: status 0
+            raise OpenRouterError(0, type(error).__name__) from None
         if response.status_code >= 400:
             try:
                 message = str(response.json().get("error", {}).get("message", ""))[:200]

@@ -105,7 +105,8 @@ async def test_react_tool_replaces_the_status_reaction(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
     conversation.meet(KATE, PARTY)
-    model.reply(tool_call("react", emoji="🔥"), ".")
+    # A later tool call must not swap the reaction back to a status emoji.
+    model.reply(tool_call("react", emoji="🔥"), tool_call("search_history", query="exam"), ".")
     asked = await conversation.send(KATE, PARTY, "derp I passed my exam!")
     await conversation.settle(asked)
     reactions = [c["reaction"] for c in conversation.api.calls_of("setMessageReaction", after=asked.after)]

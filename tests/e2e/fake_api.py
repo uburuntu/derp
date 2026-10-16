@@ -53,6 +53,11 @@ TRUE_METHODS = frozenset(
 )
 
 
+def rich_blocks(source: str) -> JsonObject:
+    """A received ``RichMessage``: one paragraph block per source paragraph."""
+    return {"blocks": [{"type": "paragraph", "text": p} for p in source.split("\n\n") if p]}
+
+
 @dataclass(frozen=True, slots=True)
 class Attachment:
     field: str
@@ -369,8 +374,10 @@ class FakeBotAPI:
         return self._new_message(fields, text=str(fields["text"]))
 
     def _m_sendRichMessage(self, fields: JsonObject) -> JsonObject:  # noqa: N802
-        rich = fields["rich_message"]
-        return self._new_message(fields, text=str(rich.get("markdown") or rich.get("html") or ""))
+        rich = fields["rich_message"]  # Telegram returns the parsed blocks, never the source text
+        return self._new_message(
+            fields, rich_message=rich_blocks(str(rich.get("markdown") or rich.get("html") or ""))
+        )
 
     def _m_sendRichMessageDraft(self, fields: JsonObject) -> bool:  # noqa: N802
         chat = self.chats.get(int(fields["chat_id"]), {})
@@ -429,7 +436,11 @@ class FakeBotAPI:
         if message is None:
             raise ValueError(f"message {key} does not exist")
         rich = fields.get("rich_message")
-        message["text"] = str(rich.get("markdown") if isinstance(rich, Mapping) else fields["text"])
+        if isinstance(rich, Mapping):
+            message.pop("text", None)
+            message["rich_message"] = rich_blocks(str(rich.get("markdown")))
+        else:
+            message["text"] = str(fields["text"])
         message["edit_date"] = int(datetime.now(UTC).timestamp())
         if markup := fields.get("reply_markup"):
             message["reply_markup"] = markup

@@ -87,3 +87,19 @@ async def test_ambient_voice_is_transcribed_silently_and_long_ones_are_skipped(
         rows = await session.execute(select(MessageMedia.message_id, MessageMedia.transcript))
         transcripts = {row[0]: row[1] for row in rows}
     assert transcripts == {short.message_id: "купи хлеба", long.message_id: None}
+
+
+class BrokenSTT(FakeSTT):
+    async def transcribe(self, model: str, audio: bytes, audio_format: str, **_: Any) -> Transcript:
+        raise FileNotFoundError("ffmpeg")  # any failure, not only provider errors
+
+
+async def test_voice_invocation_is_answered_even_when_transcription_breaks(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    await use_stt(conversation, BrokenSTT())
+    conversation.api.register_file("v2", OGG)
+    model.reply("не расслышал, но я тут")
+    sent = await conversation.send(EVA, voice=voice("v2"))
+    reply = await conversation.expect_reply(sent)
+    assert reply["rich_message"]["markdown"] == "не расслышал, но я тут"

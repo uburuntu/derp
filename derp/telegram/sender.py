@@ -4,7 +4,10 @@ LLM answers and system copy are Markdown and go out via ``sendRichMessage``.
 A rejected rich message (BadRequest means nothing was delivered) is resent as
 plain text, split to Telegram's limits. Untrusted (model-written) Markdown is
 stripped of interactive tags so a prompt-injected answer cannot render
-callback buttons that look like Derp's own controls.
+callback buttons that look like Derp's own controls, and of remote media and
+link previews, which Telegram's servers would fetch — an injected answer could
+otherwise leak chat content in a URL. Rich messages come back from Telegram as
+blocks without text, so the sent Markdown is kept as their ``text`` for history.
 """
 
 import re
@@ -18,6 +21,7 @@ from aiogram.types import (
     InputMediaPhoto,
     InputMediaVideo,
     InputRichMessage,
+    LinkPreviewOptions,
     Message,
     ReplyParameters,
 )
@@ -25,6 +29,12 @@ from aiogram.types import (
 from derp.telegram.text import PLAIN_LIMIT, RICH_LIMIT, split_text
 
 _INTERACTIVE_TAGS = re.compile(r"</?\s*tg-(?:button|button-row|thinking)\b[^>]*>", re.IGNORECASE)
+_MEDIA_TAGS = re.compile(
+    r"<\s*/?\s*(?:img|video|audio|source|picture|iframe|embed|object)\b[^>]*>", re.IGNORECASE
+)
+_REMOTE_MEDIA = re.compile(
+    r"!\[([^\]]*)\](?=\[|\((?!\s*<?tg:))"
+)  # ![alt](url) / ![alt][ref], not tg:// links
 _FENCE = "```"
 RICH_CHUNK = RICH_LIMIT - 768  # headroom for fence repair and entity overhead
 
@@ -52,9 +62,14 @@ class Target:
         return ReplyParameters(message_id=self.reply_to, allow_sending_without_reply=True)
 
 
+def _strip_once(markdown: str) -> str:
+    markdown = _MEDIA_TAGS.sub("", _INTERACTIVE_TAGS.sub("", markdown))
+    return _REMOTE_MEDIA.sub(lambda m: f"[{m.group(1) or 'link'}]", markdown)
+
+
 def sanitize_untrusted(markdown: str) -> str:
     # Repeat until stable: removing an inner tag must not assemble an outer one.
-    while (cleaned := _INTERACTIVE_TAGS.sub("", markdown)) != markdown:
+    while (cleaned := _strip_once(markdown)) != markdown:
         markdown = cleaned
     return markdown
 
@@ -92,24 +107,35 @@ async def send_markdown(
         last = index == len(chunks) - 1
         target_for_chunk = target if index == 0 else target.replying(None)
         try:
-            sent.append(
-                await bot.send_rich_message(
-                    chat_id=target.chat_id,
-                    message_thread_id=target.thread_id,
-                    rich_message=InputRichMessage(markdown=chunk),
-                    reply_parameters=target_for_chunk.reply_parameters,
-                    reply_markup=reply_markup if last else None,
-                )
+            message = await bot.send_rich_message(
+                chat_id=target.chat_id,
+                message_thread_id=target.thread_id,
+                rich_message=InputRichMessage(markdown=chunk),
+                reply_parameters=target_for_chunk.reply_parameters,
+                reply_markup=reply_markup if last else None,
             )
         except TelegramBadRequest:
             sent.extend(
-                await send_plain(bot, target_for_chunk, chunk, reply_markup=reply_markup if last else None)
+                await send_plain(
+                    bot,
+                    target_for_chunk,
+                    chunk,
+                    reply_markup=reply_markup if last else None,
+                    previews=trusted,
+                )
             )
+        else:
+            sent.append(message if message.text else message.model_copy(update={"text": chunk}))
     return sent
 
 
 async def send_plain(
-    bot: Bot, target: Target, text: str, *, reply_markup: InlineKeyboardMarkup | None = None
+    bot: Bot,
+    target: Target,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    previews: bool = True,
 ) -> list[Message]:
     chunks = split_text(text, PLAIN_LIMIT) if text.strip() else ["…"]
     sent: list[Message] = []
@@ -120,6 +146,7 @@ async def send_plain(
                 chat_id=target.chat_id,
                 message_thread_id=target.thread_id,
                 text=chunk,
+                link_preview_options=None if previews else LinkPreviewOptions(is_disabled=True),
                 reply_parameters=(target if index == 0 else target.replying(None)).reply_parameters,
                 reply_markup=reply_markup if last else None,
             )
