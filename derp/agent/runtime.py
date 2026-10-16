@@ -68,7 +68,7 @@ from derp.money.wallets import release
 from derp.ops.observability import record_run_failure
 from derp.ops.owner import notify_owners
 from derp.telegram.media import MediaGateway
-from derp.telegram.sender import Target, send_markdown
+from derp.telegram.sender import PartialDeliveryError, Target, send_markdown
 
 log = logging.getLogger("derp.agent")
 
@@ -107,6 +107,7 @@ class Runtime:
         self.api = api
         self.lanes = Lanes(settings.run_concurrency)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
+        self.in_flight: set[str] = set()  # operation ids of holds a live run still owns
         self.agent = Agent[RunDeps, str](output_type=str, deps_type=RunDeps, instructions=PERSONA)
 
     async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome | None:
@@ -157,44 +158,51 @@ class Runtime:
                 await send_markdown(self.bot, target, text, reply_markup=markup)
             return Outcome(None, "unfunded", ())
         funding = funds.funding
-        pin = await self.pins.get(funding.role)
-        digest_role = ModelRole.CHAT_FREE if funding is Funding.FREE else ModelRole.CHAT_SPONSORED
-        digest_pin = await self.pins.get(digest_role)
-        async with self.db.transaction() as session:
-            run = await start_run(
-                session,
-                chat_id=chat.id,
-                user_id=asker.id,
-                trigger=trigger,
-                role=funding.role.value,
-                funding=funding.value,
-                thread_id=target.thread_id,
-                trigger_message_id=message.message_id or None,
-                wallet_id=funds.wallet_id,
-                reservation_id=funds.reservation_id,
-            )
-            window = await build_window(
-                session,
-                chat_id=chat.id,
-                thread_id=target.thread_id,
-                before_message_id=message.message_id or 2**62,
-                budget=self.funder.window(funding),
-                tz=tz,
-            )
-            prompt = await current_prompt(session, message, window, tz)
-            reply_to = message.reply_to_message.message_id if message.reply_to_message else None
-            images = await referenced_media(session, chat.id, message.message_id, reply_to)
-            topic = await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
-            memory = await load_memory(session, chat.id, asker.id)
-            earlier = await latest_before(
-                session,
-                chat.id,
-                target.thread_id or 0,
-                window.oldest_message_id or message.message_id or 2**62,
-            )
-            if earlier is not None and earlier.day < datetime.now(tz).date() - timedelta(days=EARLIER_DAYS):
-                earlier = None
+        run_id: int | None = None
+        self.in_flight.add(funds.operation_id)
         try:
+            pin = await self.pins.get(funding.role)
+            digest_role = ModelRole.CHAT_FREE if funding is Funding.FREE else ModelRole.CHAT_SPONSORED
+            digest_pin = await self.pins.get(digest_role)
+            async with self.db.transaction() as session:
+                run = await start_run(
+                    session,
+                    chat_id=chat.id,
+                    user_id=asker.id,
+                    trigger=trigger,
+                    role=funding.role.value,
+                    funding=funding.value,
+                    thread_id=target.thread_id,
+                    trigger_message_id=message.message_id or None,
+                    wallet_id=funds.wallet_id,
+                    reservation_id=funds.reservation_id,
+                )
+                run_id = run.id
+                window = await build_window(
+                    session,
+                    chat_id=chat.id,
+                    thread_id=target.thread_id,
+                    before_message_id=message.message_id or 2**62,
+                    budget=self.funder.window(funding),
+                    tz=tz,
+                )
+                prompt = await current_prompt(session, message, window, tz)
+                reply_to = message.reply_to_message.message_id if message.reply_to_message else None
+                images = await referenced_media(session, chat.id, message.message_id, reply_to)
+                topic = (
+                    await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
+                )
+                memory = await load_memory(session, chat.id, asker.id)
+                earlier = await latest_before(
+                    session,
+                    chat.id,
+                    target.thread_id or 0,
+                    window.oldest_message_id or message.message_id or 2**62,
+                )
+                if earlier is not None and earlier.day < datetime.now(tz).date() - timedelta(
+                    days=EARLIER_DAYS
+                ):
+                    earlier = None
             inspected = await inspect(self.gateway, images)
             model = self.model_factory(pin)
             deps = RunDeps(
@@ -297,10 +305,12 @@ class Runtime:
             if error is None and not silent and (output.strip() or not (deps.delivered or stopped)):
                 try:
                     sent = await send_markdown(self.bot, target, output, trusted=False)
+                except PartialDeliveryError as exc:  # what Telegram accepted still counts
+                    error, sent = exc, exc.sent
                 except TelegramAPIError as exc:
-                    error = exc
-                else:
-                    deps.delivered.extend((m.message_id, "message") for m in sent)
+                    error, sent = exc, []
+                deps.delivered.extend((m.message_id, "message") for m in sent)
+                if sent:
                     async with self.db.transaction() as session:
                         await record_outgoing(session, sent)
             status = "failed" if error is not None else "cancelled" if stopped else "completed"
@@ -345,14 +355,16 @@ class Runtime:
         except (
             BaseException
         ) as exc:  # died outside the model call (network, shutdown): never leave it running
-            await self._abandon(run.id, funds, exc)
+            await self._abandon(run_id, funds, exc)
             raise
+        finally:
+            self.in_flight.discard(funds.operation_id)
 
-    async def _abandon(self, run_id: int, funds: Funds, error: BaseException) -> None:
+    async def _abandon(self, run_id: int | None, funds: Funds, error: BaseException) -> None:
         """Mark a run that escaped its normal close as failed and return its hold (no-op once settled)."""
         with contextlib.suppress(Exception):
             async with self.db.transaction() as session:
-                run = await session.get(AgentRun, run_id, with_for_update=True)
+                run = await session.get(AgentRun, run_id, with_for_update=True) if run_id else None
                 if run is not None and run.status == "running":
                     run.status = "failed"
                     run.error_type = type(error).__name__

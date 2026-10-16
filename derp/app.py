@@ -24,7 +24,7 @@ from derp.inference.openrouter import build_provider, chat_model
 from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
 from derp.inference.scout import run_scout
-from derp.money.wallets import release_stale
+from derp.money.wallets import expire_lots, release, stale_holds
 from derp.ops import observability
 from derp.ops.owner import notify_owners
 from derp.ops.periodic import every
@@ -102,7 +102,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
     return dispatcher
 
 
-def background_tasks(services: Services) -> list[asyncio.Task[None]]:
+def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[None]]:
     async def scout() -> None:
         await run_scout(
             services.db,
@@ -120,16 +120,26 @@ def background_tasks(services: Services) -> list[asyncio.Task[None]]:
         if applied := await reconcile_refunds(services.db, services.bot):
             await notify_owners(services.bot, services.settings, f"Refund sweep applied {applied} refund(s).")
 
-    async def stale_holds() -> None:
-        # Holds outlive their run only when the process died mid-run.
+    async def free_stale_holds() -> None:
+        # Holds outlive their run only when the process died mid-run; live runs keep theirs however long.
         cutoff = datetime.now(UTC) - timedelta(seconds=services.settings.run_caps.timeout_seconds + 600)
+        async with services.db.session() as session:
+            stale = await stale_holds(session, cutoff)
+        for operation_id in stale:
+            if operation_id in runtime.in_flight:
+                continue
+            async with services.db.transaction() as session:  # one wallet lock per transaction
+                await release(session, operation_id)
+
+    async def expire() -> None:
         async with services.db.transaction() as session:
-            await release_stale(session, cutoff)
+            await expire_lots(session)
 
     return [
         asyncio.create_task(every("model-scout", 24 * 3600, scout, initial_delay=600)),
         asyncio.create_task(every("chat-profiles", 3600, profiles, initial_delay=120)),
-        asyncio.create_task(every("stale-holds", 600, stale_holds, initial_delay=60)),
+        asyncio.create_task(every("stale-holds", 600, free_stale_holds, initial_delay=60)),
+        asyncio.create_task(every("expire-lots", 6 * 3600, expire, initial_delay=300)),
         asyncio.create_task(every("refund-sweep", 24 * 3600, refunds, initial_delay=900)),
     ]
 
@@ -143,7 +153,7 @@ async def run(settings: Settings) -> None:
         dispatcher = build_dispatcher(services)
         me = await services.bot.get_me()
         log.info("polling as bot %s", me.id)
-        tasks = background_tasks(services)
+        tasks = background_tasks(services, dispatcher["runtime"])
         await dispatcher.start_polling(
             services.bot, allowed_updates=list(ALLOWED_UPDATES), handle_signals=True
         )

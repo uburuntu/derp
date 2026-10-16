@@ -107,6 +107,22 @@ async def test_group_purchase_for_the_chat_can_be_paid_by_anyone(conversation: C
     assert await wallet_balance(conversation, "user", DANA.id) == 0
 
 
+async def test_buying_for_yourself_in_a_group_continues_in_private(conversation: Conversation) -> None:
+    conversation.meet(CARL)
+    conversation.meet(CARL, PUB)
+    asked = await conversation.send(CARL, PUB, "/buy")
+    chooser = await conversation.expect_reply(asked)
+    for_me = chooser["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == PUB.id)
+    after = conversation.seq
+    await press(conversation, CARL, PUB.id, menu_id, for_me)
+    assert conversation.api.calls_of("editMessageText", after=after) == []  # the group sees no balance
+    menu = conversation.api.calls_of("sendRichMessage", after=after)[-1]
+    assert int(menu["chat_id"]) == CARL.id and "Your balance" in menu["rich_message"]["markdown"]
+    answer = conversation.api.calls_of("answerCallbackQuery", after=after)[-1]
+    assert "private chat" in str(answer["text"])
+
+
 async def test_checkout_refuses_someone_elses_or_stale_invoices(conversation: Conversation) -> None:
     mine = f"p1:pack_s_v1:650:user:{CARL.id}"
     refused = await checkout(conversation, DANA, mine, 50)
@@ -148,6 +164,7 @@ async def test_derp_plus_subscription_credits_each_cycle_once(conversation: Conv
     # One Derp+ at a time: a second offer is refused before any invoice exists.
     second = f"s1:derp_plus_v1:7150:{CARL.id}:other"
     assert (await checkout(conversation, CARL, second, 500))["ok"] in (False, "false")
+    assert (await checkout(conversation, CARL, payload, 500))["ok"] in (True, "true")  # its own renewal
 
     renewal = paid(payload, 500, "sub-2") | {
         "is_recurring": True,
@@ -247,6 +264,8 @@ async def test_refunding_derp_plus_stops_renewal(conversation: Conversation) -> 
     async with conversation.db.session() as session:
         assert await session.scalar(select(Subscription.state)) == "canceled"
     assert await wallet_balance(conversation, "user", CARL.id) == 0
+    again = f"s1:derp_plus_v1:7150:{CARL.id}:new"
+    assert (await checkout(conversation, CARL, again, 500))["ok"] in (True, "true")  # can subscribe again
 
 
 async def test_daily_sweep_applies_chargebacks_nobody_announced(conversation: Conversation) -> None:

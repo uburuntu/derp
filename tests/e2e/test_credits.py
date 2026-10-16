@@ -75,3 +75,26 @@ async def test_info_shows_the_receipt_of_an_answer(conversation: Conversation, m
     assert (
         "Reply to one of my messages" in (await conversation.expect_reply(stray))["rich_message"]["markdown"]
     )
+
+
+async def test_plain_group_credits_go_by_dm_never_into_the_group(conversation: Conversation) -> None:
+    conversation.meet(ERIN)
+    conversation.meet(ERIN, LOFT, status="administrator")
+    conversation.meet(FINN, LOFT)
+    after = conversation.seq
+    asked = await conversation.send(ERIN, LOFT, "/credits")
+    await conversation.settle(asked)
+    sent = conversation.api.calls_of("sendRichMessage", after=after)
+    private = [c for c in sent if int(c["chat_id"]) == ERIN.id]
+    public = [c["rich_message"]["markdown"] for c in sent if int(c["chat_id"]) == LOFT.id]
+    assert private and "Free today" in private[0]["rich_message"]["markdown"]
+    assert public == ["Sent you the details in our private chat."]
+
+    conversation.api.fail_next(
+        "sendRichMessage",
+        error_code=403,
+        description="Forbidden: bot can't initiate conversation with a user",
+    )
+    stranger = await conversation.send(FINN, LOFT, "/credits")
+    reply = (await conversation.expect_reply(stranger))["rich_message"]["markdown"]
+    assert "Open a private chat with me" in reply

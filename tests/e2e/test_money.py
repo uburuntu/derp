@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models.function import AgentInfo
@@ -203,3 +204,21 @@ async def test_busy_free_models_say_so(
     model.reply(busy)
     asked = await conversation.send(CARL, text="hi")
     assert "free models are busy" in (await conversation.expect_reply(asked))["rich_message"]["markdown"]
+
+
+async def test_a_failure_before_the_model_runs_returns_the_hold(
+    conversation: Conversation, model: ScriptedModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from derp.agent import runtime
+
+    async def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("window")
+
+    async with conversation.db.transaction() as session:
+        await credit(session, (await wallet(session, "user", CARL.id)).id, "stars:c", 650, "purchase")
+    monkeypatch.setattr(runtime, "build_window", broken)
+    sent = await conversation.send(CARL, text="hi derp")
+    await conversation.settle(sent)
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(Reservation.state)) == "released"
+        assert await session.scalar(select(AgentRun.id)) is None  # its row rolled back with the window

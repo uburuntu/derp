@@ -120,11 +120,12 @@ async def reserve(
 
     Holds the full amount, or — when ``minimum`` is given — whatever is
     available as long as it reaches ``minimum``. Returns None when the wallet
-    can't cover it. Repeating the operation returns the original reservation.
+    can't cover it. Repeating the operation returns the original reservation
+    while it is still held on this wallet; a settled one funds nothing again.
     """
     await _lock(session, wallet_id)
     if existing := await session.scalar(select(Reservation).where(Reservation.operation_id == operation_id)):
-        return existing
+        return existing if existing.wallet_id == wallet_id and existing.state == "held" else None
     lots = list(
         await session.scalars(
             select(CreditLot)
@@ -163,7 +164,8 @@ async def capture(
 
     The charge never exceeds what was held (the difference is eaten, never
     owed). Returns the credits actually captured; repeating returns the first
-    result. Credits returned to a lot that expired meanwhile are expired.
+    result. Credits returned to a lot that expired meanwhile are expired, and
+    to a lot that was clawed back (refunded) are clawed back too.
     """
     reservation = await session.scalar(select(Reservation).where(Reservation.operation_id == operation_id))
     if reservation is None:
@@ -198,7 +200,9 @@ async def capture(
             entry(lot, "capture", used)
         if back := hold.amount - used:
             entry(lot, "release", back)
-            if lot.expires_at is not None and lot.expires_at <= moment:
+            if lot.revoked_at is not None:
+                entry(lot, "clawback", back)
+            elif lot.expires_at is not None and lot.expires_at <= moment:
                 entry(lot, "expire", back)
             else:
                 lot.remaining += back
@@ -214,18 +218,15 @@ async def release(session: AsyncSession, operation_id: str, *, now: datetime | N
     await capture(session, operation_id, 0, now=now)
 
 
-async def release_stale(session: AsyncSession, before: datetime, *, now: datetime | None = None) -> int:
-    """Release reservations still held since before ``before`` (their process died)."""
-    stale = list(
+async def stale_holds(session: AsyncSession, before: datetime) -> list[str]:
+    """Operation ids of reservations still held since before ``before``; release each in its own transaction."""
+    return list(
         await session.scalars(
-            select(Reservation.operation_id).where(
-                Reservation.state == "held", Reservation.created_at < before
-            )
+            select(Reservation.operation_id)
+            .where(Reservation.state == "held", Reservation.created_at < before)
+            .order_by(Reservation.id)
         )
     )
-    for operation_id in stale:
-        await release(session, operation_id, now=now)
-    return len(stale)
 
 
 async def expire_lots(session: AsyncSession, *, now: datetime | None = None) -> int:
@@ -266,7 +267,8 @@ async def expire_lots(session: AsyncSession, *, now: datetime | None = None) -> 
 async def claw_back(session: AsyncSession, lot_operation_id: str, operation_id: str) -> int:
     """Remove what's left of a lot (a refunded purchase); returns the credits taken.
 
-    Spent or held credits are not recovered: there is no debt.
+    Spent credits are not recovered: there is no debt. Credits held right now
+    are taken when their run returns them (see ``capture``).
     """
     lot = await session.scalar(select(CreditLot).where(CreditLot.operation_id == lot_operation_id))
     if lot is None:
@@ -282,6 +284,7 @@ async def claw_back(session: AsyncSession, lot_operation_id: str, operation_id: 
     )
     if done is not None:
         return done
+    lot.revoked_at = lot.revoked_at or datetime.now(UTC)
     taken = lot.remaining
     if taken:
         session.add(

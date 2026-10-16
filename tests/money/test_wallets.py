@@ -15,8 +15,8 @@ from derp.money.wallets import (
     credit,
     expire_lots,
     release,
-    release_stale,
     reserve,
+    stale_holds,
     wallet,
 )
 
@@ -57,6 +57,11 @@ async def test_credit_and_reserve_are_idempotent(database: Database) -> None:
         assert held is not None and held.amount == 200
         assert (await reserve(session, user.id, "run:1", 200)) == held
         assert await balance(session, user.id) == 450
+        other = await wallet(session, "chat", 7)
+        await credit(session, other.id, "grant:chat", 500, "grant")
+        assert await reserve(session, other.id, "run:1", 200) is None  # the id is taken on another wallet
+        await release(session, "run:1")
+        assert await reserve(session, user.id, "run:1", 200) is None  # settled: funds nothing again
     await assert_ledger_explains_lots(database)
 
 
@@ -131,6 +136,17 @@ async def test_claw_back_takes_only_what_is_left(database: Database) -> None:
     await assert_ledger_explains_lots(database)
 
 
+async def test_credits_held_during_a_refund_are_clawed_back_when_returned(database: Database) -> None:
+    async with database.transaction() as session:
+        user = await wallet(session, "user", 7)
+        await credit(session, user.id, "stars:1", 100, "purchase")
+        await reserve(session, user.id, "run:1", 100)
+        assert await claw_back(session, "stars:1", "refund:1") == 0  # everything is held
+        await capture(session, "run:1", 30)
+        assert await balance(session, user.id) == 0
+    await assert_ledger_explains_lots(database)
+
+
 async def test_concurrent_reservations_never_overspend(database: Database) -> None:
     async with database.transaction() as session:
         wallet_id = (await wallet(session, "chat", -100)).id
@@ -162,8 +178,9 @@ async def test_stale_reservations_are_released(database: Database) -> None:
         user = await wallet(session, "user", 7)
         await credit(session, user.id, "grant:1", 100, "grant")
         await reserve(session, user.id, "run:1", 60)
-        assert await release_stale(session, datetime.now(UTC) - timedelta(minutes=10)) == 0
-        assert await release_stale(session, datetime.now(UTC) + timedelta(seconds=1)) == 1
+        assert await stale_holds(session, datetime.now(UTC) - timedelta(minutes=10)) == []
+        assert await stale_holds(session, datetime.now(UTC) + timedelta(seconds=1)) == ["run:1"]
+        await release(session, "run:1")
         assert await balance(session, user.id) == 100
 
 

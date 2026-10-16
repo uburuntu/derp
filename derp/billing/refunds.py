@@ -46,8 +46,9 @@ async def apply_refund(db: Database, charge_id: str) -> Refunded | None:
             subscription = await session.scalar(
                 select(Subscription).where(Subscription.payload == purchase.payload)
             )
-            if subscription is not None:
+            if subscription is not None:  # the refunded cycle is over: Derp+ can be bought again
                 subscription.state = "canceled"
+                subscription.period_end = min(subscription.period_end, datetime.now(UTC))
     return Refunded(purchase, clawed, first)
 
 

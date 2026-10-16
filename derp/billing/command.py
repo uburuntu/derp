@@ -7,6 +7,7 @@ pay a chat invoice, but a personal one only by the person it was made for.
 """
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import (
@@ -37,7 +38,7 @@ from derp.db.engine import Database
 from derp.locales import resolve, t
 from derp.money.wallets import balance, wallet
 from derp.ops.owner import notify_owners
-from derp.telegram.sender import Target, send_markdown
+from derp.telegram.sender import Target, send_markdown, send_privately
 
 
 class BuyAction(CallbackData, prefix="buy"):
@@ -112,6 +113,14 @@ async def on_buy(
     kind = "user" if owner_id == query.from_user.id else "chat"
     if not callback_data.product:
         left = await _balance(db, kind, owner_id)
+        if kind == "user" and chat.type != "private":  # a personal balance never shows in the group
+            text = t(locale, "billing.menu", balance=f"{left:,}")
+            markup = _packs_keyboard(settings, "user", locale, plan=True)
+            delivered = await send_privately(bot, owner_id, text, reply_markup=markup)
+            await query.answer(
+                t(locale, "money.sent_privately" if delivered else "money.dm_first"), show_alert=True
+            )
+            return
         key = "billing.menu" if kind == "user" else "billing.menu_chat"
         await bot.edit_message_text(
             chat_id=chat.id,
@@ -130,19 +139,23 @@ async def on_buy(
         return
     order = Order(pack.id, pack.credits, kind, owner_id)
     whom = t(locale, "billing.invoice_for_me") if kind == "user" else t(locale, "billing.invoice_for_chat")
-    await bot.send_invoice(
-        chat_id=chat.id,
-        message_thread_id=message.message_thread_id if message.is_topic_message else None,
-        title=t(locale, "billing.invoice_title", credits=f"{pack.credits:,}"),
-        description=t(locale, "billing.invoice_description", whom=whom),
-        payload=order.payload,
-        currency="XTR",
-        prices=[
-            LabeledPrice(
-                label=t(locale, "billing.invoice_title", credits=f"{pack.credits:,}"), amount=pack.stars
-            )
-        ],
-    )
+    try:
+        await bot.send_invoice(
+            chat_id=chat.id,
+            message_thread_id=message.message_thread_id if message.is_topic_message else None,
+            title=t(locale, "billing.invoice_title", credits=f"{pack.credits:,}"),
+            description=t(locale, "billing.invoice_description", whom=whom),
+            payload=order.payload,
+            currency="XTR",
+            prices=[
+                LabeledPrice(
+                    label=t(locale, "billing.invoice_title", credits=f"{pack.credits:,}"), amount=pack.stars
+                )
+            ],
+        )
+    except TelegramAPIError:
+        await query.answer(t(locale, "billing.unavailable"), show_alert=True)
+        return
     await query.answer()
 
 
@@ -158,14 +171,18 @@ async def _offer_plan(
         return
     offer = settings.plan
     order = plan_order(settings, query.from_user.id)
-    link = await bot.create_invoice_link(
-        title=t(locale, "billing.plan_title"),
-        description=t(locale, "billing.plan_description", credits=f"{offer.credits:,}"),
-        payload=order.payload,
-        currency="XTR",
-        prices=[LabeledPrice(label=t(locale, "billing.plan_title"), amount=offer.stars)],
-        subscription_period=offer.period_seconds,
-    )
+    try:
+        link = await bot.create_invoice_link(
+            title=t(locale, "billing.plan_title"),
+            description=t(locale, "billing.plan_description", credits=f"{offer.credits:,}"),
+            payload=order.payload,
+            currency="XTR",
+            prices=[LabeledPrice(label=t(locale, "billing.plan_title"), amount=offer.stars)],
+            subscription_period=offer.period_seconds,
+        )
+    except TelegramAPIError:
+        await query.answer(t(locale, "billing.unavailable"), show_alert=True)
+        return
     pay = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=t(locale, "billing.plan_pay", stars=offer.stars), url=link)]
@@ -184,7 +201,8 @@ async def on_pre_checkout(query: PreCheckoutQuery, db: Database, settings: Setti
     )
     if reason is None and order is not None and order.kind == "plan":
         async with db.session() as session:  # one Derp+ at a time: Telegram would allow several
-            if await current_plan(session, query.from_user.id) is not None:
+            running = await current_plan(session, query.from_user.id)
+            if running is not None and running.payload != query.invoice_payload:  # renewals pass
                 reason = "billing.already_subscribed_short"
     if reason is None:
         await query.answer(ok=True)

@@ -1,7 +1,8 @@
 """/credits and /info: balances and per-answer receipts, shown only to the person asking.
 
 In groups both are ephemeral commands, so replies are ephemeral too (see
-``Target``). Admins also see who spent the chat's Derpcoins in the last 30 days.
+``Target``); a command sent the ordinary way is answered by DM instead. Admins
+also see who spent the chat's Derpcoins in the last 30 days.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -23,10 +24,19 @@ from derp.memory.notes import is_admin
 from derp.money.funding import day_end, sponsored_lot_id
 from derp.money.models import CreditLot, Wallet
 from derp.money.wallets import balances, wallet
-from derp.telegram.sender import Target, send_markdown
+from derp.telegram.sender import Target, send_markdown, send_privately
 
 USAGE_DAYS = 30
 USAGE_ROWS = 10
+
+
+async def _reply_privately(bot: Bot, message: Message, locale: str, text: str) -> None:
+    target = Target.reply_to_message(message)
+    if message.chat.type == "private" or message.ephemeral_message_id or message.from_user is None:
+        await send_markdown(bot, target, text)
+        return
+    delivered = await send_privately(bot, message.from_user.id, text)
+    await send_markdown(bot, target, t(locale, "money.sent_privately" if delivered else "money.dm_first"))
 
 
 async def show_credits(message: Message, db: Database, settings: Settings, bot: Bot, chat_row: Chat) -> None:
@@ -67,7 +77,7 @@ async def show_credits(message: Message, db: Database, settings: Settings, bot: 
         if await is_admin(bot, chat_row, user_id):
             lines.extend(await _chat_usage(db, chat_wallet.id, locale, now))
     lines.append(t(locale, "credits.hint"))
-    await send_markdown(bot, Target.reply_to_message(message), "\n".join(lines))
+    await _reply_privately(bot, message, locale, "\n".join(lines))
 
 
 async def _chat_usage(db: Database, wallet_id: int, locale: str, now: datetime) -> list[str]:
@@ -99,7 +109,6 @@ async def show_info(message: Message, db: Database, bot: Bot) -> None:
     if message.from_user is None:
         return
     locale = resolve(message.from_user.language_code)
-    target = Target.reply_to_message(message)
     replied = message.reply_to_message
     run: AgentRun | None = None
     payer: str | None = None
@@ -109,7 +118,7 @@ async def show_info(message: Message, db: Database, bot: Bot) -> None:
             if run is not None and run.wallet_id is not None:
                 payer = await session.scalar(select(Wallet.kind).where(Wallet.id == run.wallet_id))
     if run is None:
-        await send_markdown(bot, target, t(locale, "info.how"))
+        await send_markdown(bot, Target.reply_to_message(message), t(locale, "info.how"))
         return
     funding = {"paid": f"info.paid_{payer or 'user'}", "sponsored": "info.sponsored", "free": "info.free"}
     text = t(
@@ -123,7 +132,7 @@ async def show_info(message: Message, db: Database, bot: Bot) -> None:
         charged=f"{run.charged_credits:,}",
         funding=t(locale, funding.get(run.funding, "info.free")),
     )
-    await send_markdown(bot, target, text)
+    await _reply_privately(bot, message, locale, text)
 
 
 def build_router() -> Router:

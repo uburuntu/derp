@@ -15,8 +15,11 @@ free_enable = "Allow free models (admins)"
 free_on = "Free models are on for you."
 free_admins_only = "Only chat admins can allow free models."
 free_enabled = "An admin allowed free models here: when Derpcoins run out, I answer with free models, whose providers may store the messages they get."
+sent_privately = "Sent you the details in our private chat."
+dm_first = "I keep balances out of groups. Open a private chat with me, press Start, then ask again."
 
 [billing]
+unavailable = "Payments aren't available right now. Try again in a bit."
 menu = "**Derpcoins** pay for my answers once the free daily ones run out.\nYour balance: **{balance}**. Pick a pack:"
 menu_chat = "**Derpcoins for this chat** — everyone here uses them before their own.\nChat balance: **{balance}**. Pick a pack:"
 who = "Who are the Derpcoins for?"

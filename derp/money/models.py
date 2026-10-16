@@ -52,6 +52,7 @@ class CreditLot(Base):
     amount: Mapped[int]
     remaining: Mapped[int]
     expires_at: Mapped[datetime | None]
+    revoked_at: Mapped[datetime | None]  # clawed back (refunded): credits returned to it are clawed back too
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 

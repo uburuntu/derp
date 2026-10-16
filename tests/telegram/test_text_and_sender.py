@@ -76,3 +76,32 @@ def test_untrusted_markdown_cannot_make_telegram_fetch_urls() -> None:
     assert '[link](https://evil.example/?d=secret "cap")' in cleaned and "[x][ref]" in cleaned
     assert "![22:45](tg://time?unix=1647531900)" in cleaned and "[ok](https://t.me/)" in cleaned
     assert sanitize_untrusted("!![](https://e/x)") == "[link](https://e/x)"  # no media reassembled
+
+
+async def test_a_failure_after_the_first_part_reports_what_was_delivered() -> None:
+    from datetime import UTC, datetime
+    from typing import Any, cast
+
+    import pytest
+    from aiogram import Bot
+    from aiogram.exceptions import TelegramForbiddenError
+    from aiogram.methods import SendRichMessage
+    from aiogram.types import Chat
+
+    from derp.telegram.sender import RICH_CHUNK, PartialDeliveryError, send_markdown
+
+    class Flaky:
+        calls = 0
+
+        async def send_rich_message(self, **fields: Any) -> Message:
+            self.calls += 1
+            if self.calls > 1:
+                raise TelegramForbiddenError(
+                    SendRichMessage(chat_id=1, rich_message=fields["rich_message"]), "blocked"
+                )
+            return Message(message_id=10, date=datetime.now(UTC), chat=Chat(id=1, type="private"))
+
+    long = "\n\n".join("word " * (RICH_CHUNK // 6) for _ in range(4))
+    with pytest.raises(PartialDeliveryError) as caught:
+        await send_markdown(cast(Bot, Flaky()), Target(1), long)
+    assert [m.message_id for m in caught.value.sent] == [10]

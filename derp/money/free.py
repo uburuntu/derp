@@ -77,6 +77,7 @@ async def on_free(
         async with db.transaction() as session:
             row = await session.get(Chat, chat.id)
             if row is None:
+                await query.answer()
                 return
             row.free_models = True
             chat = row

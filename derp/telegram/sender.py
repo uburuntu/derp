@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import (
     EphemeralMessageParameters,
     InlineKeyboardMarkup,
@@ -106,6 +106,14 @@ def split_rich(markdown: str, limit: int = RICH_CHUNK) -> list[str]:
     return repaired
 
 
+class PartialDeliveryError(TelegramAPIError):
+    """A multi-part send failed after Telegram had accepted the first parts (``sent``)."""
+
+    def __init__(self, error: TelegramAPIError, sent: list[Message]) -> None:
+        super().__init__(error.method, error.message)
+        self.sent = sent
+
+
 async def send_markdown(
     bot: Bot,
     target: Target,
@@ -114,11 +122,43 @@ async def send_markdown(
     trusted: bool = True,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> list[Message]:
-    """Send Markdown as one or more rich messages; the keyboard goes on the last one."""
+    """Send Markdown as one or more rich messages; the keyboard goes on the last one.
+
+    A failure after some parts went out raises ``PartialDeliveryError`` carrying them.
+    """
     if not trusted:
         markdown = sanitize_untrusted(markdown)
     chunks = split_rich(markdown) if markdown.strip() else ["…"]
     sent: list[Message] = []
+    try:
+        await _send_chunks(bot, target, chunks, sent, trusted=trusted, reply_markup=reply_markup)
+    except TelegramAPIError as error:
+        if sent:
+            raise PartialDeliveryError(error, sent) from error
+        raise
+    return sent
+
+
+async def send_privately(
+    bot: Bot, user_id: int, markdown: str, *, reply_markup: InlineKeyboardMarkup | None = None
+) -> bool:
+    """DM someone; False when Telegram won't let Derp start the conversation (never pressed Start)."""
+    try:
+        await send_markdown(bot, Target(user_id), markdown, reply_markup=reply_markup)
+    except TelegramForbiddenError, TelegramBadRequest:
+        return False
+    return True
+
+
+async def _send_chunks(
+    bot: Bot,
+    target: Target,
+    chunks: list[str],
+    sent: list[Message],
+    *,
+    trusted: bool,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> None:
     for index, chunk in enumerate(chunks):
         last = index == len(chunks) - 1
         target_for_chunk = target if index == 0 else target.replying(None)
@@ -143,7 +183,6 @@ async def send_markdown(
             )
         else:
             sent.append(message if message.text else message.model_copy(update={"text": chunk}))
-    return sent
 
 
 async def send_plain(
