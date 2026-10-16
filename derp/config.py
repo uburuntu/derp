@@ -134,6 +134,7 @@ class Settings(BaseSettings):
     plan: Plan = Plan()
     sponsored_daily_credits: int = 10
     sponsored_global_daily_usd: float = 1.0
+    openrouter_low_usd: float = 5.0  # owner ping when the API key's spending limit has less left
     approval_credits: int = 60  # a single action costing more asks first
     approval_balance_fraction: float = (
         0.25  # …as does one costing more than this share of the payer's balance
@@ -153,6 +154,7 @@ class Settings(BaseSettings):
 
     # Telemetry — optional, fails soft
     logfire_token: str = Field(default="", repr=False)
+    logfire_url: str = ""  # project link appended to error digests
 
     # Third-party tools — optional; tools disable themselves when missing
     wolfram_app_id: str = Field(default="", repr=False)

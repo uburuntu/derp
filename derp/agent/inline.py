@@ -26,7 +26,9 @@ from aiogram.types import (
 )
 
 from derp.agent.runtime import Runtime
+from derp.db.engine import Database
 from derp.locales import resolve, t
+from derp.ops.owner import is_blocked
 from derp.telegram.sender import sanitize_untrusted
 
 log = logging.getLogger("derp.inline")
@@ -39,9 +41,17 @@ def _waiting_markup(locale: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[button]])
 
 
-async def on_inline_query(query: InlineQuery, bot: Bot) -> None:
+async def _blocked(db: Database, user_id: int) -> bool:
+    async with db.session() as session:
+        return await is_blocked(session, user_id, user_id)
+
+
+async def on_inline_query(query: InlineQuery, bot: Bot, db: Database) -> None:
     locale = resolve(query.from_user.language_code)
     text = query.query.strip()
+    if await _blocked(db, query.from_user.id):
+        await bot.answer_inline_query(query.id, results=[], cache_time=0, is_personal=True)
+        return
     button = InlineQueryResultsButton(text=t(locale, "inline.get_coins"), start_parameter="buy")
     if not text:
         await bot.answer_inline_query(query.id, results=[], cache_time=0, is_personal=True, button=button)
@@ -87,8 +97,8 @@ async def on_chosen(result: ChosenInlineResult, bot: Bot, runtime: Runtime) -> N
             await runtime.settle_detached(detached, delivered=delivered)
 
 
-async def on_guest(message: Message, bot: Bot, runtime: Runtime) -> None:
-    if not message.guest_query_id or message.from_user is None:
+async def on_guest(message: Message, bot: Bot, runtime: Runtime, db: Database) -> None:
+    if not message.guest_query_id or message.from_user is None or await _blocked(db, message.from_user.id):
         return
     locale = resolve(message.from_user.language_code)
     detached = await runtime.answer_detached(

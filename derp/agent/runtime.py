@@ -76,7 +76,7 @@ from derp.money.free import consented, offer
 from derp.money.funding import Funder, Funding, Funds
 from derp.money.wallets import release
 from derp.ops.observability import record_run_failure
-from derp.ops.owner import notify_owners
+from derp.ops.owner import is_blocked, notify_owners
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import PartialDeliveryError, Target, send_markdown
 from derp.tools.lookups import Lookups
@@ -145,9 +145,15 @@ class Runtime:
         )
 
     async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome | None:
-        """Answer an invocation, queued per chat topic. None when merged into a newer trigger or a duplicate."""
+        """Answer an invocation, queued per chat topic.
+
+        None when an owner blocked the chat or the asker, or the trigger was merged into a newer one or is a duplicate.
+        """
         if message.from_user is None:
             raise ValueError("an invocation needs a sender")
+        async with self.db.session() as session:
+            if await is_blocked(session, chat.id, message.from_user.id):
+                return None
         key = (chat.id, Target.reply_to_message(message).thread_id)
         async with self.lanes.turn(key, message.from_user.id, message.message_id) as go:
             if not go or (message.message_id and await self._answered(chat.id, message.message_id)):

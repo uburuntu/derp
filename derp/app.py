@@ -21,14 +21,14 @@ from derp.db.engine import Database
 from derp.history.members import refresh_stale_profiles
 from derp.history.middleware import CaptureMiddleware
 from derp.history.transcription import Transcriber
-from derp.inference.api import OpenRouterAPI
+from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.openrouter import build_provider, chat_model
 from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
 from derp.inference.scout import run_scout
 from derp.money.wallets import expire_lots, release, stale_holds
 from derp.ops import observability
-from derp.ops.owner import notify_owners
+from derp.ops.owner import ErrorTally, notify_owners, send_error_digest
 from derp.ops.periodic import every
 from derp.scheduler.worker import Firings
 from derp.settings.privacy import enforce_retention
@@ -40,6 +40,7 @@ from derp.telegram.updates import ALLOWED_UPDATES
 from derp.tools.lookups import Lookups
 
 log = logging.getLogger("derp.app")
+ERROR_DIGEST_SECONDS = 600
 
 
 @dataclass(slots=True)
@@ -102,6 +103,8 @@ def build_dispatcher(services: Services) -> Dispatcher:
         db=services.db,
         runtime=runtime,
         transcriber=services.transcriber,
+        api=services.api,
+        pins=services.pins,
     )
     dispatcher.update.outer_middleware(UpdateSpanMiddleware())
     dispatcher.message.outer_middleware(CaptureMiddleware())
@@ -150,6 +153,21 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
         await enforce_retention(services.db, services.settings)
         await drop_old(services.db, datetime.now(UTC) - timedelta(days=1))
 
+    tally = ErrorTally()
+    logging.getLogger().addHandler(tally)
+
+    async def errors() -> None:
+        await send_error_digest(services.bot, services.settings, tally, ERROR_DIGEST_SECONDS // 60)
+
+    async def openrouter_limit() -> None:
+        try:
+            key = await services.api.key_info()
+        except OpenRouterError:
+            return
+        left = key.get("limit_remaining")
+        if left is not None and float(left) < services.settings.openrouter_low_usd:
+            await notify_owners(services.bot, services.settings, f"OpenRouter key: ${float(left):.2f} left.")
+
     async def expire() -> None:
         async with services.db.transaction() as session:
             await expire_lots(session)
@@ -162,6 +180,10 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
         asyncio.create_task(every("retention", 24 * 3600, retention, initial_delay=1800)),
         asyncio.create_task(every("expire-lots", 6 * 3600, expire, initial_delay=300)),
         asyncio.create_task(every("refund-sweep", 24 * 3600, refunds, initial_delay=900)),
+        asyncio.create_task(
+            every("error-digest", ERROR_DIGEST_SECONDS, errors, initial_delay=ERROR_DIGEST_SECONDS)
+        ),
+        asyncio.create_task(every("openrouter-limit", 24 * 3600, openrouter_limit, initial_delay=1200)),
     ]
 
 

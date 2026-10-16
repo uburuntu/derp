@@ -81,6 +81,7 @@ capped = "That got too expensive for one message, so I stopped. Try a smaller as
 free_busy = "The free models are busy right now. Try again in a bit, or /buy Derpcoins."
 
 [money]
+granted = "🎁 Derp's developer sent you **{credits}** Derpcoins."
 free_offer = "Today's free Derpcoins are used up. /buy more — or keep chatting on free models. Heads-up: free models' providers may store what you send them."
 free_consent = "Use free models"
 free_offer_group = "Today's free Derpcoins are used up. /buy more, or an admin can allow free models in this chat — their providers may store the messages they get."
