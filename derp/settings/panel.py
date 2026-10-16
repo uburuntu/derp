@@ -173,7 +173,7 @@ async def _show(
             )
 
 
-async def _apply(db: Database, chat_id: int, user_id: int, action: str, value: str) -> str | None:
+async def apply_setting(db: Database, chat_id: int, user_id: int, action: str, value: str) -> str | None:
     """Change one setting (the caller checked the role); returns an alert key, if any."""
     if action == "ambient" and value == "purge":
         await switch_context(db, chat_id, on=False)
@@ -225,7 +225,7 @@ async def on_action(
         await query.answer(t(locale, "settings.admins_alert"), show_alert=True)
         return
     page = value if action == "page" else "main"
-    alert = None if action == "page" else await _apply(db, chat.id, query.from_user.id, action, value)
+    alert = None if action == "page" else await apply_setting(db, chat.id, query.from_user.id, action, value)
     await query.answer(t(locale, alert) if alert else None)
     if action == "free" and value == "on" and chat.type != "private":
         await send_markdown(bot, Target(chat.id), t(chat.locale or locale, "money.free_enabled"))

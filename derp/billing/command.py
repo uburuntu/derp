@@ -33,7 +33,7 @@ from derp.billing.purchases import (
     refusal,
 )
 from derp.billing.refunds import apply_refund, refund
-from derp.config import Settings
+from derp.config import Pack, Settings
 from derp.db.engine import Database
 from derp.locales import resolve, t
 from derp.money.wallets import balance, wallet
@@ -46,7 +46,7 @@ class BuyAction(CallbackData, prefix="buy"):
     product: str = ""  # pack or plan id; empty: show the packs for this target
 
 
-def _packs_keyboard(
+def packs_keyboard(
     settings: Settings, target: str, locale: str, *, plan: bool = False
 ) -> InlineKeyboardMarkup:
     rows = [
@@ -69,6 +69,24 @@ def _packs_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+async def send_pack_invoice(
+    bot: Bot, chat_id: int, thread_id: int | None, locale: str, pack: Pack, *, kind: str, owner_id: int
+) -> Message:
+    """Post the Stars invoice for one pack (never ephemeral: an invoice must persist to be paid)."""
+    order = Order(pack.id, pack.credits, kind, owner_id)
+    whom = t(locale, "billing.invoice_for_me") if kind == "user" else t(locale, "billing.invoice_for_chat")
+    title = t(locale, "billing.invoice_title", credits=f"{pack.credits:,}")
+    return await bot.send_invoice(
+        chat_id=chat_id,
+        message_thread_id=thread_id,
+        title=title,
+        description=t(locale, "billing.invoice_description", whom=whom),
+        payload=order.payload,
+        currency="XTR",
+        prices=[LabeledPrice(label=title, amount=pack.stars)],
+    )
+
+
 async def _balance(db: Database, kind: str, owner_id: int) -> int:
     async with db.transaction() as session:
         return await balance(session, (await wallet(session, kind, owner_id)).id)
@@ -82,7 +100,7 @@ async def show_buy(message: Message, db: Database, settings: Settings, bot: Bot)
     if message.chat.type == "private":
         mine = await _balance(db, "user", message.from_user.id)
         text = t(locale, "billing.menu", balance=f"{mine:,}")
-        markup = _packs_keyboard(settings, "user", locale, plan=True)
+        markup = packs_keyboard(settings, "user", locale, plan=True)
         await send_markdown(bot, target, text, reply_markup=markup)
         return
     chooser = InlineKeyboardMarkup(
@@ -115,7 +133,7 @@ async def on_buy(
         left = await _balance(db, kind, owner_id)
         if kind == "user" and chat.type != "private":  # a personal balance never shows in the group
             text = t(locale, "billing.menu", balance=f"{left:,}")
-            markup = _packs_keyboard(settings, "user", locale, plan=True)
+            markup = packs_keyboard(settings, "user", locale, plan=True)
             delivered = await send_privately(bot, owner_id, text, reply_markup=markup)
             await query.answer(
                 t(locale, "money.sent_privately" if delivered else "money.dm_first"), show_alert=True
@@ -126,7 +144,7 @@ async def on_buy(
             chat_id=chat.id,
             message_id=message.message_id,
             rich_message=InputRichMessage(markdown=t(locale, key, balance=f"{left:,}")),
-            reply_markup=_packs_keyboard(settings, kind, locale, plan=chat.type == "private"),
+            reply_markup=packs_keyboard(settings, kind, locale, plan=chat.type == "private"),
         )
         await query.answer()
         return
@@ -137,22 +155,9 @@ async def on_buy(
     if pack is None:
         await query.answer(t(locale, "billing.stale"), show_alert=True)
         return
-    order = Order(pack.id, pack.credits, kind, owner_id)
-    whom = t(locale, "billing.invoice_for_me") if kind == "user" else t(locale, "billing.invoice_for_chat")
     try:
-        await bot.send_invoice(
-            chat_id=chat.id,
-            message_thread_id=message.message_thread_id if message.is_topic_message else None,
-            title=t(locale, "billing.invoice_title", credits=f"{pack.credits:,}"),
-            description=t(locale, "billing.invoice_description", whom=whom),
-            payload=order.payload,
-            currency="XTR",
-            prices=[
-                LabeledPrice(
-                    label=t(locale, "billing.invoice_title", credits=f"{pack.credits:,}"), amount=pack.stars
-                )
-            ],
-        )
+        thread = message.message_thread_id if message.is_topic_message else None
+        await send_pack_invoice(bot, chat.id, thread, locale, pack, kind=kind, owner_id=owner_id)
     except TelegramAPIError:
         await query.answer(t(locale, "billing.unavailable"), show_alert=True)
         return

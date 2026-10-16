@@ -42,8 +42,15 @@ async def _reply_privately(bot: Bot, message: Message, locale: str, text: str) -
 async def show_credits(message: Message, db: Database, settings: Settings, bot: Bot, chat_row: Chat) -> None:
     if message.from_user is None:
         return
-    user_id = message.from_user.id
     locale = resolve(message.from_user.language_code)
+    text = await credits_card(db, settings, bot, chat_row, message.from_user.id, locale)
+    await _reply_privately(bot, message, locale, text)
+
+
+async def credits_card(
+    db: Database, settings: Settings, bot: Bot, chat_row: Chat, user_id: int, locale: str
+) -> str:
+    """The person's balances (and the chat's, with its spenders for admins): private information."""
     now = datetime.now(UTC)
     chat_left: int | None = None
     async with db.transaction() as session:
@@ -77,7 +84,7 @@ async def show_credits(message: Message, db: Database, settings: Settings, bot: 
         if await is_admin(bot, chat_row, user_id):
             lines.extend(await _chat_usage(db, chat_wallet.id, locale, now))
     lines.append(t(locale, "credits.hint"))
-    await _reply_privately(bot, message, locale, "\n".join(lines))
+    return "\n".join(lines)
 
 
 async def _chat_usage(db: Database, wallet_id: int, locale: str, now: datetime) -> list[str]:

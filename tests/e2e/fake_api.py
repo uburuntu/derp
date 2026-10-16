@@ -58,6 +58,12 @@ def rich_blocks(source: str) -> JsonObject:
     return {"blocks": [{"type": "paragraph", "text": p} for p in source.split("\n\n") if p]}
 
 
+class Refusal(Exception):  # noqa: N818 - Telegram's answer, not a fake failure
+    def __init__(self, code: int, description: str) -> None:
+        super().__init__(description)
+        self.code, self.description = code, description
+
+
 @dataclass(frozen=True, slots=True)
 class Attachment:
     field: str
@@ -255,6 +261,8 @@ class FakeBotAPI:
             return self._error(failure.error_code, failure.description, failure.parameters)
         try:
             result = await self._dispatch(method, fields)
+        except Refusal as refusal:  # what Telegram itself would answer
+            return self._error(refusal.code, refusal.description)
         except Exception as error:  # noqa: BLE001 - recorded as a protocol error
             self.protocol_errors.append(f"failed to serve {method}: {error}")
             return self._error(400, f"Bad Request: {error}")
@@ -348,6 +356,8 @@ class FakeBotAPI:
 
     def _new_message(self, fields: JsonObject, **content: Any) -> JsonObject:
         chat_id = int(fields["chat_id"])
+        if chat_id > 0 and chat_id not in self.chats and chat_id in self.users:
+            raise Refusal(403, "Forbidden: bot can't initiate conversation with a user")
         if chat_id not in self.chats:
             raise ValueError(f"chat {chat_id} is not registered")
         message: JsonObject = {

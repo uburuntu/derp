@@ -215,3 +215,7 @@ context_off_page = "Turn context off? I'll delete the **{count}** stored message
 context_off_confirm = "Turn off and delete"
 context_purged = "Context is off; the chat history I'd kept is deleted."
 admins_alert = "Only admins can change this chat's settings."
+
+[feedback]
+how = "Tell the people behind Derp what's broken or what you'd like: `/feedback your words`."
+thanks = "Thanks — passed on to the people behind Derp."

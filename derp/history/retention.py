@@ -47,6 +47,7 @@ from derp.history.models import (
     Reaction,
     ReactionCount,
 )
+from derp.ops.models import Feedback
 
 
 def retention_days(retention: Retention) -> ColumnElement[int]:
@@ -145,6 +146,7 @@ async def forget_member(session: AsyncSession, chat_id: int, user_id: int, now: 
         delete(MemberEvent).where(MemberEvent.chat_id == chat_id, MemberEvent.user_id == user_id)
     )
     await session.execute(delete(GameScore).where(GameScore.chat_id == chat_id, GameScore.user_id == user_id))
+    await session.execute(delete(Feedback).where(Feedback.chat_id == chat_id, Feedback.user_id == user_id))
     return count
 
 

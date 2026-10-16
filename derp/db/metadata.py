@@ -11,6 +11,7 @@ from derp.history import models as _history  # noqa: F401
 from derp.inference import models as _inference  # noqa: F401
 from derp.memory import models as _memory  # noqa: F401
 from derp.money import models as _money  # noqa: F401
+from derp.ops import models as _ops  # noqa: F401
 from derp.scheduler import models as _scheduler  # noqa: F401
 
 metadata = Base.metadata
