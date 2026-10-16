@@ -1,6 +1,6 @@
 """Chat knowledge tables: what Derp knows about each chat, always scoped by chat."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import CheckConstraint, Computed, ForeignKeyConstraint, Index, String, func
@@ -276,3 +276,26 @@ class Sticker(Base):
     curated: Mapped[bool] = mapped_column(default=False, server_default=sql("false"))
     uses: Mapped[int] = mapped_column(default=1, server_default="1")
     first_seen: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Digest(Base):
+    """A summary of one chat day (in the chat's time zone), built on first request and cached.
+
+    ``thread_id`` 0 is the whole chat; otherwise one forum topic. ``last_message_id``
+    is the newest message the day had when it was built, so today's digest is
+    rebuilt once newer messages exist. Edits and deletions inside the day mark it
+    ``stale``.
+    """
+
+    __tablename__ = "digests"
+
+    chat_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    thread_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    day: Mapped[date] = mapped_column(primary_key=True)
+    first_message_id: Mapped[int]
+    last_message_id: Mapped[int]
+    message_count: Mapped[int]
+    summary: Mapped[str]
+    model: Mapped[str] = mapped_column(String(120))
+    stale: Mapped[bool] = mapped_column(default=False, server_default=sql("false"))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())

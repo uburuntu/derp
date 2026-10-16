@@ -37,6 +37,9 @@ class RunDeps:
     gateway: MediaGateway
     pin: RolePin
     model: Model
+    digest_pin: RolePin  # a cheap pin for day digests
+    digest_model: Model
+    digest_role: str
     delivered: list[tuple[int, str]] = field(
         default_factory=list[tuple[int, str]]
     )  # (message id, kind) so far

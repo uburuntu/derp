@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from derp.agent.deps import RunDeps
 from derp.agent.toolsets import ALL_TIERS, Family
 from derp.history.capture import record_outgoing
+from derp.history.digests import mark_stale
 from derp.history.models import Message, MessageMedia, Sticker
 from derp.history.queries import resolve_members
 from derp.memory.notes import is_admin
@@ -296,6 +297,7 @@ async def delete_own_message(ctx: RunContext[RunDeps], message_id: int) -> str:
         if stored is not None:
             stored.deleted_at = datetime.now(UTC)
             stored.text = None
+            await mark_stale(session, deps.chat.id, message_id)
     return f"Deleted #{message_id}."
 
 

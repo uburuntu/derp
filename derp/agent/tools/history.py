@@ -1,22 +1,29 @@
-"""Chat-knowledge tools: search, exact reads, structured queries and the chat profile.
+"""Chat-knowledge tools: search, exact reads, structured queries, day digests and the chat profile.
 
-Free on every tier. Scope always comes from the run: the current chat, and the
-current forum topic unless the model asks for the whole chat.
+Free on every tier, except that building a digest is a model call charged to the
+run. Scope always comes from the run: the current chat, and the current forum
+topic unless the model asks for the whole chat.
 """
 
-from datetime import UTC, datetime, timedelta
+import logging
+from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 
 from pydantic_ai import BinaryContent, RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
+from derp.agent.digests import build
 from derp.agent.media import as_content, inspect, note_images, referenced_media
 from derp.agent.toolsets import Family
-from derp.history.models import ForumTopic, Message, Poll
+from derp.history.digests import day_stats, is_current, scope_key
+from derp.history.models import Digest, ForumTopic, Message, Poll
 from derp.history.queries import ChatQuery, Scope, around, id_range, resolve_members, run_query, search
 from derp.history.render import describe_time, load_views, render_transcript
+from derp.money.funding import Funding, run_cost
 
+log = logging.getLogger("derp.digests")
 OUTPUT_LIMIT = 8000  # characters returned to the model per call
 toolset = FunctionToolset[RunDeps]()
 
@@ -181,6 +188,77 @@ async def inspect_media(ctx: RunContext[RunDeps], message_id: int) -> list[str |
     if not deps.pin.vision:
         return "\n".join(notes)
     return [*notes, *as_content(inspected)]
+
+
+PAID_BUILDS = 7  # days a paid run may summarize per call; other runs build one
+
+
+async def _affordable(deps: RunDeps) -> bool:
+    """Side calls ledgered so far still fit under the run's hold."""
+    if deps.funds.reservation_id is None:
+        return True
+    async with deps.db.session() as session:
+        spent = await run_cost(session, deps.run_id)
+    return deps.settings.credits_for_usd(float(spent)) < deps.funds.credits
+
+
+@toolset.tool
+async def digest(
+    ctx: RunContext[RunDeps],
+    period: Literal["today", "yesterday", "last_7_days"] | date = "today",
+    whole_chat: bool = False,
+) -> str:
+    """Summaries of chat days (in the chat's time zone): what was discussed, decided and planned.
+
+    Prefer this over reading transcripts for "what happened" questions; cite its #ids with read_messages.
+
+    Args:
+        period: today, yesterday, last_7_days, or one date (YYYY-MM-DD).
+        whole_chat: Summarize all forum topics instead of the current one.
+    """
+    deps = ctx.deps
+    today = datetime.now(deps.tz).date()
+    match period:
+        case "today":
+            days = [today]
+        case "yesterday":
+            days = [today - timedelta(days=1)]
+        case "last_7_days":
+            days = [today - timedelta(days=n) for n in range(6, -1, -1)]
+        case _:
+            if period > today:
+                return "That day hasn't happened yet."
+            days = [period]
+    scope = _scope(ctx, whole_chat)
+    key = scope_key(scope)
+    builds = PAID_BUILDS if deps.funding is Funding.PAID else 1
+    sections: list[str] = []
+    for day in days:
+        async with deps.db.session() as session:
+            stats = await day_stats(session, scope, day, deps.tz)
+            cached = await session.get(Digest, (deps.chat.id, key, day)) if stats else None
+        if stats is None:
+            if len(days) == 1:
+                sections.append(f"{day:%a %Y-%m-%d}: no stored messages.")
+            continue
+        found, note = cached, ""
+        if not is_current(cached, stats) and builds > 0 and await _affordable(deps):
+            builds -= 1
+            try:
+                found = await build(
+                    deps.db, deps.digest_model, deps.digest_pin, scope, key, day, deps.tz,
+                    funding=deps.funding.value, role=deps.digest_role, run_id=deps.run_id, user_id=deps.user_id,
+                )  # fmt: skip
+            except Exception as error:  # noqa: BLE001 - fall back to the cached digest or a pointer
+                log.info("digest build failed: %s", type(error).__name__)
+        if found is not None and not is_current(found, stats):
+            note = " — may be outdated"
+        header = f"## {day:%a %Y-%m-%d} ({stats.count} messages{note})"
+        body = (
+            found.summary if found is not None else "Not summarized yet: use search_history or read_messages."
+        )
+        sections.append(f"{header}\n{body}")
+    return _clip("\n\n".join(sections)) if sections else "No stored messages in that period."
 
 
 family = Family("history", toolset, deferred=("chat_info", "inspect_media"))

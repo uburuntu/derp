@@ -13,7 +13,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from decimal import Decimal
 
 from aiogram import Bot
@@ -51,6 +51,7 @@ from derp.agent.toolsets import toolsets_for
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.capture import record_outgoing
+from derp.history.digests import latest_before
 from derp.history.models import Chat, ForumTopic, Message, User
 from derp.history.render import chat_time, estimate_tokens, load_views, neutralize, one_line, render_line
 from derp.inference.api import OpenRouterAPI, OpenRouterError
@@ -73,6 +74,7 @@ log = logging.getLogger("derp.agent")
 
 ModelFactory = Callable[[RolePin], Model]
 SILENT = {"", ".", "…"}  # final answers that mean "nothing more to say"
+EARLIER_DAYS = 3  # the latest digest before the context window joins the situation if this recent
 ALBUM_SETTLE = 1.0  # seconds: album siblings arrive as separate updates; let them be stored first
 
 
@@ -156,6 +158,8 @@ class Runtime:
             return Outcome(None, "unfunded", ())
         funding = funds.funding
         pin = await self.pins.get(funding.role)
+        digest_role = ModelRole.CHAT_FREE if funding is Funding.FREE else ModelRole.CHAT_SPONSORED
+        digest_pin = await self.pins.get(digest_role)
         async with self.db.transaction() as session:
             run = await start_run(
                 session,
@@ -182,6 +186,14 @@ class Runtime:
             images = await referenced_media(session, chat.id, message.message_id, reply_to)
             topic = await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
             memory = await load_memory(session, chat.id, asker.id)
+            earlier = await latest_before(
+                session,
+                chat.id,
+                target.thread_id or 0,
+                window.oldest_message_id or message.message_id or 2**62,
+            )
+            if earlier is not None and earlier.day < datetime.now(tz).date() - timedelta(days=EARLIER_DAYS):
+                earlier = None
         try:
             inspected = await inspect(self.gateway, images)
             model = self.model_factory(pin)
@@ -202,6 +214,9 @@ class Runtime:
                 gateway=self.gateway,
                 pin=pin,
                 model=model,
+                digest_pin=digest_pin,
+                digest_model=model if digest_pin == pin else self.model_factory(digest_pin),
+                digest_role=digest_role.value,
             )
             brief = situation(
                 chat=chat,
@@ -211,6 +226,7 @@ class Runtime:
                 topic=topic.name if topic else None,
                 rules=chat.rules,
                 notes=notes_block(memory, asker.full_name),
+                earlier=earlier,
                 blind=bool(inspected) and not pin.vision,
             )
             caps = self.settings.run_caps

@@ -16,6 +16,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from derp.history.digests import mark_stale
 from derp.history.models import Chat, ForumTopic, Message, MessageMedia, Sticker, User
 from derp.history.polls import upsert_poll
 
@@ -274,6 +275,8 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
             message_id=message.message_id,
             by_derp=capture == "derp",
         )
+    if message.edit_date:  # summaries of the day no longer match what was said
+        await mark_stale(session, message.chat.id, message.message_id)
     await _track_topic(session, message)
     return True
 

@@ -36,7 +36,7 @@ async def test_paid_answer_is_charged_its_marked_up_cost(
     sent = await conversation.send(CARL, text="hi derp")
     await conversation.expect_reply(sent)
     await conversation.settle(sent)
-    assert model.pins[-1].model != "deepseek/deepseek-v4.1-flash"  # paid runs use the standard chat model
+    assert model.pins[0].model != "deepseek/deepseek-v4.1-flash"  # paid runs use the standard chat model
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun))
         assert run is not None and (run.funding, run.charged_credits, run.wallet_id) == (
