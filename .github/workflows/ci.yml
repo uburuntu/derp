@@ -8,7 +8,7 @@ on:
   workflow_call:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}  # a deploy calling CI never cancels the push run
   cancel-in-progress: true
 
 jobs:

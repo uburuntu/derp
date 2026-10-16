@@ -1,0 +1,62 @@
+name: Deploy
+
+# Production releases come only from main, and only while the DEPLOY_ENABLED
+# repository variable is "true". The image travels over SSH to the host's
+# forced-command wrapper (tools/deployment/host.py); no registry is involved.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build and validate the private image archive
+        id: image
+        run: python3 tools/deployment/build_release.py
+      - name: Skip superseded revisions
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$current" = "$GITHUB_SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Deploy with automatic rollback
+        if: steps.current.outputs.deploy == 'true'
+        run: python3 tools/deployment/client.py
+        env:
+          DEPLOY_ARCHIVE: ${{ steps.image.outputs.archive }}
+          DEPLOY_HOST: ${{ secrets.SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_PORT: ${{ secrets.SSH_PORT }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Remove the private image archive
+        if: always()
+        env:
+          DEPLOY_ARCHIVE: ${{ steps.image.outputs.archive }}
+        run: |
+          if [ -n "$DEPLOY_ARCHIVE" ]; then
+            rm -rf -- "$(dirname -- "$DEPLOY_ARCHIVE")"
+          fi

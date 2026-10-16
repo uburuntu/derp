@@ -51,6 +51,7 @@ filterwarnings = ["ignore:Computed default on:UserWarning"]
 target-version = "py314"
 line-length = 110
 extend-exclude = ["references", ".claude", "node_modules"]
+per-file-target-version = { "tools/deployment/*.py" = "py310" }  # system Python on the host and CI runners
 
 [tool.ruff.lint]
 extend-select = [
@@ -72,16 +73,17 @@ ignore = ["S311", "RUF001", "RUF002", "RUF003"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "A002", "T20", "ASYNC109"]
 "migrations/**" = ["N999"]
-"tools/**" = ["T20", "S603", "S607"]
+"tools/**" = ["T20", "S603", "S607", "S108"]
 
 [tool.pyright]
-include = ["derp", "tests", "migrations"]
+include = ["derp", "tests", "migrations", "tools"]
 exclude = ["references", "**/__pycache__", ".venv", ".claude", "node_modules"]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
 strict = ["derp/money", "derp/history", "derp/agent"]
 reportMissingTypeStubs = false
 reportUnnecessaryTypeIgnoreComment = "warning"
+executionEnvironments = [{ root = "tools/deployment", pythonVersion = "3.10" }, { root = "." }]
 
 [tool.logfire]
 ignore_no_config = true
