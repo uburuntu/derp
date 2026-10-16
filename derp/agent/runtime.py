@@ -46,7 +46,7 @@ from derp.agent.lanes import Lanes
 from derp.agent.media import as_content, inspect, note_images, referenced_media
 from derp.agent.models import AgentRun, Approval
 from derp.agent.persona import PERSONA, situation
-from derp.agent.progress import DraftProgress, Progress, ReactionProgress, stage_for_tool
+from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
 from derp.agent.runs import finish_run, record_output, start_run, totals
 from derp.agent.tools import CAPABILITIES, FAMILIES
 from derp.agent.toolsets import toolsets_for
@@ -286,7 +286,7 @@ class Runtime:
             progress: Progress = (
                 DraftProgress(self.bot, target)
                 if chat.type == "private"
-                else ReactionProgress(self.bot, target)
+                else ActionProgress(self.bot, target)
             )
             token = CancellationToken()
             output = ""
@@ -341,8 +341,6 @@ class Runtime:
             finally:
                 if draft_key is not None:
                     self.active.pop(draft_key, None)
-                if target.reply_to in deps.reacted:
-                    progress.keep_reaction()  # Derp's own reaction replaced the status one; leave it
                 await progress.close()
             await price_interrupted(self.api, self.db, new_messages, funding.role, window.tokens)
             silent = output.strip() in SILENT and bool(
@@ -615,8 +613,6 @@ class _Stream:
                     log.info("run %s stopped at its money cap", ctx.deps.run_id)
                     self.capped = True
                     self.token.cancel()
-                if ctx.deps.target.reply_to in ctx.deps.reacted:
-                    self.progress.keep_reaction()  # Derp reacted to the trigger itself: don't overwrite it
                 await self.progress.stage(stage_for_tool(event.part.tool_name))
 
 

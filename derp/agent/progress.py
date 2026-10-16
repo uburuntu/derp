@@ -1,10 +1,10 @@
-"""Showing that Derp is working: drafts in private chats, a status reaction in groups.
+"""Showing that Derp is working: drafts in private chats, a chat action in groups.
 
 Private chats stream the answer into a rich-message draft (throttled well
 under Telegram's 20 drafts / 5 s), with a thinking block naming the current
-step and a stop button. Groups get one status reaction on the trigger that
-changes by stage and is removed when the answer lands. When Telegram refuses
-either (reactions restricted, drafts unavailable), a typing indicator stands in.
+step and a stop button. Groups get a chat action matching the stage ("typing",
+"sending a photo" while drawing): unlike a reaction on the trigger, it notifies
+nobody. When drafts are unavailable, the chat action stands in for them too.
 Progress never fails a run: every Telegram error here is swallowed.
 """
 
@@ -17,20 +17,19 @@ from typing import Protocol
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import InputRichMessage, ReactionTypeEmoji, ReactionTypeUnion
+from aiogram.types import InputRichMessage
 
 from derp.telegram.sender import Target, sanitize_untrusted
 from derp.telegram.text import RICH_LIMIT
 
 log = logging.getLogger("derp.progress")
 DRAFT_INTERVAL = 0.4  # seconds between drafts: ≤ 12.5 per 5 s
-TYPING_INTERVAL = 4.5  # Telegram shows "typing…" for ~5 s
+ACTION_INTERVAL = 4.5  # Telegram shows a chat action for ~5 s
 DRAFT_TAIL = 3000  # characters of a long partial answer shown in the draft
 SEARCH_TOOLS = ("search", "read_messages", "chat_query", "chat_info", "inspect_media", "fetch", "digest")
 DRAW_TOOLS = ("image", "meme", "sticker", "background", "reverse")
 
-# Reaction stages; only Telegram's standard reaction emoji are allowed (no 🎨, so drawing is ✍).
-THINKING, SEARCHING, DRAWING, WORKING = "👀", "🤔", "✍", "👨‍💻"
+THINKING, SEARCHING, DRAWING, WORKING = "thinking", "searching", "drawing", "working"
 
 
 def stage_for_tool(tool_name: str) -> str:
@@ -49,37 +48,49 @@ STATUS_TEXT = {
 }
 
 
+def action_for(stage: str) -> str:
+    return "upload_photo" if stage == DRAWING else "typing"
+
+
 class Progress(Protocol):
     draft_id: int | None
 
     async def start(self) -> None: ...
     async def stage(self, stage: str) -> None: ...
     async def text(self, partial: str) -> None: ...
-    def keep_reaction(self) -> None: ...
     async def close(self) -> None: ...
 
 
-class Typing:
-    """Fallback indicator: a chat action refreshed until closed."""
+class ChatAction:
+    """A chat action refreshed until closed; a new action is shown at once."""
 
     def __init__(self, bot: Bot, target: Target) -> None:
         self.bot = bot
         self.target = target
+        self.action = "typing"
+        self._changed = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._loop())
 
+    def show(self, action: str) -> None:
+        if action != self.action:
+            self.action = action
+            self._changed.set()
+
     async def _loop(self) -> None:
         while True:
+            self._changed.clear()
             try:
                 await self.bot.send_chat_action(
-                    self.target.chat_id, "typing", message_thread_id=self.target.thread_id
+                    self.target.chat_id, self.action, message_thread_id=self.target.thread_id
                 )
             except TelegramAPIError:
                 return
-            await asyncio.sleep(TYPING_INTERVAL)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._changed.wait(), ACTION_INTERVAL)
 
     async def stop(self) -> None:
         if self._task is not None:
@@ -101,7 +112,7 @@ class DraftProgress:
         self._partial = ""
         self._dirty = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
-        self._typing = Typing(bot, target)
+        self._fallback = ChatAction(bot, target)
 
     async def start(self) -> None:
         self._dirty.set()
@@ -109,15 +120,13 @@ class DraftProgress:
 
     async def stage(self, stage: str) -> None:
         self._status = STATUS_TEXT.get(stage, STATUS_TEXT[WORKING])
+        self._fallback.show(action_for(stage))
         self._dirty.set()
 
     async def text(self, partial: str) -> None:
         self._partial = partial
         self._status = ""
         self._dirty.set()
-
-    def keep_reaction(self) -> None:
-        return None
 
     def render(self) -> str:
         body = sanitize_untrusted(self._partial)
@@ -143,7 +152,7 @@ class DraftProgress:
             except TelegramAPIError as error:
                 log.info("drafts unavailable: %s", type(error).__name__)
                 self.draft_id = None
-                self._typing.start()
+                self._fallback.start()
                 return
 
     async def close(self) -> None:
@@ -151,51 +160,25 @@ class DraftProgress:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-        await self._typing.stop()
+        await self._fallback.stop()
 
 
-class ReactionProgress:
-    """Groups: one status reaction on the trigger, removed when the answer is out."""
+class ActionProgress:
+    """Groups: a chat action that follows the run's stage until the answer is out."""
 
     draft_id: int | None = None
 
     def __init__(self, bot: Bot, target: Target) -> None:
-        self.bot = bot
-        self.target = target
-        self._current: str | None = None
-        self._typing = Typing(bot, target)
-        self._disabled = target.reply_to is None
+        self._action = ChatAction(bot, target)
 
     async def start(self) -> None:
-        await self.stage(THINKING)
+        self._action.start()
 
     async def stage(self, stage: str) -> None:
-        if self._disabled:
-            self._typing.start()
-            return
-        if stage == self._current:
-            return
-        self._current = stage
-        await self._react([ReactionTypeEmoji(emoji=stage)])
+        self._action.show(action_for(stage))
 
     async def text(self, partial: str) -> None:
         return None
 
-    def keep_reaction(self) -> None:
-        self._current = None
-        self._disabled = True  # later stages must not overwrite it either
-
-    async def _react(self, reaction: list[ReactionTypeUnion]) -> None:
-        if self.target.reply_to is None:
-            return
-        try:
-            await self.bot.set_message_reaction(self.target.chat_id, self.target.reply_to, reaction=reaction)
-        except TelegramAPIError as error:  # reactions restricted in this chat
-            log.info("status reaction refused: %s", type(error).__name__)
-            self._disabled = True
-            self._typing.start()
-
     async def close(self) -> None:
-        await self._typing.stop()
-        if self._current is not None and not self._disabled:
-            await self._react([])
+        await self._action.stop()

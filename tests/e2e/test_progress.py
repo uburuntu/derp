@@ -50,7 +50,7 @@ async def test_stop_button_posts_the_partial_answer(conversation: Conversation, 
     assert not runtime.active
 
 
-async def test_group_status_reaction_follows_stages_and_is_removed(
+async def test_group_progress_is_a_chat_action_never_a_reaction(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
     conversation.meet(FRED, GROUP)
@@ -62,21 +62,7 @@ async def test_group_status_reaction_follows_stages_and_is_removed(
     asked = await conversation.send(FRED, GROUP, "@DerpRobot find x", entities=MENTION)
     await conversation.expect_reply(asked)
     await conversation.settle(asked)
-    reactions = [c["reaction"] for c in conversation.api.calls_of("setMessageReaction", after=asked.after)]
-    emojis = [r[0]["emoji"] if r else None for r in reactions]
-    assert emojis == ["👀", "🤔", None]
+    actions = conversation.api.calls_of("sendChatAction", after=asked.after)
+    assert actions and {a["action"] for a in actions} == {"typing"}
+    assert conversation.api.calls_of("setMessageReaction", after=asked.after) == []
     assert conversation.api.calls_of("sendRichMessageDraft", after=asked.after) == []
-
-
-async def test_restricted_reactions_fall_back_to_typing(
-    conversation: Conversation, model: ScriptedModel
-) -> None:
-    conversation.meet(FRED, GROUP)
-    conversation.api.fail_next(
-        "setMessageReaction", error_code=400, description="Bad Request: REACTION_INVALID"
-    )
-    asked = await conversation.send(FRED, GROUP, "@DerpRobot hi", entities=MENTION)
-    await conversation.expect_reply(asked)
-    await conversation.settle(asked)
-    assert conversation.api.calls_of("sendChatAction", after=asked.after)
-    assert len(conversation.api.calls_of("setMessageReaction", after=asked.after)) == 1
