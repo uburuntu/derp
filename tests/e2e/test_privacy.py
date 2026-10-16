@@ -50,7 +50,7 @@ async def test_forget_everything_after_confirming(conversation: Conversation, mo
     asked = await conversation.send(HAL, DEN, "/forget")
     prompt = await conversation.expect_reply(asked)
     text = prompt["rich_message"]["markdown"]
-    assert "1 stored messages" in text  # commands are never stored
+    assert "Stored messages: **1**" in text  # commands are never stored
     data = prompt["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
     prompt_id = max(mid for (cid, mid) in conversation.api.messages if cid == DEN.id)
 
@@ -63,7 +63,7 @@ async def test_forget_everything_after_confirming(conversation: Conversation, mo
 
     after = conversation.seq
     await conversation.press(HAL, DEN.id, prompt_id, data)
-    assert "forgot 1 messages" in str(
+    assert "your messages here (1)" in str(
         conversation.api.calls_of("answerCallbackQuery", after=after)[-1]["text"]
     )
     assert (await stored(conversation, first.message_id)).text is None

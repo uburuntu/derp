@@ -67,7 +67,10 @@ async def test_admins_change_chat_settings_and_members_only_their_own(conversati
     assert "**30 days**" in shown and "admins only" in shown and "Rules: none" in shown
 
     await conversation.press_ephemeral(ADMIN, CLUBHOUSE.id, panel, data("page", "ambient_off"))
-    assert "**1** stored messages" in conversation.api.ephemerals[(CLUBHOUSE.id, panel)]["rich_markdown"]
+    assert (
+        "weren't addressed to me (**1**)"
+        in conversation.api.ephemerals[(CLUBHOUSE.id, panel)]["rich_markdown"]
+    )
     await conversation.press_ephemeral(ADMIN, CLUBHOUSE.id, panel, data("ambient", "purge"))
     async with conversation.db.session() as session:
         chat = await session.get(Chat, CLUBHOUSE.id)

@@ -102,7 +102,7 @@ async def test_grant_credits_a_wallet_and_tells_the_person(conversation: Convers
     told = [
         c for c in conversation.api.calls_of("sendRichMessage", sent.after) if int(c["chat_id"]) == PAT.id
     ]
-    assert "**300** Derpcoins" in told[0]["rich_message"]["markdown"]
+    assert "**+300** dc" in told[0]["rich_message"]["markdown"]
     async with conversation.db.session() as session:
         assert await balance(session, (await wallet(session, "user", PAT.id)).id) == 300
 

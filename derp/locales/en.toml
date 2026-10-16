@@ -81,7 +81,7 @@ capped = "That got too expensive for one message, so I stopped. Try a smaller as
 free_busy = "The free models are busy right now. Try again in a bit, or /buy Derpcoins."
 
 [money]
-granted = "🎁 Derp's developer sent you **{credits}** Derpcoins."
+granted = "🎁 Derp's developer sent you **+{credits}** dc."
 free_offer = "Today's free Derpcoins are used up. /buy more — or keep chatting on free models. Heads-up: free models' providers may store what you send them."
 free_consent = "Use free models"
 free_offer_group = "Today's free Derpcoins are used up. /buy more, or an admin can allow free models in this chat — their providers may store the messages they get."
@@ -129,7 +129,7 @@ hint = "_Answers spend Derp+ first, then bought Derpcoins, then the free daily o
 
 [info]
 how = "Reply to one of my messages with /info to see what it cost."
-receipt = "🧾 **About this answer**\nModel: `{model}`\nTokens: {input} in · {output} out · {context} of context · {tools} tool calls\nCharged: **{charged}** Derpcoins — {funding}"
+receipt = "🧾 **About this answer**\nModel: `{model}`\nTokens: {input} in · {output} out · {context} of context · tool calls: {tools}\nCharged: **{charged}** dc — {funding}"
 paid_user = "from personal Derpcoins"
 paid_chat = "from this chat's Derpcoins"
 sponsored = "covered by the free daily allowance"
@@ -222,10 +222,10 @@ support_sent = "Sent to the person who runs Derp. Refunds come back to your Star
 [privacy]
 forgot_one = "Done — I've forgotten that message."
 only_own = "I can only forget your own messages. Reply /forget to one of yours, or send /forget on its own to forget everything you've said here."
-confirm = "Forget everything you've said in this chat? That's {count} stored messages, plus your reactions, poll votes and personal notes here. This can't be undone."
+confirm = "Forget everything you've said in this chat? Stored messages: **{count}**, plus your reactions, poll votes and personal notes here. This can't be undone."
 confirm_button = "Forget it all"
 not_yours = "This button is for the person who asked."
-forgot_all = "Done — forgot {count} messages and everything attached to them."
+forgot_all = "Done — your messages here ({count}) and everything attached to them are forgotten."
 
 [approvals]
 image = "🖼 This image costs about **{credits}** Derpcoins. Make it?"
@@ -285,7 +285,7 @@ retention_page = "🗓 How long should I keep this chat's history? Shortening it
 days = "{days} days"
 default_days = "Default ({days} days)"
 notes_page = "📝 Who can make me remember things here?"
-context_off_page = "Turn context off? I'll delete the **{count}** stored messages that weren't addressed to me, and from then on only see mentions and replies. This can't be undone."
+context_off_page = "Turn context off? I'll delete the stored messages that weren't addressed to me (**{count}**), and from then on only see mentions and replies. This can't be undone."
 context_off_confirm = "Turn off and delete"
 context_purged = "Context is off; the chat history I'd kept is deleted."
 admins_alert = "Only admins can change this chat's settings."

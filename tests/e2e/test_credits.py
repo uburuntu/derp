@@ -52,7 +52,7 @@ async def test_info_shows_the_receipt_of_an_answer(conversation: Conversation, m
     answer_id = max(mid for (cid, mid) in conversation.api.messages if cid == ERIN.id)
     info = await conversation.send(ERIN, text="/info", reply_to=answer_id)
     text = (await conversation.expect_reply(info))["rich_message"]["markdown"]
-    assert "Charged: **12** Derpcoins — from personal Derpcoins" in text
+    assert "Charged: **12** dc — from personal Derpcoins" in text
     stray = await conversation.send(ERIN, text="/info")
     assert (
         "Reply to one of my messages" in (await conversation.expect_reply(stray))["rich_message"]["markdown"]
