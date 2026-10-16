@@ -8,7 +8,7 @@ from aiogram import Dispatcher
 
 
 def include_routers(dispatcher: Dispatcher) -> None:
-    from derp.agent import handler
+    from derp.agent import approvals, handler
     from derp.billing import command as billing
     from derp.history import members, polls, reactions
     from derp.memory import command as memory
@@ -27,6 +27,7 @@ def include_routers(dispatcher: Dispatcher) -> None:
         memory.build_router(),
         money.build_router(),
         free.build_router(),
+        approvals.build_router(),
         billing.build_router(),  # before the agent: payment service messages invoke nothing
         handler.build_router(),  # last: invocations that no command claimed
     )

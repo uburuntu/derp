@@ -42,3 +42,23 @@ async def test_web_search_and_fetch_server_tools_are_accepted_and_billed() -> No
     print(result.output, usage)
     assert "example" in result.output.lower()
     assert usage.cost_usd > 0
+
+
+async def test_image_pin_generates_on_its_zdr_host() -> None:
+    from derp.inference.api import OpenRouterAPI
+
+    settings = Settings()
+    pin = settings.model_pins[ModelRole.IMAGE]
+    api = OpenRouterAPI(settings)
+    try:
+        image = await api.generate_image(
+            pin.model, "a small red circle on white", only=pin.only[pin.model], aspect_ratio="1:1"
+        )
+    finally:
+        await api.close()
+    print(image.model, image.media_type, len(image.data), image.cost_usd)
+    assert (
+        image.data[:4] in (b"\x89PNG", b"\xff\xd8\xff\xe0", b"\xff\xd8\xff\xe1", b"RIFF")
+        and image.cost_usd > 0
+    )
+    assert image.cost_usd <= settings.image_price_usd

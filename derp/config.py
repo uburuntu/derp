@@ -134,8 +134,12 @@ class Settings(BaseSettings):
     plan: Plan = Plan()
     sponsored_daily_credits: int = 10
     sponsored_global_daily_usd: float = 1.0
-    approval_credits: int = 60
-    approval_balance_fraction: float = 0.25
+    approval_credits: int = 60  # a single action costing more asks first
+    approval_balance_fraction: float = (
+        0.25  # …as does one costing more than this share of the payer's balance
+    )
+    approval_minutes: int = 15
+    image_price_usd: float = 0.045  # upper estimate of one standard image on the image pin
     run_caps: RunCaps = RunCaps()
     run_concurrency: int = 12  # agent runs in flight at once, across all chats
     context_windows: ContextWindows = ContextWindows()

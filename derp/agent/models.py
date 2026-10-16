@@ -68,3 +68,28 @@ class RunOutput(Base):
     message_id: Mapped[int]  # for reactions: the message that was reacted to
     kind: Mapped[str] = mapped_column(String(10))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Approval(Base):
+    """An expensive action waiting for its requester's Run or Cancel; denial and expiry cost nothing."""
+
+    __tablename__ = "approvals"
+    __table_args__ = (
+        CheckConstraint("state in ('pending', 'approved', 'denied', 'expired')", name="state"),
+        CheckConstraint("kind in ('image')", name="kind"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int | None]  # the run that asked
+    chat_id: Mapped[int]
+    thread_id: Mapped[int | None]
+    user_id: Mapped[int]  # only they can decide
+    reply_to: Mapped[int | None]  # the message the result answers
+    kind: Mapped[str] = mapped_column(String(12))
+    args: Mapped[dict[str, Any]]  # what to run (prompt text: deleted with the row after a day)
+    credits: Mapped[int]  # the estimate shown on the prompt
+    state: Mapped[str] = mapped_column(String(10), default="pending")
+    prompt_message_id: Mapped[int | None]
+    expires_at: Mapped[datetime]
+    decided_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

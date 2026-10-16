@@ -457,6 +457,11 @@ class FakeBotAPI:
             poll["correct_option_ids"] = list(correct)
         return self._new_message(fields, poll=poll)
 
+    def _m_sendPhoto(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        unique = f"photo-{len(self.calls)}"
+        sizes = [{"file_id": f"f-{unique}", "file_unique_id": unique, "width": 1024, "height": 1024}]
+        return self._new_message(fields, photo=sizes)
+
     def _m_sendSticker(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         file_id = str(fields["sticker"])
         sticker = {

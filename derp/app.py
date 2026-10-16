@@ -12,6 +12,7 @@ from aiogram import Bot, Dispatcher
 from pydantic_ai.models import Model
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
+from derp.agent.approvals import drop_old
 from derp.agent.runtime import ModelFactory, Runtime
 from derp.billing.refunds import reconcile_refunds
 from derp.config import Settings, get_settings
@@ -134,6 +135,7 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
 
     async def retention() -> None:
         await enforce_retention(services.db, services.settings)
+        await drop_old(services.db, datetime.now(UTC) - timedelta(days=1))
 
     async def expire() -> None:
         async with services.db.transaction() as session:

@@ -40,9 +40,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.context import Window, build_window
 from derp.agent.deps import RunDeps
+from derp.agent.images import ImageJob, make_image
 from derp.agent.lanes import Lanes
 from derp.agent.media import as_content, inspect, note_images, referenced_media
-from derp.agent.models import AgentRun
+from derp.agent.models import AgentRun, Approval
 from derp.agent.persona import PERSONA, situation
 from derp.agent.progress import DraftProgress, Progress, ReactionProgress, stage_for_tool
 from derp.agent.runs import finish_run, record_output, start_run, totals
@@ -228,6 +229,8 @@ class Runtime:
                 digest_pin=digest_pin,
                 digest_model=model if digest_pin == pin else self.model_factory(digest_pin),
                 digest_role=digest_role.value,
+                api=self.api,
+                pins=self.pins,
             )
             brief = situation(
                 chat=chat,
@@ -253,6 +256,7 @@ class Runtime:
             # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing here
             # keeps the captured list aligned so the run's own messages slice out exactly.
             history = repair_messages(window.messages)
+            deps.history_start = len(history)
             new_messages: list[ModelMessage] = []
             stream = _Stream(progress, token, self.settings, funds, start=len(history))
             await progress.start()
@@ -362,6 +366,57 @@ class Runtime:
             raise
         finally:
             self.in_flight.discard(funds.operation_id)
+
+    async def run_approved(self, approval: Approval, chat: Chat, locale: str) -> None:
+        """Carry out an approved action as its own run, funded now from the requester's paid order."""
+        target = Target(approval.chat_id, approval.thread_id, approval.reply_to)
+        funds = await self.funder.reserve(
+            chat_id=chat.id,
+            private=chat.type == "private",
+            user_id=approval.user_id,
+            operation_id=f"approval:{approval.id}",
+        )
+        if funds is None or funds.funding is not Funding.PAID or funds.credits < approval.credits:
+            if funds is not None and funds.reservation_id is not None:
+                async with self.db.transaction() as session:
+                    await release(session, funds.operation_id)
+            await self._say(target, t(locale, "approvals.no_coins"))
+            return
+        async with self.db.transaction() as session:
+            run = await start_run(
+                session,
+                chat_id=chat.id,
+                user_id=approval.user_id,
+                trigger="callback",
+                role=ModelRole.IMAGE.value,
+                funding=funds.funding.value,
+                thread_id=approval.thread_id,
+                wallet_id=funds.wallet_id,
+                reservation_id=funds.reservation_id,
+            )
+        sent: TgMessage | None = None
+        error: BaseException | None = None
+        self.in_flight.add(funds.operation_id)
+        try:
+            sent = await make_image(
+                db=self.db, api=self.api, bot=self.bot, gateway=self.gateway,
+                pin=await self.pins.get(ModelRole.IMAGE), target=target, job=ImageJob.from_args(approval.args),
+                run_id=run.id, funding=funds.funding.value, user_id=approval.user_id,
+            )  # fmt: skip
+        except (OpenRouterError, TelegramAPIError) as failed:
+            error = failed
+        finally:
+            async with self.db.transaction() as session:
+                stored = await session.merge(run)
+                if sent is not None:
+                    record_output(session, stored, sent.message_id, "image")
+                finish_run(session, stored, [], status="completed" if sent else "failed",
+                           error_type=type(error).__name__ if error else None)  # fmt: skip
+                charged = await self.funder.settle(session, funds, run.id, delivered=sent is not None)
+                stored.charged_credits = charged
+            self.in_flight.discard(funds.operation_id)
+        if sent is None:
+            await self._say(target, t(locale, "approvals.failed"))
 
     async def _abandon(self, run_id: int | None, funds: Funds, error: BaseException) -> None:
         """Mark a run that escaped its normal close as failed and return its hold (no-op once settled)."""

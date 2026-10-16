@@ -152,3 +152,16 @@ confirm = "Forget everything you've said in this chat? That's {count} stored mes
 confirm_button = "Forget it all"
 not_yours = "This button is for the person who asked."
 forgot_all = "Done — forgot {count} messages and everything attached to them."
+
+[approvals]
+image = "🖼 This image costs about **{credits}** Derpcoins. Make it?"
+run = "Make it"
+cancel = "Cancel"
+making = "On it — drawing…"
+cancelled = "Cancelled — nothing charged."
+already_approved = "Already decided: it's being made."
+already_denied = "Already cancelled."
+already_expired = "This offer expired. Ask again if you still want it."
+not_yours = "Only the person who asked can decide."
+no_coins = "Not enough Derpcoins for this any more — nothing was charged. /buy tops up."
+failed = "The image didn't come out — nothing was charged."

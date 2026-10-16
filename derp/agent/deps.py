@@ -13,6 +13,8 @@ from pydantic_ai.models import Model
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat
+from derp.inference.api import OpenRouterAPI
+from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
 from derp.money.funding import Funding, Funds
 from derp.telegram.media import MediaGateway
@@ -40,6 +42,9 @@ class RunDeps:
     digest_pin: RolePin  # a cheap pin for day digests
     digest_model: Model
     digest_role: str
+    api: OpenRouterAPI
+    pins: PinStore
+    history_start: int = 0  # index of the run's first message in the agent's history
     delivered: list[tuple[int, str]] = field(
         default_factory=list[tuple[int, str]]
     )  # (message id, kind) so far
