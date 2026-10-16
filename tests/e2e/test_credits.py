@@ -1,6 +1,3 @@
-from datetime import UTC, datetime
-from typing import Any
-
 from derp.agent.models import AgentRun
 from derp.money.wallets import credit, wallet
 from tests.e2e.harness import Conversation, Person, Room
@@ -9,21 +6,6 @@ from tests.e2e.model import ScriptedModel
 ERIN = Person(1201, "Erin")
 FINN = Person(1202, "Finn")
 LOFT = Room(-1012, title="Loft")
-
-
-async def ephemeral_command(conversation: Conversation, person: Person, room: Room, text: str) -> int:
-    """An ephemeral command: message id 0, visible only to the sender and Derp."""
-    command = text.split()[0]
-    message: dict[str, Any] = {
-        "message_id": 0,
-        "ephemeral_message_id": 77,
-        "date": int(datetime.now(UTC).timestamp()),
-        "chat": room.payload(person),
-        "from": person.payload(),
-        "text": text,
-        "entities": [{"type": "bot_command", "offset": 0, "length": len(command)}],
-    }
-    return await conversation.push("message", message)
 
 
 async def test_private_credits_show_bought_and_free_allowance(conversation: Conversation) -> None:
@@ -50,7 +32,7 @@ async def test_group_credits_are_ephemeral_and_admins_see_chat_usage(conversatio
         )  # fmt: skip
     for person, admin in ((ERIN, True), (FINN, False)):
         after = conversation.seq
-        await conversation.settle(await ephemeral_command(conversation, person, LOFT, "/credits"))
+        await conversation.settle(await conversation.ephemeral_command(person, LOFT, "/credits"))
         reply = conversation.api.calls_of("sendRichMessage", after=after)[-1]
         assert int(reply["ephemeral_message_parameters"]["receiver_user_id"]) == person.id
         assert int(reply["reply_parameters"]["ephemeral_message_id"]) == 77

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.config import Settings
 from derp.db.engine import Database
+from derp.history.models import User
 from derp.inference.ledger import estimate_cost
 from derp.inference.models import ModelPin, ProviderCall
 from derp.inference.roles import ModelRole
@@ -125,7 +126,9 @@ class Funder:
         async with self.db.transaction() as session:
             payers = [] if private else [(await wallet(session, "chat", chat_id)).id]
             mine = (await wallet(session, "user", user_id)).id
-            payers.append(mine)
+            person = await session.get(User, user_id)
+            if private or person is None or person.group_spending:
+                payers.append(mine)
             minimum = await self.typical_turn(session, Funding.PAID)
             for wallet_id in payers:
                 held = await reserve(

@@ -194,6 +194,38 @@ class Conversation:
         )
         await self.settle(update_id)
 
+    async def ephemeral_command(self, person: Person, room: Room, text: str, ephemeral_id: int = 77) -> int:
+        """An ephemeral command: message id 0, visible only to the sender and Derp."""
+        command = text.split()[0]
+        message: dict[str, Any] = {
+            "message_id": 0,
+            "ephemeral_message_id": ephemeral_id,
+            "date": int(datetime.now(UTC).timestamp()),
+            "chat": room.payload(person),
+            "from": person.payload(),
+            "text": text,
+            "entities": [{"type": "bot_command", "offset": 0, "length": len(command)}],
+        }
+        return await self.push("message", message)
+
+    async def press_ephemeral(self, person: Person, chat_id: int, ephemeral_id: int, data: str) -> None:
+        """Press a button on an ephemeral message Derp sent to ``person``."""
+        query_id = f"q{len(self.api.calls)}"
+        message = self.api.expect_ephemeral_callback(
+            query_id, chat_id=chat_id, ephemeral_id=ephemeral_id, data=data
+        )
+        update_id = await self.push(
+            "callback_query",
+            {
+                "id": query_id,
+                "from": person.payload(),
+                "chat_instance": "c",
+                "message": message,
+                "data": data,
+            },
+        )
+        await self.settle(update_id)
+
     async def settle(self, sent: Sent | int, timeout: float = 5) -> None:
         """Wait until the update's handler finished (the next poll confirms its offset)."""
         update_id = sent.update_id if isinstance(sent, Sent) else sent

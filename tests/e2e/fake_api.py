@@ -107,6 +107,7 @@ class FakeBotAPI:
         self.files: dict[str, tuple[str, bytes]] = {}
         self.poll_ids = 0
         self.inline_results: dict[str, bool] = {}  # result id → has a keyboard
+        self.ephemerals: dict[tuple[int, int], JsonObject] = {}  # (chat, ephemeral id) → message
         self.inline_messages: dict[str, JsonObject] = {}  # inline_message_id → last edit
         self.pinned: dict[int, int] = {}
         self.handlers: dict[str, Callable[[JsonObject], Any]] = {}
@@ -376,6 +377,7 @@ class FakeBotAPI:
             if not (isinstance(reply, Mapping) and reply.get("ephemeral_message_id")):
                 raise ValueError("non-admin bots send ephemeral messages only as replies to ephemeral ones")
             message.update(message_id=0, ephemeral_message_id=len(self.calls), receiver_user=receiver)
+            self.ephemerals[(chat_id, int(message["ephemeral_message_id"]))] = message
             return message
         if isinstance(reply, Mapping):
             target = self.messages.get((chat_id, int(reply["message_id"])))
@@ -552,6 +554,29 @@ class FakeBotAPI:
         else:
             message.pop("reply_markup", None)
         return dict(message)
+
+    def _m_editEphemeralMessageText(self, fields: JsonObject) -> bool:  # noqa: N802
+        key = (int(fields["chat_id"]), int(fields["ephemeral_message_id"]))
+        message = self.ephemerals.get(key)
+        if message is None or int(message["receiver_user"]["id"]) != int(fields["receiver_user_id"]):
+            raise ValueError(f"ephemeral message {key} was not sent to that user")
+        if isinstance(rich := fields.get("rich_message"), Mapping):
+            message["rich_markdown"] = rich.get("markdown")
+        if isinstance(markup := fields.get("reply_markup"), Mapping):
+            message["reply_markup"] = markup
+        else:
+            message.pop("reply_markup", None)
+        return True
+
+    def expect_ephemeral_callback(
+        self, callback_id: str, *, chat_id: int, ephemeral_id: int, data: str
+    ) -> JsonObject:
+        message = self.ephemerals[(chat_id, ephemeral_id)]
+        rows = (message.get("reply_markup") or {}).get("inline_keyboard", [])
+        if data not in {button.get("callback_data") for row in rows for button in row}:
+            raise AssertionError(f"callback data {data!r} is not on the live ephemeral message")
+        self.outstanding_callbacks.add(callback_id)
+        return {k: v for k, v in message.items() if k not in {"rich_markdown"}}
 
     def _m_editMessageReplyMarkup(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         key = (int(fields["chat_id"]), int(fields["message_id"]))
