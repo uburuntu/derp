@@ -165,3 +165,8 @@ already_expired = "This offer expired. Ask again if you still want it."
 not_yours = "Only the person who asked can decide."
 no_coins = "Not enough Derpcoins for this any more — nothing was charged. /buy tops up."
 failed = "The image didn't come out — nothing was charged."
+
+[scheduler]
+reminder = "⏰ Reminder from {name}: {text}"
+skipped = "⏰ Skipped scheduled job #{id}: not enough Derpcoins to answer it."
+paused = "⏰ Paused scheduled job #{id} after missing several runs for lack of Derpcoins. Ask me to resume it once there are Derpcoins again."

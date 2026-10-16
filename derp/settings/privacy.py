@@ -7,7 +7,7 @@ quote what was forgotten are dropped as well; usage and charges stay.
 """
 
 import contextlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
@@ -24,7 +24,10 @@ from derp.history.models import Message as StoredMessage
 from derp.history.retention import forget_member, forget_message, purge_ambient, purge_expired
 from derp.locales import resolve, t
 from derp.memory.models import Note
+from derp.scheduler.models import Job
 from derp.telegram.sender import Target, send_markdown
+
+FINISHED_JOB_DAYS = 30
 
 
 class ForgetAll(CallbackData, prefix="forget"):
@@ -51,6 +54,7 @@ async def forget_everything(db: Database, chat_id: int, user_id: int) -> int:
         )
         count = await forget_member(session, chat_id, user_id, now)
         await session.execute(delete(Note).where(Note.chat_id == chat_id, Note.user_id == user_id))
+        await session.execute(delete(Job).where(Job.chat_id == chat_id, Job.creator_id == user_id))
         if first is not None:
             await scrub_runs(session, chat_id, since=first)
     return count
@@ -75,6 +79,10 @@ async def enforce_retention(db: Database, settings: Settings) -> int:
     async with db.transaction() as session:
         deleted = await purge_expired(session, settings.retention, now)
         await expire_run_messages(session, settings.retention, now)
+        finished = Job.state.in_(("done", "cancelled")) & (
+            Job.created_at < now - timedelta(days=FINISHED_JOB_DAYS)
+        )
+        await session.execute(delete(Job).where(finished))
     return deleted
 
 

@@ -156,6 +156,8 @@ class Runtime:
             operation_id=operation_id,
             free_allowed=free_allowed,
         )
+        if funds is None and trigger == "job":  # the scheduler posts its own note
+            return Outcome(None, "unfunded", ())
         if funds is None:  # free models not allowed yet: offer them (consent / admin opt-in)
             text, markup = offer(locale, group=not private)
             with contextlib.suppress(TelegramAPIError):
