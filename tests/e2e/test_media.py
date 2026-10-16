@@ -86,11 +86,6 @@ async def test_inspect_media_tool_opens_an_older_image(
     await conversation.settle(posted)
     assert model.requests == []  # ambient photos are not downloaded
 
-    def find(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
-        return ModelResponse(
-            parts=[ToolCallPart("search_tools", {"queries": ["open image"]}, tool_call_id="s1")]
-        )
-
     def call(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         return ModelResponse(
             parts=[ToolCallPart("inspect_media", {"message_id": posted.message_id}, tool_call_id="m1")]
@@ -100,7 +95,7 @@ async def test_inspect_media_tool_opens_an_older_image(
         assert images_in(messages), "the tool returns the pixels to a vision model"
         return ModelResponse(parts=[TextPart("it's a meme")])
 
-    model.reply(find, call, "a meme with a frog", answer)
+    model.reply(call, "a meme with a frog", answer)
     asked = await conversation.send(DORA, group, f"дерп, что на #{posted.message_id}?")
     reply = await conversation.expect_reply(asked)
     assert reply["rich_message"]["markdown"] == "it's a meme"

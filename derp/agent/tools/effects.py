@@ -11,7 +11,6 @@ on sponsored ones. The fee is a ``run_fees`` row added to the run's charge,
 written only after Telegram accepted the result, so a failed send costs nothing.
 """
 
-from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from typing import Literal
 
@@ -24,12 +23,20 @@ from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
 from derp.agent.tools.images import spent_credits
+from derp.agent.tools.sources import (
+    SOUND,
+    VISUAL,
+    Refused,
+    Source,
+    avatar_source,
+    chat_photo_source,
+    message_media,
+)
 from derp.agent.toolsets import Family
 from derp.history.capture import record_outgoing
-from derp.history.models import Message, MessageMedia
 from derp.money.funding import Funding
 from derp.money.models import RunFee
-from derp.telegram.media import MediaUnavailableError, sniff_image
+from derp.telegram.media import sniff_image
 from derp.tools import background, effects, lookups
 from derp.tools.captions import Style
 from derp.tools.workers import EffectError
@@ -38,94 +45,15 @@ toolset = FunctionToolset[RunDeps]()
 background_tools = FunctionToolset[RunDeps]()
 song_tools = FunctionToolset[RunDeps]()
 profile_tools = FunctionToolset[RunDeps]()
-VISUAL = ("photo", "sticker", "document", "animation", "video", "video_note")
-SOUND = ("voice", "audio", "video", "video_note")
 Sendable = Literal["photo", "video", "animation", "video_note", "voice", "document"]
 
 
-class Refused(Exception):  # noqa: N818 - a message for the model, not an error
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class Source:
-    data: bytes
-    type: str  # the Telegram media type it came from ("profile_photo" for avatars)
-    image: bool  # a still picture Pillow can open (GIFs count as clips)
-
-
-async def _replied(deps: RunDeps) -> int | None:
-    async with deps.db.session() as session:
-        return await session.scalar(
-            select(Message.reply_to_message_id).where(
-                Message.chat_id == deps.chat.id, Message.message_id == deps.trigger_message_id
-            )
-        )
-
-
-async def _media(deps: RunDeps, message_id: int | None, types: tuple[str, ...]) -> Source:
-    anchors = [message_id] if message_id is not None else [deps.trigger_message_id, await _replied(deps)]
-    async with deps.db.session() as session:
-        rows = list(
-            await session.scalars(
-                select(MessageMedia)
-                .join(
-                    Message,
-                    (Message.chat_id == MessageMedia.chat_id)
-                    & (Message.message_id == MessageMedia.message_id),
-                )
-                .where(
-                    MessageMedia.chat_id == deps.chat.id,
-                    MessageMedia.message_id.in_([a for a in anchors if a]),
-                    MessageMedia.type.in_(types),
-                    Message.deleted_at.is_(None),
-                )
-                .order_by(MessageMedia.idx)
-            )
-        )
-    rows.sort(key=lambda r: anchors.index(r.message_id))
-    if not rows:
-        where = (
-            f"message #{message_id}" if message_id is not None else "this message or the one it replies to"
-        )
-        raise Refused(f"No usable media in {where}; name the message with message_id.")
-    row = rows[0]
-    try:
-        data = await deps.gateway.fetch(
-            row.file_id, bot_id=row.bot_id, key=row.file_unique_id, size_hint=row.file_size
-        )
-    except MediaUnavailableError as unavailable:
-        raise Refused(f"That file can't be downloaded ({unavailable.reason}).") from None
-    kind = sniff_image(data)
-    return Source(data, row.type, image=kind is not None and kind != "image/gif")
-
-
-async def _profile_photo(deps: RunDeps, message_id: int | None) -> Source:
-    """The profile photo of a message's sender, of the person replied to, or of the asker."""
-    anchor = message_id if message_id is not None else await _replied(deps)
-    user_id = deps.user_id
-    if anchor is not None:
-        async with deps.db.session() as session:
-            sender = await session.scalar(
-                select(Message.user_id).where(Message.chat_id == deps.chat.id, Message.message_id == anchor)
-            )
-        if sender is None and message_id is not None:
-            raise Refused(f"Message #{message_id} isn't in this chat's history or has no person behind it.")
-        user_id = sender or user_id
-    try:
-        photos = await deps.bot.get_user_profile_photos(user_id=user_id, limit=1)
-    except TelegramAPIError:
-        raise Refused("Telegram didn't share that profile photo.") from None
-    if not photos.photos:
-        raise Refused("They have no profile photo I can see.")
-    biggest = photos.photos[0][-1]
-    try:
-        data = await deps.gateway.fetch(
-            biggest.file_id, bot_id=deps.bot.id, key=biggest.file_unique_id, size_hint=biggest.file_size
-        )
-    except MediaUnavailableError as unavailable:
-        raise Refused(f"The profile photo can't be downloaded ({unavailable.reason}).") from None
-    return Source(data, "profile_photo", image=sniff_image(data) is not None)
+async def _visual(deps: RunDeps, message_id: int | None, profile_photo: bool, chat_photo: bool) -> Source:
+    if chat_photo:
+        return await chat_photo_source(deps)
+    if profile_photo:
+        return await avatar_source(deps, message_id)
+    return await message_media(deps, message_id, VISUAL)
 
 
 def _check_outputs(deps: RunDeps) -> None:
@@ -207,6 +135,7 @@ async def make_meme(
     style: Literal["demotivator", "lobster", "panel"] = "demotivator",
     message_id: int | None = None,
     profile_photo: bool = False,
+    chat_photo: bool = False,
 ) -> str:
     """Caption a picture, GIF, sticker or video as a meme and send it.
 
@@ -218,13 +147,12 @@ async def make_meme(
         style: The meme layout.
         message_id: Use the media of this stored message (default: the current message or the one it replies to).
         profile_photo: Use the profile photo of message_id's sender (or of the person replied to, or the asker).
+        chat_photo: Use this chat's photo.
     """
     deps = ctx.deps
     try:
         _check_outputs(deps)
-        source = await (
-            _profile_photo(deps, message_id) if profile_photo else _media(deps, message_id, VISUAL)
-        )
+        source = await _visual(deps, message_id, profile_photo, chat_photo)
         if source.image:
             return _sent(
                 await _send(deps, "photo", await effects.meme_image(source.data, text, style), "meme.jpg")
@@ -257,7 +185,7 @@ async def reverse_media(ctx: RunContext[RunDeps], message_id: int | None = None)
     deps = ctx.deps
     try:
         _check_outputs(deps)
-        source = await _media(deps, message_id, (*VISUAL, "voice", "audio"))
+        source = await message_media(deps, message_id, (*VISUAL, "voice", "audio"))
         if source.image:
             return _sent(await _send(deps, "photo", await effects.mirror(source.data), "mirrored.jpg"))
         if source.type in ("voice", "audio"):
@@ -291,7 +219,7 @@ async def identify_anime(ctx: RunContext[RunDeps], message_id: int | None = None
     """
     deps = ctx.deps
     try:
-        source = await _media(deps, message_id, VISUAL)
+        source = await message_media(deps, message_id, VISUAL)
         frame = source.data if source.image else await effects.still(source.data)
         return await deps.lookups.identify_anime(frame)
     except Refused as refused:
@@ -311,7 +239,7 @@ async def identify_song(ctx: RunContext[RunDeps], message_id: int | None = None)
     """
     deps = ctx.deps
     try:
-        source = await _media(deps, message_id, SOUND)
+        source = await message_media(deps, message_id, SOUND)
         return await deps.lookups.identify_song(await effects.audio_sample(source.data))
     except Refused as refused:
         return str(refused)
@@ -323,20 +251,22 @@ async def identify_song(ctx: RunContext[RunDeps], message_id: int | None = None)
 
 @background_tools.tool(sequential=True)
 async def remove_background(
-    ctx: RunContext[RunDeps], message_id: int | None = None, profile_photo: bool = False
+    ctx: RunContext[RunDeps],
+    message_id: int | None = None,
+    profile_photo: bool = False,
+    chat_photo: bool = False,
 ) -> str:
     """Cut the subject out of a picture (transparent background) and send it as a PNG file.
 
     Args:
         message_id: Use the picture of this stored message (default: the current message or the one it replies to).
         profile_photo: Use the profile photo of message_id's sender (or of the person replied to, or the asker).
+        chat_photo: Use this chat's photo.
     """
     deps = ctx.deps
     try:
         _check_outputs(deps)
-        source = await (
-            _profile_photo(deps, message_id) if profile_photo else _media(deps, message_id, VISUAL)
-        )
+        source = await _visual(deps, message_id, profile_photo, chat_photo)
         if not source.image:
             raise Refused("That isn't a still picture.")
         await _heavy_allowed(ctx)
@@ -352,24 +282,30 @@ async def remove_background(
 
 @profile_tools.tool
 async def profile_photo(
-    ctx: RunContext[RunDeps], message_id: int | None = None
+    ctx: RunContext[RunDeps], message_id: int | None = None, chat_photo: bool = False
 ) -> list[str | BinaryContent] | str:
-    """Look at someone's profile photo: message_id's sender, else the person replied to, else the asker.
+    """Look at someone's profile photo (message_id's sender, else the person replied to, else the asker) or the chat's.
+
+    Only to see it: drawing and meme tools take profile_photo / chat_photo directly.
 
     Args:
         message_id: A stored message whose sender's profile photo to look at.
+        chat_photo: Look at this chat's photo instead.
     """
     deps = ctx.deps
     if not deps.pin.vision:
         return "This model can't see images."
     try:
-        source = await _profile_photo(deps, message_id)
+        source = await (chat_photo_source(deps) if chat_photo else avatar_source(deps, message_id))
     except Refused as refused:
         return str(refused)
     media_type = sniff_image(source.data)
     if media_type is None:
-        return "That profile photo isn't a picture I can open."
-    return ["(profile photo)", BinaryContent(source.data, media_type=media_type)]
+        return "That photo isn't a picture I can open."
+    return [
+        f"({'chat' if chat_photo else 'profile'} photo)",
+        BinaryContent(source.data, media_type=media_type),
+    ]
 
 
 PAID_AND_SPONSORED = frozenset({Funding.PAID, Funding.SPONSORED})

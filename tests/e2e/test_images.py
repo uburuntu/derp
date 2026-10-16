@@ -1,17 +1,29 @@
+import io
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 
+from PIL import Image
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart, ToolReturnPart
+from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from derp.agent.models import AgentRun, Approval, RunOutput
 from derp.inference.api import GeneratedImage
 from derp.inference.models import ProviderCall
 from derp.money.wallets import balance, credit, wallet
-from tests.e2e.harness import Conversation, Person
+from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
+from tests.e2e.test_effects import jpeg, results_of
 
 JO = Person(1501, "Jo")
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+
+def png() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 64), "gold").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 @dataclass
@@ -19,10 +31,14 @@ class FakeImages:
     """Stands in for OpenRouterAPI: images cost $0.04 each."""
 
     prompts: list[str] = field(default_factory=list[str])
+    references: list[list[tuple[bytes, str]]] = field(default_factory=list[list[tuple[bytes, str]]])
 
-    async def generate_image(self, model: str, prompt: str, **_: object) -> GeneratedImage:
+    async def generate_image(
+        self, model: str, prompt: str, *, references: Sequence[tuple[bytes, str]] = (), **_: object
+    ) -> GeneratedImage:
         self.prompts.append(prompt)
-        return GeneratedImage(PNG, "image/png", model, Decimal("0.04"))
+        self.references.append(list(references))
+        return GeneratedImage(png(), "image/png", model, Decimal("0.04"))
 
     async def close(self) -> None:
         return None
@@ -130,3 +146,64 @@ async def test_cancelling_an_expensive_image_charges_nothing_for_it(
         asking = await session.scalar(select(AgentRun))
         left = await balance(session, (await wallet(session, "user", JO.id)).id)
     assert asking is not None and left == 150 - asking.charged_credits  # only the asking turn's tokens
+
+
+async def test_a_profile_photo_gets_an_ai_edit_in_one_call(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 650)
+    avatar = jpeg("orange")
+    conversation.api.register_file(f"profile-{JO.id}", avatar)
+    model.reply(tool_call("generate_image", prompt="add a fun party hat", profile_photo=True), ".")
+    asked = await conversation.send(JO, text="add me a fun hat to my profile picture")
+    await conversation.expect_reply(asked, method="sendPhoto")
+    await conversation.settle(asked)
+    assert [data for data, _ in images.references[0]] == [avatar]
+    assert conversation.api.calls_of("setChatPhoto") == []  # the person sets it themselves
+
+
+async def test_the_chat_photo_is_a_source_for_edits(conversation: Conversation, model: ScriptedModel) -> None:
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 650)
+    club = Room(-1502, title="Club")
+    conversation.meet(JO, club)
+    logo = jpeg("purple")
+    conversation.api.register_file(f"chatphoto-{club.id}", logo)
+    model.reply(tool_call("generate_image", prompt="give it a santa hat", chat_photo=True), ".")
+    asked = await conversation.send(JO, club, "derp put a santa hat on our chat picture")
+    await conversation.expect_reply(asked, method="sendPhoto")
+    await conversation.settle(asked)
+    assert [data for data, _ in images.references[0]] == [logo]
+
+
+def meme_of_the_sent_image(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+    """The next tool takes the picture the previous one sent, by the id in its answer."""
+    sent = next(
+        str(part.content)
+        for message in reversed(messages)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "generate_image"
+    )
+    match = re.search(r"#(\d+)", sent)
+    assert match, sent
+    args = {"text": "me after the party", "message_id": int(match.group(1))}
+    return ModelResponse(parts=[ToolCallPart("make_meme", args, tool_call_id="meme-call")])
+
+
+async def test_a_drawn_image_feeds_the_meme_tool(conversation: Conversation, model: ScriptedModel) -> None:
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 650)
+    model.reply(tool_call("generate_image", prompt="a cat in a party hat"), meme_of_the_sent_image, ".")
+    asked = await conversation.send(JO, text="draw a party cat and make a meme of it")
+    await conversation.settle(asked)
+    photos = conversation.api.calls_of("sendPhoto", after=asked.after)
+    assert len(photos) == 2 and images.prompts == ["a cat in a party hat"]
+    meme = results_of(model, "make_meme")
+    assert meme and meme[0].startswith("Sent"), meme

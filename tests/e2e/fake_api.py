@@ -496,6 +496,8 @@ class FakeBotAPI:
     def _m_sendPhoto(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         unique = f"photo-{len(self.calls)}"
         sizes = [{"file_id": f"f-{unique}", "file_unique_id": unique, "width": 1024, "height": 1024}]
+        if uploads := self.calls[-1].attachments:  # like Telegram, the sent photo can be downloaded again
+            self.register_file(f"f-{unique}", uploads[0].data)
         return self._new_message(fields, photo=sizes)
 
     def _uploaded(self, kind: str, **extra: Any) -> JsonObject:
@@ -652,7 +654,14 @@ class FakeBotAPI:
         ]
 
     def _m_getChat(self, fields: JsonObject) -> JsonObject:  # noqa: N802
-        chat = dict(self.chats[int(fields["chat_id"])])
+        """The chat as registered, with a photo when a ``chatphoto-<chat id>`` file is registered."""
+        chat_id = int(fields["chat_id"])
+        chat = dict(self.chats[chat_id])
+        if (file_id := f"chatphoto-{chat_id}") in self.files:
+            chat["photo"] = {
+                "small_file_id": file_id, "small_file_unique_id": f"u-{file_id}",
+                "big_file_id": file_id, "big_file_unique_id": f"u-{file_id}",
+            }  # fmt: skip
         return {"accent_color_id": 0, "max_reaction_count": 11, "accepted_gift_types": _NO_GIFTS, **chat}
 
     def _m_getChatMemberCount(self, fields: JsonObject) -> int:  # noqa: N802

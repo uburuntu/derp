@@ -84,7 +84,6 @@ async def test_an_image_meme_is_free_and_goes_out_as_a_photo(
     conversation.meet(LIV, PUB)
     picture = await ambient(conversation, "pic", jpeg(), photo=photo("pic", jpeg()))
     model.reply(
-        tool_call("search_tools", queries=["meme"]),
         tool_call("make_meme", text="когда тесты зелёные", style="demotivator", message_id=picture),
         ".",
     )
@@ -103,13 +102,32 @@ async def test_a_profile_photo_meme(conversation: Conversation, model: ScriptedM
     conversation.meet(LIV, PUB)
     conversation.api.register_file(f"profile-{LIV.id}", jpeg("orange"))
     model.reply(
-        tool_call("search_tools", queries=["meme"]),
         tool_call("make_meme", text="me", style="lobster", profile_photo=True),
         ".",
     )
     asked = await conversation.send(LIV, PUB, "derp meme my avatar")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
+
+
+async def test_a_chat_photo_meme(conversation: Conversation, model: ScriptedModel) -> None:
+    conversation.meet(LIV, PUB)
+    conversation.api.register_file(f"chatphoto-{PUB.id}", jpeg("navy"))
+    model.reply(tool_call("make_meme", text="us", chat_photo=True), ".")
+    asked = await conversation.send(LIV, PUB, "derp meme our chat picture")
+    await conversation.expect_reply(asked, method="sendPhoto")
+    await conversation.settle(asked)
+
+
+async def test_a_missing_chat_photo_is_explained_to_the_model(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(LIV, PUB)
+    model.reply(tool_call("make_meme", text="us", chat_photo=True), "no picture here")
+    asked = await conversation.send(LIV, PUB, "derp meme our chat picture")
+    await conversation.settle(asked)
+    assert any("No chat photo" in result for result in results_of(model, "make_meme"))
+    assert conversation.api.calls_of("sendPhoto", after=asked.after) == []
 
 
 @needs_ffmpeg
@@ -123,7 +141,6 @@ async def test_a_video_meme_costs_the_flat_fee_on_paid_runs(
     data = clip("video")
     moving = await ambient(conversation, "vid", data, video=video("vid", data))
     model.reply(
-        tool_call("search_tools", queries=["meme"]),
         tool_call("make_meme", text="this is fine", message_id=moving),
         ".",
     )
@@ -148,7 +165,6 @@ async def test_sponsored_heavy_effects_stop_at_the_daily_count(
             )
     moving = await ambient(conversation, "vid2", b"\x00" * 64, video=video("vid2", b"\x00" * 64))
     model.reply(
-        tool_call("search_tools", queries=["meme"]),
         tool_call("make_meme", text="again", message_id=moving),
         "out of them",
     )
@@ -165,7 +181,7 @@ async def test_a_replied_voice_note_is_reversed(conversation: Conversation, mode
     data = clip("voice")
     voice = {"file_id": "vn", "file_unique_id": "u-vn", "duration": 2, "file_size": len(data)}
     spoken = await ambient(conversation, "vn", data, voice=voice)
-    model.reply(tool_call("search_tools", queries=["reverse"]), tool_call("reverse_media"), ".")
+    model.reply(tool_call("reverse_media"), ".")
     asked = await conversation.send(LIV, PUB, "derp play this backwards", reply_to=spoken)
     sent = await conversation.expect_reply(asked, method="sendVoice", timeout=30)
     await conversation.settle(asked, timeout=30)
@@ -194,7 +210,6 @@ async def test_song_and_anime_recognition(
     data = clip("video")
     moving = await ambient(conversation, "vid3", data, video=video("vid3", data))
     model.reply(
-        tool_call("search_tools", queries=["song", "anime"]),
         tool_call("identify_song", message_id=moving),
         tool_call("identify_anime", message_id=moving),
         "It's Rick.",
@@ -215,8 +230,8 @@ async def test_keyed_and_model_backed_effects_hide_when_unavailable(
     )
     await conversation.restart()
     conversation.meet(LIV, PUB)
-    model.reply(tool_call("search_tools", queries=["background", "song", "meme"]), "none")
+    model.reply("none")
     asked = await conversation.send(LIV, PUB, "derp cut out the background")
     await conversation.settle(asked)
-    [found] = results_of(model, "search_tools")
+    found = {tool.name for tool in model.infos[-1].function_tools}
     assert "make_meme" in found and "remove_background" not in found and "identify_song" not in found

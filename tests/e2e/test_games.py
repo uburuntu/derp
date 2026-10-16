@@ -43,7 +43,6 @@ async def test_a_quiz_scores_first_answers_into_the_leaderboard(
         {"question": "Pizza or sushi?", "options": ["Pizza", "Sushi"], "multiple_answers": True},
     ]
     model.reply(
-        tool_call("search_tools", queries=["quiz"]),
         tool_call("post_polls", polls=polls, seconds_per_poll=60),
         "Go!",
     )
@@ -82,7 +81,6 @@ async def test_most_likely_polls_use_active_members(conversation: Conversation, 
     for person, text in ((BEN, "morning"), (CY, "hey"), (BEN, "coffee?")):
         await conversation.settle(await conversation.send(person, QUIZ_ROOM, text))
     model.reply(
-        tool_call("search_tools", queries=["most likely poll"]),
         tool_call("most_likely_poll", question="Who's most likely to oversleep?"),
         ".",
     )

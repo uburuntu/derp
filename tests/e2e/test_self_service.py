@@ -28,7 +28,7 @@ def result_of(model: ScriptedModel, tool: str) -> str:
 
 
 async def ask(conversation: Conversation, model: ScriptedModel, person: Person, *calls: Any) -> int:
-    model.reply(tool_call("search_tools", queries=["buy", "balance", "setting", "feedback"]), *calls, ".")
+    model.reply(*calls, ".")
     asked = await conversation.send(person, DEN, "derp please")
     await conversation.settle(asked)
     return asked.after

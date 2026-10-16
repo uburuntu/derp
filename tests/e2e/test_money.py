@@ -217,3 +217,16 @@ async def test_a_failure_before_the_model_runs_returns_the_hold(
     async with conversation.db.session() as session:
         assert await session.scalar(select(Reservation.state)) == "released"
         assert await session.scalar(select(AgentRun.id)) is None  # its row rolled back with the window
+
+
+async def test_free_model_runs_keep_the_long_tail_in_the_toolbox(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    await exhaust_sponsorship(conversation, settings)
+    async with conversation.db.transaction() as session:
+        session.add(User(id=CARL.id, first_name="Carl", free_models_consent_version=POLICY_VERSION))
+    model.reply("hi")
+    asked = await conversation.send(CARL, text="hi")
+    await conversation.expect_reply(asked)
+    names = {tool.name for tool in model.infos[-1].function_tools}
+    assert "search_tools" in names and "search_history" in names and "inspect_media" not in names

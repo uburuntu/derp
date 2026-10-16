@@ -13,6 +13,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   history and nothing from them is stored except accounting.
 - It looks at photos, stickers and albums, listens to voice messages and video notes (transcribed), and opens
   links. Media tools also take videos, GIFs and audio (memes, reversing, song recognition).
+- Profile pictures and the chat photo work as sources: "add me a hat on my profile picture" or "meme our chat
+  photo". Derp sends the result; bots can't change anyone's profile photo, so people set it themselves.
+- One tool's result feeds the next: draw a picture, then meme it or cut it out, in one answer.
 - People never choose a model: Derp picks one by who pays (see money). Bought and free daily answers go only to
   AI providers that keep nothing (zero data retention).
 
@@ -86,7 +89,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 ## tools
 
 - Tiers: "paid" is bought Derpcoins, Derp+ or the group wallet; "sponsored" is the free daily allowance; "free" is
-  free models. Toolbox tools are found on demand, they work the same.
+  free models. On free models, toolbox tools are found on demand; they work the same.
 - Every answer can also search the web and open links (paid and sponsored) and run exact maths in a Python sandbox
   with no network or files (every tier).
 

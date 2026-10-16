@@ -3,7 +3,8 @@
 Billing is all-or-nothing per image. The provider call is ledgered against the
 run only once Telegram accepted the photo; if sending fails the cost is
 absorbed (ledgered without a run) and nothing is charged. Edits use the
-images of stored messages in the same chat as references.
+images of stored messages in the same chat, a member's profile photo or the
+chat photo as references.
 """
 
 import logging
@@ -20,7 +21,7 @@ from derp.history.capture import record_outgoing
 from derp.inference.api import GeneratedImage, OpenRouterAPI, OpenRouterError
 from derp.inference.ledger import record_usage, simple_usage
 from derp.inference.roles import ModelRole, RolePin
-from derp.telegram.media import MediaGateway
+from derp.telegram.media import MediaGateway, chat_photo_bytes, profile_photo_bytes, sniff_image
 from derp.telegram.sender import Target
 
 log = logging.getLogger("derp.images")
@@ -32,9 +33,17 @@ class ImageJob:
     prompt: str
     aspect_ratio: str = "1:1"
     references: tuple[int, ...] = ()  # stored message ids (this chat) whose images are edited
+    avatar_of: int | None = None  # whose profile photo is edited (resolved from a message, never model input)
+    chat_photo: bool = False  # edit this chat's photo
 
     def as_args(self) -> dict[str, object]:
-        return {"prompt": self.prompt, "aspect_ratio": self.aspect_ratio, "references": list(self.references)}
+        return {
+            "prompt": self.prompt,
+            "aspect_ratio": self.aspect_ratio,
+            "references": list(self.references),
+            "avatar_of": self.avatar_of,
+            "chat_photo": self.chat_photo,
+        }
 
     @classmethod
     def from_args(cls, args: dict[str, object]) -> ImageJob:
@@ -43,6 +52,8 @@ class ImageJob:
             prompt=str(args.get("prompt", "")),
             aspect_ratio=str(args.get("aspect_ratio", "1:1")),
             references=tuple(int(r) for r in references),
+            avatar_of=int(cast(int, args["avatar_of"])) if args.get("avatar_of") is not None else None,
+            chat_photo=bool(args.get("chat_photo")),
         )
 
 
@@ -91,6 +102,11 @@ async def make_image(
 ) -> Message:
     """Generate, send and ledger one image; raises when nothing reached the chat."""
     references = await _references(db, gateway, target.chat_id, job.references)
+    photos = [
+        *([await profile_photo_bytes(bot, gateway, job.avatar_of)] if job.avatar_of is not None else []),
+        *([await chat_photo_bytes(bot, gateway, target.chat_id)] if job.chat_photo else []),
+    ]
+    references += [(data, sniff_image(data) or "image/jpeg") for data in photos]
     image = await _generate(api, pin, job, references)
     try:
         sent = await bot.send_photo(

@@ -14,7 +14,7 @@ async def test_questions_about_derp_are_answered_from_its_own_guide(
 
     def look_up(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         names = {tool.name for tool in info.function_tools}
-        assert "about_derp" in names and "read_source" not in names  # the source tools wait in the toolbox
+        assert {"about_derp", "read_source", "search_source"} <= names
         return ModelResponse(parts=[ToolCallPart("about_derp", {"topics": ["money"]}, tool_call_id="a1")])
 
     def answer(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:

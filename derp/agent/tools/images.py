@@ -16,6 +16,7 @@ from derp.agent.approvals import ask, needs_approval
 from derp.agent.deps import RunDeps
 from derp.agent.images import ImageJob, make_image
 from derp.agent.runs import totals
+from derp.agent.tools.sources import Refused, avatar_source, chat_photo_source, photo_owner
 from derp.agent.toolsets import Family
 from derp.history.models import Message
 from derp.inference.api import OpenRouterError
@@ -54,6 +55,8 @@ async def generate_image(
     prompt: str,
     edit: bool = False,
     edit_message_id: int | None = None,
+    profile_photo: bool = False,
+    chat_photo: bool = False,
     aspect_ratio: Literal["1:1", "16:9", "9:16", "4:3", "3:4"] = "1:1",
 ) -> str:
     """Draw one image, or edit an existing one, and send it to the chat.
@@ -61,7 +64,9 @@ async def generate_image(
     Args:
         prompt: What to draw, or what to change, in detail (English works best).
         edit: Edit the image in the current message or the message it replies to.
-        edit_message_id: Edit the image of this stored message instead.
+        edit_message_id: Edit the image of this stored message instead (e.g. one you just sent).
+        profile_photo: Edit a profile photo: edit_message_id's sender, else the person replied to, else the asker.
+        chat_photo: Edit this chat's photo.
         aspect_ratio: Shape of the picture.
     """
     deps = ctx.deps
@@ -70,8 +75,18 @@ async def generate_image(
     price = deps.settings.credits_for_usd(deps.settings.image_price_usd)
     if deps.funding is not Funding.PAID or deps.funds.wallet_id is None:
         return "Images need Derpcoins (the free daily ones don't cover one). Tell them /buy gets some."
-    references = await _references(deps, edit_message_id) if edit or edit_message_id else ()
-    job = ImageJob(prompt[:2000], aspect_ratio, references)
+    avatar_of: int | None = None
+    try:
+        if profile_photo:
+            avatar_of = await photo_owner(deps, edit_message_id)
+            await avatar_source(deps, edit_message_id)  # fails early (and warms the cache) without a photo
+        if chat_photo:
+            await chat_photo_source(deps)
+    except Refused as refused:
+        return str(refused)
+    edits_message = (edit or edit_message_id is not None) and not profile_photo
+    references = await _references(deps, edit_message_id) if edits_message else ()
+    job = ImageJob(prompt[:2000], aspect_ratio, references, avatar_of=avatar_of, chat_photo=chat_photo)
     async with deps.db.session() as session:
         rest = await balance(session, deps.funds.wallet_id, sources=PAID_SOURCES)
     if needs_approval(deps.settings, price, deps.funds.credits + rest):

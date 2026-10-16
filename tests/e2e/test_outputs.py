@@ -115,23 +115,14 @@ async def test_react_tool_replaces_the_status_reaction(
         assert list(await session.scalars(select(RunOutput.kind))) == ["reaction"]
 
 
-async def test_toolbox_tools_are_found_through_search(
-    conversation: Conversation, model: ScriptedModel
-) -> None:
+async def test_toolbox_tools_are_called_directly(conversation: Conversation, model: ScriptedModel) -> None:
     conversation.meet(KATE, PARTY)
 
-    def search(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        names = {t.name for t in info.function_tools}
-        assert "chat_info" not in names and "search_tools" in names and "search_history" in names
-        return ModelResponse(
-            parts=[ToolCallPart("search_tools", {"queries": ["chat profile info"]}, tool_call_id="s")]
-        )
-
     def use(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        assert "chat_info" in {t.name for t in info.function_tools}
+        assert "chat_info" in {t.name for t in info.function_tools}  # no search_tools round trip first
         return ModelResponse(parts=[ToolCallPart("chat_info", {}, tool_call_id="c")])
 
-    model.reply(search, use, "it's the Party chat")
+    model.reply(use, "it's the Party chat")
     asked = await conversation.send(KATE, PARTY, "derp what is this chat?")
     reply = await conversation.expect_reply(asked)
     assert reply["rich_message"]["markdown"] == "it's the Party chat"

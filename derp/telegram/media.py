@@ -111,3 +111,28 @@ class MediaGateway:
         while self._cached_bytes > CACHE_BYTES and self._cache:
             _, (_, evicted) = self._cache.popitem(last=False)
             self._cached_bytes -= len(evicted)
+
+
+async def profile_photo_bytes(bot: Bot, gateway: MediaGateway, user_id: int) -> bytes:
+    """A person's current profile photo, largest size; raises when Telegram doesn't share one."""
+    try:
+        photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
+    except TelegramAPIError:
+        raise MediaUnavailableError("Telegram didn't share that profile photo") from None
+    if not photos.photos:
+        raise MediaUnavailableError("no profile photo visible to Derp")
+    biggest = photos.photos[0][-1]
+    return await gateway.fetch(
+        biggest.file_id, bot_id=bot.id, key=biggest.file_unique_id, size_hint=biggest.file_size
+    )
+
+
+async def chat_photo_bytes(bot: Bot, gateway: MediaGateway, chat_id: int) -> bytes:
+    """A chat's own photo (a private chat's is the person's)."""
+    try:
+        photo = (await bot.get_chat(chat_id)).photo
+    except TelegramAPIError:
+        raise MediaUnavailableError("Telegram didn't share the chat photo") from None
+    if photo is None:
+        raise MediaUnavailableError("this chat has no photo")
+    return await gateway.fetch(photo.big_file_id, bot_id=bot.id, key=photo.big_file_unique_id)

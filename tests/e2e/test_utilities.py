@@ -54,7 +54,6 @@ async def test_weather_is_found_through_tool_search(
     }  # fmt: skip
     conversation.meet(KIM, DORM)
     model.reply(
-        tool_call("search_tools", queries=["weather forecast"]),
         tool_call("weather", place="Kazan"),
         "Grab a jacket.",
     )
@@ -69,7 +68,6 @@ async def test_weather_is_found_through_tool_search(
 async def test_an_outage_is_reported_to_the_model(conversation: Conversation, model: ScriptedModel) -> None:
     conversation.meet(KIM, DORM)
     model.reply(
-        tool_call("search_tools", queries=["exchange rate"]),
         tool_call("exchange_rate", base="USD", quote="RUB"),
         "Rates are down.",
     )
@@ -82,8 +80,8 @@ async def test_an_outage_is_reported_to_the_model(conversation: Conversation, mo
 
 async def test_keyed_tools_hide_without_keys(conversation: Conversation, model: ScriptedModel) -> None:
     conversation.meet(KIM, DORM)
-    model.reply(tool_call("search_tools", queries=["wolfram", "program", "urban"]), "None here.")
+    model.reply("None here.")
     asked = await conversation.send(KIM, DORM, "derp ask wolfram")
     await conversation.settle(asked)
-    [found] = results_of(model, "search_tools")
+    found = {tool.name for tool in model.infos[-1].function_tools}
     assert "urban_dictionary" in found and "wolfram" not in found and "run_program" not in found

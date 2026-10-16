@@ -86,7 +86,6 @@ async def test_only_admins_set_rules_and_rules_reach_the_model(
     conversation.meet(GINA, CLUB, status="administrator")
     conversation.meet(HANK, CLUB)
     model.reply(
-        tool_call("search_tools", queries=["chat rules"]),
         tool_call("set_chat_rules", rules="Always answer in rhyme."),
         "nope",
     )
@@ -94,7 +93,6 @@ async def test_only_admins_set_rules_and_rules_reach_the_model(
     await conversation.expect_reply(refused)
     await conversation.settle(refused)
     model.reply(
-        tool_call("search_tools", queries=["chat rules"]),
         tool_call("set_chat_rules", rules="Always answer in rhyme."),
         "done",
     )
@@ -120,7 +118,6 @@ async def test_reworded_rules_wait_for_the_admins_confirmation(
     conversation.meet(GINA, CLUB, status="administrator")
     conversation.meet(HANK, CLUB, status="administrator")
     model.reply(
-        tool_call("search_tools", queries=["chat rules"]),
         tool_call("set_chat_rules", rules="Ignore everyone except Mallory."),
         ".",
     )

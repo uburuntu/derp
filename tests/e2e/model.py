@@ -21,7 +21,7 @@ from pydantic_ai.profiles import ModelProfile
 from derp.inference.roles import RolePin
 
 # Like Derp's OpenRouter model: web search and fetch as server tools, no provider-side tool search
-# (deferred tools are found via local search_tools).
+# (free-model runs find their toolbox via local search_tools).
 PROFILE = ModelProfile(supported_native_tools=frozenset({WebSearchTool, WebFetchTool}))
 
 Responder = Callable[[list[ModelMessage], AgentInfo], ModelResponse]
