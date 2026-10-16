@@ -69,7 +69,7 @@ async def on_chosen(result: ChosenInlineResult, bot: Bot, runtime: Runtime) -> N
         operation_id=f"inline:{result.inline_message_id}",
         where="through inline mode into some chat",
     )
-    question = f"❓ {result.query[:QUERY_LIMIT]}\n\n"
+    question = f"❓ {sanitize_untrusted(result.query[:QUERY_LIMIT])}\n\n"
     if detached is None or not detached.text:
         text = question + t(locale, "inline.unfunded" if detached is None else "inline.failed")
     else:

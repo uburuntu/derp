@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from decimal import Decimal
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import Message as TgMessage
 from aiogram.types import User as TgUser
 from pydantic_ai import Agent, CancellationToken, RunCancelled, RunContext, capture_run_messages
@@ -94,6 +94,7 @@ class Outcome:
     run_id: int | None  # None: nobody could pay, no run was started
     status: str
     delivered: tuple[int, ...]
+    refused: bool = False  # Telegram won't take messages here (removed, banned, topic gone)
 
 
 @dataclass(slots=True)
@@ -390,7 +391,8 @@ class Runtime:
                 record_run_failure(run.id, error, prompt)
                 if not isinstance(error, TelegramAPIError) and not deps.delivered:
                     await self._apologize(target, locale, error, funds)
-            return Outcome(run.id, status, tuple(message_id for message_id, _ in deps.delivered))
+            refused = isinstance(error, TelegramForbiddenError | TelegramBadRequest) and not deps.delivered
+            return Outcome(run.id, status, tuple(message_id for message_id, _ in deps.delivered), refused)
         except (
             BaseException
         ) as exc:  # died outside the model call (network, shutdown): never leave it running

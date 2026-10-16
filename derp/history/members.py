@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from derp.db.engine import Database
 from derp.history.capture import upsert_chat, upsert_user
 from derp.history.models import Chat, ChatMember, MemberEvent, Message
+from derp.scheduler.jobs import pause_jobs
 
 log = logging.getLogger("derp.members")
 ADMIN_STATUSES = {"creator", "administrator"}
@@ -73,6 +74,8 @@ async def record_event(
     )
     if duplicate is None:
         session.add(MemberEvent(chat_id=chat_id, user_id=user_id, kind=kind, actor_id=actor_id))
+    if kind in ("leave", "ban"):  # their scheduled prompts would keep spending in a chat they left
+        await pause_jobs(session, chat_id, user_id)
     if status is not None:
         statement = insert(ChatMember).values(chat_id=chat_id, user_id=user_id, status=status)
         await session.execute(
@@ -142,6 +145,8 @@ async def on_my_chat_member(update: ChatMemberUpdated, db: Database, bot: Bot) -
     async with db.transaction() as session:
         chat = await upsert_chat(session, update.chat)
         chat.bot_status = str(update.new_chat_member.status)
+        if update.new_chat_member.status in ("left", "kicked"):
+            await pause_jobs(session, update.chat.id)
     if update.new_chat_member.status in ADMIN_STATUSES | {"member"}:
         await refresh_profile(bot, db, update.chat.id)
 

@@ -30,7 +30,7 @@ from derp.money.wallets import expire_lots, release, stale_holds
 from derp.ops import observability
 from derp.ops.owner import notify_owners
 from derp.ops.periodic import every
-from derp.scheduler.worker import run_due
+from derp.scheduler.worker import Firings
 from derp.settings.privacy import enforce_retention
 from derp.telegram.bot import create_bot
 from derp.telegram.media import MediaGateway
@@ -140,8 +140,10 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
             async with services.db.transaction() as session:  # one wallet lock per transaction
                 await release(session, operation_id)
 
+    firings = Firings()
+
     async def jobs() -> None:
-        await run_due(services.db, services.bot, runtime)
+        await firings.tick(services.db, services.bot, runtime)
 
     async def retention() -> None:
         await enforce_retention(services.db, services.settings)

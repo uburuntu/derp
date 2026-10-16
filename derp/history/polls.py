@@ -76,7 +76,7 @@ async def on_poll_answer(answer: PollAnswer, db: Database) -> None:
     if voter is None:
         return
     async with db.transaction() as session:
-        poll = await session.get(Poll, answer.poll_id)
+        poll = await session.get(Poll, answer.poll_id, with_for_update=True)  # one answer at a time per poll
         if poll is None:
             return
         first = await session.get(PollVote, (answer.poll_id, voter)) is None

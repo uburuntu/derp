@@ -112,9 +112,14 @@ async def _workspace(data: bytes) -> AsyncIterator[Path]:
             yield source
 
 
-async def _render(source: Path, name: str, args: list[str], *, what: str) -> bytes:
+async def _render(source: Path, name: str, args: list[str], *, what: str, read: float | None = None) -> bytes:
+    """``read`` caps how many seconds of input are decoded, whatever the container claims."""
     output = source.with_name(name)
-    await run(_ffmpeg(*INPUT, "-i", str(source), *args, "-fs", str(MAX_OUTPUT_BYTES), str(output)), what=what)
+    limit = ["-t", str(read)] if read else []
+    await run(
+        _ffmpeg(*INPUT, *limit, "-i", str(source), *args, "-fs", str(MAX_OUTPUT_BYTES), str(output)),
+        what=what,
+    )
     data = await asyncio.to_thread(output.read_bytes)
     if not data or len(data) >= MAX_OUTPUT_BYTES:
         raise EffectError(f"{what} output too large")
@@ -177,7 +182,7 @@ async def reverse(data: bytes, *, voice: bool = False) -> bytes:
             if not info.audio:
                 raise EffectError("no sound in that file")
             args = ["-vn", "-af", "areverse", "-c:a", "libopus", "-b:a", "64k", "-f", "ogg"]
-            return await _render(source, "reversed.ogg", args, what="reverse")
+            return await _render(source, "reversed.ogg", args, what="reverse", read=MAX_REVERSE_SECONDS)
         width, height = captions.media_size(info.width, info.height)
         if width * height * 4 * info.seconds * (info.fps or 30) > MAX_REVERSE_BUFFER:
             raise EffectError("too big to reverse; try a shorter or smaller clip")
@@ -185,7 +190,7 @@ async def reverse(data: bytes, *, voice: bool = False) -> bytes:
             "-vf", f"scale={width}:{height}:flags=lanczos,reverse",
             *(["-af", "areverse"] if info.audio else ["-an"]), *VIDEO_OUT,
         ]  # fmt: skip
-        return await _render(source, "reversed.mp4", args, what="reverse")
+        return await _render(source, "reversed.mp4", args, what="reverse", read=MAX_REVERSE_SECONDS)
 
 
 async def mirror(data: bytes) -> bytes:

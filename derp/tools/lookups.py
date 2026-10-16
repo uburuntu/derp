@@ -9,9 +9,11 @@ bodies are never logged.
 """
 
 import base64
+import functools
 import hashlib
 import hmac
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import quote
 from xml.etree import ElementTree
@@ -24,6 +26,7 @@ TIMEOUT = httpx.Timeout(10, connect=5)
 MAX_BYTES = 1_000_000
 USER_AGENT = "DerpBot/2 (+https://t.me/DerpRobot)"
 CACHE_SECONDS = 600
+CACHE_ENTRIES = 256
 WEATHER = {
     0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast", 45: "fog", 48: "rime fog",
     51: "light drizzle", 53: "drizzle", 55: "heavy drizzle", 61: "light rain", 63: "rain", 65: "heavy rain",
@@ -46,6 +49,19 @@ class LookupError(Exception):  # noqa: A001 - module-scoped name, always importe
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+def _parsed[**P](method: Callable[P, Awaitable[str]]) -> Callable[P, Awaitable[str]]:
+    """A service answering in an unexpected shape is a failed lookup, not a crashed run."""
+
+    @functools.wraps(method)
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> str:
+        try:
+            return await method(*args, **kwargs)
+        except ValueError, KeyError, IndexError, TypeError, AttributeError, ElementTree.ParseError:
+            raise LookupError("unexpected response") from None
+
+    return wrapper
 
 
 def _cyrillic(text: str) -> bool:
@@ -76,6 +92,8 @@ class Lookups:
         if len(response.content) > MAX_BYTES:
             raise LookupError("response too large")
         if cache:
+            if len(self._cache) >= CACHE_ENTRIES:  # drop the oldest; dicts keep insertion order
+                self._cache.pop(next(iter(self._cache)))
             self._cache[key] = (time.monotonic(), response)
         return response
 
@@ -90,6 +108,7 @@ class Lookups:
             raise LookupError("response too large")
         return response
 
+    @_parsed
     async def weather(self, place: str) -> str:
         found = (
             await self._get(
@@ -133,6 +152,7 @@ class Lookups:
             )
         return "\n".join(lines) + "\n(Open-Meteo)"
 
+    @_parsed
     async def exchange_rate(self, base: str, quote_currency: str, amount: float) -> str:
         base, quote_currency = base.strip().lower(), quote_currency.strip().lower()
         if base in COINS or quote_currency in COINS:
@@ -155,7 +175,7 @@ class Lookups:
             moved = f" ({change:+.1f}% in 24h)" if isinstance(change, int | float) else ""
             return f"{amount:g} {base.upper()} = {amount * rate:,.6g} {quote_currency.upper()}{moved} (CoinGecko)"
         data = (
-            await self._get(f"https://open.er-api.com/v6/latest/{quote(base.upper())}", cache=True)
+            await self._get(f"https://open.er-api.com/v6/latest/{quote(base.upper(), safe='')}", cache=True)
         ).json()
         rates = data.get("rates") or {}
         if data.get("result") != "success" or quote_currency.upper() not in rates:
@@ -163,6 +183,7 @@ class Lookups:
         rate = float(rates[quote_currency.upper()])
         return f"{amount:g} {base.upper()} = {amount * rate:,.6g} {quote_currency.upper()} (open.er-api.com, daily)"
 
+    @_parsed
     async def wiki(self, query: str) -> str:
         lang = "ru" if _cyrillic(query) else "en"
         found = (
@@ -183,12 +204,13 @@ class Lookups:
         title = str(hits[0]["title"])
         summary = (
             await self._get(
-                f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{quote(title.replace(' ', '_'))}"
+                f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{quote(title.replace(' ', '_'), safe='')}"
             )
         ).json()
         page = ((summary.get("content_urls") or {}).get("desktop") or {}).get("page", "")
         return f"{title}: {str(summary.get('extract', ''))[:1500]}\n{page}"
 
+    @_parsed
     async def urban(self, term: str) -> str:
         data = (await self._get("https://api.urbandictionary.com/v0/define", params={"term": term})).json()
         entries = sorted(data.get("list") or [], key=lambda e: -int(e.get("thumbs_up", 0)))[:2]
@@ -200,6 +222,7 @@ class Lookups:
             for e in entries
         )
 
+    @_parsed
     async def arxiv(self, query: str) -> str:
         response = await self._get(
             "https://export.arxiv.org/api/query",
@@ -216,6 +239,7 @@ class Lookups:
             lines.append(f"{title} ({', '.join(authors)}, {year}) {link}\n  {summary}")
         return "\n".join(lines) or f"No arXiv papers for {query!r}."
 
+    @_parsed
     async def wolfram(self, query: str) -> str:
         appid = self.settings.require("wolfram_app_id")
         try:
@@ -231,6 +255,7 @@ class Lookups:
             raise LookupError(f"HTTP {response.status_code}")
         return response.text[:1500] + "\n(WolframAlpha)"
 
+    @_parsed
     async def run_program(self, language: str, source: str, stdin: str) -> str:
         client_id, secret = self.settings.require("jdoodle_client_id", "jdoodle_client_secret")
         body = {
@@ -247,6 +272,7 @@ class Lookups:
         output = "\n".join(str(data.get("output") or "").splitlines()[:80])[:3000]
         return f"{output or '(no output)'}\n— cpu {data.get('cpuTime')} s, memory {data.get('memory')} KB"
 
+    @_parsed
     async def identify_song(self, sample: bytes) -> str:
         """ACRCloud music recognition of a short audio sample (signature version 1)."""
         host, key, secret = self.settings.require(
@@ -288,6 +314,7 @@ class Lookups:
         ]
         return "\n".join([*lines, *links]) + "\n(ACRCloud)"
 
+    @_parsed
     async def identify_anime(self, image: bytes) -> str:
         """trace.moe scene search: which anime, episode and moment a screenshot is from."""
         data = (

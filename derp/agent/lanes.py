@@ -29,16 +29,22 @@ class Lanes:
 
     @asynccontextmanager
     async def turn(self, key: LaneKey, user_id: int, message_id: int) -> AsyncGenerator[bool]:
-        """Yields True when this trigger should run, False when a newer one from the same user supersedes it."""
+        """Yields True when this trigger should run, False when a newer one from the same user supersedes it.
+
+        Synthetic triggers (id 0, scheduled prompts) are never stored, so no newer message contains them:
+        they always run and never supersede anyone.
+        """
         lane = self._lanes.setdefault(key, _Lane())
         lane.users += 1
-        lane.newest[user_id] = max(lane.newest.get(user_id, 0), message_id)
+        if message_id > 0:
+            lane.newest[user_id] = max(lane.newest.get(user_id, 0), message_id)
         try:
             async with lane.lock:
-                if lane.newest.get(user_id, 0) > message_id:
+                if message_id > 0 and lane.newest.get(user_id, 0) > message_id:
                     yield False
                     return
-                lane.newest.pop(user_id, None)
+                if message_id > 0:
+                    lane.newest.pop(user_id, None)
                 async with self._slots:
                     yield True
         finally:

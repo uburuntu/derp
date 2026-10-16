@@ -9,6 +9,7 @@ tools can echo file contents or paths, so they are discarded.
 
 import asyncio
 import contextlib
+import resource
 from collections.abc import AsyncIterator, Sequence
 
 SLOTS = 2
@@ -18,6 +19,8 @@ MAX_OUTPUT_BYTES = 50 * 1024 * 1024  # what the Bot API lets a bot upload
 MAX_PIXELS = 16_000_000
 MAX_SIDE = 8192
 TIMEOUT = 60
+
+MAX_WORKER_MEMORY = 2048 * 1024 * 1024  # address space per native worker
 
 
 class EffectError(Exception):
@@ -56,6 +59,12 @@ class WorkerPool:
             self._waiting -= 1
 
 
+def _cap_memory() -> None:
+    """A crafted file can't make a worker eat the host's memory (best effort where unsupported)."""
+    with contextlib.suppress(ValueError, OSError):
+        resource.setrlimit(resource.RLIMIT_AS, (MAX_WORKER_MEMORY, MAX_WORKER_MEMORY))
+
+
 async def run(
     args: Sequence[str], *, seconds: float = TIMEOUT, max_output: int = MAX_OUTPUT_BYTES, what: str = "effect"
 ) -> bytes:
@@ -65,6 +74,7 @@ async def run(
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
+        preexec_fn=_cap_memory,
     )
     stdout = process.stdout
     chunks: list[bytes] = []

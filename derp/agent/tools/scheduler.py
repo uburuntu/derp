@@ -76,6 +76,7 @@ async def schedule(
             text=text.strip()[:1000] or "⏰",
             repeat=repeat,
             next_at=when,
+            anchor_at=when,
         )
         session.add(job)
         await session.flush()

@@ -32,16 +32,17 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("derp.scheduler")
 BATCH = 10
+FIRING_LIMIT = 8  # jobs firing at once; the rest wait for the next tick
 
 
-async def claim_due(db: Database, now: datetime) -> list[tuple[Job, Chat]]:
+async def claim_due(db: Database, now: datetime, limit: int = BATCH) -> list[tuple[Job, Chat]]:
     async with db.transaction() as session:
         due = list(
             await session.scalars(
                 select(Job)
                 .where(Job.state == "active", Job.next_at <= now)
                 .order_by(Job.next_at)
-                .limit(BATCH)
+                .limit(limit)
                 .with_for_update(skip_locked=True)
             )
         )
@@ -98,6 +99,10 @@ async def fire(db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, n
             )
             return
         outcome = await runtime.answer(as_message(job, chat, user, now), chat, trigger="job")
+        if outcome is not None and outcome.refused:
+            log.info("job %s paused: the chat refused the answer", job.id)
+            await _set(db, job.id, state="paused")
+            return
         if outcome is None or outcome.status != "unfunded":
             await _set(db, job.id, misses=0)
             return
@@ -112,13 +117,36 @@ async def fire(db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, n
         await _set(db, job.id, state="paused")
 
 
+async def _fire_logged(db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, now: datetime) -> None:
+    try:
+        await fire(db, bot, runtime, job, chat, now)
+    except Exception as error:  # noqa: BLE001 - one job must not take the others down
+        log.error("job %s failed: %s", job.id, type(error).__name__)
+
+
 async def run_due(db: Database, bot: Bot, runtime: Runtime) -> int:
+    """Claim what is due and fire it all, returning when every firing finished."""
     now = datetime.now(UTC)
     claimed = await claim_due(db, now)
-    results = await asyncio.gather(
-        *(fire(db, bot, runtime, job, chat, now) for job, chat in claimed), return_exceptions=True
-    )
-    for (job, _chat), result in zip(claimed, results, strict=True):
-        if isinstance(result, BaseException):
-            log.error("job %s failed: %s", job.id, type(result).__name__)
+    await asyncio.gather(*(_fire_logged(db, bot, runtime, job, chat, now) for job, chat in claimed))
     return len(claimed)
+
+
+class Firings:
+    """Fires due jobs in the background, so one slow scheduled prompt never delays other chats' reminders."""
+
+    def __init__(self, limit: int = FIRING_LIMIT) -> None:
+        self.limit = limit
+        self.tasks: set[asyncio.Task[None]] = set()
+
+    async def tick(self, db: Database, bot: Bot, runtime: Runtime) -> int:
+        room = self.limit - len(self.tasks)
+        if room <= 0:
+            return 0
+        now = datetime.now(UTC)
+        claimed = await claim_due(db, now, min(BATCH, room))
+        for job, chat in claimed:
+            task = asyncio.create_task(_fire_logged(db, bot, runtime, job, chat, now))
+            self.tasks.add(task)
+            task.add_done_callback(self.tasks.discard)
+        return len(claimed)

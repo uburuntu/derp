@@ -31,6 +31,7 @@ class Job(Base):
     text: Mapped[str]
     repeat: Mapped[str | None] = mapped_column(String(8))  # wall-clock time in the chat's time zone
     next_at: Mapped[datetime]
+    anchor_at: Mapped[datetime]  # the first scheduled time: repeats keep its wall time and day of month
     state: Mapped[str] = mapped_column(String(10), default="active")
     misses: Mapped[int] = mapped_column(default=0)  # unfunded firings in a row; pauses at the limit
     runs: Mapped[int] = mapped_column(default=0)

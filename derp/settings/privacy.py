@@ -16,6 +16,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import delete, func, select
 
+from derp.agent.models import Approval
 from derp.agent.runs import expire_run_messages, scrub_runs
 from derp.config import Settings
 from derp.db.engine import Database
@@ -55,6 +56,9 @@ async def forget_everything(db: Database, chat_id: int, user_id: int) -> int:
         count = await forget_member(session, chat_id, user_id, now)
         await session.execute(delete(Note).where(Note.chat_id == chat_id, Note.user_id == user_id))
         await session.execute(delete(Job).where(Job.chat_id == chat_id, Job.creator_id == user_id))
+        await session.execute(
+            delete(Approval).where(Approval.chat_id == chat_id, Approval.user_id == user_id)
+        )
         if first is not None:
             await scrub_runs(session, chat_id, since=first)
     return count

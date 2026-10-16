@@ -1,14 +1,17 @@
 """Job rules: who may schedule what, when it fires next, and how times are shown.
 
-Repeats keep the wall-clock time in the chat's time zone (so 09:00 stays 09:00
-across daylight-saving changes). Firings missed while Derp was down are
-skipped, not replayed: a job fires at most once per claim.
+Repeats keep the first occurrence's wall-clock time in the chat's time zone (so
+09:00 stays 09:00 across daylight-saving changes, and a time skipped by a
+spring-forward gap returns the next day) and its day of month (a job on the
+31st fires on the last day of shorter months, then on the 31st again).
+Firings missed while Derp was down are skipped, not replayed: a job fires at
+most once per claim.
 """
 
 import calendar
 from datetime import UTC, date, datetime, timedelta, tzinfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.scheduler.models import Job
@@ -20,15 +23,15 @@ PERSON_LIMIT = 10  # active jobs per person per chat
 MISS_LIMIT = 3  # unfunded firings in a row before a job pauses
 
 
-def _add_month(day: date) -> date:
+def _add_month(day: date, wanted: int) -> date:
     year, month = (day.year + 1, 1) if day.month == 12 else (day.year, day.month + 1)
-    return day.replace(year=year, month=month, day=min(day.day, calendar.monthrange(year, month)[1]))
+    return date(year, month, min(wanted, calendar.monthrange(year, month)[1]))
 
 
-def following(at: datetime, repeat: str, tz: tzinfo) -> datetime:
-    """The next occurrence after ``at`` for a repeat rule, at the same local wall time."""
-    local = at.astimezone(tz)
-    day = local.date()
+def following(at: datetime, repeat: str, tz: tzinfo, anchor: datetime | None = None) -> datetime:
+    """The occurrence after ``at`` for a repeat rule, at the anchor's local wall time and day of month."""
+    first = (anchor or at).astimezone(tz)
+    day = at.astimezone(tz).date()
     match repeat:
         case "daily":
             day += timedelta(days=1)
@@ -39,18 +42,26 @@ def following(at: datetime, repeat: str, tz: tzinfo) -> datetime:
         case "weekly":
             day += timedelta(days=7)
         case _:
-            day = _add_month(day)
-    return datetime.combine(day, local.timetz().replace(tzinfo=None), tz).astimezone(UTC)
+            day = _add_month(day, first.day)
+    return datetime.combine(day, first.time(), tz).astimezone(UTC)
 
 
 def next_after(job: Job, now: datetime, tz: tzinfo) -> datetime | None:
     """When a job fires after its current firing; None once a one-off has fired."""
     if job.repeat is None:
         return None
-    upcoming = following(job.next_at, job.repeat, tz)
+    upcoming = following(job.next_at, job.repeat, tz, job.anchor_at)
     while upcoming <= now:  # skip what was missed while Derp was down
-        upcoming = following(upcoming, job.repeat, tz)
+        upcoming = following(upcoming, job.repeat, tz, job.anchor_at)
     return upcoming
+
+
+async def pause_jobs(session: AsyncSession, chat_id: int, creator_id: int | None = None) -> None:
+    """Pause a chat's active jobs (Derp was removed), or one member's (they left)."""
+    where = [Job.chat_id == chat_id, Job.state == "active"]
+    if creator_id is not None:
+        where.append(Job.creator_id == creator_id)
+    await session.execute(update(Job).where(*where).values(state="paused"))
 
 
 def parse_local(text: str, tz: tzinfo) -> datetime | None:

@@ -48,3 +48,27 @@ async def test_topics_run_side_by_side_within_the_global_cap() -> None:
 
     await asyncio.gather(run((1, None), 1), run((1, 5), 2), run((2, None), 3))
     assert peak == 1
+
+
+async def test_scheduled_prompts_are_never_merged_away() -> None:
+    lanes = Lanes(concurrency=4)
+    release = asyncio.Event()
+    ran: list[int] = []
+
+    async def run(message_id: int, *, hold: bool = False) -> bool:
+        async with lanes.turn((1, None), 7, message_id) as go:
+            if go:
+                ran.append(message_id)
+                if hold:
+                    await release.wait()
+            return go
+
+    busy = asyncio.create_task(run(10, hold=True))
+    await asyncio.sleep(0)
+    job = asyncio.create_task(run(0))  # a scheduled prompt: id 0, never stored
+    await asyncio.sleep(0)
+    newer = asyncio.create_task(run(11))  # the creator speaks while it waits
+    await asyncio.sleep(0)
+    release.set()
+    assert await asyncio.gather(busy, job, newer) == [True, True, True]
+    assert ran == [10, 0, 11]

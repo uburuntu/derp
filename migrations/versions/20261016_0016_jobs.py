@@ -27,6 +27,7 @@ def upgrade() -> None:
         sa.Column("text", sa.String(), nullable=False),
         sa.Column("repeat", sa.String(length=8), nullable=True),
         sa.Column("next_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("anchor_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("state", sa.String(length=10), nullable=False),
         sa.Column("misses", sa.BigInteger(), nullable=False),
         sa.Column("runs", sa.BigInteger(), nullable=False),

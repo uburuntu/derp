@@ -86,8 +86,8 @@ async def test_an_image_over_a_quarter_of_the_balance_asks_first(
         approved = await session.scalar(select(AgentRun).where(AgentRun.trigger == "callback"))
         assert approved is not None and approved.charged_credits == 48 and approved.status == "completed"
         left = await balance(session, wallet_id)
-    asking_run_tokens = 150 - 48 - left
-    assert asking_run_tokens >= 0
+        asking = await session.scalar(select(AgentRun).where(AgentRun.trigger != "callback"))
+    assert asking is not None and left == 150 - 48 - asking.charged_credits  # the asking turn pays its tokens
 
     closed = conversation.api.calls_of("editMessageText", after=after)[-1]
     assert closed["rich_message"]["markdown"] == "On it — drawing…" and "reply_markup" not in closed.fields
@@ -122,7 +122,11 @@ async def test_cancelling_an_expensive_image_charges_nothing_for_it(
     after = conversation.seq
     await conversation.press(JO, JO.id, prompt_id, cancel)
     closed = conversation.api.calls_of("editMessageText", after=after)[-1]
-    assert closed["rich_message"]["markdown"] == "Cancelled — nothing charged." and images.prompts == []
+    text = "Cancelled — the image wasn't made, and it costs nothing."
+    assert closed["rich_message"]["markdown"] == text and images.prompts == []
     async with conversation.db.session() as session:
         assert await session.scalar(select(Approval.state)) == "denied"
         assert await session.scalar(select(AgentRun.id).where(AgentRun.trigger == "callback")) is None
+        asking = await session.scalar(select(AgentRun))
+        left = await balance(session, (await wallet(session, "user", JO.id)).id)
+    assert asking is not None and left == 150 - asking.charged_credits  # only the asking turn's tokens

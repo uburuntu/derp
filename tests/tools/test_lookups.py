@@ -82,3 +82,20 @@ async def test_keyed_lookups_send_their_keys_only_to_their_service(settings: Set
     assert await tools.wolfram("meaning of life") == "42\n(WolframAlpha)"
     assert "no short answer" in await tools.wolfram("??")
     assert await tools.run_program("nodejs", "console.log('hi')", "") == "hi\n— cpu 0.01 s, memory 1024 KB"
+
+
+async def test_odd_answers_fail_the_lookup_not_the_run(settings: Settings) -> None:
+    seen: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.raw_path.decode())
+        if request.url.path.endswith("api.php"):
+            return httpx.Response(200, json={"query": {"search": [{"title": "AC/DC"}]}})
+        return httpx.Response(200, text="<html>maintenance</html>")
+
+    tools = make(settings, handle)
+    with pytest.raises(lookups.LookupError, match="unexpected response"):
+        await tools.wiki("acdc")
+    assert seen[-1].endswith("/page/summary/AC%2FDC")
+    with pytest.raises(lookups.LookupError, match="unexpected response"):
+        await make(settings, lambda _r: httpx.Response(200, content=b"<feed><entry>")).arxiv("x")
