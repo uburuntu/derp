@@ -37,7 +37,7 @@ async def test_private_chat_answers_and_remembers(conversation: Conversation, mo
     assert "привет, дерп" in prompt_text(history)  # the previous turn is in the window
     assert any(isinstance(m, ModelResponse) and m.parts == [TextPart("**привет**, человек")] for m in history)
     assert "<current_message>" in prompt_text(history[-1:])
-    assert model.pins[-1].model == "deepseek/deepseek-v4.1-flash"  # sponsored until wallets exist
+    assert model.pins[-1].model == "deepseek/deepseek-v4.1-flash"  # sponsored: no credits bought
 
     async with conversation.db.session() as session:
         runs = list(await session.scalars(select(AgentRun).order_by(AgentRun.id)))

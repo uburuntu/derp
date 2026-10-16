@@ -4,6 +4,10 @@ private = "**Derp** is waking up. Say something."
 [agent]
 failed = "Something broke on my side. Try again in a moment — you weren't charged."
 timeout = "That took too long and I gave up. Try again, maybe simpler — you weren't charged."
+capped = "That got too expensive for one message, so I stopped. Try a smaller ask — you weren't charged."
+
+[money]
+unfunded = "Today's free Derpcoins are used up. They refill tomorrow."
 
 [memory]
 title = "🧠 **What I remember here**"

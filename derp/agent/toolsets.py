@@ -14,7 +14,8 @@ from dataclasses import dataclass
 
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 
-from derp.agent.deps import Funding, RunDeps
+from derp.agent.deps import RunDeps
+from derp.money.funding import Funding
 
 ALL_TIERS = frozenset(Funding)
 

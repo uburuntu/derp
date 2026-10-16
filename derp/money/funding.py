@@ -1,0 +1,166 @@
+"""Who pays for a run, and holding the money before it starts.
+
+Order — private chat: the user's paid credits (plan allowance, purchases,
+grants) → the user's sponsored daily allowance. Group: the chat's credits →
+the invoker's paid credits → the invoker's sponsored allowance. The payer is
+fixed when the run reserves; everything the run does counts against that
+reservation. Paid runs use the standard chat model, sponsored runs the cheap
+one, and sponsorship also stops at a global daily dollar cap.
+"""
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
+from enum import StrEnum
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from derp.config import Settings
+from derp.db.engine import Database
+from derp.inference.ledger import estimate_cost
+from derp.inference.models import ModelPin, ProviderCall
+from derp.inference.roles import ModelRole
+from derp.money.wallets import capture, credit, release, reserve, wallet
+
+PAID_SOURCES = ("plan", "purchase", "grant", "migration")
+TYPICAL_OUTPUT_TOKENS = 300
+
+
+class Funding(StrEnum):
+    PAID = "paid"
+    SPONSORED = "sponsored"
+    FREE = "free"
+
+    @property
+    def role(self) -> ModelRole:
+        return {
+            Funding.PAID: ModelRole.CHAT,
+            Funding.SPONSORED: ModelRole.CHAT_SPONSORED,
+            Funding.FREE: ModelRole.CHAT_FREE,
+        }[self]
+
+
+@dataclass(frozen=True, slots=True)
+class Funds:
+    funding: Funding
+    operation_id: str
+    wallet_id: int | None  # None: nothing reserved (free models)
+    reservation_id: int | None
+    credits: int  # held for this run; the run's hard money cap
+
+
+Notify = Callable[[str], Awaitable[None]]
+
+
+async def _quiet(_text: str) -> None:
+    return None
+
+
+def day_end(now: datetime) -> datetime:
+    return datetime.combine(now.date() + timedelta(days=1), time(), tzinfo=UTC)
+
+
+async def sponsored_spent_today(session: AsyncSession, now: datetime) -> Decimal:
+    start = datetime.combine(now.date(), time(), tzinfo=UTC)
+    spent = await session.scalar(
+        select(func.coalesce(func.sum(ProviderCall.cost_usd), 0)).where(
+            ProviderCall.funding == "sponsored", ProviderCall.created_at >= start
+        )
+    )
+    return Decimal(spent or 0)
+
+
+class Funder:
+    def __init__(self, db: Database, settings: Settings, *, notify: Notify = _quiet) -> None:
+        self.db = db
+        self.settings = settings
+        self.notify = notify
+        self._cap_reported: date | None = None
+
+    def window(self, funding: Funding) -> int:
+        windows = self.settings.context_windows
+        return {Funding.PAID: windows.paid, Funding.SPONSORED: windows.sponsored, Funding.FREE: windows.free}[
+            funding
+        ]
+
+    async def typical_turn(self, session: AsyncSession, funding: Funding) -> int:
+        """Credits a plain turn usually costs on this tier's model: the least worth starting a run for."""
+        prices = await session.get(ModelPin, funding.role.value)
+        if prices is None or prices.price_prompt is None:
+            return 1
+        usd = estimate_cost(
+            self.window(funding) // 2,
+            TYPICAL_OUTPUT_TOKENS,
+            float(prices.price_prompt),
+            float(prices.price_completion or 0),
+        )
+        return max(1, self.settings.credits_for_usd(float(usd)))
+
+    async def reserve(
+        self, *, chat_id: int, private: bool, user_id: int, operation_id: str, now: datetime | None = None
+    ) -> Funds | None:
+        """Hold money for a run from the first payer that can cover a typical turn; None if nobody can."""
+        moment = now or datetime.now(UTC)
+        cap = self.settings.run_caps.credits
+        cap_hit = False
+        async with self.db.transaction() as session:
+            payers = [] if private else [(await wallet(session, "chat", chat_id)).id]
+            mine = (await wallet(session, "user", user_id)).id
+            payers.append(mine)
+            minimum = await self.typical_turn(session, Funding.PAID)
+            for wallet_id in payers:
+                held = await reserve(
+                    session, wallet_id, operation_id, cap, sources=PAID_SOURCES, minimum=minimum, now=moment
+                )
+                if held is not None:
+                    return Funds(Funding.PAID, operation_id, wallet_id, held.id, held.amount)
+            if await sponsored_spent_today(session, moment) >= Decimal(
+                str(self.settings.sponsored_global_daily_usd)
+            ):
+                cap_hit = True
+            else:
+                await credit(
+                    session,
+                    mine,
+                    f"sponsored:{user_id}:{moment.date().isoformat()}",
+                    self.settings.sponsored_daily_credits,
+                    "sponsored",
+                    expires_at=day_end(moment),
+                )
+                held = await reserve(
+                    session,
+                    mine,
+                    operation_id,
+                    cap,
+                    sources=("sponsored",),
+                    minimum=await self.typical_turn(session, Funding.SPONSORED),
+                    now=moment,
+                )
+                if held is not None:
+                    return Funds(Funding.SPONSORED, operation_id, mine, held.id, held.amount)
+        if cap_hit and self._cap_reported != moment.date():
+            self._cap_reported = moment.date()
+            await self.notify(
+                f"Sponsored usage hit today's ${self.settings.sponsored_global_daily_usd:g} cap."
+            )
+        return None
+
+    async def settle(self, session: AsyncSession, funds: Funds, run_id: int, *, delivered: bool) -> int:
+        """Charge the run's marked-up provider cost if Telegram accepted an output, else return the hold."""
+        if funds.reservation_id is None:
+            return 0
+        if not delivered:
+            await release(session, funds.operation_id)
+            return 0
+        cost = await run_cost(session, run_id)
+        return await capture(session, funds.operation_id, self.settings.credits_for_usd(float(cost)))
+
+
+async def run_cost(session: AsyncSession, run_id: int) -> Decimal:
+    """Everything the provider ledger attributes to a run: model turns, image notes, tools."""
+    total = await session.scalar(
+        select(func.coalesce(func.sum(ProviderCall.cost_usd), 0)).where(ProviderCall.run_id == run_id)
+    )
+    return Decimal(total or 0)

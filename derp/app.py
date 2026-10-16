@@ -6,6 +6,7 @@ Importing this module creates nothing; ``main`` and ``build_dispatcher`` do.
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, Dispatcher
 from pydantic_ai.models import Model
@@ -22,6 +23,7 @@ from derp.inference.openrouter import build_provider, chat_model
 from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
 from derp.inference.scout import run_scout
+from derp.money.wallets import release_stale
 from derp.ops import observability
 from derp.ops.owner import notify_owners
 from derp.ops.periodic import every
@@ -113,9 +115,16 @@ def background_tasks(services: Services) -> list[asyncio.Task[None]]:
     async def profiles() -> None:
         await refresh_stale_profiles(services.bot, services.db)
 
+    async def stale_holds() -> None:
+        # Holds outlive their run only when the process died mid-run.
+        cutoff = datetime.now(UTC) - timedelta(seconds=services.settings.run_caps.timeout_seconds + 600)
+        async with services.db.transaction() as session:
+            await release_stale(session, cutoff)
+
     return [
         asyncio.create_task(every("model-scout", 24 * 3600, scout, initial_delay=600)),
         asyncio.create_task(every("chat-profiles", 3600, profiles, initial_delay=120)),
+        asyncio.create_task(every("stale-holds", 600, stale_holds, initial_delay=60)),
     ]
 
 

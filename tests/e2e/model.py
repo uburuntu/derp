@@ -8,10 +8,12 @@ paths serve the same queue.
 
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
-from pydantic_ai.models import Model
+from pydantic_ai.models import Model, StreamedResponse
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 from pydantic_ai.native_tools import WebSearchTool
 from pydantic_ai.profiles import ModelProfile
@@ -30,6 +32,21 @@ class Chunks:
     between: Callable[[int], Awaitable[None]] | None = None
 
 
+class _CostedModel(FunctionModel):
+    """Streams like FunctionModel, reporting an OpenRouter-style ``cost`` on every response."""
+
+    def __init__(self, *args: Any, cost: Callable[[], float], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.cost = cost
+
+    @asynccontextmanager
+    async def request_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamedResponse]:
+        async with super().request_stream(*args, **kwargs) as response:
+            if cost := self.cost():
+                response.provider_details = {"cost": cost}
+            yield response
+
+
 @dataclass(slots=True)
 class ScriptedModel:
     replies: deque[str | Responder | Chunks] = field(default_factory=deque[str | Responder | Chunks])
@@ -37,14 +54,19 @@ class ScriptedModel:
     infos: list[AgentInfo] = field(default_factory=list[AgentInfo])
     pins: list[RolePin] = field(default_factory=list[RolePin])
     default: str = "ok"
+    cost: float = 0.0  # USD each streamed response reports
 
     def reply(self, *items: str | Responder | Chunks) -> None:
         self.replies.extend(items)
 
     def factory(self, pin: RolePin) -> Model:
         self.pins.append(pin)
-        return FunctionModel(
-            self._respond, stream_function=self._stream, model_name=pin.model, profile=PROFILE
+        return _CostedModel(
+            self._respond,
+            stream_function=self._stream,
+            model_name=pin.model,
+            profile=PROFILE,
+            cost=lambda: self.cost,
         )
 
     def _next(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse | Chunks:

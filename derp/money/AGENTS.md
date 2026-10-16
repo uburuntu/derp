@@ -7,4 +7,6 @@
 - `expire_lots` and `claw_back` (refunds: takes only what is left of a lot; spent credits are not recovered) write their own entries.
 - DB guarantees: `CHECK 0 ≤ remaining ≤ amount`, captured ≤ held, ledger entries positive with unique (operation, kind, lot), and a trigger rejecting UPDATE/DELETE on `ledger_entries`.
 - Invariant (tested): per lot, `amount − remaining = hold − release + expire + clawback`; `capture` entries record spending and do not change the lot.
-- All functions run inside the caller's transaction; never hold one across Telegram or provider calls.
+- `funding.py`: `Funding` (paid → standard chat model, sponsored → cheap model, free) and `Funder`. Payer order — private: own paid lots → own sponsored daily lot; group: chat's paid lots → invoker's paid lots → invoker's sponsored lot. A payer is used only if it covers a typical turn on its tier's model; it reserves up to `run_caps.credits`, and that hold is the run's money cap. The sponsored lot is credited lazily per UTC day; sponsorship stops at `sponsored_global_daily_usd` (summed from `provider_calls`, one owner ping per day).
+- `Funder.settle` charges `credits_for_usd(sum of the run's provider_calls)` only when Telegram accepted an output (message, tool output or reaction); otherwise the hold is released. A background task releases holds older than the run timeout + 10 min.
+- All wallet functions run inside the caller's transaction; never hold one across Telegram or provider calls.

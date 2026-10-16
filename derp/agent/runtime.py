@@ -10,7 +10,8 @@ stored as history only after Telegram accepted them.
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterable, Awaitable, Callable
+import uuid
+from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
 from decimal import Decimal
@@ -33,17 +34,17 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.context import Window, build_window
-from derp.agent.deps import Funding, RunDeps
+from derp.agent.deps import RunDeps
 from derp.agent.lanes import Lanes
 from derp.agent.media import as_content, inspect, note_images, referenced_media
 from derp.agent.models import AgentRun
 from derp.agent.persona import PERSONA, situation
 from derp.agent.progress import DraftProgress, Progress, ReactionProgress, stage_for_tool
-from derp.agent.runs import finish_run, record_output, start_run
+from derp.agent.runs import finish_run, record_output, start_run, totals
 from derp.agent.tools import FAMILIES
 from derp.agent.toolsets import toolsets_for
 from derp.config import Settings
@@ -59,7 +60,9 @@ from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
 from derp.memory.notes import load_memory, notes_block
+from derp.money.funding import Funder, Funds
 from derp.ops.observability import record_run_failure
+from derp.ops.owner import notify_owners
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import Target, send_markdown
 
@@ -67,17 +70,11 @@ log = logging.getLogger("derp.agent")
 
 ModelFactory = Callable[[RolePin], Model]
 SILENT = {"", ".", "…"}  # final answers that mean "nothing more to say"
-Funder = Callable[[TgMessage, Chat], Awaitable[Funding]]
-
-
-async def sponsored_funder(_message: TgMessage, _chat: Chat) -> Funding:
-    """Placeholder until wallets exist: every run is creator-sponsored on the cheap chat model."""
-    return Funding.SPONSORED
 
 
 @dataclass(frozen=True, slots=True)
 class Outcome:
-    run_id: int
+    run_id: int | None  # None: nobody could pay, no run was started
     status: str
     delivered: tuple[int, ...]
 
@@ -93,25 +90,18 @@ class Runtime:
         model_factory: ModelFactory,
         gateway: MediaGateway,
         api: OpenRouterAPI,
-        funder: Funder = sponsored_funder,
     ) -> None:
         self.db = db
         self.bot = bot
         self.settings = settings
         self.pins = pins
         self.model_factory = model_factory
-        self.funder = funder
+        self.funder = Funder(db, settings, notify=lambda text: notify_owners(bot, settings, text))
         self.gateway = gateway
         self.api = api
         self.lanes = Lanes(settings.run_concurrency)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.agent = Agent[RunDeps, str](output_type=str, deps_type=RunDeps, instructions=PERSONA)
-
-    def window_budget(self, funding: Funding) -> int:
-        windows = self.settings.context_windows
-        return {Funding.PAID: windows.paid, Funding.SPONSORED: windows.sponsored, Funding.FREE: windows.free}[
-            funding
-        ]
 
     async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome | None:
         """Answer an invocation, queued per chat topic. None when merged into a newer trigger or a duplicate."""
@@ -140,7 +130,16 @@ class Runtime:
         locale = resolve(asker.language_code)
         tz = chat_time(chat)
         target = Target.reply_to_message(message)
-        funding = await self.funder(message, chat)
+        operation_id = (
+            f"turn:{chat.id}:{message.message_id}" if message.message_id else f"turn:{uuid.uuid4().hex}"
+        )
+        funds = await self.funder.reserve(
+            chat_id=chat.id, private=chat.type == "private", user_id=asker.id, operation_id=operation_id
+        )
+        if funds is None:
+            await self._say(target, t(locale, "money.unfunded"))
+            return Outcome(None, "unfunded", ())
+        funding = funds.funding
         pin = await self.pins.get(funding.role)
         async with self.db.transaction() as session:
             run = await start_run(
@@ -152,13 +151,15 @@ class Runtime:
                 funding=funding.value,
                 thread_id=target.thread_id,
                 trigger_message_id=message.message_id or None,
+                wallet_id=funds.wallet_id,
+                reservation_id=funds.reservation_id,
             )
             window = await build_window(
                 session,
                 chat_id=chat.id,
                 thread_id=target.thread_id,
                 before_message_id=message.message_id or 2**62,
-                budget=self.window_budget(funding),
+                budget=self.funder.window(funding),
                 tz=tz,
             )
             prompt = await current_prompt(session, message, window, tz)
@@ -179,7 +180,7 @@ class Runtime:
             thread_id=target.thread_id,
             trigger_message_id=message.message_id,
             run_id=run.id,
-            funding=funding,
+            funds=funds,
             target=target,
             tz=tz,
             gateway=self.gateway,
@@ -199,7 +200,6 @@ class Runtime:
         progress: Progress = (
             DraftProgress(self.bot, target) if chat.type == "private" else ReactionProgress(self.bot, target)
         )
-        stream = _Stream(progress)
         token = CancellationToken()
         output = ""
         error: BaseException | None = None
@@ -208,6 +208,7 @@ class Runtime:
         # keeps the captured list aligned so the run's own messages slice out exactly.
         history = repair_messages(window.messages)
         new_messages: list[ModelMessage] = []
+        stream = _Stream(progress, token, self.settings, funds, start=len(history))
         await progress.start()
         if progress.draft_id is not None:
             self.active[(chat.id, progress.draft_id)] = token
@@ -288,6 +289,15 @@ class Runtime:
             chat_id=chat.id,
             user_id=asker.id,
         )
+        async with self.db.transaction() as session:
+            charged = await self.funder.settle(
+                session, funds, run.id, delivered=bool(deps.delivered or deps.reacted)
+            )
+            await session.execute(
+                update(AgentRun).where(AgentRun.id == run.id).values(charged_credits=charged)
+            )
+        if stream.capped and not deps.delivered:
+            await self._say(target, t(locale, "agent.capped"))
         if error is not None:
             record_run_failure(run.id, error, prompt)
             if not isinstance(error, TelegramAPIError) and not deps.delivered:
@@ -303,21 +313,42 @@ class Runtime:
         return True
 
     async def _apologize(self, target: Target, locale: str, error: BaseException) -> None:
-        key = "agent.timeout" if isinstance(error, TimeoutError) else "agent.failed"
+        await self._say(
+            target, t(locale, "agent.timeout" if isinstance(error, TimeoutError) else "agent.failed")
+        )
+
+    async def _say(self, target: Target, text: str) -> None:
         try:
-            await send_markdown(self.bot, target, t(locale, key))
+            await send_markdown(self.bot, target, text)
         except TelegramAPIError:
-            log.info("apology not delivered")
+            log.info("notice not delivered")
 
 
 class _Stream:
-    """Feeds streamed events to the progress indicator and remembers the latest answer text."""
+    """Feeds streamed events to progress, remembers the latest answer text and enforces the money cap.
 
-    def __init__(self, progress: Progress) -> None:
+    Before each tool call the run's responses so far are priced; once they reach the credits held
+    for the run, the run is stopped like a user stop (whatever was written is posted).
+    """
+
+    def __init__(
+        self, progress: Progress, token: CancellationToken, settings: Settings, funds: Funds, *, start: int
+    ) -> None:
         self.progress = progress
+        self.token = token
+        self.settings = settings
+        self.funds = funds
+        self.start = start  # index of the run's first message in the context's history
         self.partial = ""
+        self.capped = False
 
-    async def handle(self, _ctx: RunContext[RunDeps], events: AsyncIterable[AgentStreamEvent]) -> None:
+    def over_budget(self, messages: list[ModelMessage]) -> bool:
+        if self.funds.reservation_id is None:
+            return False
+        spent = totals(messages[self.start :]).cost_usd
+        return self.settings.credits_for_usd(float(spent)) >= self.funds.credits
+
+    async def handle(self, ctx: RunContext[RunDeps], events: AsyncIterable[AgentStreamEvent]) -> None:
         async for event in events:
             if isinstance(event, PartStartEvent):
                 if event.index == 0:  # a new model response: its text replaces the previous one's
@@ -329,6 +360,10 @@ class _Stream:
                 self.partial += event.delta.content_delta
                 await self.progress.text(self.partial)
             elif isinstance(event, FunctionToolCallEvent):
+                if self.over_budget(ctx.messages):
+                    log.info("run %s stopped at its money cap", ctx.deps.run_id)
+                    self.capped = True
+                    self.token.cancel()
                 await self.progress.stage(stage_for_tool(event.part.tool_name))
 
 

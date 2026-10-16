@@ -6,7 +6,6 @@ their own arguments — so a prompt can't point a tool at another chat.
 
 from dataclasses import dataclass, field
 from datetime import tzinfo
-from enum import StrEnum
 
 from aiogram import Bot
 from pydantic_ai.models import Model
@@ -14,23 +13,10 @@ from pydantic_ai.models import Model
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat
-from derp.inference.roles import ModelRole, RolePin
+from derp.inference.roles import RolePin
+from derp.money.funding import Funding, Funds
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import Target
-
-
-class Funding(StrEnum):
-    PAID = "paid"
-    SPONSORED = "sponsored"
-    FREE = "free"
-
-    @property
-    def role(self) -> ModelRole:
-        return {
-            Funding.PAID: ModelRole.CHAT,
-            Funding.SPONSORED: ModelRole.CHAT_SPONSORED,
-            Funding.FREE: ModelRole.CHAT_FREE,
-        }[self]
 
 
 @dataclass(slots=True)
@@ -45,7 +31,7 @@ class RunDeps:
     thread_id: int | None
     trigger_message_id: int
     run_id: int
-    funding: Funding
+    funds: Funds  # who pays and how much is held: the run's money cap
     target: Target
     tz: tzinfo
     gateway: MediaGateway
@@ -55,6 +41,10 @@ class RunDeps:
         default_factory=list[tuple[int, str]]
     )  # (message id, kind) so far
     reacted: set[int] = field(default_factory=set[int])  # messages Derp reacted to with the react tool
+
+    @property
+    def funding(self) -> Funding:
+        return self.funds.funding
 
     @property
     def tool_outputs_left(self) -> int:

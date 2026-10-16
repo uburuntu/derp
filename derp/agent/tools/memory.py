@@ -9,11 +9,12 @@ from typing import Literal
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from derp.agent.deps import Funding, RunDeps
+from derp.agent.deps import RunDeps
 from derp.agent.toolsets import Family
 from derp.history.models import Chat
 from derp.memory.models import Note
 from derp.memory.notes import RULES_CHARS, add_note, is_admin
+from derp.money.funding import Funding
 
 toolset = FunctionToolset[RunDeps]()
 
