@@ -11,7 +11,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from derp.agent.context import build_window, clip_tool_results
+from derp.agent import context
+from derp.agent.context import HISTORY_CLOSE, Window, build_window, clip_tool_results
 from derp.agent.runs import finish_run, record_output, start_run
 from derp.db.engine import Database
 from derp.history.models import Chat, Message, MessageMedia, Reaction, User
@@ -130,3 +131,63 @@ async def test_small_budget_keeps_newest_and_never_opens_mid_run(database: Datab
             session, chat_id=CHAT, thread_id=77, before_message_id=7, budget=1000, tz=UTC_TZ
         )
         assert "other topic" in str(topic.messages) and topic.count == 1
+
+
+@pytest.mark.db
+async def test_kept_window_start_extends_the_prefix_until_it_outgrows_the_budget(database: Database) -> None:
+    async with database.transaction() as session:
+        session.add(Chat(id=CHAT, type="supergroup", title="Busy"))
+        session.add(User(id=1, first_name="Ann"))
+        await session.flush()
+        session.add_all([message(i, 1, f"message number {i} about nothing much") for i in range(1, 121)])
+
+    def transcript(window: Window) -> str:
+        first = window.messages[0].parts[0]
+        assert isinstance(first, UserPromptPart) and isinstance(first.content, str)
+        return first.content
+
+    async with database.session() as session:
+        fresh = await build_window(
+            session, chat_id=CHAT, thread_id=None, before_message_id=41, budget=150, tz=UTC_TZ
+        )
+        start = fresh.oldest_message_id
+        assert start is not None and start > 1
+        kept = await build_window(
+            session, chat_id=CHAT, thread_id=None, before_message_id=44, budget=150, tz=UTC_TZ, start_at=start
+        )
+        assert kept.oldest_message_id == start and kept.tokens > fresh.tokens
+        # Same start, new messages appended: the old prompt text is a prefix of the new one (cache hit).
+        assert transcript(kept).startswith(transcript(fresh).removesuffix(f"\n{HISTORY_CLOSE}"))
+        later = await build_window(
+            session,
+            chat_id=CHAT,
+            thread_id=None,
+            before_message_id=120,
+            budget=150,
+            tz=UTC_TZ,
+            start_at=start,
+        )
+        assert later.oldest_message_id is not None and later.oldest_message_id > start and later.tokens <= 150
+
+
+@pytest.mark.db
+async def test_row_capped_windows_are_kept_too(database: Database, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(context, "SCAN_LIMIT", 10)  # busy chat of short messages: rows run out before tokens
+    async with database.transaction() as session:
+        session.add(Chat(id=CHAT, type="supergroup", title="Busy"))
+        session.add(User(id=1, first_name="Ann"))
+        await session.flush()
+        session.add_all([message(i, 1, f"hi {i}") for i in range(1, 41)])
+    async with database.session() as session:
+        fresh = await build_window(
+            session, chat_id=CHAT, thread_id=None, before_message_id=21, budget=10_000, tz=UTC_TZ
+        )
+        assert (fresh.count, fresh.oldest_message_id) == (10, 11)
+        kept = await build_window(
+            session, chat_id=CHAT, thread_id=None, before_message_id=24, budget=10_000, tz=UTC_TZ, start_at=11
+        )
+        assert (kept.count, kept.oldest_message_id) == (13, 11)
+        reset = await build_window(
+            session, chat_id=CHAT, thread_id=None, before_message_id=30, budget=10_000, tz=UTC_TZ, start_at=11
+        )
+        assert (reset.count, reset.oldest_message_id) == (10, 20)

@@ -20,8 +20,8 @@ async def test_private_note_is_saved_and_shown_next_time(
     await conversation.expect_reply(first)
     await conversation.settle(first)
 
-    def check(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        assert info.instructions is not None and "Gina is vegetarian" in info.instructions
+    def check(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        assert "Gina is vegetarian" in str(messages[-1])  # the situation opens the current request
         return ModelResponse(parts=[TextPart("salad it is")])
 
     model.reply(check)
@@ -104,8 +104,8 @@ async def test_only_admins_set_rules_and_rules_reach_the_model(
     tool_results = [str(p) for m in model.requests[2] for p in m.parts if "set_chat_rules" in str(p)]
     assert any("Only chat admins" in r for r in tool_results)
 
-    def check(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        assert info.instructions is not None and "Always answer in rhyme." in info.instructions
+    def check(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        assert "Always answer in rhyme." in str(messages[-1])
         return ModelResponse(parts=[TextPart("rules in mind, I'll be kind")])
 
     model.reply(check)

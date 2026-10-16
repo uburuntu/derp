@@ -21,7 +21,7 @@ from sqlalchemy.orm import aliased
 from derp.history.models import Chat, Message, MessageMedia, Reaction, ReactionCount, User
 
 _WRAPPER_TAG = re.compile(
-    r"<(?=\s*/?\s*(?:chat_history|current_message|notes|chat_profile)\b)", re.IGNORECASE
+    r"<(?=\s*/?\s*(?:chat_history|current_message|notes|chat_profile|situation)\b)", re.IGNORECASE
 )
 CONTINUATION = "\n  ┆ "
 

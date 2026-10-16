@@ -9,7 +9,13 @@ from pydantic_ai.usage import RequestUsage
 
 from derp.config import Settings
 from derp.inference.api import OpenRouterAPI, OpenRouterError
-from derp.inference.openrouter import chat_settings, provider_config, response_usage, total_cost
+from derp.inference.openrouter import (
+    chat_settings,
+    conversation_id,
+    provider_config,
+    response_usage,
+    total_cost,
+)
 from derp.inference.roles import DEFAULT_PINS, ModelRole, RolePin
 
 
@@ -32,6 +38,15 @@ def test_chat_settings_carry_fallbacks_and_max_price() -> None:
     assert settings.get("max_tokens") == 2000
     assert settings.get("openrouter_provider", {}).get("max_price") == {"prompt": 1.5, "completion": 6}
     assert "openrouter_models" not in chat_settings(RolePin(model="a/b"), max_tokens=10)
+
+
+def test_conversation_ids_make_routing_sticky_without_exposing_ids() -> None:
+    chat = conversation_id("chat:-1001:0")
+    assert chat == conversation_id("chat:-1001:0") != conversation_id("chat:-1001:7")
+    assert "1001" not in chat and len(chat) == 32
+    settings = chat_settings(RolePin(model="a/b"), max_tokens=10, session=chat)
+    assert settings.get("extra_body") == {"session_id": chat}
+    assert "extra_body" not in chat_settings(RolePin(model="a/b"), max_tokens=10)
 
 
 def test_cost_comes_from_reported_usage_only() -> None:

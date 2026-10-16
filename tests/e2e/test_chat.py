@@ -3,6 +3,7 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from derp.agent.models import AgentRun, RunOutput
+from derp.agent.persona import PERSONA
 from derp.history.models import Message
 from derp.inference.roles import DEFAULT_PINS, ModelRole
 from tests.e2e.harness import Conversation, Person, Room
@@ -73,7 +74,8 @@ async def test_group_mention_replies_in_topic_and_ambient_is_context(
     def check(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         text = prompt_text(messages)
         assert "pizza tonight?" in text and "secret plans" not in text
-        assert info.instructions is not None and "Chaos" in info.instructions
+        assert info.instructions == PERSONA  # static, so tools + persona + window stay a cacheable prefix
+        assert "<situation>" in prompt_text(messages[-1:]) and "Chaos" in prompt_text(messages[-1:])
         return ModelResponse(parts=[TextPart("pineapple. fight me")])
 
     model.reply(check)

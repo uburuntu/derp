@@ -5,6 +5,9 @@ which already includes server-tool fees such as web search. Never use
 ``ModelResponse.cost()``: it estimates from a static price table.
 """
 
+import hashlib
+import hmac
+import secrets
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -87,12 +90,24 @@ class DerpOpenRouterModel(OpenRouterModel):
         return tools, choice
 
 
+# Keys conversation ids so OpenRouter never sees Telegram ids; per process, so a restart only resets stickiness.
+_SESSION_KEY = secrets.token_bytes(16)
+
+
+def conversation_id(scope: str) -> str:
+    """OpenRouter ``session_id`` for a chat topic or a person: keeps them on one provider, whose cache is warm."""
+    return hmac.new(_SESSION_KEY, scope.encode(), hashlib.sha256).hexdigest()[:32]
+
+
 def chat_model(pin: RolePin, provider: OpenRouterProvider) -> OpenRouterModel:
     return DerpOpenRouterModel(pin.model, provider=provider)
 
 
-def chat_settings(pin: RolePin, *, max_tokens: int) -> OpenRouterModelSettings:
+def chat_settings(pin: RolePin, *, max_tokens: int, session: str | None = None) -> OpenRouterModelSettings:
     """Per-request settings: fallbacks, per-request ZDR, usage accounting, prompt caching.
+
+    ``session`` (a ``conversation_id``) makes OpenRouter's provider routing sticky for that conversation;
+    without it the conversation is keyed by the first system and user messages.
 
     No ``sort: price`` or ``:floor`` on chat roles: OpenRouter's default routing
     keeps tool-calling quality (Exacto) which matters more than the last cent.
@@ -106,6 +121,8 @@ def chat_settings(pin: RolePin, *, max_tokens: int) -> OpenRouterModelSettings:
     )
     if pin.fallbacks:
         settings["openrouter_models"] = list(pin.fallbacks)
+    if session is not None:
+        settings["extra_body"] = {"session_id": session}
     if pin.reasoning == "none":
         # Some providers ignore effort "none"; only an explicit disable stops hidden reasoning.
         settings["openrouter_reasoning"] = {"enabled": False}

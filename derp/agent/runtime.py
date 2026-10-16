@@ -25,7 +25,6 @@ from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
-    InstructionPart,
     ModelMessage,
     ModelResponse,
     PartDeltaEvent,
@@ -67,7 +66,7 @@ from derp.history.render import (
 from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.ledger import cancelled_cost, estimate_cost
 from derp.inference.models import ModelPin
-from derp.inference.openrouter import chat_settings
+from derp.inference.openrouter import chat_settings, conversation_id
 from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
@@ -106,6 +105,7 @@ class Detached:
     funds: Funds
 
 
+WINDOW_STARTS_KEPT = 10_000  # topics remembered; forgetting one only costs a cache miss
 DETACHED_BRIEF = (
     "You were summoned {where}: you can't see that chat, its history or its members, and you have no "
     "tools except the web. Answer the request on its own, briefly. The asker is “{asker}”. Now: {now}."
@@ -137,6 +137,8 @@ class Runtime:
         self.lanes = Lanes(settings.run_concurrency)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.in_flight: set[str] = set()  # operation ids of holds a live run still owns
+        # Where each topic's last window started: kept while it fits, so consecutive runs share a cacheable prefix.
+        self.window_starts: dict[tuple[int, int | None], int] = {}
         self.agent = Agent[RunDeps, str](
             output_type=str,
             deps_type=RunDeps,
@@ -220,6 +222,7 @@ class Runtime:
                     reservation_id=funds.reservation_id,
                 )
                 run_id = run.id
+                topic_key = (chat.id, target.thread_id)
                 window = await build_window(
                     session,
                     chat_id=chat.id,
@@ -227,7 +230,12 @@ class Runtime:
                     before_message_id=message.message_id or 2**62,
                     budget=self.funder.window(funding),
                     tz=tz,
+                    start_at=self.window_starts.get(topic_key),
                 )
+                if len(self.window_starts) > WINDOW_STARTS_KEPT:
+                    self.window_starts.clear()
+                if window.oldest_message_id is not None:
+                    self.window_starts[topic_key] = window.oldest_message_id
                 prompt = await current_prompt(session, message, window, tz)
                 reply_to = message.reply_to_message.message_id if message.reply_to_message else None
                 images = await referenced_media(session, chat.id, message.message_id, reply_to)
@@ -282,6 +290,7 @@ class Runtime:
                 earlier=earlier,
                 blind=bool(inspected) and not pin.vision,
             )
+            request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
             caps = self.settings.run_caps
             progress: Progress = (
                 DraftProgress(self.bot, target)
@@ -308,12 +317,15 @@ class Runtime:
                     try:
                         async with asyncio.timeout(caps.timeout_seconds):
                             result = await self.agent.run(
-                                [prompt, *as_content(inspected)] if pin.vision and inspected else prompt,
+                                [request, *as_content(inspected)] if pin.vision and inspected else request,
                                 message_history=history,
                                 deps=deps,
                                 model=model,
-                                instructions=InstructionPart(brief, dynamic=True),
-                                model_settings=chat_settings(pin, max_tokens=caps.output_tokens),
+                                model_settings=chat_settings(
+                                    pin,
+                                    max_tokens=caps.output_tokens,
+                                    session=conversation_id(f"chat:{chat.id}:{target.thread_id or 0}"),
+                                ),
                                 usage_limits=UsageLimits(
                                     request_limit=caps.tool_calls + 2, tool_calls_limit=caps.tool_calls
                                 ),
@@ -445,17 +457,21 @@ class Runtime:
             brief = DETACHED_BRIEF.format(
                 where=where, asker=one_line(asker.full_name), now=describe_time(datetime.now(UTC), UTC)
             )
+            request = f"<situation>\n{brief}\n</situation>\n\n{neutralize(prompt)}"
             caps = self.settings.run_caps
             text, status, error_type = "", "completed", None
             with capture_run_messages() as captured:
                 try:
                     async with asyncio.timeout(caps.timeout_seconds):
                         result = await self.agent.run(
-                            neutralize(prompt),
+                            request,
                             deps=deps,
                             model=model,
-                            instructions=InstructionPart(brief, dynamic=True),
-                            model_settings=chat_settings(pin, max_tokens=caps.output_tokens),
+                            model_settings=chat_settings(
+                                pin,
+                                max_tokens=caps.output_tokens,
+                                session=conversation_id(f"user:{asker.id}"),
+                            ),
                             usage_limits=UsageLimits(request_limit=3, tool_calls_limit=caps.tool_calls),
                             toolsets=[],
                         )
