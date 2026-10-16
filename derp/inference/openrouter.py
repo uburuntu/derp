@@ -31,11 +31,20 @@ def build_provider(settings: Settings) -> OpenRouterProvider:
     )
 
 
+# Fast routing preferences (p50 over OpenRouter's rolling 5 minutes); soft, unlike max_price.
+MIN_THROUGHPUT = {"p50": 80}  # tokens per second
+MAX_LATENCY = {"p50": 1.5}  # seconds to the first token
+
+
 def provider_config(pin: RolePin) -> OpenRouterProviderConfig:
     config: OpenRouterProviderConfig = {}
     if pin.zdr:
         config["zdr"] = True
         config["data_collection"] = "deny"
+    if pin.fast:  # documented provider fields Pydantic AI's TypedDict doesn't list yet; passed through as is
+        extra = cast(dict[str, Any], config)
+        extra["preferred_min_throughput"] = MIN_THROUGHPUT
+        extra["preferred_max_latency"] = MAX_LATENCY
     max_price: dict[str, float] = {}
     if pin.max_price_prompt is not None:
         max_price["prompt"] = pin.max_price_prompt

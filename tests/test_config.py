@@ -41,7 +41,9 @@ def test_require_optional_integration() -> None:
 
 def test_model_pins_default_and_free_role_is_not_zdr() -> None:
     pins = make().model_pins
-    assert pins[ModelRole.CHAT].model == "openai/gpt-6-luna"
+    assert (
+        pins[ModelRole.CHAT].fast and not pins[ModelRole.CHAT_SPONSORED].fast
+    )  # paid answers route for speed
     assert pins[ModelRole.CHAT_FREE].zdr is False
     assert all(pin.zdr for role, pin in pins.items() if role is not ModelRole.CHAT_FREE)
 

@@ -106,9 +106,8 @@ class Settings(BaseSettings):
     openrouter_app_url: str = "https://t.me/DerpRobot"
     openrouter_app_title: str = "Derp"
     model_pins: dict[ModelRole, RolePin] = Field(default_factory=lambda: dict(DEFAULT_PINS))
+    # Families the scout may propose. No OpenAI or Anthropic chat models: too buttoned-up for Derp's voice.
     model_family_allowlist: tuple[str, ...] = (
-        "openai/",
-        "anthropic/",
         "google/",
         "deepseek/",
         "x-ai/",

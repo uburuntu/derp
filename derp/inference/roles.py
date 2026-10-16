@@ -10,7 +10,6 @@ class ModelRole(StrEnum):
     CHAT = "chat"
     CHAT_SPONSORED = "chat_sponsored"
     CHAT_FREE = "chat_free"
-    CHAT_FRONTIER = "chat_frontier"
     IMAGE = "image"
     STT = "stt"
 
@@ -26,6 +25,8 @@ class RolePin(BaseModel, frozen=True):
     vision: bool = (
         True  # every model in the pin accepts image input; otherwise images reach it as descriptions
     )
+    # Prefer providers that are fast right now (soft: never blocks a request); still price-weighted among them.
+    fast: bool = False
     max_price_prompt: float | None = None  # USD per 1M tokens
     max_price_completion: float | None = None
     # Provider allowlist per model for APIs without a ``zdr`` routing flag (Images API).
@@ -37,15 +38,19 @@ class RolePin(BaseModel, frozen=True):
 
 
 DEFAULT_PINS: dict[ModelRole, RolePin] = {
-    ModelRole.CHAT: RolePin(model="openai/gpt-6-luna"),
-    ModelRole.CHAT_SPONSORED: RolePin(model="deepseek/deepseek-v4.1-flash", reasoning="none"),
+    # GLM's reasoning can't be disabled, but at "low" it emits next to none.
+    ModelRole.CHAT: RolePin(
+        model="z-ai/glm-5.3-flash", fallbacks=("deepseek/deepseek-v4.1-flash",), fast=True
+    ),
+    ModelRole.CHAT_SPONSORED: RolePin(
+        model="z-ai/glm-5.3-flash", fallbacks=("deepseek/deepseek-v4.1-flash",)
+    ),
     ModelRole.CHAT_FREE: RolePin(
         model="thinkingmachines/inkling:free",
         fallbacks=("thinkingmachines/inkling-small:free", "google/gemma-4-26b-a4b-it:free"),
         zdr=False,
         vision=False,
     ),
-    ModelRole.CHAT_FRONTIER: RolePin(model="openai/gpt-6.1-sol"),
     ModelRole.IMAGE: RolePin(
         model="google/gemini-3.1-flash-lite-image",
         fallbacks=("bytedance-seed/seedream-5-0-flash",),

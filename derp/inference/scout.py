@@ -141,8 +141,6 @@ def plan(
 ) -> list[Change]:
     changes: list[Change] = []
     for role, pin in pins.items():
-        if role is ModelRole.CHAT_FRONTIER:
-            continue
         current = pin
         if not available(role, pin.model, catalog):
             live = [m for m in pin.fallbacks if available(role, m, catalog)]

@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from derp.agent.models import AgentRun, RunOutput
 from derp.history.models import Message
+from derp.inference.roles import DEFAULT_PINS, ModelRole
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel
 
@@ -40,7 +41,9 @@ async def test_private_chat_answers_and_remembers(conversation: Conversation, mo
     async with conversation.db.session() as session:
         mine = await session.scalar(select(Message).where(Message.is_derp).order_by(Message.message_id))
         assert mine is not None and (mine.kind, mine.text) == ("text", "**привет**, человек")
-    assert model.pins[-1].model == "deepseek/deepseek-v4.1-flash"  # sponsored: no credits bought
+    assert (
+        model.pins[-1] == DEFAULT_PINS[ModelRole.CHAT_SPONSORED]
+    )  # no credits bought: sponsored, no fast routing
     kinds = {tool.kind for tool in model.infos[-1].model_request_parameters.native_tools}
     assert kinds == {"web_search", "web_fetch"}
 

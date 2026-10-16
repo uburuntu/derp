@@ -14,8 +14,15 @@ from derp.inference.roles import DEFAULT_PINS, ModelRole, RolePin
 
 
 def test_zdr_is_per_request_except_free() -> None:
-    assert provider_config(DEFAULT_PINS[ModelRole.CHAT]) == {"zdr": True, "data_collection": "deny"}
+    assert provider_config(DEFAULT_PINS[ModelRole.CHAT_SPONSORED]) == {"zdr": True, "data_collection": "deny"}
     assert provider_config(DEFAULT_PINS[ModelRole.CHAT_FREE]) == {}
+
+
+def test_fast_pins_prefer_fast_providers_softly() -> None:
+    config = dict(provider_config(DEFAULT_PINS[ModelRole.CHAT]))
+    assert config["preferred_min_throughput"] == {"p50": 80}
+    assert config["preferred_max_latency"] == {"p50": 1.5}
+    assert "max_price" not in config and "sort" not in config  # a preference, never a filter
 
 
 def test_chat_settings_carry_fallbacks_and_max_price() -> None:
