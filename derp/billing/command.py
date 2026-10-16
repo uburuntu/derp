@@ -7,7 +7,7 @@ pay a chat invoice, but a personal one only by the person it was made for.
 """
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import (
     BotSubscriptionUpdated,
@@ -31,6 +31,7 @@ from derp.billing.purchases import (
     record_payment,
     refusal,
 )
+from derp.billing.refunds import apply_refund, refund
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.locales import resolve, t
@@ -241,10 +242,45 @@ async def on_subscription(update: BotSubscriptionUpdated, db: Database, settings
     await notify_owners(bot, settings, f"Derp+ {update.state}: {plan}")
 
 
+async def on_refund_command(
+    message: Message, command: CommandObject, db: Database, settings: Settings, bot: Bot
+) -> None:
+    """Owner only (unlisted): ``/refund <telegram charge id>``. Anyone else gets silence."""
+    if message.from_user is None or message.from_user.id not in settings.owner_ids:
+        return
+    charge = (command.args or "").strip()
+    if not charge:
+        await send_markdown(bot, Target.reply_to_message(message), "Usage: `/refund <charge id>`")
+        return
+    result = await refund(db, bot, charge)
+    if result is None:
+        text = "No purchase with that charge id."
+    elif not result.first:
+        text = "Already refunded; nothing more to take back."
+    else:
+        p = result.purchase
+        text = f"Refunded {p.stars}⭐ ({p.product}); took back {result.clawed} of {p.credits} Derpcoins."
+    await send_markdown(bot, Target.reply_to_message(message), text)
+
+
+async def on_refunded(message: Message, db: Database, settings: Settings, bot: Bot) -> None:
+    """Telegram reports a refund (e.g. one made outside /refund): apply it once."""
+    if message.refunded_payment is None:
+        return
+    result = await apply_refund(db, message.refunded_payment.telegram_payment_charge_id)
+    if result is not None and result.first:
+        p = result.purchase
+        await notify_owners(
+            bot, settings, f"Refund reported: {p.stars}⭐ {p.product}, took back {result.clawed} dc"
+        )
+
+
 def build_router() -> Router:
     router = Router(name="billing")
     router.message.register(show_buy, Command("buy"))
     router.message.register(on_payment, F.successful_payment)
+    router.message.register(on_refunded, F.refunded_payment)
+    router.message.register(on_refund_command, Command("refund"))
     router.callback_query.register(on_buy, BuyAction.filter())
     router.pre_checkout_query.register(on_pre_checkout)
     router.subscription.register(on_subscription)

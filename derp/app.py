@@ -13,6 +13,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from derp.agent.runtime import ModelFactory, Runtime
+from derp.billing.refunds import reconcile_refunds
 from derp.config import Settings, get_settings
 from derp.db.engine import Database
 from derp.history.members import refresh_stale_profiles
@@ -115,6 +116,10 @@ def background_tasks(services: Services) -> list[asyncio.Task[None]]:
     async def profiles() -> None:
         await refresh_stale_profiles(services.bot, services.db)
 
+    async def refunds() -> None:
+        if applied := await reconcile_refunds(services.db, services.bot):
+            await notify_owners(services.bot, services.settings, f"Refund sweep applied {applied} refund(s).")
+
     async def stale_holds() -> None:
         # Holds outlive their run only when the process died mid-run.
         cutoff = datetime.now(UTC) - timedelta(seconds=services.settings.run_caps.timeout_seconds + 600)
@@ -125,6 +130,7 @@ def background_tasks(services: Services) -> list[asyncio.Task[None]]:
         asyncio.create_task(every("model-scout", 24 * 3600, scout, initial_delay=600)),
         asyncio.create_task(every("chat-profiles", 3600, profiles, initial_delay=120)),
         asyncio.create_task(every("stale-holds", 600, stale_holds, initial_delay=60)),
+        asyncio.create_task(every("refund-sweep", 24 * 3600, refunds, initial_delay=900)),
     ]
 
 

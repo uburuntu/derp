@@ -4,8 +4,9 @@ from typing import Any
 from sqlalchemy import func, select
 
 from derp.billing.models import Purchase, Subscription
+from derp.billing.refunds import reconcile_refunds
 from derp.money.models import CreditLot
-from derp.money.wallets import balance, wallet
+from derp.money.wallets import balance, capture, reserve, wallet
 from tests.e2e.harness import Conversation, Person, Room
 
 CARL = Person(1101, "Carl")
@@ -180,3 +181,101 @@ async def test_derp_plus_subscription_credits_each_cycle_once(conversation: Conv
     await conversation.settle(update_id)
     async with conversation.db.session() as session:
         assert await session.scalar(select(Subscription.state)) == "canceled"
+
+
+async def buy_pack(conversation: Conversation, person: Person, charge: str) -> str:
+    payload = f"p1:pack_s_v1:650:user:{person.id}"
+    await checkout(conversation, person, payload, 50)
+    sent = await conversation.send(person, successful_payment=paid(payload, 50, charge))
+    await conversation.settle(sent)
+    return payload
+
+
+async def test_owner_refund_takes_back_only_what_is_unspent(conversation: Conversation) -> None:
+    conversation.meet(OWNER)
+    await buy_pack(conversation, CARL, "ch-r1")
+    async with conversation.db.transaction() as session:
+        carl = (await wallet(session, "user", CARL.id)).id
+        await reserve(session, carl, "turn:spent", 150)
+        await capture(session, "turn:spent", 150)
+
+    stranger = await conversation.send(DANA, text="/refund ch-r1")
+    await conversation.settle(stranger)
+    assert conversation.api.calls_of("refundStarPayment") == []  # owners only
+
+    asked = await conversation.send(OWNER, text="/refund ch-r1")
+    reply = await conversation.expect_reply(asked)
+    assert "took back 500 of 650" in reply["rich_message"]["markdown"]
+    call = conversation.api.calls_of("refundStarPayment")[-1]
+    assert (int(call["user_id"]), call["telegram_payment_charge_id"]) == (CARL.id, "ch-r1")
+    assert await wallet_balance(conversation, "user", CARL.id) == 0
+
+    # Telegram's own refund notice and a repeated command change nothing more.
+    notice = await conversation.send(
+        CARL,
+        refunded_payment={
+            "currency": "XTR",
+            "total_amount": 50,
+            "invoice_payload": "x",
+            "telegram_payment_charge_id": "ch-r1",
+        },
+    )
+    await conversation.settle(notice)
+    again = await conversation.send(OWNER, text="/refund ch-r1")
+    assert "Already refunded" in (await conversation.expect_reply(again))["rich_message"]["markdown"]
+    assert len(conversation.api.calls_of("refundStarPayment")) == 1
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(Purchase.status)) == "refunded"
+
+
+async def test_refunding_derp_plus_stops_renewal(conversation: Conversation) -> None:
+    conversation.meet(OWNER)
+    payload = f"s1:derp_plus_v1:7150:{CARL.id}:abc"
+    await checkout(conversation, CARL, payload, 500)
+    expires = int(datetime.now(UTC).timestamp()) + 30 * 86400
+    first = paid(payload, 500, "sub-r1") | {
+        "is_recurring": True,
+        "is_first_recurring": True,
+        "subscription_expiration_date": expires,
+    }
+    sent = await conversation.send(CARL, successful_payment=first)
+    await conversation.settle(sent)
+    asked = await conversation.send(OWNER, text="/refund sub-r1")
+    await conversation.expect_reply(asked)
+    cancel = conversation.api.calls_of("editUserStarSubscription")[-1]
+    assert cancel["telegram_payment_charge_id"] == "sub-r1" and cancel["is_canceled"] in (True, "true")
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(Subscription.state)) == "canceled"
+    assert await wallet_balance(conversation, "user", CARL.id) == 0
+
+
+async def test_daily_sweep_applies_chargebacks_nobody_announced(conversation: Conversation) -> None:
+    conversation.meet(OWNER)
+    await buy_pack(conversation, CARL, "ch-s1")
+    await buy_pack(conversation, DANA, "ch-s2")
+    conversation.api.star_transactions = [
+        {
+            "id": "ch-s1",
+            "amount": 50,
+            "date": 0,
+            "source": {"type": "user", "transaction_type": "invoice_payment", "user": CARL.payload()},
+        },
+        {
+            "id": "ch-s2",
+            "amount": 50,
+            "date": 0,
+            "source": {"type": "user", "transaction_type": "invoice_payment", "user": DANA.payload()},
+        },
+        {
+            "id": "ch-s1",
+            "amount": 50,
+            "date": 1,
+            "receiver": {"type": "user", "transaction_type": "invoice_payment", "user": CARL.payload()},
+        },
+    ]
+    assert conversation.services is not None
+    bot = conversation.services.bot
+    assert await reconcile_refunds(conversation.db, bot) == 1
+    assert await reconcile_refunds(conversation.db, bot) == 0
+    assert await wallet_balance(conversation, "user", CARL.id) == 0
+    assert await wallet_balance(conversation, "user", DANA.id) == 650

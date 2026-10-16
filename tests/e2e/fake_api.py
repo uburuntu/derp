@@ -93,6 +93,7 @@ class FakeBotAPI:
         self.long_poll_cap = long_poll_cap
         self.condition = asyncio.Condition()
         self.calls: list[Call] = []
+        self.star_transactions: list[JsonObject] = []  # what getStarTransactions pages through
         self.protocol_errors: list[str] = []
         self.failures: dict[str, deque[Failure]] = defaultdict(deque)
         self.updates: list[JsonObject] = []
@@ -402,6 +403,10 @@ class FakeBotAPI:
             "total_amount": sum(int(p["amount"]) for p in prices),
         }
         return self._new_message(fields, invoice=invoice)
+
+    def _m_getStarTransactions(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        offset, limit = int(fields.get("offset", 0)), int(fields.get("limit", 100))
+        return {"transactions": self.star_transactions[offset : offset + limit]}
 
     def _m_createInvoiceLink(self, fields: JsonObject) -> str:  # noqa: N802
         period = fields.get("subscription_period")
