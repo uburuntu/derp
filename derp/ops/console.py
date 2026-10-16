@@ -28,7 +28,7 @@ from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
 from derp.inference.pins import PinStore, apply_pin, rollback_pin
 from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
-from derp.money.models import RunFee
+from derp.money.models import CreditLot, RunFee
 from derp.money.wallets import balance, credit, wallet
 from derp.telegram.sender import Target, send_markdown, send_privately
 
@@ -229,19 +229,29 @@ async def grant(message: Message, command: CommandObject, db: Database, bot: Bot
         await send_markdown(bot, target, f"Grant between 1 and {MAX_GRANT:,} Derpcoins.")
         return
     kind = "chat" if owner_id < 0 else "user"
-    async with db.transaction() as session:
-        if await session.get(Chat if kind == "chat" else User, owner_id) is None:
-            await send_markdown(bot, target, f"No {kind} `{owner_id}` known.")
-            return
-        wallet_id = (await wallet(session, kind, owner_id)).id
-        await credit(session, wallet_id, f"grant:{message.chat.id}:{message.message_id}", amount, "grant")
-        left = await balance(session, wallet_id)
-        person = await session.get(User, owner_id) if kind == "user" else None
+    operation_id = f"grant:{message.chat.id}:{message.message_id}"
+    known, fresh, left, language = False, False, 0, None
+    async with db.transaction() as session:  # Telegram calls wait until it's committed
+        recipient = await session.get(Chat if kind == "chat" else User, owner_id)
+        if recipient is not None:
+            known = True
+            wallet_id = (await wallet(session, kind, owner_id)).id
+            fresh = (
+                await session.scalar(select(CreditLot.id).where(CreditLot.operation_id == operation_id))
+                is None
+            )
+            await credit(session, wallet_id, operation_id, amount, "grant")
+            left = await balance(session, wallet_id)
+            language = recipient.language_code if isinstance(recipient, User) else None
+    if not known:
+        await send_markdown(bot, target, f"No {kind} `{owner_id}` known.")
+        return
+    if not fresh:  # a redelivered command: credited once, told once
+        return
     note = ""
-    if person is not None:
-        locale = resolve(person.language_code)
-        delivered = await send_privately(bot, owner_id, t(locale, "money.granted", credits=f"{amount:,}"))
-        note = " They were told." if delivered else " Couldn't DM them."
+    if kind == "user":
+        text = t(resolve(language), "money.granted", credits=f"{amount:,}")
+        note = " They were told." if await send_privately(bot, owner_id, text) else " Couldn't DM them."
     await send_markdown(bot, target, f"Granted {amount:,} dc to {kind} `{owner_id}`; balance {left:,}.{note}")
 
 
@@ -256,10 +266,11 @@ async def block(message: Message, command: CommandObject, db: Database, bot: Bot
     key = int(raw)
     async with db.transaction() as session:
         row = await session.get(Chat, key) if key < 0 else await session.get(User, key)
-        if row is None:
-            await send_markdown(bot, target, f"`{key}` isn't known.")
-            return
-        row.blocked_at = datetime.now(UTC) if on else None
+        if row is not None:
+            row.blocked_at = datetime.now(UTC) if on else None
+    if row is None:
+        await send_markdown(bot, target, f"`{key}` isn't known.")
+        return
     await send_markdown(bot, target, f"{'Blocked' if on else 'Unblocked'} `{key}`.")
 
 

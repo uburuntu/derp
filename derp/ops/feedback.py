@@ -18,6 +18,7 @@ from derp.history.models import Chat, User
 from derp.history.render import one_line
 from derp.locales import resolve, t
 from derp.ops.models import FEEDBACK_KINDS, Feedback
+from derp.ops.owner import is_blocked
 from derp.telegram.sender import Target, sanitize_untrusted, send_markdown
 
 PAGE = 5
@@ -62,6 +63,8 @@ async def on_feedback(message: Message, command: CommandObject, db: Database, bo
         await send_markdown(bot, target, t(locale, "feedback.how"))
         return
     async with db.transaction() as session:
+        if await is_blocked(session, message.chat.id, message.from_user.id):
+            return  # blocked: nothing reaches the owners
         await file(
             session,
             user_id=message.from_user.id,

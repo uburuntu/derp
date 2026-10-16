@@ -32,7 +32,7 @@ from derp.db.engine import Database
 from derp.history.models import Chat
 from derp.history.render import one_line
 from derp.locales import DEFAULT, LOCALES, resolve, t
-from derp.money.command import free_left_today
+from derp.money.command import bought_total, free_left_today
 from derp.money.wallets import balances, wallet
 from derp.settings.onboarding import sees_everything
 from derp.settings.panel import kept_days
@@ -66,7 +66,7 @@ GROUP_COMMANDS = (
     "privacy",
     "terms",
 )
-EPHEMERAL_IN_GROUPS = {"help", "settings", "credits", "info", "privacy", "terms"}
+EPHEMERAL_IN_GROUPS = {"help", "settings", "credits", "info", "memory", "privacy", "terms"}
 
 
 class StartAction(CallbackData, prefix="start"):
@@ -95,9 +95,9 @@ async def start(
     locale = resolve(message.from_user.language_code)
     target = Target.reply_to_message(message)
     if message.chat.type != "private":
-        if (
-            not command.args
-        ):  # "/start <payload>" arrives when someone adds Derp by link; the join notice covers it
+        # "/start <payload>" arrives when someone adds Derp by link (the join notice covers it);
+        # a bare /start may be meant for another bot.
+        if not command.args and addressed(message):
             await send_markdown(
                 bot, target, await help_text(db, settings, bot, chat_row, message.from_user.id, locale)
             )
@@ -122,7 +122,7 @@ async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user
         async with db.transaction() as session:
             mine = await balances(session, (await wallet(session, "user", user_id)).id, now=now)
             free = await free_left_today(session, settings, user_id, now)
-        bought = sum(mine.values())
+        bought = bought_total(mine)
         lines = [
             t(locale, "help.title_private"),
             t(locale, "help.private"),
@@ -147,19 +147,22 @@ async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user
 
 
 async def show_help(message: Message, db: Database, settings: Settings, bot: Bot, chat_row: Chat) -> None:
-    if message.from_user is None:
+    if message.from_user is None or (message.chat.type != "private" and not addressed(message)):
         return
     locale = resolve(message.from_user.language_code)
     text = await help_text(db, settings, bot, chat_row, message.from_user.id, locale)
     await send_markdown(bot, Target.reply_to_message(message), text)
 
 
+def addressed(message: Message) -> bool:
+    """In groups a bare command may be another bot's: answer only ``/cmd@Derp`` or an ephemeral command."""
+    return bool(message.ephemeral_message_id) or "@" in message_text(message).split(maxsplit=1)[0]
+
+
 async def on_unknown_command(message: Message, bot: Bot) -> None:
-    """Private chats always; groups only for commands addressed to Derp, since bare ones may be another bot's."""
-    word = message_text(message).split(maxsplit=1)[0]
-    if message.chat.type != "private" and "@" not in word:
+    if message.chat.type != "private" and not addressed(message):
         return
-    name = word.removeprefix("/").partition("@")[0][:32]
+    name = message_text(message).split(maxsplit=1)[0].removeprefix("/").partition("@")[0][:32]
     locale = resolve(message.from_user.language_code if message.from_user else None)
     await send_markdown(
         bot, Target.reply_to_message(message), t(locale, "help.unknown", command=one_line(name))

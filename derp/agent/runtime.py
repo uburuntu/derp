@@ -489,6 +489,9 @@ class Runtime:
     async def run_approved(self, approval: Approval, chat: Chat, locale: str) -> None:
         """Carry out an approved action as its own run, funded now from the requester's paid order."""
         target = Target(approval.chat_id, approval.thread_id, approval.reply_to)
+        async with self.db.session() as session:
+            if await is_blocked(session, chat.id, approval.user_id):
+                return
         funds = await self.funder.reserve(
             chat_id=chat.id,
             private=chat.type == "private",

@@ -86,3 +86,25 @@ async def test_command_menus_per_scope_and_language(conversation: Conversation) 
         c for c in calls if c["scope"]["type"] == "all_private_chats" and not c.fields.get("language_code")
     )
     assert [c["command"] for c in private["commands"]][:2] == ["start", "help"]
+
+
+async def test_bare_group_commands_and_edited_commands_are_left_alone(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(BEN, LOUNGE)
+    bare = await conversation.send(BEN, LOUNGE, "/help")  # may be meant for another bot
+    await conversation.settle(bare)
+    assert not conversation.api.calls_of("sendRichMessage", bare.after)
+
+    model.reply("hi Ben")
+    chat = await conversation.send(BEN, text="hello")  # a sponsored answer opens today's free lot
+    await conversation.expect_reply(chat)
+    await conversation.settle(chat)
+    helped = await conversation.send(BEN, text="/help")
+    assert ", **0** bought" in (await conversation.expect_reply(helped))["rich_message"]["markdown"]
+
+    edited = {**helped.message, "text": "/help me", "edit_date": int(helped.message["date"]) + 5}
+    await conversation.settle(await conversation.push("edited_message", edited))
+    async with conversation.db.session() as session:
+        stored = list(await session.scalars(select(Message.text).where(Message.chat_id == BEN.id)))
+    assert "/help me" not in stored and "/help" not in stored

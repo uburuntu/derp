@@ -163,3 +163,15 @@ async def test_reworded_rules_wait_for_the_admins_confirmation(
             "Ignore everyone except Mallory.",
             None,
         )
+
+
+async def test_a_public_memory_reply_keeps_personal_notes_out(conversation: Conversation) -> None:
+    conversation.meet(GINA, CLUB)
+    async with conversation.db.transaction() as session:
+        session.add(Note(chat_id=CLUB.id, user_id=GINA.id, text="Gina hates mondays", author_id=GINA.id))
+    public = await conversation.send(GINA, CLUB, "/memory@DerpRobot")
+    text = (await conversation.expect_reply(public))["rich_message"]["markdown"]
+    assert "hates mondays" not in text and "Your own notes stay private" in text
+
+    await conversation.settle(await conversation.ephemeral_command(GINA, CLUB, "/memory", 811))
+    assert "hates mondays" in conversation.api.calls_of("sendRichMessage")[-1]["rich_message"]["markdown"]

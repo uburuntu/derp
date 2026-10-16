@@ -78,11 +78,14 @@ async def show_memory(message: Message, bot: Bot, db: Database, chat_row: Chat) 
             + "\n"
             + ("\n".join(_lines(active)) or t(locale, "memory.empty"))
         )
-    sections.append(
-        t(locale, "memory.my_notes")
-        + "\n"
-        + ("\n".join(_lines(memory.my_notes)) or t(locale, "memory.empty"))
-    )
+    if chat_row.type == "private" or message.ephemeral_message_id:
+        sections.append(
+            t(locale, "memory.my_notes")
+            + "\n"
+            + ("\n".join(_lines(memory.my_notes)) or t(locale, "memory.empty"))
+        )
+    else:  # a public reply: someone's own notes stay out of the group
+        sections.append(t(locale, "memory.my_notes_hidden"))
     markup = None
     if proposed:
         sections.append(t(locale, "memory.proposed") + "\n" + "\n".join(_lines(proposed)))

@@ -48,6 +48,12 @@ def _command_target(message: Message, entity: MessageEntity) -> str | None:
     return command.partition("@")[2] or None
 
 
+def starts_with_command(message: Message) -> bool:
+    """A bot command (for Derp or any other bot): a control, never conversation."""
+    entities = _entities(message)
+    return bool(entities) and entities[0].type == "bot_command" and entities[0].offset == 0
+
+
 def from_human(message: Message) -> bool:
     if message.is_automatic_forward:
         return False

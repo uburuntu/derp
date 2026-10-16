@@ -1,16 +1,19 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from derp.billing.models import Purchase
-from derp.history.models import Chat
+from derp.history.models import Chat, Message
 from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
 from derp.money.wallets import balance, wallet
 from derp.ops.console import ConsoleAction
+from derp.scheduler.models import Job
+from derp.scheduler.worker import run_due
 from tests.e2e.harness import Conversation, Person, Room
-from tests.e2e.model import ScriptedModel
+from tests.e2e.model import ScriptedModel, tool_call
 
 OWNER = Person(1000, "Olga")
 PAT = Person(1101, "Pat")
@@ -127,3 +130,24 @@ async def test_blocked_people_and_chats_get_no_answers(
     asked = await conversation.send(PAT, YARD, "derp tell me a joke")
     await conversation.settle(asked)
     assert not model.requests
+
+
+async def test_blocking_pauses_jobs_and_stops_storing(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    model.reply(tool_call("schedule", text="stretch", in_minutes=30), "Will do.")
+    asked = await conversation.send(PAT, text="remind me in 30 min to stretch")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    await conversation.expect_reply(await conversation.send(OWNER, text=f"/block {PAT.id}"))
+    ignored = await conversation.send(PAT, text="are you there?")
+    await conversation.settle(ignored)
+    async with conversation.db.transaction() as session:
+        await session.execute(update(Job).values(next_at=datetime.now(UTC) - timedelta(seconds=1)))
+    assert conversation.services is not None and conversation.dispatcher is not None
+    after = conversation.seq
+    await run_due(conversation.db, conversation.services.bot, conversation.dispatcher["runtime"])
+    assert not conversation.api.calls_of("sendRichMessage", after)
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(Job.state)) == "paused"
+        assert await session.get(Message, (PAT.id, ignored.message_id)) is None

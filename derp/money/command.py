@@ -48,6 +48,11 @@ async def show_credits(message: Message, db: Database, settings: Settings, bot: 
     await _reply_privately(bot, message, locale, text)
 
 
+def bought_total(balances_by_source: dict[str, int]) -> int:
+    """Derpcoins that never expire: bought, granted or carried over from the previous Derp."""
+    return sum(balances_by_source.get(source, 0) for source in ("purchase", "grant", "migration"))
+
+
 async def free_left_today(session: AsyncSession, settings: Settings, user_id: int, now: datetime) -> int:
     today = await session.scalar(
         select(CreditLot.remaining).where(CreditLot.operation_id == sponsored_lot_id(user_id, now))
@@ -73,7 +78,7 @@ async def credits_card(
     if plan is not None:
         left = f"{mine.get('plan', 0):,}"
         lines.append(t(locale, "credits.plan", left=left, date=f"{plan.period_end:%Y-%m-%d}"))
-    bought = mine.get("purchase", 0) + mine.get("grant", 0) + mine.get("migration", 0)
+    bought = bought_total(mine)
     lines.append(t(locale, "credits.bought", left=f"{bought:,}"))
     lines.append(
         t(

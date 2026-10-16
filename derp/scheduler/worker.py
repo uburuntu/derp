@@ -23,6 +23,7 @@ from derp.db.engine import Database
 from derp.history.models import Chat, User
 from derp.history.render import chat_time
 from derp.locales import resolve, t
+from derp.ops.owner import is_blocked
 from derp.scheduler.jobs import MISS_LIMIT, next_after
 from derp.scheduler.models import Job
 from derp.telegram.sender import Target, send_markdown
@@ -90,6 +91,11 @@ async def fire(db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, n
     target = Target(chat.id, job.thread_id)
     async with db.session() as session:
         user = await session.get(User, job.creator_id)
+        blocked = await is_blocked(session, chat.id, job.creator_id)
+    if blocked:
+        log.info("job %s paused: an owner blocked its chat or creator", job.id)
+        await _set(db, job.id, state="paused")
+        return
     locale = chat.locale or resolve(user.language_code if user else None)
     try:
         if job.kind == "message":

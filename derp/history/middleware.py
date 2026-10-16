@@ -6,18 +6,20 @@ from typing import Any
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import Message, TelegramObject
 
-from derp.agent.invocation import TriggerKind, detect_trigger
+from derp.agent.invocation import detect_trigger, starts_with_command
 from derp.db.engine import Database
 from derp.history.capture import index_sticker, store_message, upsert_chat, upsert_user
 from derp.history.members import track_message
 from derp.history.models import Message as MessageRow
 from derp.history.transcription import Transcriber
+from derp.ops.owner import is_blocked
 
 
 class CaptureMiddleware(BaseMiddleware):
     """Stores invocations always, ambient messages when the chat allows it, and edits in place.
 
-    Commands addressed to Derp are never stored: they are controls, not conversation.
+    Bot commands are never stored: they are controls, not conversation. Nothing from a chat or
+    person an owner blocked is stored or transcribed.
 
     The message an invocation replies to is part of the invocation: stored too if Derp hadn't kept
     it (privacy mode, ambient off), so its text and media are available to the run. Stored voice
@@ -42,17 +44,22 @@ class CaptureMiddleware(BaseMiddleware):
         bot: Bot = data["bot"]
         me = await bot.me()
         trigger = None if self.edits else detect_trigger(event, bot_id=me.id, bot_username=me.username or "")
-        command = trigger is not None and trigger.kind is TriggerKind.COMMAND
+        command = starts_with_command(event)  # edits too: an edited command is still a command
         async with db.transaction() as session:
             chat = await upsert_chat(session, event.chat)
             if event.from_user is not None:
                 await upsert_user(session, event.from_user)
+            blocked = await is_blocked(session, chat.id, event.from_user.id if event.from_user else None)
             stored = False
-            if not command and (trigger is not None or chat.type == "private" or chat.ambient):
+            if (
+                not command
+                and not blocked
+                and (trigger is not None or chat.type == "private" or chat.ambient)
+            ):
                 stored = await store_message(
                     session, event, capture="invocation" if trigger else "ambient", bot_id=me.id
                 )
-            replied = event.reply_to_message if trigger is not None and not command else None
+            replied = event.reply_to_message if trigger is not None and not command and not blocked else None
             if (
                 replied is not None
                 and await session.get(MessageRow, (chat.id, replied.message_id)) is not None
