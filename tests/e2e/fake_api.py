@@ -390,6 +390,19 @@ class FakeBotAPI:
     def _m_sendChatAction(self, fields: JsonObject) -> bool:  # noqa: N802
         return True
 
+    def _m_sendInvoice(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        if fields.get("currency") != "XTR" or "provider_token" in fields:
+            raise ValueError("Stars invoices use XTR and no provider token")
+        prices = fields["prices"]
+        invoice = {
+            "title": fields["title"],
+            "description": fields["description"],
+            "start_parameter": "",
+            "currency": "XTR",
+            "total_amount": sum(int(p["amount"]) for p in prices),
+        }
+        return self._new_message(fields, invoice=invoice)
+
     def _m_sendDice(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         return self._new_message(fields, dice={"emoji": fields.get("emoji", "🎲"), "value": 4})
 

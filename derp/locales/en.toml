@@ -7,7 +7,22 @@ timeout = "That took too long and I gave up. Try again, maybe simpler — you we
 capped = "That got too expensive for one message, so I stopped. Try a smaller ask — you weren't charged."
 
 [money]
-unfunded = "Today's free Derpcoins are used up. They refill tomorrow."
+unfunded = "Today's free Derpcoins are used up. They refill tomorrow — or /buy more."
+
+[billing]
+menu = "**Derpcoins** pay for my answers once the free daily ones run out.\nYour balance: **{balance}**. Pick a pack:"
+menu_chat = "**Derpcoins for this chat** — everyone here uses them before their own.\nChat balance: **{balance}**. Pick a pack:"
+who = "Who are the Derpcoins for?"
+for_me = "For me"
+for_chat = "For this chat"
+invoice_title = "{credits} Derpcoins"
+invoice_description = "{whom}. By paying you agree to /terms."
+invoice_for_me = "For your own wallet"
+invoice_for_chat = "For this chat's wallet — anyone here can pay"
+stale = "This offer has changed. Open /buy again."
+not_yours = "This invoice was made for someone else. Open /buy to get your own."
+thanks = "Thanks! **+{credits}** Derpcoins. Your balance: **{balance}**."
+thanks_chat = "Thanks! **+{credits}** Derpcoins for this chat. Chat balance: **{balance}**."
 
 [memory]
 title = "🧠 **What I remember here**"

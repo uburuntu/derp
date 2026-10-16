@@ -5,6 +5,7 @@ modules here when a package gains tables.
 """
 
 from derp.agent import models as _agent  # noqa: F401
+from derp.billing import models as _billing  # noqa: F401
 from derp.db.base import Base
 from derp.history import models as _history  # noqa: F401
 from derp.inference import models as _inference  # noqa: F401
