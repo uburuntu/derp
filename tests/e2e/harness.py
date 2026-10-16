@@ -110,6 +110,7 @@ class Conversation:
         if self.services is not None:
             await self.services.bot.session.close()
             await self.services.api.close()
+            await self.services.lookups.close()
         self.task = None
 
     async def restart(self) -> None:

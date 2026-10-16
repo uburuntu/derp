@@ -49,6 +49,7 @@ from derp.agent.persona import PERSONA, situation
 from derp.agent.progress import DraftProgress, Progress, ReactionProgress, stage_for_tool
 from derp.agent.runs import finish_run, record_output, start_run, totals
 from derp.agent.tools import FAMILIES
+from derp.agent.tools.code import CODE_CAPABILITIES
 from derp.agent.tools.web import WEB_CAPABILITIES
 from derp.agent.toolsets import toolsets_for
 from derp.config import Settings
@@ -80,6 +81,7 @@ from derp.ops.observability import record_run_failure
 from derp.ops.owner import notify_owners
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import PartialDeliveryError, Target, send_markdown
+from derp.tools.lookups import Lookups
 
 log = logging.getLogger("derp.agent")
 
@@ -122,6 +124,7 @@ class Runtime:
         model_factory: ModelFactory,
         gateway: MediaGateway,
         api: OpenRouterAPI,
+        lookups: Lookups,
     ) -> None:
         self.db = db
         self.bot = bot
@@ -131,11 +134,15 @@ class Runtime:
         self.funder = Funder(db, settings, notify=lambda text: notify_owners(bot, settings, text))
         self.gateway = gateway
         self.api = api
+        self.lookups = lookups
         self.lanes = Lanes(settings.run_concurrency)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.in_flight: set[str] = set()  # operation ids of holds a live run still owns
         self.agent = Agent[RunDeps, str](
-            output_type=str, deps_type=RunDeps, instructions=PERSONA, capabilities=WEB_CAPABILITIES
+            output_type=str,
+            deps_type=RunDeps,
+            instructions=PERSONA,
+            capabilities=[*WEB_CAPABILITIES, *CODE_CAPABILITIES],
         )
 
     async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome | None:
@@ -257,6 +264,7 @@ class Runtime:
                 digest_role=digest_role.value,
                 api=self.api,
                 pins=self.pins,
+                lookups=self.lookups,
             )
             brief = situation(
                 chat=chat,
@@ -428,7 +436,7 @@ class Runtime:
                 user_id=asker.id, asker=asker.full_name, locale=resolve(asker.language_code), thread_id=None,
                 trigger_message_id=0, run_id=run.id, funds=funds, target=Target(asker.id), tz=UTC,
                 gateway=self.gateway, pin=pin, model=model, digest_pin=pin, digest_model=model,
-                digest_role=funds.funding.role.value, api=self.api, pins=self.pins,
+                digest_role=funds.funding.role.value, api=self.api, pins=self.pins, lookups=self.lookups,
             )  # fmt: skip
             brief = DETACHED_BRIEF.format(
                 where=where, asker=one_line(asker.full_name), now=describe_time(datetime.now(UTC), UTC)

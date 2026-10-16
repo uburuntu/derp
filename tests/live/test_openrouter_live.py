@@ -62,3 +62,23 @@ async def test_image_pin_generates_on_its_zdr_host() -> None:
         and image.cost_usd > 0
     )
     assert image.cost_usd <= settings.image_price_usd
+
+
+@pytest.mark.parametrize("role", [ModelRole.CHAT, ModelRole.CHAT_SPONSORED])
+async def test_chat_roles_compute_in_the_sandbox(role: ModelRole) -> None:
+    from pydantic_ai.messages import ToolCallPart
+
+    from derp.agent.tools.code import CODE_CAPABILITIES
+
+    settings = Settings()
+    pin = settings.model_pins[role]
+    agent = Agent(
+        chat_model(pin, build_provider(settings)),
+        model_settings=chat_settings(pin, max_tokens=400),
+        capabilities=CODE_CAPABILITIES,
+    )
+    result = await agent.run("Using run_code, what is 37**21 mod 1000003? Reply with just the number.")
+    calls = [p for m in result.all_messages() for p in m.parts if isinstance(p, ToolCallPart)]
+    print(role, result.output, [c.tool_name for c in calls], response_usage(result.response))
+    assert any(c.tool_name == "run_code" for c in calls)
+    assert str(pow(37, 21, 1000003)) in result.output

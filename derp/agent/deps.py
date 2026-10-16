@@ -19,6 +19,7 @@ from derp.inference.roles import RolePin
 from derp.money.funding import Funding, Funds
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import Target
+from derp.tools.lookups import Lookups
 
 
 @dataclass(slots=True)
@@ -44,6 +45,7 @@ class RunDeps:
     digest_role: str
     api: OpenRouterAPI
     pins: PinStore
+    lookups: Lookups
     history_start: int = 0  # index of the run's first message in the agent's history
     delivered: list[tuple[int, str]] = field(
         default_factory=list[tuple[int, str]]

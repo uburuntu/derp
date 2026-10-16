@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+import pydantic_ai
 from aiogram import Bot, Dispatcher
 from pydantic_ai.models import Model
 from pydantic_ai.providers.openrouter import OpenRouterProvider
@@ -35,6 +36,7 @@ from derp.telegram.bot import create_bot
 from derp.telegram.media import MediaGateway
 from derp.telegram.middleware import UpdateSpanMiddleware
 from derp.telegram.updates import ALLOWED_UPDATES
+from derp.tools.lookups import Lookups
 
 log = logging.getLogger("derp.app")
 
@@ -49,6 +51,7 @@ class Services:
     pins: PinStore
     media: MediaGateway
     transcriber: Transcriber
+    lookups: Lookups
     model_factory: ModelFactory = field(init=False)
 
     def __post_init__(self) -> None:
@@ -71,10 +74,12 @@ class Services:
             pins=pins,
             media=media,
             transcriber=Transcriber(db=db, api=api, gateway=media, pins=pins, settings=settings),
+            lookups=Lookups(settings),
         )
 
     async def close(self) -> None:
         await self.api.close()
+        await self.lookups.close()
         await self.bot.session.close()
         await self.db.close()
 
@@ -88,6 +93,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         model_factory=services.model_factory,
         gateway=services.media,
         api=services.api,
+        lookups=services.lookups,
     )
     dispatcher = Dispatcher(
         services=services,
@@ -178,5 +184,6 @@ async def run(settings: Settings) -> None:
 def main() -> None:
     settings = get_settings()
     settings.validate_core()
+    pydantic_ai.BANNER_ENABLED = False  # Derp owns its output; runs emit their own spans
     observability.configure(settings)
     asyncio.run(run(settings))

@@ -11,7 +11,8 @@ dependencies = [
     "httpx>=0.28",
     "logfire>=5.2.0",
     "pydantic>=2.12",
-    "pydantic-ai-slim[openrouter]>=2.56.0",
+    "pydantic-ai-harness[codemode]>=0.57.0",
+    "pydantic-ai-slim[openrouter]>=2.57.0",
     "pydantic-settings>=2.11",
     "sqlalchemy[asyncio]>=2.1.0",
 ]
