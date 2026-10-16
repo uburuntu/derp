@@ -1,12 +1,16 @@
-"""Web lookups for the toolbox: weather, exchange rates, Wikipedia, Urban Dictionary, arXiv, WolframAlpha, code.
+"""Web lookups for the toolbox: weather, rates, Wikipedia, Urban Dictionary, arXiv, Wolfram, code, song and anime ID.
 
 Every call has a deadline and a response-size cap and returns compact text for
 the model. Keyless public APIs are used where possible; Wolfram and the code
-runner need keys and their tools hide themselves without them. Results that
+runner (and ACRCloud song recognition) need keys and their tools hide themselves
+without them. Results that
 change slowly are cached in memory for a while. URLs, queries and response
 bodies are never logged.
 """
 
+import base64
+import hashlib
+import hmac
 import time
 from typing import Any
 from urllib.parse import quote
@@ -33,6 +37,7 @@ COINS = {
     "not": "notcoin", "usdc": "usd-coin",
 }  # fmt: skip
 ATOM = "{http://www.w3.org/2005/Atom}"
+ANIME_SIMILARITY = 0.87  # trace.moe hits below this are usually wrong
 
 
 class LookupError(Exception):  # noqa: A001 - module-scoped name, always imported qualified
@@ -72,6 +77,17 @@ class Lookups:
             raise LookupError("response too large")
         if cache:
             self._cache[key] = (time.monotonic(), response)
+        return response
+
+    async def _post(self, url: str, **kwargs: Any) -> httpx.Response:
+        try:
+            response = await self._client.post(url, **kwargs)
+        except httpx.HTTPError as error:
+            raise LookupError(type(error).__name__) from None
+        if response.status_code >= 400:
+            raise LookupError(f"HTTP {response.status_code}")
+        if len(response.content) > MAX_BYTES:
+            raise LookupError("response too large")
         return response
 
     async def weather(self, place: str) -> str:
@@ -230,3 +246,73 @@ class Lookups:
         data = response.json()
         output = "\n".join(str(data.get("output") or "").splitlines()[:80])[:3000]
         return f"{output or '(no output)'}\n— cpu {data.get('cpuTime')} s, memory {data.get('memory')} KB"
+
+    async def identify_song(self, sample: bytes) -> str:
+        """ACRCloud music recognition of a short audio sample (signature version 1)."""
+        host, key, secret = self.settings.require(
+            "acrcloud_host", "acrcloud_access_key", "acrcloud_access_secret"
+        )
+        stamp = str(int(time.time()))
+        signed = f"POST\n/v1/identify\n{key}\naudio\n1\n{stamp}".encode()
+        signature = base64.b64encode(hmac.new(secret.encode(), signed, hashlib.sha1).digest()).decode()
+        fields = {
+            "access_key": key, "data_type": "audio", "signature_version": "1", "signature": signature,
+            "sample_bytes": str(len(sample)), "timestamp": stamp,
+        }  # fmt: skip
+        data = (
+            await self._post(
+                f"https://{host}/v1/identify", data=fields, files={"sample": ("sample.wav", sample)}
+            )
+        ).json()
+        code = (data.get("status") or {}).get("code")
+        music = ((data.get("metadata") or {}).get("music") or [None])[0]
+        if code == 1001 or (code == 0 and not music):
+            return "No song recognized in that audio."
+        if code != 0 or not isinstance(music, dict):
+            raise LookupError(f"recognizer status {code}")
+        artists = ", ".join(str(a.get("name")) for a in music.get("artists") or [] if a.get("name"))
+        lines = [f"{artists or 'Unknown artist'} — {music.get('title', '?')}"]
+        if album := (music.get("album") or {}).get("name"):
+            lines.append(f"Album: {album}")
+        if released := music.get("release_date"):
+            lines.append(f"Released: {released}")
+        external = music.get("external_metadata") or {}
+        links = [
+            f"https://open.spotify.com/track/{track}"
+            for track in [((external.get("spotify") or {}).get("track") or {}).get("id")]
+            if track
+        ] + [
+            f"https://www.youtube.com/watch?v={vid}"
+            for vid in [(external.get("youtube") or {}).get("vid")]
+            if vid
+        ]
+        return "\n".join([*lines, *links]) + "\n(ACRCloud)"
+
+    async def identify_anime(self, image: bytes) -> str:
+        """trace.moe scene search: which anime, episode and moment a screenshot is from."""
+        data = (
+            await self._post(
+                "https://api.trace.moe/search?anilistInfo&cutBorders",
+                content=image,
+                headers={"Content-Type": "image/jpeg"},
+            )
+        ).json()
+        hits = [h for h in data.get("result") or [] if float(h.get("similarity") or 0) >= ANIME_SIMILARITY][
+            :2
+        ]
+        lines: list[str] = []
+        for hit in hits:
+            anilist = hit.get("anilist") if isinstance(hit.get("anilist"), dict) else {}
+            titles = anilist.get("title") or {}
+            name = titles.get("english") or titles.get("romaji") or titles.get("native") or "an unknown title"
+            moment = int(float(hit.get("from") or 0))
+            episode = f", episode {hit['episode']}" if hit.get("episode") else ""
+            adult = " (adult)" if anilist.get("isAdult") else ""
+            link = f" https://anilist.co/anime/{anilist['id']}" if anilist.get("id") else ""
+            lines.append(
+                f"{name}{adult}{episode} at {moment // 60}:{moment % 60:02d}, "
+                f"similarity {float(hit.get('similarity') or 0):.0%}{link}"
+            )
+        if not lines:
+            return "No convincing match on trace.moe; it may not be from an anime."
+        return "\n".join(lines) + "\n(trace.moe)"

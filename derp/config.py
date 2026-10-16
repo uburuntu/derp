@@ -140,6 +140,11 @@ class Settings(BaseSettings):
     )
     approval_minutes: int = 15
     image_price_usd: float = 0.045  # upper estimate of one standard image on the image pin
+    effect_credits: int = (
+        2  # flat fee on paid runs for heavy local effects (video memes, reversed clips, cutouts)
+    )
+    sponsored_effects_per_day: int = 3  # heavy local effects per person per day on sponsored runs
+    background_model: Path = Path.home() / ".cache" / "derp" / "u2netp.onnx"  # fetched at image build
     run_caps: RunCaps = RunCaps()
     run_concurrency: int = 12  # agent runs in flight at once, across all chats
     context_windows: ContextWindows = ContextWindows()

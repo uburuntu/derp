@@ -20,18 +20,20 @@ from derp.agent.toolsets import Family
 from derp.history.models import Message
 from derp.inference.api import OpenRouterError
 from derp.inference.roles import ModelRole
-from derp.money.funding import PAID_SOURCES, Funding, run_cost
+from derp.money.funding import PAID_SOURCES, Funding, run_cost, run_fees
 from derp.money.wallets import balance
 
 toolset = FunctionToolset[RunDeps]()
 
 
-async def _spent(ctx: RunContext[RunDeps]) -> int:
+async def spent_credits(ctx: RunContext[RunDeps]) -> int:
+    """Credits the run has used so far: side calls in the ledger, its own model turns and its fees."""
     deps = ctx.deps
     async with deps.db.session() as session:
         side = await run_cost(session, deps.run_id)
+        fees = await run_fees(session, deps.run_id)
     turns = totals(ctx.messages[deps.history_start :]).cost_usd
-    return deps.settings.credits_for_usd(float(side + turns))
+    return deps.settings.credits_for_usd(float(side + turns)) + fees
 
 
 async def _references(deps: RunDeps, edit_message_id: int | None) -> tuple[int, ...]:
@@ -80,7 +82,7 @@ async def generate_image(
         )  # fmt: skip
         deps.delivered.append((prompt_message.message_id, "other"))
         return 'They were asked to confirm the price with a button; the image comes after they press it. End your turn with just ".".'
-    if price > deps.funds.credits - await _spent(ctx):
+    if price > deps.funds.credits - await spent_credits(ctx):
         return f"Not enough Derpcoins left in this answer for an image (needs about {price}). Tell them /buy gets more."
     try:
         sent = await make_image(

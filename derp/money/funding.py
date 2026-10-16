@@ -22,6 +22,7 @@ from derp.db.engine import Database
 from derp.inference.ledger import estimate_cost
 from derp.inference.models import ModelPin, ProviderCall
 from derp.inference.roles import ModelRole
+from derp.money.models import RunFee
 from derp.money.wallets import capture, credit, release, reserve, wallet
 
 PAID_SOURCES = ("plan", "purchase", "grant", "migration")
@@ -164,14 +165,23 @@ class Funder:
         return Funds(Funding.FREE, operation_id, None, None, 0) if free_allowed else None
 
     async def settle(self, session: AsyncSession, funds: Funds, run_id: int, *, delivered: bool) -> int:
-        """Charge the run's marked-up provider cost if Telegram accepted an output, else return the hold."""
+        """Charge the run's marked-up provider cost plus its fees if Telegram accepted an output, else return the hold."""
         if funds.reservation_id is None:
             return 0
         if not delivered:
             await release(session, funds.operation_id)
             return 0
         cost = await run_cost(session, run_id)
-        return await capture(session, funds.operation_id, self.settings.credits_for_usd(float(cost)))
+        price = self.settings.credits_for_usd(float(cost)) + await run_fees(session, run_id)
+        return await capture(session, funds.operation_id, price)
+
+
+async def run_fees(session: AsyncSession, run_id: int) -> int:
+    """Flat Derp fees (credits) a run has incurred."""
+    total = await session.scalar(
+        select(func.coalesce(func.sum(RunFee.credits), 0)).where(RunFee.run_id == run_id)
+    )
+    return int(total or 0)
 
 
 async def run_cost(session: AsyncSession, run_id: int) -> Decimal:

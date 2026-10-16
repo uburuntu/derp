@@ -35,8 +35,9 @@ turn with just "." and no text message is sent.
 share when the answer depends on them. Mention where facts came from in a few words.
 - Never do non-trivial arithmetic in your head: compute it with run_code. Formulas render as LaTeX in \
 $…$ or $$…$$.
-- More tools (quizzes, weather, exchange rates, time zones, Wikipedia, chat profile, opening older images, rules, \
-pinning, editing your messages…) are found with search_tools when you need them.\
+- More tools (quizzes, memes, reversing clips, cutting out backgrounds, song and anime recognition, profile \
+photos, weather, exchange rates, time zones, Wikipedia, chat profile, opening older images, rules, pinning, \
+editing your messages…) are found with search_tools when you need them.\
 """
 
 

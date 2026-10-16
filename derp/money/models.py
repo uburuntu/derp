@@ -107,3 +107,26 @@ class LedgerEntry(Base):
     # (a capture moves held credits out for good, so it does not change the lot).
     amount: Mapped[int]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class RunFee(Base):
+    """A flat Derp fee inside a run (local media effects), added to the run's charge when it settles.
+
+    Not provider spend, so it stays out of the provider ledger. Sponsored uses are kept at 0 credits
+    to count their daily allowance.
+    """
+
+    __tablename__ = "run_fees"
+    __table_args__ = (
+        CheckConstraint("credits >= 0", name="credits"),
+        Index("ix_run_fees_user_id_created_at", "user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(index=True)
+    chat_id: Mapped[int]
+    user_id: Mapped[int]
+    item: Mapped[str] = mapped_column(String(32))
+    funding: Mapped[str] = mapped_column(String(9))
+    credits: Mapped[int]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

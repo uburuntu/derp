@@ -20,6 +20,9 @@ COPY --from=builder --chown=app:app /app/derp /app/derp
 COPY --from=builder --chown=app:app /app/migrations /app/migrations
 COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini
 USER app
-ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYDANTIC_AI_NO_BANNER=1 HEARTBEAT_PATH=/tmp/derp.poll
+ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYDANTIC_AI_NO_BANNER=1 HEARTBEAT_PATH=/tmp/derp.poll \
+    BACKGROUND_MODEL=/home/app/.cache/derp/u2netp.onnx
+# Background-removal weights: fetched and checksum-verified once at build, never during a request.
+RUN python -m derp.tools.background fetch "$BACKGROUND_MODEL"
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD ["python", "-m", "derp.telegram.heartbeat"]
 CMD ["python", "-m", "derp"]

@@ -486,6 +486,35 @@ class FakeBotAPI:
         sizes = [{"file_id": f"f-{unique}", "file_unique_id": unique, "width": 1024, "height": 1024}]
         return self._new_message(fields, photo=sizes)
 
+    def _uploaded(self, kind: str, **extra: Any) -> JsonObject:
+        unique = f"{kind}-{len(self.calls)}"
+        return {"file_id": f"f-{unique}", "file_unique_id": unique, **extra}
+
+    def _m_sendVideo(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        return self._new_message(fields, video=self._uploaded("video", width=640, height=360, duration=3))
+
+    def _m_sendAnimation(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        return self._new_message(
+            fields, animation=self._uploaded("animation", width=640, height=360, duration=3)
+        )
+
+    def _m_sendVideoNote(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        return self._new_message(fields, video_note=self._uploaded("video_note", length=384, duration=3))
+
+    def _m_sendVoice(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        return self._new_message(fields, voice=self._uploaded("voice", duration=2))
+
+    def _m_sendDocument(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        return self._new_message(fields, document=self._uploaded("document", file_name="file"))
+
+    def _m_getUserProfilePhotos(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        """One photo per user whose ``profile-<user id>`` file is registered."""
+        file_id = f"profile-{int(fields['user_id'])}"
+        if file_id not in self.files:
+            return {"total_count": 0, "photos": []}
+        size = {"file_id": file_id, "file_unique_id": f"u-{file_id}", "width": 640, "height": 640}
+        return {"total_count": 1, "photos": [[size]]}
+
     def _m_sendSticker(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         file_id = str(fields["sticker"])
         sticker = {

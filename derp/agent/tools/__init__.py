@@ -6,7 +6,7 @@ from pydantic_ai_harness.repair_tool_arguments import RepairToolArguments
 from pydantic_ai_harness.tool_output_limits import Band, Truncate, TruncationStrategy
 
 from derp.agent.deps import RunDeps
-from derp.agent.tools import games, history, images, memory, scheduler, telegram, utilities
+from derp.agent.tools import effects, games, history, images, memory, scheduler, telegram, utilities
 from derp.agent.tools.code import CODE_MODE
 from derp.agent.tools.web import WEB_CAPABILITIES
 from derp.agent.toolsets import Family
@@ -22,6 +22,10 @@ FAMILIES: tuple[Family, ...] = (
     utilities.family,
     utilities.wolfram_family,
     utilities.code_family,
+    effects.family,
+    effects.background_family,
+    effects.song_family,
+    effects.profile_family,
 )
 
 
