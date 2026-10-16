@@ -28,6 +28,7 @@ from derp.money.wallets import expire_lots, release, stale_holds
 from derp.ops import observability
 from derp.ops.owner import notify_owners
 from derp.ops.periodic import every
+from derp.settings.privacy import enforce_retention
 from derp.telegram.bot import create_bot
 from derp.telegram.media import MediaGateway
 from derp.telegram.middleware import UpdateSpanMiddleware
@@ -131,6 +132,9 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
             async with services.db.transaction() as session:  # one wallet lock per transaction
                 await release(session, operation_id)
 
+    async def retention() -> None:
+        await enforce_retention(services.db, services.settings)
+
     async def expire() -> None:
         async with services.db.transaction() as session:
             await expire_lots(session)
@@ -139,6 +143,7 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
         asyncio.create_task(every("model-scout", 24 * 3600, scout, initial_delay=600)),
         asyncio.create_task(every("chat-profiles", 3600, profiles, initial_delay=120)),
         asyncio.create_task(every("stale-holds", 600, free_stale_holds, initial_delay=60)),
+        asyncio.create_task(every("retention", 24 * 3600, retention, initial_delay=1800)),
         asyncio.create_task(every("expire-lots", 6 * 3600, expire, initial_delay=300)),
         asyncio.create_task(every("refund-sweep", 24 * 3600, refunds, initial_delay=900)),
     ]

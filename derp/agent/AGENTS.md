@@ -1,7 +1,7 @@
 # Agent
 
 - `models.py`: `agent_runs` (one row per invocation: trigger, funding, served model, usage, cost, charge, Pydantic AI history) and `run_outputs` (every delivered message/poll/sticker/image/reaction, so `/info` resolves any output to its run).
-- `runs.py` owns the run lifecycle. `finish_run` is the single place that ledgers a run's provider responses and stores its history; stored history replaces inline binary with markers and follows the chat's retention.
+- `runs.py` owns the run lifecycle. `finish_run` is the single place that ledgers a run's provider responses and stores its history; stored history replaces inline binary with markers, follows the chat's retention (`expire_run_messages`) and is dropped by privacy actions (`scrub_runs`); a run without history is replayed as its visible text.
 - Tools never receive `chat_id`/`user_id` arguments; scope comes from run dependencies.
 - `invocation.py` decides what invokes Derp: every private message; in groups @mention/text mention, replies to Derp, or Derp's name (en/ru inflections and diminutives, not compounds). Bots never trigger (loop guard), anonymous admins do. Commands are a separate trigger kind handled by routers.
 - `context.py` builds the recent window before the current message: members' messages become `<chat_history>` transcript blocks (untrusted data), Derp's replies are replayed from their completed runs (tool calls + clipped results, no thinking, no original prompt). Runs are kept whole; the window never opens mid-run; only ids below the trigger are read, scoped to the trigger's forum topic. Budgets are estimated tokens (UTF-8 bytes / 4).

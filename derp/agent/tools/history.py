@@ -251,8 +251,10 @@ async def digest(
                 )  # fmt: skip
             except Exception as error:  # noqa: BLE001 - fall back to the cached digest or a pointer
                 log.info("digest build failed: %s", type(error).__name__)
-        if found is not None and not is_current(found, stats):
-            note = " — may be outdated"
+        if found is not None and found.stale:  # it may quote edited or forgotten messages
+            found = None
+        elif found is not None and not is_current(found, stats):
+            note = " — newer messages not included yet"
         header = f"## {day:%a %Y-%m-%d} ({stats.count} messages{note})"
         body = (
             found.summary if found is not None else "Not summarized yet: use search_history or read_messages."

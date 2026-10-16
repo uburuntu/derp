@@ -7,10 +7,12 @@ from decimal import Decimal
 from typing import Any
 
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, ModelResponse, ToolCallPart
-from sqlalchemy import select
+from sqlalchemy import null, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.models import AgentRun, RunOutput
+from derp.config import Retention
+from derp.history.retention import expired
 from derp.inference.ledger import record_usage
 from derp.inference.openrouter import response_usage
 
@@ -137,3 +139,17 @@ async def run_for_output(session: AsyncSession, chat_id: int, message_id: int) -
         .order_by(AgentRun.id.desc())
         .limit(1)
     )
+
+
+async def scrub_runs(session: AsyncSession, chat_id: int, *, since: datetime | None = None) -> None:
+    """Drop stored run transcripts of a chat (they quote its messages); usage and charges stay."""
+    where = [AgentRun.chat_id == chat_id, AgentRun.messages.is_not(None)]
+    if since is not None:
+        where.append(AgentRun.created_at >= since)
+    await session.execute(update(AgentRun).where(*where).values(messages=null()))
+
+
+async def expire_run_messages(session: AsyncSession, retention: Retention, now: datetime) -> None:
+    """Run transcripts follow their chat's retention, like the messages they quote."""
+    old = expired(AgentRun.chat_id, AgentRun.created_at, retention, now)
+    await session.execute(update(AgentRun).where(AgentRun.messages.is_not(None), old).values(messages=null()))

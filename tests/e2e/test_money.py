@@ -134,13 +134,7 @@ async def exhaust_sponsorship(conversation: Conversation, settings: Settings) ->
 async def press_button(conversation: Conversation, person: Person, chat_id: int, call: Any) -> None:
     data = call["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
     message_id = max(mid for (cid, mid) in conversation.api.messages if cid == chat_id)
-    query_id = f"q{len(conversation.api.calls)}"
-    message = conversation.api.expect_callback(query_id, chat_id=chat_id, message_id=message_id, data=data)
-    update_id = await conversation.push(
-        "callback_query",
-        {"id": query_id, "from": person.payload(), "chat_instance": "c", "message": message, "data": data},
-    )
-    await conversation.settle(update_id)
+    await conversation.press(person, chat_id, message_id, data)
 
 
 async def test_consenting_to_free_models_answers_the_waiting_question(

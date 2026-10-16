@@ -124,7 +124,7 @@ privacy = """
 
 <details><summary>What I keep</summary>
 
-Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Notes you ask me to remember, until you remove them. Payment receipts, for accounting.
+Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Short daily summaries of a chat, for up to a year. Notes you ask me to remember, until you remove them. Payment receipts, for accounting.
 </details>
 
 <details><summary>Who processes it</summary>
@@ -134,7 +134,7 @@ To answer, messages go to AI providers through OpenRouter. Paid answers and the 
 
 <details><summary>Your controls</summary>
 
-Reply /forget to remove a message from my memory, ask me to forget notes anytime, and group admins can turn context off in /settings.
+Reply /forget to remove a message from my memory, or send /forget alone to remove everything you've said in a chat (summaries that mention it are redone without it). Ask me to forget notes anytime; group admins can turn context off in /settings, which deletes the stored context.
 </details>
 
 <details><summary>Payments</summary>
@@ -144,3 +144,11 @@ Telegram handles payments; I only see the amount and a charge id.
 """
 support_how = "Write `/paysupport` followed by what happened — the date and the amount help. It goes straight to the person who runs Derp."
 support_sent = "Sent to the person who runs Derp. Refunds come back to your Stars balance."
+
+[privacy]
+forgot_one = "Done — I've forgotten that message."
+only_own = "I can only forget your own messages. Reply /forget to one of yours, or send /forget on its own to forget everything you've said here."
+confirm = "Forget everything you've said in this chat? That's {count} stored messages, plus your reactions, poll votes and personal notes here. This can't be undone."
+confirm_button = "Forget it all"
+not_yours = "This button is for the person who asked."
+forgot_all = "Done — forgot {count} messages and everything attached to them."

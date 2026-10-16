@@ -177,6 +177,22 @@ class Conversation:
 
         return await self.api.wait_call(method, after=sent.after, where=replies, timeout=timeout)
 
+    async def press(self, person: Person, chat_id: int, message_id: int, data: str) -> None:
+        """Press an inline button with callback ``data`` on one of Derp's messages and wait for the handler."""
+        query_id = f"q{len(self.api.calls)}"
+        message = self.api.expect_callback(query_id, chat_id=chat_id, message_id=message_id, data=data)
+        update_id = await self.push(
+            "callback_query",
+            {
+                "id": query_id,
+                "from": person.payload(),
+                "chat_instance": "c",
+                "message": message,
+                "data": data,
+            },
+        )
+        await self.settle(update_id)
+
     async def settle(self, sent: Sent | int, timeout: float = 5) -> None:
         """Wait until the update's handler finished (the next poll confirms its offset)."""
         update_id = sent.update_id if isinstance(sent, Sent) else sent

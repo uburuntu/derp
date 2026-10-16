@@ -16,13 +16,7 @@ PUB = Room(-1011, title="Pub")
 
 
 async def press(conversation: Conversation, person: Person, chat_id: int, message_id: int, data: str) -> None:
-    query_id = f"q{len(conversation.api.calls)}"
-    message = conversation.api.expect_callback(query_id, chat_id=chat_id, message_id=message_id, data=data)
-    update_id = await conversation.push(
-        "callback_query",
-        {"id": query_id, "from": person.payload(), "chat_instance": "c", "message": message, "data": data},
-    )
-    await conversation.settle(update_id)
+    await conversation.press(person, chat_id, message_id, data)
 
 
 async def checkout(conversation: Conversation, person: Person, payload: str, stars: int) -> dict[str, Any]:
