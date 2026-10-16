@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from derp.history.models import (
     ChatMember,
     ForumTopic,
+    GameScore,
     MemberEvent,
     Message,
     MessageMedia,
@@ -154,11 +155,19 @@ class ChatQuery(BaseModel):
     """A structured question about this chat's stored history."""
 
     preset: (
-        Literal["reaction_leaderboard", "top_messages", "member_activity", "poll_results", "joins_leaves"]
+        Literal[
+            "reaction_leaderboard",
+            "quiz_leaderboard",
+            "top_messages",
+            "member_activity",
+            "poll_results",
+            "joins_leaves",
+        ]
         | None
     ) = Field(
         default=None,
-        description="reaction_leaderboard: people by reactions received; top_messages: most-reacted messages; "
+        description="reaction_leaderboard: people by reactions received; quiz_leaderboard: points from Derp's "
+        "quizzes (days/since/until apply); top_messages: most-reacted messages; "
         "member_activity: people by message count; poll_results: polls and their known results; "
         "joins_leaves: membership events. Other fields still filter a preset.",
     )
@@ -283,6 +292,8 @@ async def run_query(session: AsyncSession, scope: Scope, query: ChatQuery) -> Qu
             query = query.model_copy(update={"group_by": None, "order": "reactions", "min_reactions": 1})
         case "member_activity":
             query = query.model_copy(update={"group_by": "user", "order": "count", "from_derp": False})
+        case "quiz_leaderboard":
+            return QueryResult("groups", [], await _quiz_points(session, scope, query), [], [])
         case "poll_results":
             return QueryResult("polls", [], [], await _polls(session, scope, query), [])
         case "joins_leaves":
@@ -352,6 +363,27 @@ async def _groups(
     else:
         statement = statement.order_by(metric.desc())
     return [(str(row[0]), int(row[1] or 0)) for row in await session.execute(statement.limit(query.limit))]
+
+
+async def _quiz_points(session: AsyncSession, scope: Scope, query: ChatQuery) -> list[tuple[str, int]]:
+    since, until = _period(query)
+    points = func.sum(GameScore.points)
+    statement = (
+        select(
+            func.coalesce(func.concat_ws(" ", User.first_name, User.last_name), literal("someone")), points
+        )
+        .select_from(GameScore)
+        .outerjoin(User, User.id == GameScore.user_id)
+        .where(GameScore.chat_id == scope.chat_id)
+        .group_by(GameScore.user_id, User.first_name, User.last_name)
+        .having(points > 0)
+        .order_by(points.desc())
+    )
+    if since is not None:
+        statement = statement.where(GameScore.day >= since.date())
+    if until is not None:
+        statement = statement.where(GameScore.day <= until.date())
+    return [(str(row[0]), int(row[1])) for row in await session.execute(statement.limit(query.limit))]
 
 
 async def _polls(session: AsyncSession, scope: Scope, query: ChatQuery) -> list[Poll]:

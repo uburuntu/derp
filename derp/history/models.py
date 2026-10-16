@@ -262,6 +262,19 @@ class PollVote(Base):
     voted_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
 
+class GameScore(Base):
+    """Quiz points per member and chat-local day: +1 for a right answer in Derp's quizzes, −1 for a wrong one, never below 0."""
+
+    __tablename__ = "game_scores"
+    __table_args__ = (CheckConstraint("points >= 0", name="points"),)
+
+    chat_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    user_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    day: Mapped[date] = mapped_column(primary_key=True)
+    points: Mapped[int] = mapped_column(default=0, server_default="0")
+    answers: Mapped[int] = mapped_column(default=0, server_default="0")
+
+
 class Sticker(Base):
     """A sticker Derp has seen anywhere (public assets, no sender kept); the pool ``send_sticker`` draws from."""
 

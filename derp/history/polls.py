@@ -4,8 +4,13 @@ What the Bot API lets Derp know: every poll message it captures (question and
 options as posted), live state only for its own polls and polls someone
 stopped, and votes only in its own non-anonymous polls. Updates for polls
 that were never captured are ignored, since they carry no chat.
+
+A member's first answer to one of Derp's quizzes scores the game: +1 when
+right, −1 when wrong, with each chat-local day's points floored at zero
+(quiz answers can't be changed, and a redelivered answer scores nothing).
 """
 
+from datetime import UTC, datetime
 from typing import Any
 
 from aiogram import Router
@@ -16,7 +21,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.db.engine import Database
-from derp.history.models import Poll, PollVote
+from derp.history.models import Chat, GameScore, Poll, PollVote, User
+from derp.history.render import chat_time
 
 
 def poll_state(poll: TgPoll) -> dict[str, Any]:
@@ -70,8 +76,31 @@ async def on_poll_answer(answer: PollAnswer, db: Database) -> None:
     if voter is None:
         return
     async with db.transaction() as session:
-        if await session.get(Poll, answer.poll_id) is None:
+        poll = await session.get(Poll, answer.poll_id)
+        if poll is None:
             return
+        first = await session.get(PollVote, (answer.poll_id, voter)) is None
+        if (
+            first
+            and answer.user
+            and answer.option_ids
+            and poll.origin == "derp_quiz"
+            and poll.correct_option_ids
+        ):
+            await session.execute(  # the leaderboard needs a name for voters who never wrote here
+                insert(User)
+                .values(
+                    id=voter,
+                    is_bot=answer.user.is_bot,
+                    first_name=answer.user.first_name,
+                    last_name=answer.user.last_name,
+                    username=answer.user.username,
+                )
+                .on_conflict_do_nothing(index_elements=[User.id])
+            )
+            await score(
+                session, poll, voter, right=sorted(answer.option_ids) == sorted(poll.correct_option_ids)
+            )
         statement = insert(PollVote).values(
             poll_id=answer.poll_id,
             voter_id=voter,
@@ -88,6 +117,23 @@ async def on_poll_answer(answer: PollAnswer, db: Database) -> None:
                 },
             )
         )
+
+
+async def score(session: AsyncSession, poll: Poll, user_id: int, *, right: bool) -> None:
+    day = datetime.now(UTC).astimezone(chat_time(await session.get(Chat, poll.chat_id))).date()
+    delta = 1 if right else -1
+    statement = insert(GameScore).values(
+        chat_id=poll.chat_id, user_id=user_id, day=day, points=max(delta, 0), answers=1
+    )
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[GameScore.chat_id, GameScore.user_id, GameScore.day],
+            set_={
+                "points": func.greatest(GameScore.points + delta, 0),
+                "answers": GameScore.answers + 1,
+            },
+        )
+    )
 
 
 def build_router() -> Router:

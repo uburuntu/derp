@@ -73,18 +73,18 @@ async def reply_target(deps: RunDeps, reply_to: int | None, reply_to_person: str
         return latest
 
 
-def _check_budget(deps: RunDeps) -> None:
+def check_budget(deps: RunDeps) -> None:
     if deps.tool_outputs_left <= 0:
         raise OutputRefused("output limit for this turn reached; answer in text instead")
 
 
-async def _delivered(deps: RunDeps, sent: TgMessage, kind: str) -> None:
+async def delivered(deps: RunDeps, sent: TgMessage, kind: str) -> None:
     deps.delivered.append((sent.message_id, kind))
     async with deps.db.transaction() as session:
         await record_outgoing(session, [sent])
 
 
-def _reply(message_id: int | None) -> ReplyParameters | None:
+def reply_parameters(message_id: int | None) -> ReplyParameters | None:
     return ReplyParameters(message_id=message_id, allow_sending_without_reply=True) if message_id else None
 
 
@@ -112,7 +112,7 @@ async def send_poll(
     """
     deps = ctx.deps
     try:
-        _check_budget(deps)
+        check_budget(deps)
         if not 2 <= len(options) <= 10:
             raise OutputRefused("a poll needs 2–10 options")
         if correct_option is not None and not 0 <= correct_option < len(options):
@@ -131,11 +131,11 @@ async def send_poll(
             is_anonymous=anonymous and deps.chat.type != "private",
             allows_multiple_answers=multiple_answers and not quiz,
             correct_option_ids=[correct_option] if correct_option is not None else None,
-            reply_parameters=_reply(target),
+            reply_parameters=reply_parameters(target),
         )
     except TelegramAPIError as error:
         return f"Telegram refused the poll ({type(error).__name__})."
-    await _delivered(deps, sent, "poll")
+    await delivered(deps, sent, "poll")
     return f"Poll posted as #{sent.message_id}."
 
 
@@ -155,7 +155,7 @@ async def send_dice(
     """
     deps = ctx.deps
     try:
-        _check_budget(deps)
+        check_budget(deps)
         target = await reply_target(deps, reply_to, reply_to_person)
     except OutputRefused as refused:
         return f"Not sent: {refused}."
@@ -164,11 +164,11 @@ async def send_dice(
             chat_id=deps.chat.id,
             message_thread_id=deps.thread_id,
             emoji=emoji,
-            reply_parameters=_reply(target),
+            reply_parameters=reply_parameters(target),
         )
     except TelegramAPIError as error:
         return f"Telegram refused the dice ({type(error).__name__})."
-    await _delivered(deps, sent, "dice")
+    await delivered(deps, sent, "dice")
     value = sent.dice.value if sent.dice else "?"
     return f"Dice #{sent.message_id} landed on {value}."
 
@@ -186,7 +186,7 @@ async def send_sticker(
     """
     deps = ctx.deps
     try:
-        _check_budget(deps)
+        check_budget(deps)
         target = await reply_target(deps, reply_to, reply_to_person)
     except OutputRefused as refused:
         return f"Not sent: {refused}."
@@ -212,11 +212,11 @@ async def send_sticker(
             chat_id=deps.chat.id,
             message_thread_id=deps.thread_id,
             sticker=file_id,
-            reply_parameters=_reply(target),
+            reply_parameters=reply_parameters(target),
         )
     except TelegramAPIError as error:
         return f"Telegram refused the sticker ({type(error).__name__})."
-    await _delivered(deps, sent, "sticker")
+    await delivered(deps, sent, "sticker")
     return f"Sticker sent as #{sent.message_id}."
 
 

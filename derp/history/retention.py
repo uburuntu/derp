@@ -38,6 +38,7 @@ from derp.history.models import (
     Chat,
     ChatMember,
     Digest,
+    GameScore,
     MemberEvent,
     Message,
     MessageMedia,
@@ -143,6 +144,7 @@ async def forget_member(session: AsyncSession, chat_id: int, user_id: int, now: 
     await session.execute(
         delete(MemberEvent).where(MemberEvent.chat_id == chat_id, MemberEvent.user_id == user_id)
     )
+    await session.execute(delete(GameScore).where(GameScore.chat_id == chat_id, GameScore.user_id == user_id))
     return count
 
 
