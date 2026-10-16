@@ -58,7 +58,9 @@ insert into messages values
 async def _import(database: Database, settings: Settings) -> Counts:
     async with database.engine.connect() as source:
         await source.execute(text("set search_path = legacy"))
-        counts = await import_main(source, database, settings, bot_id=BOT_ID, days=30, now=NOW)
+        counts = await import_main(
+            source, database, settings.credits_per_star, bot_id=BOT_ID, days=30, now=NOW
+        )
         await source.rollback()
     return counts
 

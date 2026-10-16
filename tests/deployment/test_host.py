@@ -111,8 +111,9 @@ def test_env_files_need_the_core_settings() -> None:
     host.validate_env_file(ENV + "# comment\n\nLOGFIRE_TOKEN=t\n")
     with pytest.raises(host.DeploymentError, match="core settings"):
         host.validate_env_file("ENVIRONMENT=prod\n")
-    with pytest.raises(host.DeploymentError, match="Invalid"):
-        host.validate_env_file(ENV + "export X=1\n")
+    for bad in ("export X=1", "OPS_CHAT_ID=", "MODEL_PINS='{}'", "RUN_CAPS__TOOL_CALLS=8 # fewer"):
+        with pytest.raises(host.DeploymentError, match="Invalid"):
+            host.validate_env_file(ENV + bad + "\n")
 
 
 def test_the_poller_runs_locked_down() -> None:
@@ -191,13 +192,44 @@ def test_first_release_replaces_the_legacy_bot_and_rolls_back(root: Path, tmp_pa
     tasks = [c for c in docker.commands if c[:3] == ("docker", "run", "--rm")]
     assert [c[-3:] for c in tasks] == [("python", "-m", "derp.ops.preflight"), ("alembic", "upgrade", "head")]
     current = json.loads((root / "current.json").read_text())
-    assert current["image"] == payload["image"] and json.loads((root / "previous.json").read_text())["legacy"]
+    assert current["image"] == payload["image"]
+    assert json.loads((root / "previous.json").read_text()) == {"empty": True}  # the legacy bot is retired
     release_env = root / "releases" / current["release"] / "derp.env"
     assert release_env.read_text() == ENV and release_env.stat().st_mode & 0o077 == 0
 
-    docker.rollback()  # back to the legacy bot
+    with pytest.raises(host.DeploymentError, match="No prior release"):
+        docker.rollback()  # never back to the old bot and its old database
+    assert docker.containers["derp"]["running"] and not docker.containers["derp-bot"]["running"]
+
+
+def test_a_failed_first_release_restarts_the_legacy_bot(root: Path, tmp_path: Path) -> None:
+    archive = tmp_path / "image.tar.gz"
+    payload = make_archive(archive, config())
+    docker = FakeDocker(root, healthy=False, legacy=True)
+    with pytest.raises(host.DeploymentError, match="rolled back"):
+        release(root, docker, payload, archive)
     assert "derp" not in docker.containers and docker.containers["derp-bot"]["running"]
     assert docker.containers["derp-bot"]["restart"] == "unless-stopped"
+    assert not (root / "current.json").exists()
+
+
+def test_a_failed_migration_removes_its_container_and_keeps_the_poller(root: Path, tmp_path: Path) -> None:
+    archive = tmp_path / "image.tar.gz"
+    payload = make_archive(archive, config())
+
+    class FailingMigration(FakeDocker):
+        def run(self, *args: str, timeout: int = 180, check: bool = True) -> str | None:
+            if args[-3:] == ("alembic", "upgrade", "head"):
+                self.commands.append(args)
+                raise host.DeploymentError("Operation timed out")
+            return super().run(*args, timeout=timeout, check=check)
+
+    docker = FailingMigration(root, legacy=True)
+    with pytest.raises(host.DeploymentError, match="timed out"):
+        release(root, docker, payload, archive)
+    task = next(c for c in docker.commands if c[-1] == "head")
+    assert ("docker", "rm", "--force", task[task.index("--name") + 1]) in docker.commands
+    assert docker.containers["derp-bot"]["running"] and "derp" not in docker.containers
 
 
 def test_an_unhealthy_release_restores_the_previous_one(root: Path, tmp_path: Path) -> None:

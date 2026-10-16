@@ -1,7 +1,8 @@
 """One-off, best-effort import from the previous Derp's database (run once at cutover).
 
-``python -m derp.ops.import_main --source <old database URL>`` reads the old
-schema and writes into the database from the environment:
+``SOURCE_DATABASE_URL=… TARGET_DATABASE_URL=… python -m derp.ops.import_main --bot-id <old bot id>``
+reads the old schema and writes into the new, already migrated database. Nothing
+is taken from ``.env``: the URLs and the bot id are explicit.
 
 - users and chats (rows the new bot already has are left alone);
 - balances become ``migration`` lots: old credits were worth about one Star, so
@@ -17,6 +18,7 @@ lots), so a rerun after a failure is safe. Prints counts only.
 
 import argparse
 import asyncio
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -26,7 +28,7 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
-from derp.config import Settings, get_settings
+from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import MESSAGE_KINDS, Chat, Message, User
 from derp.memory.models import Note
@@ -77,7 +79,7 @@ async def _rows(source: AsyncConnection, query: str, **params: Any) -> list[Any]
 
 
 async def import_main(
-    source: AsyncConnection, db: Database, settings: Settings, *, bot_id: int, days: int, now: datetime
+    source: AsyncConnection, db: Database, credits_per_star: int, *, bot_id: int, days: int, now: datetime
 ) -> Counts:
     counts = Counts()
     users = await _rows(
@@ -137,9 +139,7 @@ async def import_main(
                 operation_id = f"migration:{kind}:{row.telegram_id}"
                 if await session.scalar(select(CreditLot.id).where(CreditLot.operation_id == operation_id)):
                     continue
-                await credit(
-                    session, wallet_id, operation_id, row.credits * settings.credits_per_star, "migration"
-                )
+                await credit(session, wallet_id, operation_id, row.credits * credits_per_star, "migration")
                 counts.lots += 1
 
     forums = {c.telegram_id for c in chats if c.is_forum}
@@ -186,28 +186,45 @@ async def import_main(
     return counts
 
 
-async def run(source_url: str, days: int) -> Counts:
-    settings = get_settings()
-    settings.validate_core()
-    bot_id = int(settings.telegram_bot_token.partition(":")[0])
+class SchemaMissingError(Exception):
+    pass
+
+
+async def run(source_url: str, target_url: str, *, bot_id: int, days: int, credits_per_star: int) -> Counts:
     engine = create_async_engine(source_url)
-    db = Database(settings.database_url, pool_size=2)
+    db = Database(target_url, pool_size=2)
     try:
+        async with db.session() as session:
+            if await session.scalar(text("select to_regclass('public.messages')")) is None:
+                raise SchemaMissingError  # run `alembic upgrade head` on the target first
         async with engine.connect() as source:
             await source.execute(text("set transaction read only"))
-            return await import_main(source, db, settings, bot_id=bot_id, days=days, now=datetime.now(UTC))
+            return await import_main(
+                source, db, credits_per_star, bot_id=bot_id, days=days, now=datetime.now(UTC)
+            )
     finally:
         await engine.dispose()
         await db.close()
 
 
 def main() -> None:
+    """URLs come from the environment (never argv, which shows in ``ps`` and shell history)."""
     parser = argparse.ArgumentParser(description="Import users, chats, balances, memory and recent history")
-    parser.add_argument("--source", required=True, help="SQLAlchemy URL of the old database (asyncpg)")
+    parser.add_argument("--bot-id", type=int, required=True, help="the previous bot's id (its token prefix)")
     parser.add_argument("--days", type=int, default=30)
+    parser.add_argument(
+        "--credits-per-star", type=int, default=Settings.model_fields["credits_per_star"].default
+    )
     args = parser.parse_args()
+    source, target = os.environ.get("SOURCE_DATABASE_URL"), os.environ.get("TARGET_DATABASE_URL")
+    if not source or not target:
+        raise SystemExit("set SOURCE_DATABASE_URL (old database) and TARGET_DATABASE_URL (new one)")
     try:
-        counts = asyncio.run(run(args.source, args.days))
+        counts = asyncio.run(
+            run(source, target, bot_id=args.bot_id, days=args.days, credits_per_star=args.credits_per_star)
+        )
+    except SchemaMissingError:
+        raise SystemExit("import failed: the target has no schema yet; run migrations first") from None
     except Exception as error:  # noqa: BLE001 - report the failure class, never URLs or secrets
         raise SystemExit(f"import failed: {type(error).__name__}") from None
     print(  # noqa: T201

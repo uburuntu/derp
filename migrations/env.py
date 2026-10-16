@@ -14,6 +14,8 @@ config = context.config
 def run(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=metadata, compare_server_default=True)
     with context.begin_transaction():
+        # A migration queued behind a lock would block the running release's queries: give up instead.
+        connection.exec_driver_sql("set local lock_timeout = '15s'")
         context.run_migrations()
 
 

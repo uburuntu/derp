@@ -22,7 +22,9 @@ repository variable `DEPLOY_ENABLED` is `true`.
    `~/derp-deploy/releases/<release>/failure.log`, never in public logs.
 
 `.github/workflows/rollback.yml` swaps back to the previous release with the
-configuration it was released with.
+configuration it was released with. The legacy bot is never a rollback target:
+once the first release succeeds it is retired (it would run on the old database,
+whose balances now live here).
 
 ## One-time host setup
 
@@ -30,7 +32,8 @@ configuration it was released with.
    make sure the backup timers cover it.
 2. `mkdir -m 700 ~/derp-deploy`, copy `tools/deployment/host.py` to
    `~/derp-deploy/deploy.py`, and write `~/derp-deploy/derp.env` (mode 600) from
-   `env.example` with `ENVIRONMENT=prod`.
+   `env.example` with `ENVIRONMENT=prod`. Docker reads it verbatim: no quotes,
+   no trailing `# notes`, and no empty values (leave optional settings out).
 3. Add the deploy key to `~/.ssh/authorized_keys` with the forced command:
    `command="/usr/bin/python3 /home/<user>/derp-deploy/deploy.py",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 AAAA… derp-deploy`
 4. GitHub `production` environment secrets: `SSH_HOST`, `SSH_USER`, `SSH_PORT`,
@@ -38,8 +41,10 @@ configuration it was released with.
 
 ## Cutover from the previous Derp
 
-1. Stop the old bot so its data stops changing: `docker update --restart=no derp-bot && docker stop derp-bot`.
-2. Import: `make import-main SOURCE=postgresql+asyncpg://…/derp` with the new
-   `DATABASE_URL` in the environment (read-only on the old database; rerunnable).
-3. Release (merge to `main` or run the Deploy workflow). Until the first release
-   succeeds, a failure restarts the old container.
+1. Create the schema in the new database: `DATABASE_URL=… make migrate`.
+2. Stop the old bot so its data stops changing: `docker update --restart=no derp-bot && docker stop derp-bot`.
+3. Import (read-only on the old database; rerunnable):
+   `SOURCE_DATABASE_URL=… TARGET_DATABASE_URL=… make import-main BOT_ID=<old bot id>` —
+   URLs come from the environment, never the command line.
+4. Release (merge to `main` or run the Deploy workflow). If that first release
+   fails, the old container is restarted.

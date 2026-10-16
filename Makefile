@@ -68,5 +68,5 @@ run: ## Run the bot locally (dev bot from .env)
 preflight: ## Read-only production checks
 	$(UV) python -m derp.ops.preflight
 
-import-main: ## One-off import from the previous Derp database: make import-main SOURCE=postgresql+asyncpg://…
-	$(UV) python -m derp.ops.import_main --source "$(SOURCE)"
+import-main: ## One-off import from the previous Derp: SOURCE_DATABASE_URL=… TARGET_DATABASE_URL=… make import-main BOT_ID=…
+	@$(UV) python -m derp.ops.import_main --bot-id "$(BOT_ID)"

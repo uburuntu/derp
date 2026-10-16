@@ -173,10 +173,10 @@ def run_arguments(image, env_path, *, name=CONTAINER):
     ]  # fmt: skip
 
 
-def task_arguments(image, env_path, *command):
+def task_arguments(image, env_path, name, *command):
     """A one-shot task (preflight, migrations) from the release image and configuration."""
     return [
-        "docker", "run", "--rm", "--env-file", str(env_path),
+        "docker", "run", "--rm", "--name", name, "--env-file", str(env_path),
         "--read-only", "--tmpfs", "/tmp:mode=1777", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges:true",
         image, *command,
@@ -222,9 +222,13 @@ def validate_env_file(text):
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        key, separator, _ = line.partition("=")
+        key, separator, value = line.partition("=")
         if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
             raise DeploymentError("Invalid runtime configuration")
+        # docker --env-file takes values verbatim: quotes and "# notes" would become part of them,
+        # and an empty value fails typed settings. Leave optional settings out instead.
+        if not value or "\r" in value or value[0] in "'\"" or " #" in value:
+            raise DeploymentError("Invalid runtime configuration value for " + key)
         keys.add(key)
     missing = {"ENVIRONMENT", "TELEGRAM_BOT_TOKEN", "DATABASE_URL", "OPENROUTER_API_KEY", "OWNER_IDS"} - keys
     if missing:
@@ -240,13 +244,31 @@ class Deployer:
         try:
             result = subprocess.run(args, check=False, text=True, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
+            self.note(" ".join(args[:3]) + ": timed out")
             raise DeploymentError("Operation timed out") from None
         if check and result.returncode:
             # Docker output can quote configuration: it stays in the private release directory.
-            if self.diagnostic_path:
-                write_private(self.diagnostic_path, (result.stdout + result.stderr)[-131072:])
+            self.note(" ".join(args[:3]) + ":\n" + (result.stdout + result.stderr)[-65536:])
             raise DeploymentError("Docker operation failed")
         return result.stdout if result.returncode == 0 else None
+
+    def note(self, text):
+        """Append to the private diagnostic log; later failures (restore, logs) never erase earlier ones."""
+        if self.diagnostic_path is None:
+            return
+        previous = self.diagnostic_path.read_text()[-262144:] if self.diagnostic_path.exists() else ""
+        write_private(
+            self.diagnostic_path, previous + "\n--- " + time.strftime("%H:%M:%S") + " " + text + "\n"
+        )
+
+    def task(self, image, env, *command, timeout):
+        """A one-shot container that is removed even when the Docker client times out."""
+        name = "derp-task-" + str(time.time_ns())
+        try:
+            self.run(*task_arguments(image, env, name, *command), timeout=timeout)
+        except DeploymentError:
+            self.run("docker", "rm", "--force", name, check=False, timeout=60)
+            raise
 
     def inspect(self, name):
         data = self.run("docker", "inspect", name, check=False)
@@ -298,8 +320,7 @@ class Deployer:
             text=True,
             timeout=20,
         )
-        if self.diagnostic_path:
-            write_private(self.diagnostic_path, (result.stdout + result.stderr)[-131072:])
+        self.note("container logs:\n" + (result.stdout + result.stderr)[-65536:])
 
     def stop_current(self):
         if self.inspect(CONTAINER):
@@ -351,6 +372,7 @@ class Deployer:
         self.wait_healthy()
 
     def rollback(self):
+        self.diagnostic_path = self.root / "rollback-failure.log"
         previous, current = self.read_state("previous.json"), self.read_state("current.json")
         if not previous or previous.get("empty") or not current:
             raise DeploymentError("No prior release recorded")
@@ -384,9 +406,9 @@ class Deployer:
         self.receive_image(payload, directory, stream)
         report("Image received; running preflight")
         env = directory / "derp.env"
-        self.run(*task_arguments(state["image"], env, "python", "-m", "derp.ops.preflight"), timeout=180)
+        self.task(state["image"], env, "python", "-m", "derp.ops.preflight", timeout=180)
         report("Preflight passed; migrating the database")
-        self.run(*task_arguments(state["image"], env, "alembic", "upgrade", "head"), timeout=600)
+        self.task(state["image"], env, "alembic", "upgrade", "head", timeout=600)
         report("Database migrated; stopping the current poller")
         previous = self.read_state("current.json")
         if previous is None:
@@ -408,7 +430,10 @@ class Deployer:
             self.restore(previous)
             report("Previous poller restored")
             raise DeploymentError("Release failed and was rolled back") from None
-        write_private(self.root / "previous.json", json.dumps(previous))
+        # The legacy bot is retired once a release succeeds: it would run on the old database, and
+        # its credits now live here as imported lots. Only failures within this deploy bring it back.
+        retired = {"empty": True} if previous.get("legacy") else previous
+        write_private(self.root / "previous.json", json.dumps(retired))
         write_private(self.root / "current.json", json.dumps(state))
         report("Deployed " + payload["revision"] + " " + payload["image"])
         with contextlib.suppress(Exception):  # cleanup must not fail a healthy release
