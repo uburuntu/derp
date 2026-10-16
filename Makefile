@@ -7,7 +7,7 @@ TEST_DATABASE_URL ?= postgresql+asyncpg://derp:derp@localhost:$(TEST_DB_PORT)/de
 DEV_DB_PORT ?= 5434
 DEV_DATABASE_URL ?= postgresql+asyncpg://derp:derp@localhost:$(DEV_DB_PORT)/derp
 
-.PHONY: help install lint format typecheck check test test-db test-e2e test-all db-test-up db-test-down db-dev-up migrate revision run preflight
+.PHONY: help install lint format typecheck check test test-db test-e2e test-all db-test-up db-test-down db-dev-up migrate revision run preflight import-main
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -67,3 +67,6 @@ run: ## Run the bot locally (dev bot from .env)
 
 preflight: ## Read-only production checks
 	$(UV) python -m derp.ops.preflight
+
+import-main: ## One-off import from the previous Derp database: make import-main SOURCE=postgresql+asyncpg://…
+	$(UV) python -m derp.ops.import_main --source "$(SOURCE)"
