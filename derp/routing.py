@@ -14,7 +14,7 @@ def include_routers(dispatcher: Dispatcher) -> None:
     from derp.memory import command as memory
     from derp.money import command as money
     from derp.money import free
-    from derp.settings import onboarding, start
+    from derp.settings import onboarding, pages, start
 
     dispatcher.include_routers(
         members.build_router(),
@@ -22,6 +22,7 @@ def include_routers(dispatcher: Dispatcher) -> None:
         reactions.build_router(),
         polls.build_router(),
         start.build_router(),
+        pages.build_router(),
         memory.build_router(),
         money.build_router(),
         free.build_router(),

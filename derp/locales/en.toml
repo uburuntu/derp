@@ -91,3 +91,53 @@ context_on = "I read this chat to keep up with the conversation; messages are ke
 context_off = "Mentions only: I see just the messages addressed to me, so I won't know what was said before."
 settings = "_Settings: /settings · what I remember: /memory_"
 make_admin = "Make me admin (optional)"
+
+[pages]
+terms = """
+📜 **Derp — terms**
+
+<details><summary>Derpcoins</summary>
+
+Derpcoins are bought with Telegram Stars and pay for my answers: each answer costs what the AI models actually charged, plus a margin. They aren't money — they can't be cashed out or moved to someone else. Bought Derpcoins don't expire. Derp+ adds a monthly allowance that doesn't roll over; cancel it anytime in Telegram's Stars settings.
+</details>
+
+<details><summary>Refunds</summary>
+
+Payment trouble? Write /paysupport and what happened. A refund returns the Stars and removes whatever is left of that purchase's Derpcoins.
+</details>
+
+<details><summary>Using Derp</summary>
+
+Don't use me for anything illegal or to harass people. My answers are AI-generated and can be wrong — don't rely on them for medical, legal or financial decisions. Abuse can get you blocked.
+</details>
+
+<details><summary>Changes</summary>
+
+These terms can change; the current version is always in /terms.
+</details>
+"""
+privacy = """
+🔒 **Derp — privacy**
+
+<details><summary>What I keep</summary>
+
+Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Notes you ask me to remember, until you remove them. Payment receipts, for accounting.
+</details>
+
+<details><summary>Who processes it</summary>
+
+To answer, messages go to AI providers through OpenRouter. Paid answers and the free daily ones use providers that keep nothing. Free models — only if you, or an admin for a group, turned them on — may store what they get.
+</details>
+
+<details><summary>Your controls</summary>
+
+Reply /forget to remove a message from my memory, ask me to forget notes anytime, and group admins can turn context off in /settings.
+</details>
+
+<details><summary>Payments</summary>
+
+Telegram handles payments; I only see the amount and a charge id.
+</details>
+"""
+support_how = "Write `/paysupport` followed by what happened — the date and the amount help. It goes straight to the person who runs Derp."
+support_sent = "Sent to the person who runs Derp. Refunds come back to your Stars balance."
