@@ -1,37 +1,35 @@
 # Derp
 
-AI-powered Telegram bot built with [aiogram](https://github.com/aiogram/aiogram) and [Gemini](https://ai.google.dev/).
+The sharp friend already in your Telegram chat: [@DerpRobot](https://t.me/DerpRobot).
 
-## Requirements
+Quiet until called, aware of the conversation, good with text, pictures and voice, and honest about money.
 
-- Python 3.13+
-- [uv](https://github.com/astral-sh/uv)
-- Docker (for PostgreSQL)
-- Telegram bot token ([@BotFather](https://t.me/BotFather))
-- Google API key
+- 💬 **Talk**: private chats, or groups when someone says its name, @mentions it or replies
+- 🔎 **Look things up**: web search, links, weather, exchange rates, Wikipedia, a Python sandbox for exact maths
+- 🎨 **Make things**: draw and edit pictures, memes, reversed clips, cutouts, plus song and anime recognition
+- 👥 **Run the group**: polls and quizzes with a leaderboard, catch-up summaries, notes and chat rules
+- ⏰ **Remember**: one-off or repeating reminders and scheduled prompts
+- ⭐ **Pay fairly**: free Derpcoins every day, more with Telegram Stars, and `/info` on any answer shows its cost
 
-## Setup
+## Stack
+
+Python 3.14 · [aiogram](https://github.com/aiogram/aiogram) · [Pydantic AI](https://ai.pydantic.dev) over
+[OpenRouter](https://openrouter.ai) · PostgreSQL (SQLAlchemy + Alembic) · Logfire
+
+## Run it
 
 ```bash
-cp env.example .env   # Configure your credentials
-make dev-setup        # Creates venv, starts DB, runs migrations
-make run              # Start the bot
+cp env.example .env       # bot token, OpenRouter key, your Telegram id
+make install
+make db-dev-up migrate    # PostgreSQL in Docker
+make run
 ```
 
-## Configuration
+`make check` runs lint, types and every offline test. `make help` lists the rest.
 
-Key environment variables in `.env`:
+## Learn more
 
-| Variable | Description |
-|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `GOOGLE_API_KEY` | Google AI API key |
-| `LOGFIRE_TOKEN` | Logfire observability token |
-| `ENVIRONMENT` | `dev` or `prod` |
-
-See `env.example` for the complete list.
-
-## Commands
-
-Run `make help` to see all available targets.
+- [`AGENTS.md`](AGENTS.md): how the code is laid out and the rules it keeps. Every package has its own.
+- [`deploy/README.md`](deploy/README.md): a push to `main` ships over SSH with preflight checks, migrations and
+  automatic rollback.
+- [`PRIVACY.md`](PRIVACY.md): what Derp stores and who processes it.
