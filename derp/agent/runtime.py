@@ -48,9 +48,7 @@ from derp.agent.models import AgentRun, Approval
 from derp.agent.persona import PERSONA, situation
 from derp.agent.progress import DraftProgress, Progress, ReactionProgress, stage_for_tool
 from derp.agent.runs import finish_run, record_output, start_run, totals
-from derp.agent.tools import FAMILIES
-from derp.agent.tools.code import CODE_CAPABILITIES
-from derp.agent.tools.web import WEB_CAPABILITIES
+from derp.agent.tools import CAPABILITIES, FAMILIES
 from derp.agent.toolsets import toolsets_for
 from derp.config import Settings
 from derp.db.engine import Database
@@ -142,7 +140,7 @@ class Runtime:
             output_type=str,
             deps_type=RunDeps,
             instructions=PERSONA,
-            capabilities=[*WEB_CAPABILITIES, *CODE_CAPABILITIES],
+            capabilities=CAPABILITIES,
         )
 
     async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome | None:

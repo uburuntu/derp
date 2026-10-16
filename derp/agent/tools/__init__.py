@@ -1,6 +1,14 @@
-"""Tool families available to the agent; ``toolsets_for`` filters them per run."""
+"""Tool families available to the agent (``toolsets_for`` filters them per run) and run-wide capabilities."""
 
+from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai_harness import ToolOutputLimits
+from pydantic_ai_harness.repair_tool_arguments import RepairToolArguments
+from pydantic_ai_harness.tool_output_limits import Band, Truncate, TruncationStrategy
+
+from derp.agent.deps import RunDeps
 from derp.agent.tools import games, history, images, memory, scheduler, telegram, utilities
+from derp.agent.tools.code import CODE_MODE
+from derp.agent.tools.web import WEB_CAPABILITIES
 from derp.agent.toolsets import Family
 
 FAMILIES: tuple[Family, ...] = (
@@ -15,3 +23,24 @@ FAMILIES: tuple[Family, ...] = (
     utilities.wolfram_family,
     utilities.code_family,
 )
+
+
+def _clamp(chars: int) -> list[Band]:
+    return [Band(over=chars, action=Truncate(max_chars=chars, strategy=TruncationStrategy.head))]
+
+
+# Tool results that can grow with the chat or the code are clamped once, when produced.
+OUTPUT_LIMITS = ToolOutputLimits[RunDeps](
+    bands=[],
+    per_tool={
+        "run_code": _clamp(4000),
+        **{name: _clamp(8000) for name in ("read_messages", "search_history", "chat_query", "digest")},
+    },
+)
+# Cheap models' malformed tool-call JSON is repaired before validation.
+CAPABILITIES: list[AbstractCapability[RunDeps]] = [
+    *WEB_CAPABILITIES,
+    CODE_MODE,
+    OUTPUT_LIMITS,
+    RepairToolArguments[RunDeps](),
+]

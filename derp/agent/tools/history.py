@@ -24,7 +24,6 @@ from derp.history.render import describe_time, load_views, render_transcript
 from derp.money.funding import Funding, run_cost
 
 log = logging.getLogger("derp.digests")
-OUTPUT_LIMIT = 8000  # characters returned to the model per call
 toolset = FunctionToolset[RunDeps]()
 
 
@@ -32,14 +31,10 @@ def _scope(ctx: RunContext[RunDeps], whole_chat: bool) -> Scope:
     return Scope(ctx.deps.chat.id, ctx.deps.thread_id, whole_chat=whole_chat or ctx.deps.thread_id is None)
 
 
-def _clip(text: str) -> str:
-    return text if len(text) <= OUTPUT_LIMIT else text[:OUTPUT_LIMIT] + "\n… [more results cut]"
-
-
 async def _render(ctx: RunContext[RunDeps], rows: list[Message]) -> str:
     async with ctx.deps.db.session() as session:
         views = await load_views(session, sorted(rows, key=lambda r: r.message_id))
-    return _clip(render_transcript(views, ctx.deps.tz))
+    return render_transcript(views, ctx.deps.tz)
 
 
 @toolset.tool
@@ -119,7 +114,7 @@ async def chat_query(ctx: RunContext[RunDeps], query: ChatQuery) -> str:
         case "groups":
             if not result.groups:
                 return "Nothing matches."
-            return _clip("\n".join(f"{label}: {value}" for label, value in result.groups))
+            return "\n".join(f"{label}: {value}" for label, value in result.groups)
         case "polls":
             return "\n".join(_poll_line(p) for p in result.polls) or "No polls are stored."
         case "events":
@@ -260,7 +255,7 @@ async def digest(
             found.summary if found is not None else "Not summarized yet: use search_history or read_messages."
         )
         sections.append(f"{header}\n{body}")
-    return _clip("\n\n".join(sections)) if sections else "No stored messages in that period."
+    return "\n\n".join(sections) if sections else "No stored messages in that period."
 
 
 family = Family("history", toolset, deferred=("chat_info", "inspect_media"))
