@@ -20,6 +20,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message as TgMessage
 from pydantic_ai import Agent, CancellationToken, RunCancelled, RunContext, capture_run_messages
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
@@ -50,7 +51,7 @@ from derp.agent.toolsets import toolsets_for
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.capture import record_outgoing
-from derp.history.models import Chat, ForumTopic, Message
+from derp.history.models import Chat, ForumTopic, Message, User
 from derp.history.render import chat_time, estimate_tokens, load_views, neutralize, one_line, render_line
 from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.ledger import cancelled_cost, estimate_cost
@@ -60,7 +61,8 @@ from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
 from derp.memory.notes import load_memory, notes_block
-from derp.money.funding import Funder, Funds
+from derp.money.free import consented, offer
+from derp.money.funding import Funder, Funding, Funds
 from derp.money.wallets import release
 from derp.ops.observability import record_run_failure
 from derp.ops.owner import notify_owners
@@ -137,11 +139,20 @@ class Runtime:
         operation_id = (
             f"turn:{chat.id}:{message.message_id}" if message.message_id else f"turn:{uuid.uuid4().hex}"
         )
+        private = chat.type == "private"
+        async with self.db.session() as session:
+            free_allowed = consented(await session.get(User, asker.id)) if private else chat.free_models
         funds = await self.funder.reserve(
-            chat_id=chat.id, private=chat.type == "private", user_id=asker.id, operation_id=operation_id
+            chat_id=chat.id,
+            private=private,
+            user_id=asker.id,
+            operation_id=operation_id,
+            free_allowed=free_allowed,
         )
-        if funds is None:
-            await self._say(target, t(locale, "money.unfunded"))
+        if funds is None:  # free models not allowed yet: offer them (consent / admin opt-in)
+            text, markup = offer(locale, group=not private)
+            with contextlib.suppress(TelegramAPIError):
+                await send_markdown(self.bot, target, text, reply_markup=markup)
             return Outcome(None, "unfunded", ())
         funding = funds.funding
         pin = await self.pins.get(funding.role)
@@ -200,6 +211,7 @@ class Runtime:
                 topic=topic.name if topic else None,
                 rules=chat.rules,
                 notes=notes_block(memory, asker.full_name),
+                blind=bool(inspected) and not pin.vision,
             )
             caps = self.settings.run_caps
             progress: Progress = (
@@ -312,7 +324,7 @@ class Runtime:
             if error is not None:
                 record_run_failure(run.id, error, prompt)
                 if not isinstance(error, TelegramAPIError) and not deps.delivered:
-                    await self._apologize(target, locale, error)
+                    await self._apologize(target, locale, error, funds)
             return Outcome(run.id, status, tuple(message_id for message_id, _ in deps.delivered))
         except (
             BaseException
@@ -340,7 +352,10 @@ class Runtime:
         token.cancel()
         return True
 
-    async def _apologize(self, target: Target, locale: str, error: BaseException) -> None:
+    async def _apologize(self, target: Target, locale: str, error: BaseException, funds: Funds) -> None:
+        if funds.funding is Funding.FREE and isinstance(error, ModelHTTPError) and error.status_code == 429:
+            await self._say(target, t(locale, "agent.free_busy"))  # OpenRouter's shared free limits
+            return
         await self._say(
             target, t(locale, "agent.timeout" if isinstance(error, TimeoutError) else "agent.failed")
         )

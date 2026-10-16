@@ -104,9 +104,20 @@ class Funder:
         return max(1, self.settings.credits_for_usd(float(usd)))
 
     async def reserve(
-        self, *, chat_id: int, private: bool, user_id: int, operation_id: str, now: datetime | None = None
+        self,
+        *,
+        chat_id: int,
+        private: bool,
+        user_id: int,
+        operation_id: str,
+        free_allowed: bool = False,
+        now: datetime | None = None,
     ) -> Funds | None:
-        """Hold money for a run from the first payer that can cover a typical turn; None if nobody can."""
+        """Hold money for a run from the first payer that can cover a typical turn.
+
+        Free models (nothing held) come last and only when allowed (consent / admin opt-in);
+        None means nobody can pay.
+        """
         moment = now or datetime.now(UTC)
         cap = self.settings.run_caps.credits
         cap_hit = False
@@ -150,7 +161,7 @@ class Funder:
             await self.notify(
                 f"Sponsored usage hit today's ${self.settings.sponsored_global_daily_usd:g} cap."
             )
-        return None
+        return Funds(Funding.FREE, operation_id, None, None, 0) if free_allowed else None
 
     async def settle(self, session: AsyncSession, funds: Funds, run_id: int, *, delivered: bool) -> int:
         """Charge the run's marked-up provider cost if Telegram accepted an output, else return the hold."""

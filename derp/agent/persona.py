@@ -59,6 +59,7 @@ def situation(
     topic: str | None = None,
     rules: str | None = None,
     notes: str | None = None,
+    blind: bool = False,
 ) -> str:
     # Names, titles and topics are user-controlled: one short quoted line each, never instructions.
     where = (
@@ -77,4 +78,8 @@ def situation(
                      + "\n".join(profile) + "\n</chat_profile>")  # fmt: skip
     if notes:
         parts.append(notes)
+    if blind:
+        parts.append(
+            "This model can't see images. If asked about the image here, say so plainly; don't guess."
+        )
     return "\n\n".join(parts)

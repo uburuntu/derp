@@ -1,15 +1,19 @@
 from decimal import Decimal
+from typing import Any
 
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import func, select
 
 from derp.agent.models import AgentRun
 from derp.config import Settings
+from derp.history.models import Chat, User
 from derp.inference.models import ProviderCall
+from derp.money.free import POLICY_VERSION
 from derp.money.models import Reservation
 from derp.money.wallets import balance, credit, wallet
-from tests.e2e.harness import Conversation, Person
+from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
 CARL = Person(601, "Carl")
@@ -117,3 +121,85 @@ async def test_a_run_that_dies_outside_the_model_is_closed_and_released(
         assert run is not None and (run.status, run.error_type) == ("failed", "RuntimeError")
         assert await session.scalar(select(Reservation.state)) == "released"
         assert await balance(session, wallet_id) == 500
+
+
+async def exhaust_sponsorship(conversation: Conversation, settings: Settings) -> None:
+    conversation.meet(OWNER)
+    async with conversation.db.transaction() as session:
+        cap = Decimal(str(settings.sponsored_global_daily_usd))
+        session.add(ProviderCall(kind="chat", model="m", funding="sponsored", cost_usd=cap))
+
+
+async def press_button(conversation: Conversation, person: Person, chat_id: int, call: Any) -> None:
+    data = call["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    message_id = max(mid for (cid, mid) in conversation.api.messages if cid == chat_id)
+    query_id = f"q{len(conversation.api.calls)}"
+    message = conversation.api.expect_callback(query_id, chat_id=chat_id, message_id=message_id, data=data)
+    update_id = await conversation.push(
+        "callback_query",
+        {"id": query_id, "from": person.payload(), "chat_instance": "c", "message": message, "data": data},
+    )
+    await conversation.settle(update_id)
+
+
+async def test_consenting_to_free_models_answers_the_waiting_question(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    await exhaust_sponsorship(conversation, settings)
+    asked = await conversation.send(CARL, text="what's 2+2?")
+    offer = await conversation.expect_reply(asked)
+    assert "may store" in offer["rich_message"]["markdown"]
+    model.reply("4, on the house")
+    after = conversation.seq
+    await press_button(conversation, CARL, CARL.id, offer)
+    answers = [
+        c
+        for c in conversation.api.calls_of("sendRichMessage", after=after)
+        if "on the house" in c["rich_message"]["markdown"]
+    ]
+    assert answers and int(answers[0]["reply_parameters"]["message_id"]) == asked.message_id
+    assert model.pins[-1].model.endswith(":free")
+    async with conversation.db.session() as session:
+        user = await session.get(User, CARL.id)
+        assert user is not None and user.free_models_consent_version is not None
+        run = await session.scalar(select(AgentRun))
+        assert run is not None and (run.funding, run.charged_credits) == ("free", 0)
+
+
+async def test_only_an_admin_turns_free_models_on_for_a_group(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    await exhaust_sponsorship(conversation, settings)
+    den = Room(-1013, title="Den")
+    boss = Person(602, "Boss")
+    conversation.meet(CARL, den)
+    conversation.meet(boss, den, status="administrator")
+    asked = await conversation.send(CARL, den, "derp hi")
+    offer = await conversation.expect_reply(asked)
+    await press_button(conversation, CARL, den.id, offer)  # not an admin
+    async with conversation.db.session() as session:
+        chat = await session.get(Chat, den.id)
+        assert chat is not None and not chat.free_models
+    model.reply("free hello")
+    after = conversation.seq
+    await press_button(conversation, boss, den.id, offer)
+    texts = [c["rich_message"]["markdown"] for c in conversation.api.calls_of("sendRichMessage", after=after)]
+    assert any("allowed free models" in text for text in texts) and "free hello" in texts
+    async with conversation.db.session() as session:
+        chat = await session.get(Chat, den.id)
+        assert chat is not None and chat.free_models
+
+
+async def test_busy_free_models_say_so(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    await exhaust_sponsorship(conversation, settings)
+    async with conversation.db.transaction() as session:
+        session.add(User(id=CARL.id, first_name="Carl", free_models_consent_version=POLICY_VERSION))
+
+    def busy(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(status_code=429, model_name="free")
+
+    model.reply(busy)
+    asked = await conversation.send(CARL, text="hi")
+    assert "free models are busy" in (await conversation.expect_reply(asked))["rich_message"]["markdown"]

@@ -5,9 +5,16 @@ private = "**Derp** is waking up. Say something."
 failed = "Something broke on my side. Try again in a moment — you weren't charged."
 timeout = "That took too long and I gave up. Try again, maybe simpler — you weren't charged."
 capped = "That got too expensive for one message, so I stopped. Try a smaller ask — you weren't charged."
+free_busy = "The free models are busy right now. Try again in a bit, or /buy Derpcoins."
 
 [money]
-unfunded = "Today's free Derpcoins are used up. They refill tomorrow — or /buy more."
+free_offer = "Today's free Derpcoins are used up. /buy more — or keep chatting on free models. Heads-up: free models' providers may store what you send them."
+free_consent = "Use free models"
+free_offer_group = "Today's free Derpcoins are used up. /buy more, or an admin can allow free models in this chat — their providers may store the messages they get."
+free_enable = "Allow free models (admins)"
+free_on = "Free models are on for you."
+free_admins_only = "Only chat admins can allow free models."
+free_enabled = "An admin allowed free models here: when Derpcoins run out, I answer with free models, whose providers may store the messages they get."
 
 [billing]
 menu = "**Derpcoins** pay for my answers once the free daily ones run out.\nYour balance: **{balance}**. Pick a pack:"
