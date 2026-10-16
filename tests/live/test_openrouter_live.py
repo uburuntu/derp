@@ -21,3 +21,24 @@ async def test_chat_role_reports_cost_and_served_model(role: ModelRole) -> None:
     assert usage.cost_usd > 0
     assert usage.model and usage.model.split("/")[0] == pin.model.split("/")[0]
     assert usage.generation_id
+
+
+async def test_web_search_and_fetch_server_tools_are_accepted_and_billed() -> None:
+    from pydantic_ai.capabilities import NativeTool
+    from pydantic_ai.native_tools import WebFetchTool, WebSearchTool
+
+    settings = Settings()
+    pin = settings.model_pins[ModelRole.CHAT_SPONSORED]
+    agent = Agent(
+        chat_model(pin, build_provider(settings)),
+        model_settings=chat_settings(pin, max_tokens=200),
+        capabilities=[
+            NativeTool(WebSearchTool(search_context_size="low", max_uses=1)),
+            NativeTool(WebFetchTool(max_uses=1, max_content_tokens=2000)),
+        ],
+    )
+    result = await agent.run("Open https://example.com and tell me its page title in five words or fewer.")
+    usage = response_usage(result.response)
+    print(result.output, usage)
+    assert "example" in result.output.lower()
+    assert usage.cost_usd > 0

@@ -41,6 +41,8 @@ async def test_private_chat_answers_and_remembers(conversation: Conversation, mo
         mine = await session.scalar(select(Message).where(Message.is_derp).order_by(Message.message_id))
         assert mine is not None and (mine.kind, mine.text) == ("text", "**привет**, человек")
     assert model.pins[-1].model == "deepseek/deepseek-v4.1-flash"  # sponsored: no credits bought
+    kinds = {tool.kind for tool in model.infos[-1].model_request_parameters.native_tools}
+    assert kinds == {"web_search", "web_fetch"}
 
     async with conversation.db.session() as session:
         runs = list(await session.scalars(select(AgentRun).order_by(AgentRun.id)))

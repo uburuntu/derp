@@ -129,7 +129,7 @@ Messages that invoke me, and — while a group allows it — other group message
 
 <details><summary>Who processes it</summary>
 
-To answer, messages go to AI providers through OpenRouter. Paid answers and the free daily ones use providers that keep nothing. Free models — only if you, or an admin for a group, turned them on — may store what they get.
+To answer, messages go to AI providers through OpenRouter. Paid answers and the free daily ones use providers that keep nothing. Free models — only if you, or an admin for a group, turned them on — may store what they get. When I search the web or open a link, the query or address goes to a search or fetch service that may log it.
 </details>
 
 <details><summary>Your controls</summary>

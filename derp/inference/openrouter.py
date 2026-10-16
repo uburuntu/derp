@@ -8,10 +8,15 @@ which already includes server-tool fees such as web search. Never use
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, cast, override
 
+from openai.types import chat
+from openai.types.chat import ChatCompletionToolChoiceOptionParam
 from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings, OpenRouterProviderConfig
+from pydantic_ai.native_tools import AbstractNativeTool, WebFetchTool
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from derp.config import Settings
@@ -41,8 +46,40 @@ def provider_config(pin: RolePin) -> OpenRouterProviderConfig:
     return config
 
 
+class DerpOpenRouterModel(OpenRouterModel):
+    """OpenRouter plus its ``openrouter:web_fetch`` server tool, which Pydantic AI doesn't map yet.
+
+    Fetches use the plain ``openrouter`` engine (direct HTTP fetch + extraction,
+    no third-party backend); nothing is fetched from Derp's own host.
+    """
+
+    @classmethod
+    @override
+    def supported_native_tools(cls) -> frozenset[type[AbstractNativeTool]]:
+        return super().supported_native_tools() | {WebFetchTool}
+
+    @override
+    def _get_tool_choice(
+        self, model_settings: OpenAIChatModelSettings, model_request_parameters: ModelRequestParameters
+    ) -> tuple[list[chat.ChatCompletionToolParam], ChatCompletionToolChoiceOptionParam | None]:
+        tools, choice = super()._get_tool_choice(model_settings, model_request_parameters)
+        fetch = next((t for t in model_request_parameters.native_tools if isinstance(t, WebFetchTool)), None)
+        if fetch is not None:
+            parameters: dict[str, Any] = {"engine": "openrouter"}
+            if fetch.max_uses is not None:
+                parameters["max_uses"] = fetch.max_uses
+            if fetch.max_content_tokens is not None:
+                parameters["max_content_tokens"] = fetch.max_content_tokens
+            if fetch.blocked_domains:
+                parameters["blocked_domains"] = fetch.blocked_domains
+            tools.append(
+                cast(chat.ChatCompletionToolParam, {"type": "openrouter:web_fetch", "parameters": parameters})
+            )
+        return tools, choice
+
+
 def chat_model(pin: RolePin, provider: OpenRouterProvider) -> OpenRouterModel:
-    return OpenRouterModel(pin.model, provider=provider)
+    return DerpOpenRouterModel(pin.model, provider=provider)
 
 
 def chat_settings(pin: RolePin, *, max_tokens: int) -> OpenRouterModelSettings:

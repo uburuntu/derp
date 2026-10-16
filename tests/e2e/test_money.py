@@ -154,6 +154,7 @@ async def test_consenting_to_free_models_answers_the_waiting_question(
     ]
     assert answers and int(answers[0]["reply_parameters"]["message_id"]) == asked.message_id
     assert model.pins[-1].model.endswith(":free")
+    assert not model.infos[-1].model_request_parameters.native_tools  # search fees would land on the creator
     async with conversation.db.session() as session:
         user = await session.get(User, CARL.id)
         assert user is not None and user.free_models_consent_version is not None

@@ -47,6 +47,7 @@ from derp.agent.persona import PERSONA, situation
 from derp.agent.progress import DraftProgress, Progress, ReactionProgress, stage_for_tool
 from derp.agent.runs import finish_run, record_output, start_run, totals
 from derp.agent.tools import FAMILIES
+from derp.agent.tools.web import WEB_CAPABILITIES
 from derp.agent.toolsets import toolsets_for
 from derp.config import Settings
 from derp.db.engine import Database
@@ -108,7 +109,9 @@ class Runtime:
         self.lanes = Lanes(settings.run_concurrency)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.in_flight: set[str] = set()  # operation ids of holds a live run still owns
-        self.agent = Agent[RunDeps, str](output_type=str, deps_type=RunDeps, instructions=PERSONA)
+        self.agent = Agent[RunDeps, str](
+            output_type=str, deps_type=RunDeps, instructions=PERSONA, capabilities=WEB_CAPABILITIES
+        )
 
     async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome | None:
         """Answer an invocation, queued per chat topic. None when merged into a newer trigger or a duplicate."""

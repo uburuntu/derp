@@ -15,13 +15,14 @@ from typing import Any
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models import Model, StreamedResponse
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
-from pydantic_ai.native_tools import WebSearchTool
+from pydantic_ai.native_tools import WebFetchTool, WebSearchTool
 from pydantic_ai.profiles import ModelProfile
 
 from derp.inference.roles import RolePin
 
-# Like OpenRouter: no provider-side tool search, so deferred tools are found via local search_tools.
-PROFILE = ModelProfile(supported_native_tools=frozenset({WebSearchTool}))
+# Like Derp's OpenRouter model: web search and fetch as server tools, no provider-side tool search
+# (deferred tools are found via local search_tools).
+PROFILE = ModelProfile(supported_native_tools=frozenset({WebSearchTool, WebFetchTool}))
 
 Responder = Callable[[list[ModelMessage], AgentInfo], ModelResponse]
 
