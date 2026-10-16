@@ -16,7 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 import aiogram.methods
 from aiogram.methods.base import TelegramMethod
@@ -106,6 +106,8 @@ class FakeBotAPI:
         self.next_message_ids: dict[int, int] = defaultdict(int)
         self.files: dict[str, tuple[str, bytes]] = {}
         self.poll_ids = 0
+        self.inline_results: dict[str, bool] = {}  # result id → has a keyboard
+        self.inline_messages: dict[str, JsonObject] = {}  # inline_message_id → last edit
         self.pinned: dict[int, int] = {}
         self.handlers: dict[str, Callable[[JsonObject], Any]] = {}
         self._runner: web.AppRunner | None = None
@@ -457,6 +459,28 @@ class FakeBotAPI:
             poll["correct_option_ids"] = list(correct)
         return self._new_message(fields, poll=poll)
 
+    def _m_answerInlineQuery(self, fields: JsonObject) -> bool:  # noqa: N802
+        results = fields.get("results") or []
+        if not isinstance(results, list):
+            raise TypeError("results must be a list")
+        for result in cast(list[JsonObject], results):
+            markup = result.get("reply_markup")
+            self.inline_results[str(result["id"])] = bool(markup)
+        return True
+
+    def send_inline_result(self, result_id: str) -> str:
+        """The user picked a result: Telegram posts it and reports an inline_message_id only if it has a keyboard."""
+        if not self.inline_results.get(result_id):
+            raise AssertionError("results without a keyboard report no inline_message_id")
+        inline_id = f"inline-{len(self.inline_messages) + 1}"
+        self.inline_messages[inline_id] = {}
+        return inline_id
+
+    def _m_answerGuestQuery(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        if not isinstance(fields.get("result"), Mapping):
+            raise TypeError("result must be one InlineQueryResult")
+        return {"inline_message_id": f"guest-{fields['guest_query_id']}"}
+
     def _m_sendPhoto(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         unique = f"photo-{len(self.calls)}"
         sizes = [{"file_id": f"f-{unique}", "file_unique_id": unique, "width": 1024, "height": 1024}]
@@ -477,7 +501,12 @@ class FakeBotAPI:
         self.pinned[key[0]] = key[1]
         return True
 
-    def _m_editMessageText(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+    def _m_editMessageText(self, fields: JsonObject) -> JsonObject | bool:  # noqa: N802
+        if inline_id := fields.get("inline_message_id"):  # inline messages: Telegram returns True
+            if str(inline_id) not in self.inline_messages:
+                raise ValueError(f"inline message {inline_id} does not exist")
+            self.inline_messages[str(inline_id)] = dict(fields)
+            return True
         key = (int(fields["chat_id"]), int(fields["message_id"]))
         message = self.messages.get(key)
         if message is None:

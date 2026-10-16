@@ -19,6 +19,7 @@ from decimal import Decimal
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message as TgMessage
+from aiogram.types import User as TgUser
 from pydantic_ai import Agent, CancellationToken, RunCancelled, RunContext, capture_run_messages
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
@@ -55,7 +56,15 @@ from derp.db.engine import Database
 from derp.history.capture import record_outgoing
 from derp.history.digests import latest_before
 from derp.history.models import Chat, ForumTopic, Message, User
-from derp.history.render import chat_time, estimate_tokens, load_views, neutralize, one_line, render_line
+from derp.history.render import (
+    chat_time,
+    describe_time,
+    estimate_tokens,
+    load_views,
+    neutralize,
+    one_line,
+    render_line,
+)
 from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.ledger import cancelled_cost, estimate_cost
 from derp.inference.models import ModelPin
@@ -85,6 +94,21 @@ class Outcome:
     run_id: int | None  # None: nobody could pay, no run was started
     status: str
     delivered: tuple[int, ...]
+
+
+@dataclass(slots=True)
+class Detached:
+    """An answer produced without a chat to send it to (inline queries, guest mentions)."""
+
+    text: str
+    run_id: int
+    funds: Funds
+
+
+DETACHED_BRIEF = (
+    "You were summoned {where}: you can't see that chat, its history or its members, and you have no "
+    "tools except the web. Answer the request on its own, briefly. The asker is “{asker}”. Now: {now}."
+)
 
 
 class Runtime:
@@ -368,6 +392,85 @@ class Runtime:
             raise
         finally:
             self.in_flight.discard(funds.operation_id)
+
+    async def answer_detached(
+        self, *, asker: TgUser, prompt: str, trigger: str, operation_id: str, where: str
+    ) -> Detached | None:
+        """One standalone answer, paid from the asker's own funding; None when nobody can pay.
+
+        Nothing about it is stored beyond accounting: no messages, no run history.
+        Call ``settle_detached`` once delivery is known.
+        """
+        async with self.db.session() as session:
+            user = await session.get(User, asker.id)
+        funds = await self.funder.reserve(
+            chat_id=asker.id,
+            private=True,
+            user_id=asker.id,
+            operation_id=operation_id,
+            free_allowed=consented(user),
+        )
+        if funds is None:
+            return None
+        self.in_flight.add(funds.operation_id)
+        run_id: int | None = None
+        try:
+            pin = await self.pins.get(funds.funding.role)
+            async with self.db.transaction() as session:
+                run = await start_run(
+                    session, chat_id=asker.id, user_id=asker.id, trigger=trigger, role=funds.funding.role.value,
+                    funding=funds.funding.value, wallet_id=funds.wallet_id, reservation_id=funds.reservation_id,
+                )  # fmt: skip
+                run_id = run.id
+            model = self.model_factory(pin)
+            deps = RunDeps(
+                db=self.db, bot=self.bot, settings=self.settings, chat=Chat(id=asker.id, type="private"),
+                user_id=asker.id, asker=asker.full_name, locale=resolve(asker.language_code), thread_id=None,
+                trigger_message_id=0, run_id=run.id, funds=funds, target=Target(asker.id), tz=UTC,
+                gateway=self.gateway, pin=pin, model=model, digest_pin=pin, digest_model=model,
+                digest_role=funds.funding.role.value, api=self.api, pins=self.pins,
+            )  # fmt: skip
+            brief = DETACHED_BRIEF.format(
+                where=where, asker=one_line(asker.full_name), now=describe_time(datetime.now(UTC), UTC)
+            )
+            caps = self.settings.run_caps
+            text, status, error_type = "", "completed", None
+            with capture_run_messages() as captured:
+                try:
+                    async with asyncio.timeout(caps.timeout_seconds):
+                        result = await self.agent.run(
+                            neutralize(prompt),
+                            deps=deps,
+                            model=model,
+                            instructions=InstructionPart(brief, dynamic=True),
+                            model_settings=chat_settings(pin, max_tokens=caps.output_tokens),
+                            usage_limits=UsageLimits(request_limit=3, tool_calls_limit=caps.tool_calls),
+                            toolsets=[],
+                        )
+                    text, messages = result.output, result.new_messages()
+                except Exception as exc:  # noqa: BLE001 - the caller says so; nothing is charged
+                    status, error_type, messages = "failed", type(exc).__name__, list(captured)
+            async with self.db.transaction() as session:
+                stored = await session.merge(run)
+                finish_run(session, stored, messages, status=status, error_type=error_type)
+                stored.messages = None  # detached answers keep no history
+            return Detached(text.strip(), run.id, funds)
+        except BaseException as exc:
+            await self._abandon(run_id, funds, exc)
+            self.in_flight.discard(funds.operation_id)
+            raise
+
+    async def settle_detached(self, detached: Detached, *, delivered: bool) -> None:
+        try:
+            async with self.db.transaction() as session:
+                charged = await self.funder.settle(
+                    session, detached.funds, detached.run_id, delivered=delivered
+                )
+                await session.execute(
+                    update(AgentRun).where(AgentRun.id == detached.run_id).values(charged_credits=charged)
+                )
+        finally:
+            self.in_flight.discard(detached.funds.operation_id)
 
     async def run_approved(self, approval: Approval, chat: Chat, locale: str) -> None:
         """Carry out an approved action as its own run, funded now from the requester's paid order."""

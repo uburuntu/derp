@@ -170,3 +170,11 @@ failed = "The image didn't come out — nothing was charged."
 reminder = "⏰ Reminder from {name}: {text}"
 skipped = "⏰ Skipped scheduled job #{id}: not enough Derpcoins to answer it."
 paused = "⏰ Paused scheduled job #{id} after missing several runs for lack of Derpcoins. Ask me to resume it once there are Derpcoins again."
+
+[inline]
+title = "Ask Derp"
+thinking = "❓ {query}\n\n🤔 thinking…"
+ask_too = "Ask Derp"
+get_coins = "Get Derpcoins"
+unfunded = "Out of Derpcoins for today. Open @DerpRobot and /buy to keep asking."
+failed = "Couldn't answer that one — nothing was charged. Try again?"
