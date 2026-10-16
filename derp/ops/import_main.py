@@ -26,7 +26,7 @@ from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 
 from derp.config import Settings
 from derp.db.engine import Database
@@ -36,7 +36,7 @@ from derp.money.models import CreditLot
 from derp.money.wallets import credit, wallet
 
 NOTE_CHARS = 500
-BATCH = 1000
+BATCH = 1000  # rows per INSERT: well under Postgres' 32767 bind parameters
 CHAT_TYPES = {"private", "group", "supergroup", "channel"}
 
 
@@ -78,6 +78,17 @@ async def _rows(source: AsyncConnection, query: str, **params: Any) -> list[Any]
     return list((await source.execute(text(query), params)).all())
 
 
+async def _insert_new(session: AsyncSession, model: Any, rows: list[dict[str, Any]], keys: list[Any]) -> int:
+    """Multi-row inserts that skip existing keys; returns how many rows were new."""
+    added = 0
+    for start in range(0, len(rows), BATCH):
+        statement = (
+            insert(model).values(rows[start : start + BATCH]).on_conflict_do_nothing(index_elements=keys)
+        )
+        added += len((await session.execute(statement.returning(keys[0]))).all())
+    return added
+
+
 async def import_main(
     source: AsyncConnection, db: Database, credits_per_star: int, *, bot_id: int, days: int, now: datetime
 ) -> Counts:
@@ -86,42 +97,40 @@ async def import_main(
         source,
         "select telegram_id, is_bot, first_name, last_name, username, language_code, is_premium, credits from users",
     )
+    chats = [
+        c
+        for c in await _rows(
+            source, "select telegram_id, type, title, username, is_forum, llm_memory, credits from chats"
+        )
+        if c.type in CHAT_TYPES
+    ]
     async with db.transaction() as session:
-        for u in users:
-            result = await session.execute(
-                insert(User)
-                .values(
-                    id=u.telegram_id,
-                    is_bot=u.is_bot,
-                    first_name=u.first_name or "",
-                    last_name=u.last_name,
-                    username=u.username,
-                    language_code=u.language_code,
-                    is_premium=bool(u.is_premium),
-                )
-                .on_conflict_do_nothing(index_elements=[User.id])
-            )
-            counts.users += result.rowcount or 0  # type: ignore[attr-defined]
-
-    chats = await _rows(
-        source, "select telegram_id, type, title, username, is_forum, llm_memory, credits from chats"
-    )
-    async with db.transaction() as session:
+        counts.users = await _insert_new(
+            session,
+            User,
+            [
+                {
+                    "id": u.telegram_id, "is_bot": u.is_bot, "first_name": u.first_name or "",
+                    "last_name": u.last_name, "username": u.username, "language_code": u.language_code,
+                    "is_premium": bool(u.is_premium),
+                }
+                for u in users
+            ],
+            [User.id],
+        )  # fmt: skip
+        counts.chats = await _insert_new(
+            session,
+            Chat,
+            [
+                {
+                    "id": c.telegram_id, "type": c.type, "title": c.title if c.type != "private" else None,
+                    "username": c.username, "is_forum": bool(c.is_forum),
+                }
+                for c in chats
+            ],
+            [Chat.id],
+        )  # fmt: skip
         for c in chats:
-            if c.type not in CHAT_TYPES:
-                continue
-            result = await session.execute(
-                insert(Chat)
-                .values(
-                    id=c.telegram_id,
-                    type=c.type,
-                    title=c.title if c.type != "private" else None,
-                    username=c.username,
-                    is_forum=bool(c.is_forum),
-                )
-                .on_conflict_do_nothing(index_elements=[Chat.id])
-            )
-            counts.chats += result.rowcount or 0  # type: ignore[attr-defined]
             for piece in note_pieces(c.llm_memory or ""):
                 known = await session.scalar(
                     select(Note.id).where(Note.chat_id == c.telegram_id, Note.text == piece)
@@ -132,7 +141,7 @@ async def import_main(
 
     for kind, rows in (("user", users), ("chat", chats)):
         for row in rows:
-            if (row.credits or 0) <= 0 or (kind == "chat" and row.type not in CHAT_TYPES):
+            if (row.credits or 0) <= 0:
                 continue
             async with db.transaction() as session:  # one wallet lock per transaction
                 wallet_id = (await wallet(session, kind, row.telegram_id)).id
@@ -143,46 +152,29 @@ async def import_main(
                 counts.lots += 1
 
     forums = {c.telegram_id for c in chats if c.is_forum}
-    since = now - timedelta(days=days)
-    offset = 0
-    while True:
-        batch = await _rows(
-            source,
-            "select c.telegram_id as chat_id, u.telegram_id as user_id, m.telegram_message_id, m.thread_id,"
-            " m.direction, m.content_type, m.text, m.media_group_id, m.reply_to_message_id, m.telegram_date,"
-            " m.edited_at from messages m join chats c on c.id = m.chat_id left join users u on u.id = m.user_id"
-            " where m.deleted_at is null and m.telegram_date >= :since and m.telegram_message_id > 0"
-            " order by m.telegram_date, m.id limit :limit offset :offset",
-            since=since,
-            limit=BATCH,
-            offset=offset,
-        )
-        if not batch:
-            break
-        offset += len(batch)
-        async with db.transaction() as session:
-            for m in batch:
-                derp = m.direction == "out"
-                private = m.chat_id > 0
-                result = await session.execute(
-                    insert(Message)
-                    .values(
-                        chat_id=m.chat_id,
-                        message_id=m.telegram_message_id,
-                        thread_id=m.thread_id if m.chat_id in forums else None,
-                        user_id=bot_id if derp else m.user_id,
-                        date=m.telegram_date,
-                        edit_date=m.edited_at,
-                        kind=kind_of(m.content_type),
-                        text=m.text,
-                        reply_to_message_id=m.reply_to_message_id,
-                        media_group_id=m.media_group_id,
-                        is_derp=derp,
-                        capture="derp" if derp else ("invocation" if private else "ambient"),
-                    )
-                    .on_conflict_do_nothing(index_elements=[Message.chat_id, Message.message_id])
-                )
-                counts.messages += result.rowcount or 0  # type: ignore[attr-defined]
+    messages = await _rows(
+        source,
+        "select c.telegram_id as chat_id, u.telegram_id as user_id, m.telegram_message_id, m.thread_id,"
+        " m.direction, m.content_type, m.text, m.media_group_id, m.reply_to_message_id, m.telegram_date,"
+        " m.edited_at from messages m join chats c on c.id = m.chat_id left join users u on u.id = m.user_id"
+        " where m.deleted_at is null and m.telegram_date >= :since and m.telegram_message_id > 0"
+        " order by m.telegram_date, m.id",
+        since=now - timedelta(days=days),
+    )
+    rows = [
+        {
+            "chat_id": m.chat_id, "message_id": m.telegram_message_id,
+            "thread_id": m.thread_id if m.chat_id in forums else None,
+            "user_id": bot_id if m.direction == "out" else m.user_id, "date": m.telegram_date,
+            "edit_date": m.edited_at, "kind": kind_of(m.content_type), "text": m.text,
+            "reply_to_message_id": m.reply_to_message_id, "media_group_id": m.media_group_id,
+            "is_derp": m.direction == "out",
+            "capture": "derp" if m.direction == "out" else ("invocation" if m.chat_id > 0 else "ambient"),
+        }
+        for m in messages
+    ]  # fmt: skip
+    async with db.transaction() as session:
+        counts.messages = await _insert_new(session, Message, rows, [Message.chat_id, Message.message_id])
     return counts
 
 
