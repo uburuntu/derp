@@ -1,8 +1,10 @@
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
 
-from derp.billing.models import Purchase
+from derp.billing.models import Purchase, Subscription
+from derp.money.models import CreditLot
 from derp.money.wallets import balance, wallet
 from tests.e2e.harness import Conversation, Person, Room
 
@@ -58,7 +60,7 @@ async def test_private_purchase_credits_once_and_pings_the_owner(conversation: C
     asked = await conversation.send(CARL, text="/buy")
     menu = await conversation.expect_reply(asked)
     assert "balance: **0**" in menu["rich_message"]["markdown"]
-    buttons = [row[0] for row in menu["reply_markup"]["inline_keyboard"]]
+    buttons = [row[0] for row in menu["reply_markup"]["inline_keyboard"]][1:]  # Derp+ comes first
     assert [b["text"] for b in buttons] == ["50⭐ → 650", "250⭐ → 3,250", "750⭐ → 9,750"]
     menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
     after = conversation.seq
@@ -112,3 +114,69 @@ async def test_checkout_refuses_someone_elses_or_stale_invoices(conversation: Co
     assert stale["ok"] in (False, "false") and "changed" in str(stale["error_message"])
     cheaper = await checkout(conversation, CARL, mine, 40)
     assert cheaper["ok"] in (False, "false")
+
+
+async def test_derp_plus_subscription_credits_each_cycle_once(conversation: Conversation) -> None:
+    conversation.meet(OWNER)
+    asked = await conversation.send(CARL, text="/buy")
+    menu = await conversation.expect_reply(asked)
+    plan_button = menu["reply_markup"]["inline_keyboard"][0][0]
+    assert plan_button["text"].startswith("Derp+")
+    menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
+    after = conversation.seq
+    await press(conversation, CARL, CARL.id, menu_id, plan_button["callback_data"])
+    link = conversation.api.calls_of("createInvoiceLink", after=after)[-1]
+    payload = str(link["payload"])
+    assert int(link["subscription_period"]) == 2592000 and payload.startswith(
+        f"s1:derp_plus_v1:7150:{CARL.id}:"
+    )
+    offer = conversation.api.calls_of("sendRichMessage", after=after)[-1]
+    assert offer["reply_markup"]["inline_keyboard"][0][0]["url"].startswith("https://t.me/$invoice")
+
+    assert (await checkout(conversation, CARL, payload, 500))["ok"] in (True, "true")
+    now = int(datetime.now(UTC).timestamp())
+    first = paid(payload, 500, "sub-1") | {
+        "is_recurring": True,
+        "is_first_recurring": True,
+        "subscription_expiration_date": now + 30 * 86400,
+    }
+    sent = await conversation.send(CARL, successful_payment=first)
+    await conversation.settle(sent)
+    assert await wallet_balance(conversation, "user", CARL.id) == 7150
+
+    # One Derp+ at a time: a second offer is refused before any invoice exists.
+    second = f"s1:derp_plus_v1:7150:{CARL.id}:other"
+    assert (await checkout(conversation, CARL, second, 500))["ok"] in (False, "false")
+
+    renewal = paid(payload, 500, "sub-2") | {
+        "is_recurring": True,
+        "subscription_expiration_date": now + 60 * 86400,
+    }
+    sent = await conversation.send(CARL, successful_payment=renewal)
+    await conversation.settle(sent)
+    replies = [
+        c["rich_message"]["markdown"]
+        for c in conversation.api.calls_of("sendRichMessage")
+        if int(c["chat_id"]) == CARL.id
+    ]
+    assert any("Welcome to Derp+" in r for r in replies) and any("renewed" in r for r in replies)
+    async with conversation.db.session() as session:
+        lots = list(
+            await session.scalars(select(CreditLot).where(CreditLot.source == "plan").order_by(CreditLot.id))
+        )
+        assert [(lot.amount, int(lot.expires_at.timestamp())) for lot in lots if lot.expires_at] == [
+            (7150, now + 30 * 86400),
+            (7150, now + 60 * 86400),
+        ]
+        subscription = await session.scalar(select(Subscription))
+        assert subscription is not None and (subscription.first_charge_id, subscription.last_charge_id) == (
+            "sub-1",
+            "sub-2",
+        )
+
+    update_id = await conversation.push(
+        "subscription", {"user": CARL.payload(), "invoice_payload": payload, "state": "canceled"}
+    )
+    await conversation.settle(update_id)
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(Subscription.state)) == "canceled"

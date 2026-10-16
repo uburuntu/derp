@@ -403,6 +403,15 @@ class FakeBotAPI:
         }
         return self._new_message(fields, invoice=invoice)
 
+    def _m_createInvoiceLink(self, fields: JsonObject) -> str:  # noqa: N802
+        period = fields.get("subscription_period")
+        amount = sum(int(p["amount"]) for p in fields["prices"])
+        if period is not None and (
+            int(period) != 2592000 or fields.get("currency") != "XTR" or amount > 10000
+        ):
+            raise ValueError("subscriptions are 30-day XTR invoices of at most 10000 Stars")
+        return f"https://t.me/$invoice-{len(self.calls)}"
+
     def _m_sendDice(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         return self._new_message(fields, dice={"emoji": fields.get("emoji", "🎲"), "value": 4})
 

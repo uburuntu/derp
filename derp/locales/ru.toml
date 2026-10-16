@@ -23,6 +23,15 @@ stale = "Это предложение уже изменилось. Открой
 not_yours = "Этот счёт создан для другого человека. Открой /buy, чтобы получить свой."
 thanks = "Спасибо! **+{credits}** дерпкоинов. Твой баланс: **{balance}**."
 thanks_chat = "Спасибо! **+{credits}** дерпкоинов для этого чата. Баланс чата: **{balance}**."
+plan_button = "Derp+ · {credits} каждые 30 дней · {stars}⭐"
+plan_offer = "**Derp+** — {credits} дерпкоинов каждые 30 дней за {stars}⭐. Неистраченные дерпкоины не переносятся на следующий месяц. Отменить можно в любой момент в настройках Stars в Telegram."
+plan_pay = "Подписаться за {stars}⭐"
+plan_title = "Derp+"
+plan_description = "{credits} дерпкоинов каждые 30 дней. Отмена в любой момент. Оплачивая, ты соглашаешься с /terms."
+already_subscribed = "У тебя уже есть Derp+ до {date}."
+already_subscribed_short = "У тебя уже есть Derp+."
+plan_thanks = "Добро пожаловать в Derp+! **+{credits}** дерпкоинов до {date}. Твой баланс: **{balance}**."
+plan_renewed = "Derp+ продлён: **+{credits}** дерпкоинов до {date}. Твой баланс: **{balance}**."
 
 [memory]
 title = "🧠 **Что я здесь помню**"
