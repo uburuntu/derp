@@ -6,7 +6,7 @@ from typing import Any
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import Message, TelegramObject
 
-from derp.agent.invocation import detect_trigger
+from derp.agent.invocation import TriggerKind, detect_trigger
 from derp.db.engine import Database
 from derp.history.capture import index_sticker, store_message, upsert_chat, upsert_user
 from derp.history.members import track_message
@@ -16,6 +16,8 @@ from derp.history.transcription import Transcriber
 
 class CaptureMiddleware(BaseMiddleware):
     """Stores invocations always, ambient messages when the chat allows it, and edits in place.
+
+    Commands addressed to Derp are never stored: they are controls, not conversation.
 
     The message an invocation replies to is part of the invocation: stored too if Derp hadn't kept
     it (privacy mode, ambient off), so its text and media are available to the run. Stored voice
@@ -40,16 +42,17 @@ class CaptureMiddleware(BaseMiddleware):
         bot: Bot = data["bot"]
         me = await bot.me()
         trigger = None if self.edits else detect_trigger(event, bot_id=me.id, bot_username=me.username or "")
+        command = trigger is not None and trigger.kind is TriggerKind.COMMAND
         async with db.transaction() as session:
             chat = await upsert_chat(session, event.chat)
             if event.from_user is not None:
                 await upsert_user(session, event.from_user)
             stored = False
-            if trigger is not None or chat.type == "private" or chat.ambient:
+            if not command and (trigger is not None or chat.type == "private" or chat.ambient):
                 stored = await store_message(
                     session, event, capture="invocation" if trigger else "ambient", bot_id=me.id
                 )
-            replied = event.reply_to_message if trigger is not None else None
+            replied = event.reply_to_message if trigger is not None and not command else None
             if (
                 replied is not None
                 and await session.get(MessageRow, (chat.id, replied.message_id)) is not None

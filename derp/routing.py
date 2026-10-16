@@ -33,5 +33,6 @@ def include_routers(dispatcher: Dispatcher) -> None:
         approvals.build_router(),
         inline.build_router(),
         billing.build_router(),  # before the agent: payment service messages invoke nothing
-        handler.build_router(),  # last: invocations that no command claimed
+        start.build_fallback_router(),  # commands no router claimed
+        handler.build_router(),  # last: invocations that are not commands
     )

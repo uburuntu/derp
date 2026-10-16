@@ -48,7 +48,7 @@ def _button(text: str, action: str, value: str = "", *, style: str | None = None
     return InlineKeyboardButton(text=text, callback_data=data, style=style)
 
 
-def _days(chat: Chat, settings: Settings) -> int:
+def kept_days(chat: Chat, settings: Settings) -> int:
     if chat.retention_days:
         return chat.retention_days
     return settings.retention.private_days if chat.type == "private" else settings.retention.group_days
@@ -88,7 +88,7 @@ async def render(
     lines = [t(locale, "settings.title", title=one_line(chat.title or t(locale, "settings.this_chat")))]
     if group:
         lines.append(t(locale, "settings.context_on" if chat.ambient else "settings.context_off"))
-    lines.append(t(locale, "settings.retention", days=_days(chat, settings)))
+    lines.append(t(locale, "settings.retention", days=kept_days(chat, settings)))
     lines.append(t(locale, "settings.notes", mode=t(locale, f"settings.notes_{chat.notes_mode}")))
     if chat.rules:
         lines.append(t(locale, "settings.rules", rules=one_line(chat.rules, RULES_PREVIEW)))
@@ -105,7 +105,9 @@ async def render(
         lines.append(t(locale, "settings.admins_only"))
 
     rows: list[list[InlineKeyboardButton]] = []
-    first = [_button(t(locale, "settings.retention_button", days=_days(chat, settings)), "page", "retention")]
+    first = [
+        _button(t(locale, "settings.retention_button", days=kept_days(chat, settings)), "page", "retention")
+    ]
     if group:
         label = t(locale, "settings.context_button", state=on if chat.ambient else off)
         first.insert(

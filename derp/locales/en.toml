@@ -1,5 +1,78 @@
 [start]
-private = "**Derp** is waking up. Say something."
+private = """
+**Derp** — the sharp friend in your chats. No commands to learn: just say what you want.
+
+<details><summary>💬 Talk</summary>
+
+Questions, advice, roasts, translations. Send photos, voice messages, videos and links — I look, listen and read.
+_“what's in this photo?” · “sum up this link” · “translate this, but dramatic”_
+</details>
+
+<details><summary>🔎 Search and lookups</summary>
+
+Fresh news from the web, weather, exchange rates, time zones, Wikipedia, slang, papers — and a Python sandbox for exact math.
+_“weather in Tbilisi tomorrow” · “100 USD in euros” · “what does ‘rizz’ mean”_
+</details>
+
+<details><summary>🎨 Pictures and memes</summary>
+
+Draw or edit pictures, caption memes, reverse a GIF, cut out a background, name that song or anime.
+_“draw a cat in a spacesuit” · “meme this: monday again” · “what song is this?”_
+</details>
+
+<details><summary>👥 Groups</summary>
+
+Add me to a group: I stay quiet until someone calls me by name, @mentions me or replies to me. I catch people up, run polls and quizzes with a leaderboard, and remember notes and the chat's rules.
+_“derp, what did I miss?” · “derp, quiz us on geography” · “derp, who's most likely to be late?”_
+</details>
+
+<details><summary>⏰ Reminders</summary>
+
+One-off or repeating: reminders, morning digests, a question every Friday.
+_“remind me Friday at 9 to call mom” · “every morning post a fun fact”_
+</details>
+
+<details><summary>⭐ Derpcoins</summary>
+
+Answers cost Derpcoins: {daily} free every day, more with Telegram Stars via /buy. Reply /info to any answer to see what it cost.
+</details>
+
+Works inline too: type @{username} in any chat.
+"""
+add_to_group = "➕ Add to a group"
+buy = "⭐ Buy Derpcoins"
+
+[help]
+title_private = "**Derp — help**"
+title_group = "**Derp in {title}**"
+private = "Just write: I answer every message here — text, photos, voice, video, links."
+coins = "Derpcoins: **{free}** of {daily} free left today, **{bought}** bought. More: /buy"
+chat_wallet = "This chat's wallet: **{left}** dc, spent before anyone's own."
+commands = """**Commands**
+/settings — settings
+/credits — your Derpcoins
+/buy — buy Derpcoins
+/memory — what I remember here
+/info — reply to my answer: model and cost
+/forget — delete what you said here
+/privacy · /terms · /feedback"""
+more_private = "_Everything I can do: /start_"
+more_group = "_Everything I can do: [open me in private](https://t.me/{username}?start=help)_"
+unknown = "There's no /{command}. Just say what you want in words — the real commands are in /help."
+
+[commands]
+start = "What I can do"
+help = "How I work here"
+buy = "Buy Derpcoins"
+credits = "Your Derpcoins"
+settings = "Settings"
+memory = "What I remember here"
+info = "Reply to my answer: model and cost"
+forget = "Delete what you said"
+feedback = "Tell the developer something"
+privacy = "What I store and for how long"
+terms = "Terms"
+paysupport = "Payment problems"
 
 [agent]
 failed = "Something broke on my side. Try again in a moment — you weren't charged."

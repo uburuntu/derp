@@ -11,6 +11,7 @@ from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.models import AgentRun
 from derp.agent.runs import run_for_output
@@ -47,6 +48,13 @@ async def show_credits(message: Message, db: Database, settings: Settings, bot: 
     await _reply_privately(bot, message, locale, text)
 
 
+async def free_left_today(session: AsyncSession, settings: Settings, user_id: int, now: datetime) -> int:
+    today = await session.scalar(
+        select(CreditLot.remaining).where(CreditLot.operation_id == sponsored_lot_id(user_id, now))
+    )
+    return settings.sponsored_daily_credits if today is None else today  # the day's lot appears on first use
+
+
 async def credits_card(
     db: Database, settings: Settings, bot: Bot, chat_row: Chat, user_id: int, locale: str
 ) -> str:
@@ -56,9 +64,7 @@ async def credits_card(
     async with db.transaction() as session:
         mine = await balances(session, (await wallet(session, "user", user_id)).id, now=now)
         plan = await current_plan(session, user_id, now=now)
-        today = await session.scalar(
-            select(CreditLot.remaining).where(CreditLot.operation_id == sponsored_lot_id(user_id, now))
-        )
+        free = await free_left_today(session, settings, user_id, now)
         chat_wallet: Wallet | None = None
         if chat_row.type != "private":
             chat_wallet = await wallet(session, "chat", chat_row.id)
@@ -69,7 +75,6 @@ async def credits_card(
         lines.append(t(locale, "credits.plan", left=left, date=f"{plan.period_end:%Y-%m-%d}"))
     bought = mine.get("purchase", 0) + mine.get("grant", 0) + mine.get("migration", 0)
     lines.append(t(locale, "credits.bought", left=f"{bought:,}"))
-    free = settings.sponsored_daily_credits if today is None else today  # the day's lot appears on first use
     lines.append(
         t(
             locale,

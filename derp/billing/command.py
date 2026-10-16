@@ -92,15 +92,21 @@ async def _balance(db: Database, kind: str, owner_id: int) -> int:
         return await balance(session, (await wallet(session, kind, owner_id)).id)
 
 
+async def personal_menu(
+    db: Database, settings: Settings, user_id: int, locale: str
+) -> tuple[str, InlineKeyboardMarkup]:
+    """The private buy menu: the person's balance, Derp+ and the packs."""
+    mine = await _balance(db, "user", user_id)
+    return t(locale, "billing.menu", balance=f"{mine:,}"), packs_keyboard(settings, "user", locale, plan=True)
+
+
 async def show_buy(message: Message, db: Database, settings: Settings, bot: Bot) -> None:
     if message.from_user is None:
         return
     locale = resolve(message.from_user.language_code)
     target = Target.reply_to_message(message)
     if message.chat.type == "private":
-        mine = await _balance(db, "user", message.from_user.id)
-        text = t(locale, "billing.menu", balance=f"{mine:,}")
-        markup = packs_keyboard(settings, "user", locale, plan=True)
+        text, markup = await personal_menu(db, settings, message.from_user.id, locale)
         await send_markdown(bot, target, text, reply_markup=markup)
         return
     chooser = InlineKeyboardMarkup(
