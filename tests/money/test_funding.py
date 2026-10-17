@@ -62,6 +62,23 @@ async def test_paid_credits_below_a_typical_turn_fall_through_to_sponsorship(
     assert await funder.reserve(chat_id=7, private=True, user_id=7, operation_id="turn:2", now=NOW) is None
 
 
+async def test_a_typical_turn_counts_the_prompt_prefix(database: Database, settings: Settings) -> None:
+    async with database.transaction() as session:
+        # $10/M: half the 16k window + 300 out ≈ 100 credits; with an 8k persona + tools prefix ≈ 196
+        session.add(ModelPin(role="chat", pin={}, price_prompt=Decimal(10), price_completion=Decimal(10)))
+    await give(database, "user", 7, 150, "stars:1")
+    await give(database, "user", 8, 150, "stars:2")
+    bare = await Funder(database, settings).reserve(
+        chat_id=7, private=True, user_id=7, operation_id="turn:1", now=NOW
+    )
+    assert bare is not None and bare.funding is Funding.PAID
+    prefixed = Funder(database, settings, prefix={Funding.PAID: 8_000})
+    async with database.session() as session:
+        assert await prefixed.typical_turn(session, Funding.PAID) == 196
+    funds = await prefixed.reserve(chat_id=8, private=True, user_id=8, operation_id="turn:2", now=NOW)
+    assert funds is not None and funds.funding is Funding.SPONSORED  # 150 can't cover a real turn
+
+
 async def test_groups_spend_chat_credits_then_the_invokers(database: Database, settings: Settings) -> None:
     funder = Funder(database, settings)
     chat = await give(database, "chat", -100, 250, "stars:chat")

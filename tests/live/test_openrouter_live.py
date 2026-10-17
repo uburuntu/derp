@@ -82,3 +82,16 @@ async def test_chat_roles_compute_in_the_sandbox(role: ModelRole) -> None:
     print(role, result.output, [c.tool_name for c in calls], response_usage(result.response))
     assert any(c.tool_name == "run_code" for c in calls)
     assert str(pow(37, 21, 1000003)) in result.output
+
+
+async def test_free_chains_with_the_free_router_are_accepted() -> None:
+    """The free pin's fallback order (OpenRouter's ``openrouter/free`` among it) is a valid request, rotated too."""
+    settings = Settings()
+    pin = settings.model_pins[ModelRole.CHAT_FREE]
+    for chain in (pin, pin.rotated().rotated()):  # the router last, then the router first
+        agent = Agent(
+            chat_model(chain, build_provider(settings)), model_settings=chat_settings(chain, max_tokens=400)
+        )
+        result = await agent.run("Reply with exactly one word: pong")
+        print(chain.models, result.output, response_usage(result.response))
+        assert result.output.strip()

@@ -11,9 +11,11 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from sqlalchemy import update
 
 from derp.agent import context
 from derp.agent.context import HISTORY_CLOSE, Window, build_window, clip_tool_results
+from derp.agent.models import AgentRun
 from derp.agent.runs import finish_run, record_output, start_run
 from derp.db.engine import Database
 from derp.history.models import Chat, Message, MessageMedia, Reaction, User
@@ -117,6 +119,20 @@ async def test_window_replays_runs_between_member_transcripts(database: Database
     assert isinstance(last, UserPromptPart) and "#5 Bob ↩#4: nice" in str(last.content)
     assert "other topic" not in str(window.messages) and "current message" not in str(window.messages)
     assert (window.count, window.oldest_message_id) == (5, 1)
+
+
+@pytest.mark.db
+async def test_a_run_whose_history_cannot_be_loaded_is_replayed_as_its_text(database: Database) -> None:
+    await seed(database)
+    async with database.transaction() as session:
+        await session.execute(update(AgentRun).values(messages=[{"kind": "from-a-future-version"}]))
+    async with database.session() as session:
+        window = await build_window(
+            session, chat_id=CHAT, thread_id=None, before_message_id=7, budget=10_000, tz=UTC_TZ
+        )
+    derp = [m for m in window.messages if isinstance(m, ModelResponse)]
+    assert len(derp) == 1 and not any(isinstance(p, ToolCallPart) for p in derp[0].parts)
+    assert "found 3 cats" in str(derp[0].parts[0])
 
 
 @pytest.mark.db
