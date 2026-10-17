@@ -40,6 +40,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Making Derp an admin is optional: it then sees every message, reactions and members joining or leaving, and can
   pin messages for admins. The join notice and /settings (while Derp can't read the chat) carry a button for it.
 - In forum groups each topic is its own conversation.
+- When Derp cites an earlier message it links it (supergroups and channels), and it can @mention someone
+  when asked to tag them.
 - It catches people up (day summaries), runs polls and quizzes with a per-chat leaderboard, and keeps notes and
   the chat's rules (see memory).
 - Titles of the day ("who's the красавчик дня?"): Derp draws one of the recently active members at random; asking

@@ -46,6 +46,20 @@ class Chat(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
+    @property
+    def link_prefix(self) -> str | None:
+        """Where this chat's message links start: by username in public chats, by internal id in private
+        supergroups. Basic groups and private chats have no message links."""
+        if self.type not in {"supergroup", "channel"}:
+            return None
+        if self.username:
+            return f"https://t.me/{self.username}"
+        digits = str(self.id)
+        return f"https://t.me/c/{digits.removeprefix('-100')}" if digits.startswith("-100") else None
+
+    def message_link(self, message_id: int) -> str | None:
+        return f"{prefix}/{message_id}" if (prefix := self.link_prefix) else None
+
 
 class User(Base):
     __tablename__ = "users"
@@ -72,6 +86,11 @@ class User(Base):
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip() if self.last_name else self.first_name
+
+    @property
+    def label(self) -> str:
+        """How transcripts name the person: their name, then @username when they have one (writing it pings them)."""
+        return f"{self.full_name} @{self.username}" if self.username else self.full_name
 
 
 class ForumTopic(Base):

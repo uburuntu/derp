@@ -197,3 +197,29 @@ async def test_a_reply_to_another_chat_shows_where_it_came_from(
     await conversation.settle(sent)
     current = prompt_text(model.requests[-1][-1:])
     assert "Bob ↩ (from Daily News: photo) «prices doubled»: derp is this true?" in current
+
+
+async def test_group_answers_link_cited_messages_and_see_usernames(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    lounge = Room(-1001130715084, title="Lounge")
+    rob, kim = Person(511, "Rob", username="rob_k"), Person(512, "Kim")
+    conversation.meet(rob, lounge)
+    conversation.meet(kim, lounge)
+    chatter = await conversation.send(rob, lounge, "pizza tonight?")
+    await conversation.settle(chatter)
+
+    def check(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        assert "Rob @rob_k: pizza tonight?" in prompt_text(messages)  # the transcript names their @username
+        return ModelResponse(parts=[TextPart(f"#{chatter.message_id} wants pizza, #999 is not a message")])
+
+    model.reply(check)
+    asked = await conversation.send(
+        kim, lounge, "@DerpRobot who's hungry?", entities=[{"type": "mention", "offset": 0, "length": 10}]
+    )
+    reply = await conversation.expect_reply(asked)
+    link = f"https://t.me/c/1130715084/{chatter.message_id}"
+    assert (
+        reply["rich_message"]["markdown"]
+        == f"[#{chatter.message_id}]({link}) wants pizza, #999 is not a message"
+    )
