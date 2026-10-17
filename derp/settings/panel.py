@@ -51,7 +51,7 @@ LIVE = ("active", "paused")
 
 
 class SettingsAction(CallbackData, prefix="set"):
-    # page | ambient (on / purge) | retention | shorten (confirmed) | notes | free | rules | spend
+    # page | ambient (on / purge) | retention | shorten (confirmed) | notes | free | rules | spend | named
     # | jpause / jresume / jdrop (value: the job id)
     action: str
     value: str = ""
@@ -207,6 +207,8 @@ async def render(
     lines.append(t(locale, "settings.jobs", count=jobs or 0))
     spends = user is None or user.group_spending
     lines.append(t(locale, "settings.spend_on" if spends else "settings.spend_off"))
+    named = user is None or user.patron_named
+    lines.append(t(locale, "settings.named_on" if named else "settings.named_off"))
     if group:
         lines.append(t(locale, "settings.admins_only"))
 
@@ -227,6 +229,10 @@ async def render(
         button(t(locale, "settings.rules_clear"), _act("rules", "clear")) if chat.rules else None,
         button(t(locale, "settings.jobs_button", count=jobs), _act("page", "jobs")) if jobs else None,
         button(spend, _act("spend", "off" if spends else "on")),
+        button(
+            t(locale, "settings.named_button", state=on if named else off),
+            _act("named", "off" if named else "on"),
+        ),
     )
     return "\n".join(lines), keyboard
 
@@ -293,6 +299,8 @@ async def apply_setting(
         match action:
             case "spend" if person is not None:
                 person.group_spending = value == "on"
+            case "named" if person is not None:
+                person.patron_named = value == "on"
             case "ambient":
                 chat.ambient = True
             case "retention" | "shorten":
@@ -361,7 +369,7 @@ async def on_action(press: Press, data: SettingsAction, db: Database, bot: Bot, 
         return
     action, value = data.action, data.value
     jobs = action in JOB_ACTIONS or (action == "page" and value == "jobs")
-    personal = jobs or action == "spend" or (action == "page" and value == "main")
+    personal = jobs or action in {"spend", "named"} or (action == "page" and value == "main")
     admin = chat.type == "private" or ((jobs or not personal) and await is_admin(bot, chat, press.user_id))
     if not personal and not admin:
         return await press.deny("settings.admins_alert")
@@ -408,7 +416,18 @@ async def on_resume(press: Press, data: ResumeJob, db: Database, bot: Bot) -> No
 def build_router() -> Router:
     router = Router(name="settings")
     router.message.register(on_settings, Command("settings"))
-    actions = {"page", "ambient", "retention", "shorten", "notes", "free", "rules", "spend", *JOB_ACTIONS}
+    actions = {
+        "page",
+        "ambient",
+        "retention",
+        "shorten",
+        "notes",
+        "free",
+        "rules",
+        "spend",
+        "named",
+        *JOB_ACTIONS,
+    }
     on_press(router, SettingsAction, F.action.in_(actions))(on_action)
     on_press(router, ResumeJob, F.id > 0)(on_resume)
     return router

@@ -52,6 +52,9 @@ async def test_admins_change_chat_settings_and_members_only_their_own(conversati
     await conversation.press_ephemeral(MEMBER, CLUBHOUSE.id, member_panel, data("spend", "off"))
     async with conversation.db.session() as session:
         assert (await session.get(User, MEMBER.id)).group_spending is False  # type: ignore[union-attr]
+    await conversation.press_ephemeral(MEMBER, CLUBHOUSE.id, member_panel, data("named", "off"))
+    async with conversation.db.session() as session:
+        assert (await session.get(User, MEMBER.id)).patron_named is False  # type: ignore[union-attr]
 
     await open_panel(conversation, ADMIN, 502)
     panel = max(k[1] for k in conversation.api.ephemerals if k[0] == CLUBHOUSE.id)
