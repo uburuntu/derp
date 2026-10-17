@@ -140,19 +140,13 @@ async def make_image(
             reply_parameters=target.reply_parameters,
         )
     except BaseException:
-        await ledger_image(db, image, target.chat_id, user_id, funding="creator", run_id=None)  # absorbed
+        async with db.transaction() as session:  # absorbed
+            record_image(session, image, target.chat_id, user_id, funding="creator", run_id=None)
         raise
-    await ledger_image(db, image, target.chat_id, user_id, funding=funding, run_id=run_id)
     async with db.transaction() as session:
+        record_image(session, image, target.chat_id, user_id, funding=funding, run_id=run_id)
         await record_outgoing(session, [sent], bot.id)
     return sent
-
-
-async def ledger_image(
-    db: Database, image: GeneratedImage, chat_id: int, user_id: int, *, funding: str, run_id: int | None
-) -> None:
-    async with db.transaction() as session:
-        record_image(session, image, chat_id, user_id, funding=funding, run_id=run_id)
 
 
 def record_image(
