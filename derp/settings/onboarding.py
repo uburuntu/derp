@@ -20,17 +20,26 @@ GROUP_TYPES = {"group", "supergroup"}
 ADMIN_LINK_RIGHTS = "invite_users"  # any admin role unlocks reaction and member updates; ask for the mildest
 
 
-async def sees_everything(bot: Bot, chat: Chat) -> bool:
-    """Ambient context is on and Telegram actually delivers ordinary group messages."""
-    if not chat.ambient:
-        return False
+async def can_read_group(bot: Bot, chat: Chat) -> bool:
+    """Whether Telegram delivers ordinary (non-mention) group messages to Derp here."""
     me = await bot.me()
     return bool(me.can_read_all_group_messages) or (chat.bot_status or "") in ADMIN_STATUSES
 
 
+async def sees_everything(bot: Bot, chat: Chat) -> bool:
+    """Ambient context is on and Telegram actually delivers ordinary group messages."""
+    return chat.ambient and await can_read_group(bot, chat)
+
+
+async def context_key(bot: Bot, chat: Chat) -> str:
+    if not chat.ambient:
+        return "onboarding.context_off"
+    return "onboarding.context_on" if await can_read_group(bot, chat) else "onboarding.context_needs_admin"
+
+
 async def notice(bot: Bot, chat: Chat, locale: str) -> tuple[str, InlineKeyboardMarkup | None]:
     me = await bot.me()
-    context = "onboarding.context_on" if await sees_everything(bot, chat) else "onboarding.context_off"
+    context = await context_key(bot, chat)
     days = chat.retention_days or 30
     text = "\n\n".join(
         [

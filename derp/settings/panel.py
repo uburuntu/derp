@@ -30,6 +30,7 @@ from derp.locales import resolve, t
 from derp.memory.notes import is_admin
 from derp.money.free import POLICY_VERSION, consented
 from derp.scheduler.models import Job
+from derp.settings.onboarding import can_read_group
 from derp.settings.privacy import switch_context
 from derp.telegram.sender import Target, rich, send_markdown
 
@@ -55,7 +56,14 @@ def kept_days(chat: Chat, settings: Settings) -> int:
 
 
 async def render(
-    session: AsyncSession, settings: Settings, chat: Chat, user: User | None, locale: str, page: str = "main"
+    session: AsyncSession,
+    settings: Settings,
+    chat: Chat,
+    user: User | None,
+    locale: str,
+    page: str = "main",
+    *,
+    can_read: bool = True,
 ) -> tuple[str, InlineKeyboardMarkup]:
     group = chat.type != "private"
     on, off = t(locale, "settings.on"), t(locale, "settings.off")
@@ -87,7 +95,14 @@ async def render(
     )
     lines = [t(locale, "settings.title", title=one_line(chat.title or t(locale, "settings.this_chat")))]
     if group:
-        lines.append(t(locale, "settings.context_on" if chat.ambient else "settings.context_off"))
+        context_line = (
+            "settings.context_off"
+            if not chat.ambient
+            else "settings.context_on"
+            if can_read
+            else "settings.context_needs_admin"
+        )
+        lines.append(t(locale, context_line))
     lines.append(t(locale, "settings.retention", days=kept_days(chat, settings)))
     lines.append(t(locale, "settings.notes", mode=t(locale, f"settings.notes_{chat.notes_mode}")))
     if chat.rules:
@@ -156,7 +171,8 @@ async def on_settings(message: Message, db: Database, settings: Settings, bot: B
         user = await session.get(User, message.from_user.id)
         if chat is None:
             return
-        text, markup = await render(session, settings, chat, user, locale)
+        can_read = True if chat.type == "private" else await can_read_group(bot, chat)
+        text, markup = await render(session, settings, chat, user, locale, can_read=can_read)
     await send_markdown(bot, Target.reply_to_message(message), text, reply_markup=markup)
 
 
@@ -243,7 +259,8 @@ async def on_action(
         user = await session.get(User, query.from_user.id)
         if fresh is None:
             return
-        text, markup = await render(session, settings, fresh, user, locale, page)
+        can_read = True if fresh.type == "private" else await can_read_group(bot, fresh)
+        text, markup = await render(session, settings, fresh, user, locale, page, can_read=can_read)
     await _show(bot, query, message, text, markup)
 
 

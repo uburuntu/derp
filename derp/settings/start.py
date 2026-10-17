@@ -36,7 +36,7 @@ from derp.history.render import one_line
 from derp.locales import DEFAULT, LOCALES, resolve, t
 from derp.money.command import bought_total, free_left_today
 from derp.money.wallets import balances, wallet
-from derp.settings.onboarding import sees_everything
+from derp.settings.onboarding import context_key
 from derp.settings.panel import kept_days
 from derp.telegram.sender import Target, send_markdown
 
@@ -167,7 +167,7 @@ async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user
     async with db.transaction() as session:
         left = sum((await balances(session, (await wallet(session, "chat", chat.id)).id, now=now)).values())
     username = await _username(bot)
-    context = "onboarding.context_on" if await sees_everything(bot, chat) else "onboarding.context_off"
+    context = await context_key(bot, chat)
     lines = [
         t(locale, "help.title_group", title=one_line(chat.title or t(locale, "settings.this_chat"))),
         t(locale, "onboarding.summon", username=username),
