@@ -11,6 +11,7 @@ from pydantic_ai.messages import RetryPromptPart, ToolReturnPart
 from sqlalchemy import select
 
 from derp.agent.models import AgentRun, RunOutput
+from derp.history.models import MessageMedia
 from derp.money.models import RunFee
 from derp.money.wallets import balance, credit, wallet
 from tests.e2e.harness import Conversation, Person, Room
@@ -235,3 +236,68 @@ async def test_keyed_and_model_backed_effects_hide_when_unavailable(
     await conversation.settle(asked)
     found = {tool.name for tool in model.infos[-1].function_tools}
     assert "make_meme" in found and "remove_background" not in found and "identify_song" not in found
+
+
+VASYA = Person(1802, "Vasya", username="vasya_k")
+VASILISA = Person(1803, "Vasilisa")
+
+
+async def regulars(conversation: Conversation, *people: Person) -> None:
+    for someone in people:
+        conversation.meet(someone, PUB)
+        said = await conversation.send(someone, PUB, "hi all")
+        await conversation.settle(said)
+
+
+async def test_a_member_named_by_the_asker_is_the_source_in_one_call(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(LIV, PUB)
+    await regulars(conversation, VASYA, VASILISA)
+    conversation.api.register_file(f"profile-{VASYA.id}", jpeg("red"))
+    model.reply(
+        tool_call("make_meme", text="кто", person="vas"),
+        tool_call("make_meme", text="кто", person="Petya"),
+        tool_call("make_meme", text="король", person="@vasya_k"),
+        tool_call("reverse_media", person="Vasya"),
+        ".",
+    )
+    asked = await conversation.send(LIV, PUB, "derp meme @vasya_k's avatar and mirror it")
+    await conversation.settle(asked)
+    assert len(conversation.api.calls_of("sendPhoto", after=asked.after)) == 2
+    ambiguous, missing, sent = results_of(model, "make_meme")
+    assert sent.startswith("Sent it as #")
+    assert "Vasya (@vasya_k)" in ambiguous and "Vasilisa" in ambiguous
+    assert "No one called 'Petya' here" in missing
+    assert results_of(model, "reverse_media")[0].startswith("Sent it as #")
+
+
+@needs_ffmpeg
+async def test_derp_looks_at_a_gif_and_a_video_message_through_a_frame(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(LIV, PUB)
+    data = clip("video")
+    gif = await ambient(conversation, "gif", data, animation=video("gif", data))
+    note = {"file_id": "vnote", "file_unique_id": "u-vnote", "length": 240, "duration": 2}
+    round_note = await ambient(conversation, "vnote", data, video_note=note)
+    model.reply(
+        tool_call("inspect_media", message_id=gif),
+        "a test pattern",
+        tool_call("inspect_media", message_id=round_note),
+        "a test pattern again",
+        "colour bars, twice",
+    )
+    asked = await conversation.send(LIV, PUB, "derp what's on the gif and the circle?")
+    await conversation.expect_reply(asked, timeout=30)
+    await conversation.settle(asked, timeout=30)
+    labels = [
+        str(part.content)
+        for message in model.requests[-1]
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "inspect_media"
+    ]
+    assert "still frame of the animation" in labels[0] and "still frame of the video note" in labels[1]
+    async with conversation.db.session() as session:
+        notes = set(await session.scalars(select(MessageMedia.description)))
+    assert {"a test pattern", "a test pattern again"} <= notes

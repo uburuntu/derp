@@ -49,12 +49,19 @@ profile_tools = FunctionToolset[RunDeps]()
 Sendable = Literal["photo", "video", "animation", "video_note", "voice", "document"]
 
 
-async def _visual(deps: RunDeps, message_id: int | None, profile_photo: bool, chat_photo: bool) -> Source:
+async def _visual(
+    deps: RunDeps,
+    message_id: int | None,
+    profile_photo: bool,
+    chat_photo: bool,
+    person: str | None,
+    types: tuple[str, ...] = VISUAL,
+) -> Source:
     if chat_photo:
         return await chat_photo_source(deps)
-    if profile_photo:
-        return await avatar_source(deps, message_id)
-    return await message_media(deps, message_id, VISUAL)
+    if profile_photo or person:
+        return await avatar_source(deps, message_id, person)
+    return await message_media(deps, message_id, types)
 
 
 def _check_outputs(deps: RunDeps) -> None:
@@ -137,6 +144,7 @@ async def make_meme(
     message_id: int | None = None,
     profile_photo: bool = False,
     chat_photo: bool = False,
+    person: str | None = None,
 ) -> str:
     """Caption a picture, GIF, sticker or video as a meme and send it.
 
@@ -149,11 +157,12 @@ async def make_meme(
         message_id: Use the media of this stored message (default: the current message or the one it replies to).
         profile_photo: Use the profile photo of message_id's sender (or of the person replied to, or the asker).
         chat_photo: Use this chat's photo.
+        person: Use this member's profile photo (name or @username).
     """
     deps = ctx.deps
     try:
         _check_outputs(deps)
-        source = await _visual(deps, message_id, profile_photo, chat_photo)
+        source = await _visual(deps, message_id, profile_photo, chat_photo, person)
         if source.image:
             return _sent(
                 await _send(deps, "photo", await effects.meme_image(source.data, text, style), "meme.jpg")
@@ -179,16 +188,27 @@ def _style(style: str) -> Style:
 
 
 @toolset.tool(sequential=True)
-async def reverse_media(ctx: RunContext[RunDeps], message_id: int | None = None) -> str:
+async def reverse_media(
+    ctx: RunContext[RunDeps],
+    message_id: int | None = None,
+    profile_photo: bool = False,
+    chat_photo: bool = False,
+    person: str | None = None,
+) -> str:
     """Play a video, GIF, video message, voice or audio backwards (pictures get mirrored) and send it.
 
     Args:
         message_id: Use the media of this stored message (default: the current message or the one it replies to).
+        profile_photo: Mirror the profile photo of message_id's sender (or of the person replied to, or the asker).
+        chat_photo: Mirror this chat's photo.
+        person: Use this member's profile photo (name or @username).
     """
     deps = ctx.deps
     try:
         _check_outputs(deps)
-        source = await message_media(deps, message_id, (*VISUAL, "voice", "audio"))
+        source = await _visual(
+            deps, message_id, profile_photo, chat_photo, person, (*VISUAL, "voice", "audio")
+        )
         if source.image:
             return _sent(await _send(deps, "photo", await effects.mirror(source.data), "mirrored.jpg"))
         if source.type in ("voice", "audio"):
@@ -260,6 +280,7 @@ async def remove_background(
     message_id: int | None = None,
     profile_photo: bool = False,
     chat_photo: bool = False,
+    person: str | None = None,
 ) -> str:
     """Cut the subject out of a picture (transparent background) and send it as a PNG file.
 
@@ -267,11 +288,12 @@ async def remove_background(
         message_id: Use the picture of this stored message (default: the current message or the one it replies to).
         profile_photo: Use the profile photo of message_id's sender (or of the person replied to, or the asker).
         chat_photo: Use this chat's photo.
+        person: Use this member's profile photo (name or @username).
     """
     deps = ctx.deps
     try:
         _check_outputs(deps)
-        source = await _visual(deps, message_id, profile_photo, chat_photo)
+        source = await _visual(deps, message_id, profile_photo, chat_photo, person)
         if not source.image:
             raise Refused("That isn't a still picture.")
         await _heavy_allowed(ctx)
@@ -289,21 +311,25 @@ async def remove_background(
 
 @profile_tools.tool
 async def profile_photo(
-    ctx: RunContext[RunDeps], message_id: int | None = None, chat_photo: bool = False
+    ctx: RunContext[RunDeps],
+    message_id: int | None = None,
+    chat_photo: bool = False,
+    person: str | None = None,
 ) -> list[str | BinaryContent] | str:
     """Look at someone's profile photo (message_id's sender, else the person replied to, else the asker) or the chat's.
 
-    Only to see it: drawing and meme tools take profile_photo / chat_photo directly.
+    Only to see it: drawing and meme tools take profile_photo / chat_photo / person directly.
 
     Args:
         message_id: A stored message whose sender's profile photo to look at.
         chat_photo: Look at this chat's photo instead.
+        person: Look at this member's profile photo (name or @username).
     """
     deps = ctx.deps
     if not deps.pin.vision:
         return "This model can't see images."
     try:
-        source = await (chat_photo_source(deps) if chat_photo else avatar_source(deps, message_id))
+        source = await (chat_photo_source(deps) if chat_photo else avatar_source(deps, message_id, person))
     except Refused as refused:
         return str(refused)
     media_type = sniff_image(source.data)

@@ -58,6 +58,7 @@ async def generate_image(
     edit_message_id: int | None = None,
     profile_photo: bool = False,
     chat_photo: bool = False,
+    person: str | None = None,
     aspect_ratio: Literal["1:1", "16:9", "9:16", "4:3", "3:4"] = "1:1",
 ) -> str:
     """Draw one image, or edit an existing one, and send it to the chat.
@@ -68,6 +69,7 @@ async def generate_image(
         edit_message_id: Edit the image of this stored message instead (e.g. one you just sent).
         profile_photo: Edit a profile photo: edit_message_id's sender, else the person replied to, else the asker.
         chat_photo: Edit this chat's photo.
+        person: Edit this member's profile photo (name or @username), e.g. to draw them.
         aspect_ratio: Shape of the picture.
     """
     deps = ctx.deps
@@ -78,14 +80,16 @@ async def generate_image(
         return "Images need Derpcoins (the free daily ones don't cover one). Tell them /buy gets some."
     avatar_of: int | None = None
     try:
-        if profile_photo:
-            avatar_of = await photo_owner(deps, edit_message_id)
-            await avatar_source(deps, edit_message_id)  # fails early (and warms the cache) without a photo
+        if profile_photo or person:
+            avatar_of = await photo_owner(deps, edit_message_id, person)
+            await avatar_source(
+                deps, edit_message_id, person
+            )  # fails early (and warms the cache) without a photo
         if chat_photo:
             await chat_photo_source(deps)
     except Refused as refused:
         return str(refused)
-    edits_message = (edit or edit_message_id is not None) and not profile_photo
+    edits_message = (edit or edit_message_id is not None) and avatar_of is None
     references = await _references(deps, edit_message_id) if edits_message else ()
     job = ImageJob(prompt[:2000], aspect_ratio, references, avatar_of=avatar_of, chat_photo=chat_photo)
     async with deps.db.session() as session:

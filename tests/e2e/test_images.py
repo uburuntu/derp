@@ -193,6 +193,24 @@ async def test_a_profile_photo_gets_an_ai_edit_in_one_call(
     assert conversation.api.calls_of("setChatPhoto") == []  # the person sets it themselves
 
 
+async def test_a_member_is_drawn_by_name(conversation: Conversation, model: ScriptedModel) -> None:
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 650)
+    club, vasya = Room(-1503, title="Club"), Person(1504, "Вася", username="vasyan")
+    conversation.meet(JO, club)
+    conversation.meet(vasya, club)
+    await conversation.settle(await conversation.send(vasya, club, "привет"))
+    avatar = jpeg("green")
+    conversation.api.register_file(f"profile-{vasya.id}", avatar)
+    model.reply(tool_call("generate_image", prompt="this person as a knight", person="Вася"), ".")
+    asked = await conversation.send(JO, club, "дерп нарисуй Васю рыцарем")
+    await conversation.expect_reply(asked, method="sendPhoto")
+    await conversation.settle(asked)
+    assert [data for data, _ in images.references[0]] == [avatar]
+
+
 async def test_the_chat_photo_is_a_source_for_edits(conversation: Conversation, model: ScriptedModel) -> None:
     images = FakeImages()
     conversation.overrides["api"] = images

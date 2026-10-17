@@ -4,7 +4,8 @@ Vision-capable pins get the pixels; every inspected image also gets a one-line
 description stored on ``message_media`` (and folded into search text), so later
 runs — and models without vision — see "[photo: a grey cat on a laptop]"
 instead of a bare placeholder. Descriptions are written only for images a run
-actually inspected.
+actually inspected. Asked for explicitly (``frames``), videos, GIFs and video
+messages are seen through one still frame.
 """
 
 import logging
@@ -22,10 +23,13 @@ from derp.history.models import Message, MessageMedia
 from derp.inference.ledger import record_usage
 from derp.inference.openrouter import chat_settings, response_usage
 from derp.inference.roles import RolePin
-from derp.telegram.media import Media, MediaGateway, MediaUnavailableError
+from derp.telegram.media import Media, MediaGateway, MediaUnavailableError, sniff_image
+from derp.tools.effects import still
+from derp.tools.workers import EffectError
 
 log = logging.getLogger("derp.media")
 IMAGE_LIKE = ("photo", "sticker", "document", "animation")
+CLIPS = ("animation", "video", "video_note")
 MAX_IMAGES = 4
 DESCRIBE_PROMPT = (
     "Describe this image in one line (at most 25 words) for a chat log. "
@@ -37,10 +41,15 @@ DESCRIBE_PROMPT = (
 class Inspected:
     row: MessageMedia
     image: Media
+    frame: bool = False  # a still taken from a clip
 
 
 async def referenced_media(
-    session: AsyncSession, chat_id: int, message_id: int, reply_to: int | None
+    session: AsyncSession,
+    chat_id: int,
+    message_id: int,
+    reply_to: int | None,
+    types: Sequence[str] = IMAGE_LIKE,
 ) -> list[MessageMedia]:
     """Image-like media of the message (and its album) and of the message it replies to."""
     anchors = [message_id, *([reply_to] if reply_to else [])]
@@ -65,32 +74,41 @@ async def referenced_media(
         .where(
             MessageMedia.chat_id == chat_id,
             MessageMedia.message_id.in_(ids),
-            MessageMedia.type.in_(IMAGE_LIKE),
+            MessageMedia.type.in_(types),
         )
         .order_by(MessageMedia.message_id == message_id, MessageMedia.message_id, MessageMedia.idx)
     )
     return list(rows)[-MAX_IMAGES:]
 
 
-async def inspect(gateway: MediaGateway, rows: Sequence[MessageMedia]) -> list[Inspected]:
-    """Download what can be downloaded; animated stickers, videos and oversized files are skipped."""
+async def inspect(
+    gateway: MediaGateway, rows: Sequence[MessageMedia], *, frames: bool = False
+) -> list[Inspected]:
+    """Download what can be downloaded; oversized files are skipped, and clips too unless ``frames``."""
     inspected: list[Inspected] = []
     for row in rows:
         try:
-            image = await gateway.image(
+            data = await gateway.fetch(
                 row.file_id, bot_id=row.bot_id, key=row.file_unique_id, size_hint=row.file_size
             )
+            if media_type := sniff_image(data):
+                inspected.append(Inspected(row, Media(data, media_type)))
+            elif frames:
+                inspected.append(Inspected(row, Media(await still(data), "image/jpeg"), frame=True))
+            else:
+                log.info("media #%s skipped: not an image", row.message_id)
         except MediaUnavailableError as unavailable:
             log.info("media #%s skipped: %s", row.message_id, unavailable.reason)
-            continue
-        inspected.append(Inspected(row, image))
+        except EffectError as failed:
+            log.info("media #%s frame failed: %s", row.message_id, failed.reason)
     return inspected
 
 
 def as_content(items: Sequence[Inspected]) -> list[str | BinaryContent]:
     content: list[str | BinaryContent] = []
     for item in items:
-        content.append(f"(image from #{item.row.message_id})")
+        what = f"a still frame of the {item.row.type.replace('_', ' ')}" if item.frame else "image"
+        content.append(f"({what} from #{item.row.message_id})")
         content.append(BinaryContent(item.image.data, media_type=item.image.media_type))
     return content
 
