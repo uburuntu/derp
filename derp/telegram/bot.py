@@ -1,4 +1,4 @@
-"""Bot construction: session, local/fake API base, request policy."""
+"""Bot construction (session, local/fake API base, request policy) and the bot's public @username."""
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -8,6 +8,8 @@ from aiogram.types import LinkPreviewOptions
 
 from derp.config import Settings
 from derp.telegram.policy import TelegramRequestPolicy
+
+FALLBACK_USERNAME = "DerpRobot"  # what copy calls the bot if Telegram reports no username
 
 
 def create_bot(settings: Settings) -> Bot:
@@ -22,3 +24,8 @@ def create_bot(settings: Settings) -> Bot:
         session=session,
         default=DefaultBotProperties(link_preview=LinkPreviewOptions(is_disabled=True)),
     )
+
+
+async def bot_username(bot: Bot) -> str:
+    """The @username copy and deep links name the bot by."""
+    return (await bot.me()).username or FALLBACK_USERNAME
