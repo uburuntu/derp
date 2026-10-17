@@ -457,6 +457,7 @@ class Runtime:
         """
         async with self.db.session() as session:
             user = await session.get(User, asker.id)
+            tz = chat_time(await session.get(Chat, asker.id))  # their private chat's zone, else UTC
         funds = await self.funder.reserve(
             chat_id=asker.id,
             private=True,
@@ -480,12 +481,12 @@ class Runtime:
             deps = RunDeps(
                 db=self.db, bot=self.bot, settings=self.settings, chat=Chat(id=asker.id, type="private"),
                 user_id=asker.id, asker=asker.full_name, locale=resolve(asker.language_code), thread_id=None,
-                trigger_message_id=0, run_id=run.id, funds=funds, target=Target(asker.id), tz=UTC,
+                trigger_message_id=0, run_id=run.id, funds=funds, target=Target(asker.id), tz=tz,
                 gateway=self.gateway, pin=pin, model=model, digest_pin=pin, digest_model=model,
                 digest_role=funds.funding.role.value, api=self.api, pins=self.pins, lookups=self.lookups,
             )  # fmt: skip
             brief = DETACHED_BRIEF.format(
-                where=where, asker=one_line(asker.full_name), now=describe_time(datetime.now(UTC), UTC)
+                where=where, asker=one_line(asker.full_name), now=describe_time(datetime.now(UTC), tz)
             )
             request = f"<situation>\n{brief}\n</situation>\n\n{neutralize(prompt)}"
             caps = self.settings.run_caps

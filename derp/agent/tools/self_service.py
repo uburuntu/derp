@@ -3,11 +3,16 @@
 Balances are private: in groups they go to the asker by DM and the model only
 learns that they were sent. Purchase buttons are real Stars invoices (or the
 pack menu). Settings changes follow /settings rules — chat settings need an
-admin, re-checked here, and turning context off only posts a confirmation
-button, because it deletes history.
+admin, re-checked here (a time zone nobody set yet is anyone's to set).
+Destructive or consenting changes only post a button: turning context off and
+shortening retention delete history, and free models need the person's (or in
+groups an admin's) own press on the notice that their providers may store
+prompts.
 """
 
+from datetime import UTC, datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from aiogram.exceptions import TelegramAPIError
 from pydantic_ai import RunContext
@@ -17,16 +22,20 @@ from derp.agent.deps import RunDeps
 from derp.agent.tools.telegram import delivered
 from derp.agent.toolsets import Family
 from derp.billing.command import packs_keyboard, send_pack_invoice
+from derp.history.models import Chat, User
+from derp.history.render import describe_time
 from derp.locales import t
 from derp.memory.notes import is_admin
 from derp.money.command import credits_card
+from derp.money.free import consented, offer
 from derp.money.wallets import balance, wallet
 from derp.ops import feedback
-from derp.settings.panel import NOTES_MODES, RETENTION_CHOICES, apply_setting, render
+from derp.settings.panel import NOTES_MODES, apply_setting, chosen_days, render, shortens
 from derp.telegram.sender import Target, send_markdown, send_privately
+from derp.tools.timezones import TimeZoneError, iana
 
 toolset = FunctionToolset[RunDeps]()
-Setting = Literal["context", "retention_days", "notes", "free_models", "my_coins_in_groups"]
+Setting = Literal["context", "retention_days", "time_zone", "notes", "free_models", "my_coins_in_groups"]
 
 
 @toolset.tool
@@ -87,48 +96,85 @@ async def purchase_button(ctx: RunContext[RunDeps], for_chat: bool = False, star
 
 @toolset.tool
 async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str) -> str:
-    """Change a setting (/settings): context, history retention, notes, free models, or the asker's coins in groups.
+    """Change a setting (/settings): context, history retention, time zone, notes, free models, the asker's coins.
+
+    Set time_zone when someone says where they are or asks for their local time ("I'm in Moscow",
+    "use Berlin time"): map the place to its IANA zone yourself.
 
     Args:
-        setting: context (on/off), retention_days (7, 30, 90, 365 or default), notes (auto, members,
-            admins, off), free_models (on/off), my_coins_in_groups (on/off).
+        setting: context (on/off), retention_days (days as offered in /settings, or default), time_zone
+            (an IANA name like Europe/Moscow), notes (auto, members, admins, off), free_models (on/off),
+            my_coins_in_groups (on/off).
         value: The new value.
     """
     deps = ctx.deps
-    value = value.strip().lower()
-    chat_wide = setting != "my_coins_in_groups" and deps.chat.type != "private"
+    raw, value = value.strip(), value.strip().lower()
+    group = deps.chat.type != "private"
+    async with deps.db.session() as session:
+        chat = await session.get(Chat, deps.chat.id) or deps.chat
+    # In groups chat settings need an admin; a time zone nobody set yet is anyone's to set.
+    chat_wide = (
+        group and setting != "my_coins_in_groups" and not (setting == "time_zone" and not chat.timezone)
+    )
     if chat_wide and not await is_admin(deps.bot, deps.chat, deps.user_id):
         return "Only this chat's admins can change that."
+    options = deps.settings.retention.options
     match setting:
-        case "context" if deps.chat.type == "private":
+        case "context" if not group:
             return "Context is a group setting; private chats always keep what's said to Derp."
         case "context" if value == "off":
             async with deps.db.session() as session:
-                text, markup = await render(
-                    session, deps.settings, deps.chat, None, deps.locale, "ambient_off"
-                )
+                text, markup = await render(session, deps.settings, chat, None, deps.locale, "ambient_off")
             await send_markdown(deps.bot, deps.target, text, reply_markup=markup)
             return "Posted a confirmation button: turning context off deletes stored history, so an admin must press it."
         case "context":
             action, arg = "ambient", "on"
         case "retention_days":
-            if value != "default" and (not value.isdigit() or int(value) not in RETENTION_CHOICES):
-                return "Retention can be 7, 30, 90, 365 days or default."
-            action, arg = "retention", "0" if value == "default" else value
+            arg = "0" if value == "default" else value
+            if chosen_days(arg, deps.settings) is None:
+                return f"Retention can be {', '.join(map(str, options))} days or default."
+            if shortens(chat, deps.settings, arg):
+                async with deps.db.session() as session:
+                    text, markup = await render(
+                        session, deps.settings, chat, None, deps.locale, f"shorten:{arg}"
+                    )
+                await send_markdown(deps.bot, deps.target, text, reply_markup=markup)
+                return (
+                    "Posted a confirmation button: a shorter retention deletes older messages, so "
+                    f"{'an admin' if group else 'they'} must press it."
+                )
+            action = "retention"
+        case "time_zone":
+            try:
+                arg = iana(raw)
+            except TimeZoneError as error:
+                return f"{error}."
+            action = "timezone"
         case "notes":
             if value not in NOTES_MODES:
                 return "Notes mode is one of auto, members, admins, off."
             action, arg = "notes", value
+        case "free_models" if value in ("on", "true", "yes"):
+            if chat.free_models if group else consented(await _user(deps)):
+                return "Free models are already on."
+            text, markup = offer(deps.locale, group=group, asked=True)
+            await send_markdown(deps.bot, Target(deps.chat.id, deps.thread_id), text, reply_markup=markup)
+            who = "an admin presses it" if group else "they press it themselves"
+            return f"Posted the free-models notice (their providers may store prompts) with its button; on only once {who}."
         case "free_models":
-            action, arg = "free", "on" if value in ("on", "true", "yes") else "off"
+            action, arg = "free", "off"
         case "my_coins_in_groups":
             action, arg = "spend", "on" if value in ("on", "true", "yes") else "off"
-    await apply_setting(deps.db, deps.chat.id, deps.user_id, action, arg)
-    if setting == "free_models" and arg == "on" and deps.chat.type != "private":
-        await send_markdown(
-            deps.bot, Target(deps.chat.id), t(deps.chat.locale or deps.locale, "money.free_enabled")
-        )
+    await apply_setting(deps.db, deps.settings, deps.chat.id, deps.user_id, action, arg)
+    if setting == "time_zone":
+        deps.chat.timezone, deps.tz = arg, ZoneInfo(arg)  # later tools in this run use it
+        return f"Done: this chat's time zone is now {arg} (local time {describe_time(datetime.now(UTC), deps.tz)})."
     return f"Done: {setting} is now {value}. /settings shows everything."
+
+
+async def _user(deps: RunDeps) -> User | None:
+    async with deps.db.session() as session:
+        return await session.get(User, deps.user_id)
 
 
 @toolset.tool

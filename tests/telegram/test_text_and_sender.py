@@ -1,7 +1,7 @@
 from aiogram.types import Message
 
 from derp.telegram.sender import Target, sanitize_untrusted, split_rich
-from derp.telegram.text import hard_breaks, split_text, truncate, utf16_len
+from derp.telegram.text import hard_breaks, literal, split_text, truncate, utf16_len
 
 
 def test_utf16_measure_counts_astral_as_two() -> None:
@@ -118,3 +118,9 @@ def test_existing_hard_breaks_and_single_lines_are_left_alone() -> None:
     assert hard_breaks("one  \ntwo\\\nthree") == "one  \ntwo\\\nthree"
     assert hard_breaks("just one line") == "just one line"
     assert hard_breaks("~~~\nx\ny\n~~~\nz\nw") == "~~~\nx\ny\n~~~\nz  \nw"
+
+
+def test_literal_text_cannot_format_or_add_buttons() -> None:
+    assert literal("*hi* <tg-button>x</tg-button> [a](b) ok") == (
+        r"\*hi\* \<tg\-button\>x\<\/tg\-button\> \[a\]\(b\) ok"
+    )

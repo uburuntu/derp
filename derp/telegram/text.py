@@ -16,6 +16,12 @@ RICH_LIMIT = 32_768
 
 
 _FENCE_LINE = re.compile(r" {0,3}(```|~~~)")
+_PUNCTUATION = re.compile(r"([!-/:-@\[-`{-~])")
+
+
+def literal(text: str) -> str:
+    """Untrusted text shown as-is inside trusted rich Markdown: every ASCII punctuation mark escaped."""
+    return _PUNCTUATION.sub(r"\\\1", text)
 
 
 def hard_breaks(markdown: str) -> str:

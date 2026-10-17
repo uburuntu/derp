@@ -55,7 +55,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   Group: the group wallet, then the asker's bought Derpcoins (unless they turned off "my Derpcoins in groups" in
   /settings), then the asker's free daily ones.
 - When nobody can pay, Derp offers free models: opt-in (an admin turns them on for a group), and their providers
-  may store what they get. Free models get read-only and Telegram tools only.
+  may store what they get. Asking Derp to turn them on only brings up the notice; the person (or in a group an admin)
+  presses its button. Free models get read-only and Telegram tools only.
 - An action that costs more than the approval threshold (or a large share of the payer's balance) shows a
   Run / Cancel button first; only the asker decides.
 - Balances are private: /credits in a group answers ephemerally or by DM, never in the group.
@@ -76,6 +77,12 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 
 - A reminder posts its text at a time; a scheduled prompt makes Derp answer a request at that time ("every
   morning post a fun fact"). Both can repeat daily, on weekdays, weekly or monthly in the chat's time zone.
+- Time zone: each chat has one, set by telling Derp where you are ("I'm in Moscow", "use Berlin time"). Until it is
+  set, Derp asks once before scheduling at a clock time. In a group anyone can set a missing zone; changing it needs
+  an admin. Repeating jobs keep their local time when the zone changes; one-off reminders keep their moment. Day
+  summaries and "today" follow the chat's zone; the free daily Derpcoins still refill on the UTC day.
+- /settings shows the zone and a page of the chat's reminders with pause, resume and delete buttons: people manage
+  their own, admins all of them.
 - Anyone can schedule one-offs; repeating jobs in groups need an admin. Creators cancel or resume their own,
   admins any.
 - A scheduled prompt is paid when it fires, by the usual payer order; after several unpaid firings in a row the
@@ -86,6 +93,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Bot commands and inline/guest conversations are never stored. Telemetry holds numbers only, never text.
 - /forget as a reply removes that message; /forget alone removes everything the person said in that chat, with
   their reactions, votes, notes and reminders there. Day summaries that mention it are redone without it.
+- Shortening how long a chat's history is kept asks for confirmation first, since older messages get deleted;
+  making it longer applies at once.
 - The full privacy page follows.
 
 ## limits

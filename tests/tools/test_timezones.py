@@ -1,6 +1,6 @@
 import pytest
 
-from derp.tools.timezones import TimeZoneError, convert_time
+from derp.tools.timezones import TimeZoneError, convert_time, iana
 
 
 def test_time_conversion_uses_iana_zones() -> None:
@@ -12,3 +12,12 @@ def test_time_conversion_uses_iana_zones() -> None:
     ]
     with pytest.raises(TimeZoneError):
         convert_time(None, "Mars/Olympus", [])
+
+
+def test_zone_names_are_canonical_iana() -> None:
+    assert iana(" europe/moscow ") == "Europe/Moscow"
+    assert iana("UTC") == "UTC"
+    with pytest.raises(TimeZoneError):
+        iana("Moscow")
+    with pytest.raises(TimeZoneError):
+        iana("../etc/passwd")

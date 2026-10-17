@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -109,3 +110,24 @@ async def test_around_stays_in_the_anchor_topic(seeded: Database) -> None:
     async with seeded.session() as session:
         rows = await around(session, CHAT, 3, before=5, after=5)
         assert [m.message_id for m in rows] == [1, 2, 3, 5]
+
+
+@pytest.mark.db
+async def test_days_follow_the_chats_time_zone(database: Database) -> None:
+    late = datetime(2026, 10, 16, 22, 30, tzinfo=UTC)  # 01:30 on the 17th in Moscow
+    async with database.transaction() as session:
+        session.add(Chat(id=CHAT, type="supergroup", title="Q"))
+        session.add(User(id=1, first_name="Ann"))
+        session.add_all(
+            [
+                Message(chat_id=CHAT, message_id=1, user_id=1, date=late, kind="text", text="a", capture="ambient", payload={}),
+                Message(chat_id=CHAT, message_id=2, user_id=1, date=late - timedelta(hours=3), kind="text", text="b", capture="ambient", payload={}),
+            ]
+        )  # fmt: skip
+    by_day = ChatQuery(group_by="day", order="oldest")
+    moscow = Scope(CHAT, tz=ZoneInfo("Europe/Moscow"))
+    async with database.session() as session:
+        assert (await run_query(session, Scope(CHAT), by_day)).groups == [("2026-10-16", 2)]
+        assert (await run_query(session, moscow, by_day)).groups == [("2026-10-16", 1), ("2026-10-17", 1)]
+        today = ChatQuery(since=datetime(2026, 10, 17, 0, 0))  # local midnight, no offset
+        assert [m.message_id for m in (await run_query(session, moscow, today)).messages] == [1]
