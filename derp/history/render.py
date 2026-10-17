@@ -4,6 +4,10 @@ One line per message: ``[10:42] #123 Ann ↩#120: text [photo: a cat] {🔥3}``.
 Media show their stored description or transcript when one exists; payloads
 (dice, polls, locations, service events…) become short bracketed notes.
 Contacts render without phone numbers: the window never needs them.
+
+Rendering is deterministic (same rows → same text). Reaction totals are
+optional: they change whenever someone reacts, so the context window leaves
+them out to keep old lines, and the provider's prompt cache, stable.
 """
 
 import re
@@ -164,22 +168,26 @@ def render_body(view: MessageView) -> str:
     return " ".join(parts) or "[empty]"
 
 
-def render_line(view: MessageView, tz: tzinfo) -> str:
+def render_reactions(counts: dict[str, int]) -> str:
+    """``{🔥3 👍1}``: most frequent first, ties by key, so the order never depends on the database."""
+    if not counts:
+        return ""
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return " {" + " ".join(f"{key}{count}" for key, count in ordered) + "}"
+
+
+def render_line(view: MessageView, tz: tzinfo, *, reactions: bool = True) -> str:
     row = view.row
     reply = f" ↩#{row.reply_to_message_id}" if row.reply_to_message_id else ""
     quote = f" «{_clip(row.quote, 200)}»" if row.quote else ""
     edited = " (edited)" if row.edit_date else ""
-    reactions = (
-        " {" + " ".join(f"{k}{n}" for k, n in sorted(view.reactions.items(), key=lambda kv: -kv[1])) + "}"
-        if view.reactions
-        else ""
-    )
+    totals = render_reactions(view.reactions) if reactions else ""
     when = row.date.astimezone(tz).strftime("%H:%M")
     header = f"[{when}] #{row.message_id} {one_line(view.sender)}{_forward(row.forward_origin)}{reply}{quote}{edited}"
-    return neutralize(f"{header}: {render_body(view)}{reactions}")
+    return neutralize(f"{header}: {render_body(view)}{totals}")
 
 
-def render_transcript(views: Iterable[MessageView], tz: tzinfo) -> str:
+def render_transcript(views: Iterable[MessageView], tz: tzinfo, *, reactions: bool = True) -> str:
     """Lines with a day header whenever the date changes."""
     lines: list[str] = []
     day = None
@@ -188,7 +196,7 @@ def render_transcript(views: Iterable[MessageView], tz: tzinfo) -> str:
         if current != day:
             day = current
             lines.append(f"— {current.strftime('%a %Y-%m-%d')} —")
-        lines.append(render_line(view, tz))
+        lines.append(render_line(view, tz, reactions=reactions))
     return "\n".join(lines)
 
 

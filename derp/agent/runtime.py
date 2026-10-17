@@ -138,7 +138,8 @@ class Runtime:
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.in_flight: set[str] = set()  # operation ids of holds a live run still owns
         # Where each topic's last window started: kept while it fits, so consecutive runs share a cacheable prefix.
-        self.window_starts: dict[tuple[int, int | None], int] = {}
+        # Keyed by funding tier too: tiers have their own budget and model, so they'd only reset each other.
+        self.window_starts: dict[tuple[int, int | None, str], int] = {}
         self.agent = Agent[RunDeps, str](
             output_type=str,
             deps_type=RunDeps,
@@ -223,7 +224,7 @@ class Runtime:
                     reservation_id=funds.reservation_id,
                 )
                 run_id = run.id
-                topic_key = (chat.id, target.thread_id)
+                topic_key = (chat.id, target.thread_id, funding.value)
                 window = await build_window(
                     session,
                     chat_id=chat.id,

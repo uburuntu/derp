@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic_ai.messages import (
+    ModelMessage,
     ModelRequest,
     ModelResponse,
     TextPart,
@@ -191,3 +192,52 @@ async def test_row_capped_windows_are_kept_too(database: Database, monkeypatch: 
             session, chat_id=CHAT, thread_id=None, before_message_id=30, budget=10_000, tz=UTC_TZ, start_at=11
         )
         assert (reset.count, reset.oldest_message_id) == (10, 20)
+
+
+def test_replay_clips_long_tool_call_arguments_deterministically() -> None:
+    source = "print(1)\n" * 400
+    history: list[ModelMessage] = [
+        ModelResponse(
+            parts=[
+                ToolCallPart("run_code", {"code": source, "tags": ["x" * 900, "ok"]}, tool_call_id="c1"),
+                ToolCallPart("roll", '{"sides": 6}', tool_call_id="c2"),
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart("run_code", "1", tool_call_id="c1"),
+                ToolReturnPart("roll", "4", tool_call_id="c2"),
+            ]
+        ),
+        ModelResponse(parts=[TextPart("done")]),
+    ]
+    first, second = clip_tool_results(history), clip_tool_results(history)
+    assert first[0].parts == second[0].parts  # same stored run → same replayed calls → same prefix
+    code, roll = first[0].parts
+    assert isinstance(code, ToolCallPart) and isinstance(roll, ToolCallPart)
+    args = code.args_as_dict()
+    assert len(args["code"]) < 520 and args["code"].endswith("… [clipped]")
+    assert len(args["tags"][0]) < 520 and args["tags"][1] == "ok"
+    assert (code.tool_name, code.tool_call_id) == ("run_code", "c1")
+    assert roll.args == '{"sides": 6}'  # short arguments are replayed untouched
+
+
+@pytest.mark.db
+async def test_reactions_never_change_the_window_transcript(database: Database) -> None:
+    await seed(database)
+    async with database.session() as session:
+        before = await build_window(
+            session, chat_id=CHAT, thread_id=None, before_message_id=7, budget=10_000, tz=UTC_TZ
+        )
+    async with database.transaction() as session:
+        session.add(Reaction(chat_id=CHAT, message_id=1, actor_id=2, reaction="😂"))
+    async with database.session() as session:
+        after = await build_window(
+            session, chat_id=CHAT, thread_id=None, before_message_id=7, budget=10_000, tz=UTC_TZ
+        )
+
+    def transcripts(window: Window) -> list[str]:
+        return [str(p.content) for m in window.messages for p in m.parts if isinstance(p, UserPromptPart)]
+
+    assert transcripts(after) == transcripts(before)
+    assert "#1 Ann: anyone seen cats?\n" in transcripts(after)[0]  # no reaction totals on old lines

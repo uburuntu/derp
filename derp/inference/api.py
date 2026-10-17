@@ -52,6 +52,9 @@ class OpenRouterAPI:
             },
             timeout=httpx.Timeout(90, connect=10),
         )
+        # Price estimates for responses without ``usage.cost``: never record a paid call as free.
+        self._image_price = Decimal(str(settings.image_price_usd))
+        self._stt_minute_price = Decimal(str(settings.stt_price_usd_per_minute))
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -123,14 +126,22 @@ class OpenRouterAPI:
             data=base64.b64decode(first["b64_json"]),
             media_type=str(first.get("media_type") or "image/png"),
             model=model,
-            cost_usd=Decimal(str((result.get("usage") or {}).get("cost") or 0)),
+            cost_usd=_reported_cost(result, self._image_price),
         )
 
     # Speech-to-text
 
     async def transcribe(
-        self, model: str, audio: bytes, audio_format: str, *, zdr: bool = True, language: str | None = None
+        self,
+        model: str,
+        audio: bytes,
+        audio_format: str,
+        *,
+        zdr: bool = True,
+        language: str | None = None,
+        seconds: int = 0,
     ) -> Transcript:
+        """``seconds`` (the recording's length) prices the call when OpenRouter reports no cost."""
         body: Json = {
             "model": model,
             "input_audio": {"data": base64.b64encode(audio).decode(), "format": audio_format},
@@ -143,9 +154,15 @@ class OpenRouterAPI:
         return Transcript(
             text=str(result.get("text") or "").strip(),
             model=model,
-            cost_usd=Decimal(str((result.get("usage") or {}).get("cost") or 0)),
+            cost_usd=_reported_cost(result, self._stt_minute_price * max(seconds, 1) / 60),
             language=result.get("language"),
         )
+
+
+def _reported_cost(result: Json, estimate: Decimal) -> Decimal:
+    """OpenRouter's ``usage.cost`` when present (0 included), else the configured estimate."""
+    cost = (result.get("usage") or {}).get("cost")
+    return Decimal(str(cost)) if cost is not None else estimate.quantize(Decimal("0.00000001"))
 
 
 def _data_url(data: bytes, mime: str) -> str:
