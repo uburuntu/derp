@@ -5,6 +5,7 @@ from sqlalchemy import select, update
 
 from derp.inference.models import ProviderCall
 from derp.money.wallets import claw_back, credit, wallet
+from derp.scheduler.jobs import MISS_LIMIT, ResumeJob
 from derp.scheduler.models import Job
 from derp.scheduler.worker import run_due
 from tests.e2e.harness import Conversation, Person, Room
@@ -126,3 +127,40 @@ async def test_removing_derp_or_leaving_pauses_jobs(conversation: Conversation, 
     await conversation.settle(await conversation.push("my_chat_member", kicked))
     async with conversation.db.session() as session:
         assert set((await session.scalars(select(Job.state))).all()) == {"paused"}
+
+
+async def test_a_paused_job_resumes_from_its_note_for_its_creator_only(conversation: Conversation) -> None:
+    conversation.meet(LEE, YARD)
+    conversation.meet(MAX, YARD)
+    conversation.meet(OWNER)  # the sponsorship cap pings the owner
+    await conversation.settle(await conversation.send(LEE, YARD, "hi"))
+    now = datetime.now(UTC)
+    async with conversation.db.transaction() as session:
+        job = Job(chat_id=YARD.id, creator_id=LEE.id, kind="prompt", text="tell a joke", repeat="daily",
+                  next_at=now, anchor_at=now, misses=MISS_LIMIT - 1)  # fmt: skip
+        session.add(job)
+        session.add(ProviderCall(kind="chat", model="m", funding="sponsored", cost_usd=Decimal(1000)))
+        await session.flush()
+        job_id = job.id
+    await fire_now(conversation)
+    note_id, note = max(
+        (mid, m)
+        for (cid, mid), m in conversation.api.messages.items()
+        if cid == YARD.id and m.get("reply_markup")
+    )
+    assert "Paused scheduled job" in str(note["rich_message"])
+    [[resume]] = note["reply_markup"]["inline_keyboard"]
+    assert resume["text"] == "▶️ Resume" and resume["callback_data"] == ResumeJob(id=job_id).pack()
+
+    after = conversation.seq
+    await conversation.press(MAX, YARD.id, note_id, resume["callback_data"])
+    refusal = conversation.api.calls_of("answerCallbackQuery", after=after)[-1]
+    assert "Only its creator or an admin" in refusal["text"] and refusal["show_alert"]
+    assert conversation.api.message(YARD.id, note_id).get("reply_markup")  # still there for Lee
+
+    await conversation.press(LEE, YARD.id, note_id, resume["callback_data"])
+    async with conversation.db.session() as session:
+        resumed = await session.get(Job, job_id)
+        assert resumed is not None and resumed.state == "active" and resumed.misses == 0
+    shown = conversation.api.message(YARD.id, note_id)
+    assert "reply_markup" not in shown and "is back on" in str(shown["rich_message"])

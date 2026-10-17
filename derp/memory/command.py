@@ -1,19 +1,18 @@
 """/memory: what Derp remembers here, approval of proposed chat notes, confirmation of chat rules."""
 
-import contextlib
 import hashlib
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import InlineKeyboardMarkup, Message
 
 from derp.db.engine import Database
 from derp.history.models import Chat
 from derp.locales import resolve, t
 from derp.memory.models import Note
 from derp.memory.notes import is_admin, load_memory
+from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, send_markdown
 
 
@@ -37,24 +36,22 @@ def rules_prompt(locale: str, rules: str) -> str:
     return t(locale, "memory.rules_confirm") + "\n\n" + rules
 
 
-def rules_keyboard(locale: str, rules: str) -> InlineKeyboardMarkup:
+def rules_keyboard(locale: str, rules: str) -> InlineKeyboardMarkup | None:
     draft = _digest(rules)
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "memory.rules_apply"),
-                    callback_data=RulesAction(action="apply", draft=draft).pack(),
-                    style="success",
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "memory.rules_cancel"),
-                    callback_data=RulesAction(action="cancel", draft=draft).pack(),
-                    style="danger",
-                ),
-            ]
+    return markup(
+        [
+            button(
+                t(locale, "memory.rules_apply"), RulesAction(action="apply", draft=draft), style="success"
+            ),
+            button(
+                t(locale, "memory.rules_cancel"), RulesAction(action="cancel", draft=draft), style="danger"
+            ),
         ]
     )
+
+
+def _decided(note_id: int) -> set[str]:
+    return {NoteAction(action=action, note_id=note_id).pack() for action in ("approve", "reject")}
 
 
 def _lines(notes: list[Note]) -> list[str]:
@@ -86,85 +83,70 @@ async def show_memory(message: Message, bot: Bot, db: Database, chat_row: Chat) 
         )
     else:  # a public reply: someone's own notes stay out of the group
         sections.append(t(locale, "memory.my_notes_hidden"))
-    markup = None
+    keyboard = None
     if proposed:
         sections.append(t(locale, "memory.proposed") + "\n" + "\n".join(_lines(proposed)))
-        markup = InlineKeyboardMarkup(
-            inline_keyboard=[
+        keyboard = markup(
+            *(
                 [
-                    InlineKeyboardButton(
-                        text=f"✅ #{n.id}", callback_data=NoteAction(action="approve", note_id=n.id).pack()
-                    ),
-                    InlineKeyboardButton(
-                        text=f"✖️ #{n.id}", callback_data=NoteAction(action="reject", note_id=n.id).pack()
-                    ),
+                    button(f"✅ #{n.id}", NoteAction(action="approve", note_id=n.id)),
+                    button(f"✖️ #{n.id}", NoteAction(action="reject", note_id=n.id)),
                 ]
                 for n in proposed[:10]
-            ]
+            )
         )
     sections.append(t(locale, "memory.hint"))
     await send_markdown(
-        bot, Target.reply_to_message(message), "\n\n".join(sections), trusted=False, reply_markup=markup
+        bot, Target.reply_to_message(message), "\n\n".join(sections), trusted=False, reply_markup=keyboard
     )
 
 
-async def on_note_action(query: CallbackQuery, callback_data: NoteAction, bot: Bot, db: Database) -> None:
-    locale = resolve(query.from_user.language_code)
-    message = query.message
-    if message is None:
-        await query.answer()
-        return
+async def on_note_action(press: Press, data: NoteAction, bot: Bot, db: Database) -> None:
+    """An admin's decision on one proposal; that proposal's buttons go, the others' stay."""
+    refusal: str | None = None
     async with db.transaction() as session:
-        chat = await session.get(Chat, message.chat.id)
-        note = await session.get(Note, callback_data.note_id)
+        chat = await session.get(Chat, press.chat_id)
+        note = await session.get(Note, data.note_id)
         if chat is None or note is None or note.chat_id != chat.id or note.state != "proposed":
-            await query.answer(t(locale, "memory.gone"))
-            return
-        if not await is_admin(bot, chat, query.from_user.id):
-            await query.answer(t(locale, "memory.admins_only"), show_alert=True)
-            return
-        if callback_data.action == "approve":
+            refusal = "memory.gone"
+        elif not await is_admin(bot, chat, press.user_id):
+            return await press.deny("memory.admins_only")
+        elif data.action == "approve":
             note.state = "active"
-            answer = t(locale, "memory.approved", id=note.id)
         else:
             await session.delete(note)
-            answer = t(locale, "memory.rejected", id=note.id)
-    await query.answer(answer)
+    decided = _decided(data.note_id)
+    await press.strip(keep=lambda b: b.callback_data not in decided)
+    if refusal:
+        return await press.deny(refusal)
+    await press.toast("memory.approved" if data.action == "approve" else "memory.rejected", id=data.note_id)
 
 
-async def on_rules_action(query: CallbackQuery, callback_data: RulesAction, bot: Bot, db: Database) -> None:
+async def on_rules_action(press: Press, data: RulesAction, bot: Bot, db: Database) -> None:
     """Only the admin who asked can apply or cancel, and only the draft these buttons showed."""
-    locale = resolve(query.from_user.language_code)
-    message = query.message
-    if message is None:
-        await query.answer()
-        return
     async with db.session() as session:
-        chat = await session.get(Chat, message.chat.id)
-    if chat is None or chat.rules_draft is None or _digest(chat.rules_draft) != callback_data.draft:
-        await query.answer(t(locale, "memory.gone"))
-        return
-    if chat.rules_draft_by != query.from_user.id or not await is_admin(bot, chat, query.from_user.id):
-        await query.answer(t(locale, "memory.rules_not_yours"), show_alert=True)
-        return
+        chat = await session.get(Chat, press.chat_id)
+    if chat is None or chat.rules_draft is None or _digest(chat.rules_draft) != data.draft:
+        await press.strip()
+        return await press.deny("memory.gone")
+    if chat.rules_draft_by != press.user_id or not await is_admin(bot, chat, press.user_id):
+        return await press.deny("memory.rules_not_yours")
     async with db.transaction() as session:
         row = await session.get(Chat, chat.id, with_for_update=True)
-        if row is None or row.rules_draft is None or _digest(row.rules_draft) != callback_data.draft:
-            await query.answer(t(locale, "memory.gone"))
-            return
-        if callback_data.action == "apply":
-            row.rules = row.rules_draft or None
-        row.rules_draft, row.rules_draft_by = None, None
-    with contextlib.suppress(TelegramAPIError):
-        await bot.edit_message_reply_markup(chat_id=chat.id, message_id=message.message_id, reply_markup=None)
-    await query.answer(
-        t(locale, "memory.rules_applied" if callback_data.action == "apply" else "memory.rules_cancelled")
-    )
+        current = row is not None and row.rules_draft is not None and _digest(row.rules_draft) == data.draft
+        if row is not None and current:
+            if data.action == "apply":
+                row.rules = row.rules_draft or None
+            row.rules_draft, row.rules_draft_by = None, None
+    await press.strip()
+    if not current:
+        return await press.deny("memory.gone")
+    await press.toast("memory.rules_applied" if data.action == "apply" else "memory.rules_cancelled")
 
 
 def build_router() -> Router:
     router = Router(name="memory")
-    router.callback_query.register(on_rules_action, RulesAction.filter(F.action.in_({"apply", "cancel"})))
+    on_press(router, RulesAction, F.action.in_({"apply", "cancel"}))(on_rules_action)
     router.message.register(show_memory, Command("memory"))
-    router.callback_query.register(on_note_action, NoteAction.filter(F.action.in_({"approve", "reject"})))
+    on_press(router, NoteAction, F.action.in_({"approve", "reject"}))(on_note_action)
     return router

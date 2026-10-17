@@ -63,9 +63,9 @@ async def test_forget_everything_after_confirming(conversation: Conversation, mo
 
     after = conversation.seq
     await conversation.press(HAL, DEN.id, prompt_id, data)
-    assert "your messages here (1)" in str(
-        conversation.api.calls_of("answerCallbackQuery", after=after)[-1]["text"]
-    )
+    closed = conversation.api.calls_of("editMessageText", after=after)[-1]
+    assert "your messages here (1)" in closed["rich_message"]["markdown"]  # the prompt says what went
+    assert "reply_markup" not in conversation.api.message(DEN.id, prompt_id)
     assert (await stored(conversation, first.message_id)).text is None
     assert (await stored(conversation, other.message_id)).text == "same"
     async with conversation.db.session() as session:

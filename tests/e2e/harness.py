@@ -178,11 +178,27 @@ class Conversation:
 
         return await self.api.wait_call(method, after=sent.after, where=replies, timeout=timeout)
 
-    async def press(self, person: Person, chat_id: int, message_id: int, data: str) -> None:
-        """Press an inline button with callback ``data`` on one of Derp's messages and wait for the handler."""
+    async def press(self, person: Person, chat_id: int, message_id: int, data: str, *, taps: int = 1) -> None:
+        """Press an inline button with callback ``data`` on one of Derp's messages and wait for the handler.
+
+        ``taps=2`` is a quick double tap: every press carries the message as it was before the first.
+        """
+        first = f"q{len(self.api.calls)}"
+        update_id = 0
+        for query_id in [first, *(f"{first}.{tap}" for tap in range(1, taps))]:
+            message = self.api.expect_callback(query_id, chat_id=chat_id, message_id=message_id, data=data)
+            update_id = await self._query(person, query_id, message, data)
+        await self.settle(update_id)
+
+    async def press_stale(self, person: Person, chat_id: int, message_id: int, data: str) -> None:
+        """Press a button on a message Telegram no longer shows Derp (an ``InaccessibleMessage``, date 0)."""
         query_id = f"q{len(self.api.calls)}"
-        message = self.api.expect_callback(query_id, chat_id=chat_id, message_id=message_id, data=data)
-        update_id = await self.push(
+        self.api.outstanding_callbacks.add(query_id)
+        message = {"chat": self.api.chats[chat_id], "message_id": message_id, "date": 0}
+        await self.settle(await self._query(person, query_id, message, data))
+
+    async def _query(self, person: Person, query_id: str, message: Mapping[str, Any], data: str) -> int:
+        return await self.push(
             "callback_query",
             {
                 "id": query_id,
@@ -192,7 +208,6 @@ class Conversation:
                 "data": data,
             },
         )
-        await self.settle(update_id)
 
     async def ephemeral_command(self, person: Person, room: Room, text: str, ephemeral_id: int = 77) -> int:
         """An ephemeral command: message id 0, visible only to the sender and Derp."""
@@ -208,22 +223,17 @@ class Conversation:
         }
         return await self.push("message", message)
 
-    async def press_ephemeral(self, person: Person, chat_id: int, ephemeral_id: int, data: str) -> None:
-        """Press a button on an ephemeral message Derp sent to ``person``."""
-        query_id = f"q{len(self.api.calls)}"
-        message = self.api.expect_ephemeral_callback(
-            query_id, chat_id=chat_id, ephemeral_id=ephemeral_id, data=data
-        )
-        update_id = await self.push(
-            "callback_query",
-            {
-                "id": query_id,
-                "from": person.payload(),
-                "chat_instance": "c",
-                "message": message,
-                "data": data,
-            },
-        )
+    async def press_ephemeral(
+        self, person: Person, chat_id: int, ephemeral_id: int, data: str, *, taps: int = 1
+    ) -> None:
+        """Press a button on an ephemeral message Derp sent to ``person`` (``taps`` as in ``press``)."""
+        first = f"q{len(self.api.calls)}"
+        update_id = 0
+        for query_id in [first, *(f"{first}.{tap}" for tap in range(1, taps))]:
+            message = self.api.expect_ephemeral_callback(
+                query_id, chat_id=chat_id, ephemeral_id=ephemeral_id, data=data
+            )
+            update_id = await self._query(person, query_id, message, data)
         await self.settle(update_id)
 
     async def settle(self, sent: Sent | int, timeout: float = 5) -> None:

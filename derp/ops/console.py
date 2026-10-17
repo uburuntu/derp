@@ -8,15 +8,13 @@ unknown-command reply, so the console doesn't announce itself. Owner copy is
 plain English, not localized.
 """
 
-import contextlib
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import distinct, func, select
 
 from derp.agent.models import AgentRun
@@ -32,7 +30,8 @@ from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
 from derp.money.models import CreditLot, RunFee
 from derp.money.wallets import balance, credit, wallet
-from derp.telegram.sender import Target, rich, send_markdown, send_privately
+from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.sender import Target, send_markdown, send_privately
 from derp.telegram.text import literal
 
 WINDOWS = ((1, "24 h"), (7, "7 d"), (30, "30 d"))
@@ -76,7 +75,7 @@ def _table(header: list[str], align: str, rows: list[list[str]]) -> list[str]:
     return ["| " + " | ".join(header) + " |", rule, *("| " + " | ".join(row) + " |" for row in rows)]
 
 
-async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMarkup]:
+async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMarkup | None]:
     now = datetime.now(UTC)
     week = now - timedelta(days=7)
     cost, stars, refunds, runs = [], [], [], []
@@ -158,7 +157,7 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
             "llr",
             [[literal(one_line(title or "—")), f"`{chat_id}`", _usd(c)] for chat_id, title, c in top],
         )
-    buttons: list[list[InlineKeyboardButton]] = []
+    buttons: list[InlineKeyboardButton | list[InlineKeyboardButton]] = []
     if pins:
         lines += ["", "### Model pins"]
         lines += _table(
@@ -167,7 +166,10 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
             [[pin.role, f"`{pin.pin.get('model')}`", pin.source] for pin in pins],
         )
         buttons += [
-            [_button(f"Roll back {pin.role} → {pin.previous.get('model')}", "rollback", pin.role)]
+            button(
+                f"Roll back {pin.role} → {pin.previous.get('model')}",
+                ConsoleAction(action="rollback", key=pin.role),
+            )
             for pin in pins
             if pin.previous
         ]
@@ -178,51 +180,43 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
                 f"**Proposal {p.id}** · {p.role}: `{p.current.get('model')}` → `{p.proposed.get('model')}`",
                 literal(p.reason),
             ]
-            buttons.append(
-                [
-                    _button(f"Apply #{p.id}", "apply", str(p.id)),
-                    _button(f"Ignore #{p.id}", "ignore", str(p.id)),
-                ]
-            )
-    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
+            buttons.append(_proposal_row(p.id))
+    return "\n".join(lines), markup(*buttons)
+
+
+def _proposal_row(proposal_id: int) -> list[InlineKeyboardButton]:
+    return [
+        button(f"Apply #{proposal_id}", ConsoleAction(action="apply", key=str(proposal_id))),
+        button(f"Ignore #{proposal_id}", ConsoleAction(action="ignore", key=str(proposal_id))),
+    ]
 
 
 def proposal_buttons(proposal_ids: list[int]) -> InlineKeyboardMarkup | None:
     """Apply / Ignore for each proposal, attached to the scout's ping (the same actions as in /stats)."""
-    if not proposal_ids:
-        return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [_button(f"Apply #{pid}", "apply", str(pid)), _button(f"Ignore #{pid}", "ignore", str(pid))]
-            for pid in proposal_ids
-        ]
-    )
-
-
-def _button(text: str, action: str, key: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton(text=text, callback_data=ConsoleAction(action=action, key=key).pack())
+    return markup(*(_proposal_row(pid) for pid in proposal_ids))
 
 
 async def show_stats(message: Message, db: Database, api: OpenRouterAPI, bot: Bot) -> None:
-    text, markup = await stats(db, api)
-    await send_markdown(bot, Target.reply_to_message(message), text, reply_markup=markup)
+    text, keyboard = await stats(db, api)
+    await send_markdown(bot, Target.reply_to_message(message), text, reply_markup=keyboard)
 
 
-async def decide(action: str, key: str, db: Database, pins: PinStore) -> str:
+async def decide(action: str, key: str, db: Database, pins: PinStore) -> tuple[str, bool]:
+    """Apply, ignore or roll back; a note for the owner and whether anything changed."""
     now = datetime.now(UTC)
     async with db.transaction() as session:
         if action == "rollback":
             if key not in {role.value for role in ModelRole} or not await rollback_pin(
                 session, ModelRole(key)
             ):
-                return "Nothing to roll back."
+                return "Nothing to roll back.", False
             note = f"Rolled back {key}."
         else:
             proposal = await session.get(
                 ScoutProposal, int(key) if key.isdigit() else 0, with_for_update=True
             )
             if proposal is None or proposal.status != "open":
-                return "Already decided."
+                return "Already decided.", False
             if action == "apply":
                 pin = RolePin.model_validate(proposal.proposed)
                 await apply_pin(session, ModelRole(proposal.role), pin, source="owner")
@@ -230,41 +224,21 @@ async def decide(action: str, key: str, db: Database, pins: PinStore) -> str:
             proposal.decided_at = now
             note = f"Proposal #{proposal.id} {proposal.status}."
     await pins.refresh()
-    return note
+    return note, True
 
 
 async def on_console(
-    query: CallbackQuery,
-    callback_data: ConsoleAction,
-    db: Database,
-    api: OpenRouterAPI,
-    pins: PinStore,
-    settings: Settings,
-    bot: Bot,
+    press: Press, data: ConsoleAction, db: Database, api: OpenRouterAPI, pins: PinStore, settings: Settings
 ) -> None:
-    message = query.message
-    if query.from_user.id not in settings.owner_ids or not isinstance(message, Message):
-        await query.answer()
-        return
-    await query.answer(await decide(callback_data.action, callback_data.key, db, pins), show_alert=True)
-    if message.text is not None and message.text.startswith(SCOUT_PING):  # a ping: drop the decided buttons
-        rows = message.reply_markup.inline_keyboard if message.reply_markup else []
-        mine = f"#{callback_data.key}"
-        left = [row for row in rows if not any(b.text.endswith(mine) for b in row)]
-        with contextlib.suppress(TelegramAPIError):
-            await bot.edit_message_reply_markup(
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=left) if left else None,
-            )
-        return
-    text, markup = await stats(db, api)
-    await bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        rich_message=rich(text),
-        reply_markup=markup,
-    )
+    if press.user_id not in settings.owner_ids:
+        return  # the console doesn't announce itself: a silent answer
+    note, done = await decide(data.action, data.key, db, pins)
+    await press.answer(note, alert=not done)
+    if (press.message.text or "").startswith(SCOUT_PING):  # a ping: drop the decided proposal's buttons
+        decided = {b.callback_data for b in _proposal_row(int(data.key))} if data.key.isdigit() else set()
+        return await press.strip(keep=lambda b: b.callback_data not in decided)
+    text, keyboard = await stats(db, api)
+    await press.edit(text, keyboard)
 
 
 async def grant(message: Message, command: CommandObject, db: Database, bot: Bot) -> None:
@@ -329,7 +303,5 @@ def build_router() -> Router:
     router.message.register(show_stats, Command("stats"), from_owner)
     router.message.register(grant, Command("grant"), from_owner)
     router.message.register(block, Command("block", "unblock"), from_owner)
-    router.callback_query.register(
-        on_console, ConsoleAction.filter(F.action.in_({"apply", "ignore", "rollback"}))
-    )
+    on_press(router, ConsoleAction, F.action.in_({"apply", "ignore", "rollback"}))(on_console)
     return router

@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
+from aiogram.types import InlineKeyboardMarkup
 from aiogram.types import Message as TgMessage
 from aiogram.types import User as TgUser
 from pydantic_ai import Agent, CancellationToken, RunCancelled, RunContext, capture_run_messages
@@ -77,6 +78,7 @@ from derp.money.funding import Funder, Funding, Funds
 from derp.money.wallets import release
 from derp.ops.observability import record_run_failure
 from derp.ops.owner import is_blocked, notify_owners
+from derp.telegram.buttons import link, markup
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import PartialDeliveryError, Target, send_markdown
 from derp.tools.lookups import Lookups
@@ -562,7 +564,13 @@ class Runtime:
             if funds is not None and funds.reservation_id is not None:
                 async with self.db.transaction() as session:
                     await release(session, funds.operation_id)
-            await self._say(target, t(locale, "approvals.no_coins"))
+            username = (await self.bot.me()).username
+            top_up = (
+                link(t(locale, "approvals.top_up"), f"https://t.me/{username}?start=buy")
+                if username
+                else None
+            )
+            await self._say(target, t(locale, "approvals.no_coins"), markup(top_up))
             return
         async with self.db.transaction() as session:
             run = await start_run(
@@ -629,9 +637,9 @@ class Runtime:
         key = "agent.timeout" if isinstance(error, TimeoutError) else "agent.failed"
         await self._say(target, t(locale, f"{key}_partial" if charged else key))
 
-    async def _say(self, target: Target, text: str) -> None:
+    async def _say(self, target: Target, text: str, keyboard: InlineKeyboardMarkup | None = None) -> None:
         try:
-            await send_markdown(self.bot, target, text)
+            await send_markdown(self.bot, target, text, reply_markup=keyboard)
         except TelegramAPIError:
             log.info("notice not delivered")
 

@@ -7,19 +7,19 @@ from datetime import UTC, datetime
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from aiogram.types import ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import ChatMemberUpdated, InlineKeyboardMarkup
 
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.history.members import ADMIN_STATUSES, can_read_group
+from derp.history.members import ADMIN_STATUSES, admin_link, can_read_group
 from derp.history.members import on_my_chat_member as record_membership
 from derp.history.models import Chat
 from derp.locales import resolve, t
 from derp.settings.panel import kept_days
+from derp.telegram.buttons import link, markup
 from derp.telegram.sender import Target, send_markdown
 
 GROUP_TYPES = {"group", "supergroup"}
-ADMIN_LINK_RIGHTS = "invite_users"  # any admin role unlocks reaction and member updates; ask for the mildest
 
 
 async def sees_everything(bot: Bot, chat: Chat) -> bool:
@@ -49,9 +49,7 @@ async def notice(
     )
     if (chat.bot_status or "") in ADMIN_STATUSES or not me.username:
         return text, None
-    link = f"https://t.me/{me.username}?startgroup=derp&admin={ADMIN_LINK_RIGHTS}"
-    button = InlineKeyboardButton(text=t(locale, "onboarding.make_admin"), url=link)
-    return text, InlineKeyboardMarkup(inline_keyboard=[[button]])
+    return text, markup(link(t(locale, "onboarding.make_admin"), admin_link(me.username)))
 
 
 async def ensure_onboarded(

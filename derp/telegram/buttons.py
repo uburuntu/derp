@@ -11,6 +11,7 @@ in each handler (``if not allowed: return await press.deny(key)``); ``deny`` ret
 instead of raising, so it never rolls back the handler's transaction.
 """
 
+import annotationlib
 import contextlib
 import inspect
 from collections.abc import Awaitable, Callable, Sequence
@@ -32,6 +33,10 @@ type Handler = Callable[..., Awaitable[Any]]
 
 def button(text: str, data: CallbackData, *, style: str | None = None) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=data.pack(), style=style)
+
+
+def link(text: str, url: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, url=url)
 
 
 def markup(*rows: Row) -> InlineKeyboardMarkup | None:
@@ -102,13 +107,14 @@ class Press:
 
     async def deny(self, key: str, **params: object) -> None:
         """Refuse with an alert (a localized ``key``)."""
-        await self._answer(t(self.locale, key, **params), alert=True)
+        await self.answer(t(self.locale, key, **params), alert=True)
 
     async def toast(self, key: str | None = None, **params: object) -> None:
         """Answer with a brief notice, or silently without a ``key``."""
-        await self._answer(t(self.locale, key, **params) if key else None, alert=False)
+        await self.answer(t(self.locale, key, **params) if key else None, alert=False)
 
-    async def _answer(self, text: str | None, *, alert: bool) -> None:
+    async def answer(self, text: str | None, *, alert: bool = False) -> None:
+        """Answer with ready text (owner copy is not localized); only the first answer counts."""
         if self.answered:
             return
         self.answered = True
@@ -129,7 +135,9 @@ def on_press(
     """
 
     def register(handler: Handler) -> Handler:
-        wanted = list(inspect.signature(handler).parameters)[2:]
+        # names only: annotations may name types imported for type checking alone
+        signature = inspect.signature(handler, annotation_format=annotationlib.Format.FORWARDREF)
+        wanted = list(signature.parameters)[2:]
 
         async def on_query(query: CallbackQuery, callback_data: CallbackData, bot: Bot, **deps: Any) -> None:
             message = query.message

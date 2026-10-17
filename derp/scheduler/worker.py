@@ -4,7 +4,8 @@ A job is claimed and rescheduled (or finished) in one transaction before it
 fires, so a crash mid-send never fires it twice. Prompt jobs run as an agent
 turn with the creator as invoker, funded at fire time like any message; an
 unfunded firing posts a short note, and ``MISS_LIMIT`` of them in a row pause
-the job. A chat that refuses Derp's messages pauses its jobs.
+the job (that note carries a Resume button). A chat that refuses Derp's messages
+pauses its jobs.
 """
 
 import asyncio
@@ -24,8 +25,9 @@ from derp.history.models import Chat, User
 from derp.history.render import chat_time
 from derp.locales import resolve, t
 from derp.ops.owner import is_blocked
-from derp.scheduler.jobs import MISS_LIMIT, next_after
+from derp.scheduler.jobs import MISS_LIMIT, ResumeJob, next_after
 from derp.scheduler.models import Job
+from derp.telegram.buttons import button, markup
 from derp.telegram.sender import Target, send_markdown
 
 if TYPE_CHECKING:
@@ -115,8 +117,12 @@ async def fire(db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, n
         misses = job.misses + 1
         paused = misses >= MISS_LIMIT
         await _set(db, job.id, misses=misses, **({"state": "paused"} if paused else {}))
+        resume = markup(button(t(locale, "scheduler.resume"), ResumeJob(id=job.id))) if paused else None
         await send_markdown(
-            bot, target, t(locale, "scheduler.paused" if paused else "scheduler.skipped", id=job.id)
+            bot,
+            target,
+            t(locale, "scheduler.paused" if paused else "scheduler.skipped", id=job.id),
+            reply_markup=resume,
         )
     except (TelegramForbiddenError, TelegramBadRequest) as error:  # removed from the chat, topic gone…
         log.info("job %s paused: %s", job.id, type(error).__name__)

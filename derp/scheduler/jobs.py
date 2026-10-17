@@ -15,6 +15,7 @@ new zone (``rezone``). Chats without a zone run on UTC.
 import calendar
 from datetime import UTC, date, datetime, timedelta, tzinfo
 
+from aiogram.filters.callback_data import CallbackData
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +26,12 @@ MIN_AHEAD = timedelta(seconds=30)
 CHAT_LIMIT = 25  # active jobs per chat
 PERSON_LIMIT = 10  # active jobs per person per chat
 MISS_LIMIT = 3  # unfunded firings in a row before a job pauses
+
+
+class ResumeJob(CallbackData, prefix="jobresume"):
+    """The Resume button on a paused job's note (handled with the jobs page in ``settings/panel.py``)."""
+
+    id: int
 
 
 def _add_month(day: date, wanted: int) -> date:
