@@ -8,7 +8,7 @@ from aiogram.types import Message, TelegramObject
 
 from derp.agent.invocation import detect_trigger, starts_with_command
 from derp.db.engine import Database
-from derp.history.capture import index_sticker, store_message, upsert_chat, upsert_user
+from derp.history.capture import index_sticker, is_stored, store_message, upsert_chat, upsert_user
 from derp.history.members import track_message
 from derp.history.models import Message as MessageRow
 from derp.history.transcription import Transcriber
@@ -17,6 +17,9 @@ from derp.ops.owner import is_blocked
 
 class CaptureMiddleware(BaseMiddleware):
     """Stores invocations always, ambient messages when the chat allows it, and edits in place.
+
+    An edit to a message already kept (an invocation, say) updates it even while the chat's context
+    is off; edits to messages Derp didn't keep are stored only when ambient messages would be.
 
     Bot commands are never stored: they are controls, not conversation. Nothing from a chat or
     person an owner blocked is stored or transcribed.
@@ -52,11 +55,10 @@ class CaptureMiddleware(BaseMiddleware):
                 await upsert_user(session, event.from_user)
             blocked = await is_blocked(session, chat.id, event.from_user.id if event.from_user else None)
             stored = False
-            if (
-                not command
-                and not blocked
-                and (trigger is not None or chat.type == "private" or chat.ambient)
-            ):
+            keep = trigger is not None or chat.type == "private" or chat.ambient
+            if self.edits and not keep and not command and not blocked:  # an edit updates a row already kept
+                keep = await is_stored(session, chat.id, event.message_id)
+            if keep and not command and not blocked:
                 stored = await store_message(
                     session, event, capture="invocation" if trigger else "ambient", bot_id=me.id
                 )

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -14,6 +15,7 @@ from derp.history.capture import (
     upsert_chat,
 )
 from derp.history.models import Chat, ForumTopic, Message, MessageMedia, User
+from derp.history.retention import forget_message
 
 BOT_ID = 777000111
 
@@ -157,3 +159,28 @@ async def test_an_edit_that_swaps_the_photo_drops_notes_about_the_old_one(databa
         message = await session.get(Message, (-100, 10))
         assert media is not None and (media.file_unique_id, media.description) == ("b", None)
         assert message is not None and message.extra_text is None
+
+
+@pytest.mark.db
+async def test_an_edit_never_restores_a_forgotten_message(database: Database) -> None:
+    def shot(unique: str, caption: str, **extra: Any) -> TgMessage:
+        size = {"file_id": f"f-{unique}", "file_unique_id": unique, "width": 10, "height": 10}
+        return tg(photo=[size], caption=caption, **extra)
+
+    async with database.transaction() as session:
+        await upsert_chat(session, shot("a", "secret").chat)
+        await store_message(session, shot("a", "secret"), capture="ambient", bot_id=BOT_ID)
+    async with database.transaction() as session:
+        await forget_message(session, -100, 10, datetime.now(UTC))
+    async with database.transaction() as session:
+        edited = shot("b", "still secret", edit_date=1_700_000_100)
+        assert not await store_message(session, edited, capture="ambient", bot_id=BOT_ID)
+    async with database.session() as session:
+        message = await session.get(Message, (-100, 10))
+        assert message is not None and message.deleted_at is not None
+        assert (message.text, message.entities, message.payload, message.raw) == (None, None, {}, None)
+        assert await session.scalar(select(func.count()).select_from(MessageMedia)) == 0
+        searchable = select(func.count()).where(
+            Message.tsv.bool_op("@@")(func.plainto_tsquery("simple", "secret"))
+        )
+        assert await session.scalar(searchable) == 0
