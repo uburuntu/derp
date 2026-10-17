@@ -9,18 +9,19 @@ or the private chat (personal ones).
 """
 
 import asyncio
+from typing import Any
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message
 
-from derp.billing.purchases import Order, current_plan, plan_order
+from derp.billing.purchases import Order, current_plan, pack_order, plan_order
 from derp.config import Pack, Settings
 from derp.db.engine import Database
 from derp.locales import t
 from derp.money.wallets import balance, wallet
-from derp.telegram.buttons import Press, Row, button, markup
+from derp.telegram.buttons import Press, Row, button, link, markup
 from derp.telegram.sender import Target, send_markdown, send_privately
 
 
@@ -29,18 +30,14 @@ class BuyAction(CallbackData, prefix="buy"):
     product: str = ""  # pack or plan id; empty: show the packs for this target
 
 
-def _keyboard(*rows: Row) -> InlineKeyboardMarkup:
-    return markup(*rows) or InlineKeyboardMarkup(inline_keyboard=[])
-
-
 def pack_label(pack: Pack) -> str:
     return f"{pack.stars}⭐ → {pack.credits:,} dc"
 
 
 def packs_keyboard(
-    settings: Settings, target: str, locale: str, *, plan: bool = False
-) -> InlineKeyboardMarkup:
-    """Pack buttons that post a Stars invoice where they are pressed (private chats)."""
+    settings: Settings, target: str, locale: str, *rows: Row, plan: bool = False
+) -> InlineKeyboardMarkup | None:
+    """Pack buttons that post a Stars invoice where they are pressed (private chats), then ``rows``."""
     offer = settings.plan
     plan_button = button(
         t(locale, "billing.plan_button", credits=f"{offer.credits:,}", stars=offer.stars),
@@ -48,12 +45,12 @@ def packs_keyboard(
         style="primary",
     )
     packs = [button(pack_label(pack), BuyAction(target=target, product=pack.id)) for pack in settings.packs]
-    return _keyboard(plan_button if plan else None, *packs)
+    return markup(plan_button if plan else None, *packs, *rows)
 
 
-def group_chooser(locale: str, chat_balance: int) -> tuple[str, InlineKeyboardMarkup]:
+def group_chooser(locale: str, chat_balance: int) -> tuple[str, InlineKeyboardMarkup | None]:
     """Group /buy: the chat wallet first (its balance is the chat's to see), then the presser's own."""
-    keyboard = _keyboard(
+    keyboard = markup(
         [
             button(t(locale, "billing.for_chat"), BuyAction(target="chat"), style="primary"),
             button(t(locale, "billing.for_me"), BuyAction(target="user")),
@@ -62,56 +59,45 @@ def group_chooser(locale: str, chat_balance: int) -> tuple[str, InlineKeyboardMa
     return t(locale, "billing.who", balance=f"{chat_balance:,}"), keyboard
 
 
-def _invoice_texts(locale: str, pack: Pack, kind: str) -> tuple[str, str]:
-    whom = t(locale, "billing.invoice_for_me") if kind == "user" else t(locale, "billing.invoice_for_chat")
+def _invoice(title: str, description: str, order: Order, stars: int) -> dict[str, Any]:
+    """What a Stars invoice carries, posted or as a link."""
+    return {
+        "title": title,
+        "description": description,
+        "payload": order.payload,
+        "currency": "XTR",
+        "prices": [LabeledPrice(label=title, amount=stars)],
+    }
+
+
+def _pack_invoice(locale: str, pack: Pack, kind: str, owner_id: int, thread_id: int | None) -> dict[str, Any]:
+    whom = t(locale, "billing.invoice_for_me" if kind == "user" else "billing.invoice_for_chat")
     title = t(locale, "billing.invoice_title", credits=f"{pack.credits:,}")
-    return title, t(locale, "billing.invoice_description", whom=whom)
+    order = pack_order(pack, kind, owner_id, thread_id)
+    return _invoice(title, t(locale, "billing.invoice_description", whom=whom), order, pack.stars)
 
 
 async def send_pack_invoice(
-    bot: Bot,
-    chat_id: int,
-    thread_id: int | None,
-    locale: str,
-    pack: Pack,
-    *,
-    kind: str,
-    owner_id: int,
+    bot: Bot, locale: str, pack: Pack, *, kind: str, owner_id: int, thread_id: int | None = None
 ) -> Message:
-    """Post the Stars invoice for one pack (never ephemeral: an invoice must persist to be paid)."""
-    order = Order(pack.id, pack.credits, kind, owner_id, thread_id=(thread_id or 0) if kind == "chat" else 0)
-    title, description = _invoice_texts(locale, pack, kind)
+    """Post the Stars invoice for one pack where its Derpcoins go (never ephemeral: it must persist to be paid).
+
+    A chat's goes to the chat, in ``thread_id``; a personal one to the person's private chat, never a group.
+    """
     return await bot.send_invoice(
-        chat_id=chat_id,
-        message_thread_id=thread_id,
-        title=title,
-        description=description,
-        payload=order.payload,
-        currency="XTR",
-        prices=[LabeledPrice(label=title, amount=pack.stars)],
-    )
-
-
-async def pack_link(bot: Bot, locale: str, pack: Pack, order: Order) -> str:
-    title, description = _invoice_texts(locale, pack, order.target)
-    return await bot.create_invoice_link(
-        title=title,
-        description=description,
-        payload=order.payload,
-        currency="XTR",
-        prices=[LabeledPrice(label=title, amount=pack.stars)],
+        chat_id=owner_id,
+        message_thread_id=thread_id if kind == "chat" else None,
+        **_pack_invoice(locale, pack, kind, owner_id, thread_id),
     )
 
 
 async def plan_link(bot: Bot, settings: Settings, locale: str, user_id: int) -> str:
     """A fresh Derp+ subscription link (a new payload nonce each time)."""
     offer = settings.plan
+    title = t(locale, "billing.plan_title")
+    description = t(locale, "billing.plan_description", credits=f"{offer.credits:,}")
     return await bot.create_invoice_link(
-        title=t(locale, "billing.plan_title"),
-        description=t(locale, "billing.plan_description", credits=f"{offer.credits:,}"),
-        payload=plan_order(settings, user_id).payload,
-        currency="XTR",
-        prices=[LabeledPrice(label=t(locale, "billing.plan_title"), amount=offer.stars)],
+        **_invoice(title, description, plan_order(settings, user_id), offer.stars),
         subscription_period=offer.period_seconds,
     )
 
@@ -125,25 +111,23 @@ async def links_keyboard(
     owner_id: int,
     thread_id: int | None = None,
     plan: bool = False,
-) -> InlineKeyboardMarkup:
+) -> InlineKeyboardMarkup | None:
     """Invoice-link buttons for each pack (and Derp+ for a person without one); raises TelegramAPIError."""
-    orders = [
-        Order(pack.id, pack.credits, kind, owner_id, thread_id=(thread_id or 0) if kind == "chat" else 0)
-        for pack in settings.packs
-    ]
     links = await asyncio.gather(
-        *(pack_link(bot, locale, pack, order) for pack, order in zip(settings.packs, orders, strict=True))
+        *(
+            bot.create_invoice_link(**_pack_invoice(locale, pack, kind, owner_id, thread_id))
+            for pack in settings.packs
+        )
     )
     rows: list[InlineKeyboardButton] = [
-        InlineKeyboardButton(text=pack_label(pack), url=link)
-        for pack, link in zip(settings.packs, links, strict=True)
+        link(pack_label(pack), url) for pack, url in zip(settings.packs, links, strict=True)
     ]
     if plan:
         offer = settings.plan
         label = t(locale, "billing.plan_button", credits=f"{offer.credits:,}", stars=offer.stars)
         url = await plan_link(bot, settings, locale, owner_id)
         rows.insert(0, InlineKeyboardButton(text=label, url=url, style="primary"))
-    return _keyboard(*rows)
+    return markup(*rows)
 
 
 async def wallet_balance(db: Database, kind: str, owner_id: int) -> int:
@@ -152,11 +136,12 @@ async def wallet_balance(db: Database, kind: str, owner_id: int) -> int:
 
 
 async def personal_menu(
-    db: Database, settings: Settings, user_id: int, locale: str
-) -> tuple[str, InlineKeyboardMarkup]:
-    """The private buy menu: the person's balance, Derp+ and the packs."""
+    db: Database, settings: Settings, user_id: int, locale: str, extra: Row = None
+) -> tuple[str, InlineKeyboardMarkup | None]:
+    """The private buy menu: the person's balance, Derp+ and the packs (then the ``extra`` row)."""
     mine = await wallet_balance(db, "user", user_id)
-    return t(locale, "billing.menu", balance=f"{mine:,}"), packs_keyboard(settings, "user", locale, plan=True)
+    keyboard = packs_keyboard(settings, "user", locale, extra, plan=True)
+    return t(locale, "billing.menu", balance=f"{mine:,}"), keyboard
 
 
 async def link_menu(
@@ -168,7 +153,7 @@ async def link_menu(
     kind: str,
     owner_id: int,
     thread_id: int | None = None,
-) -> tuple[str, InlineKeyboardMarkup]:
+) -> tuple[str, InlineKeyboardMarkup | None]:
     """The pack menu with invoice links: a chat's (anyone may pay) or a person's (Derp+ unless running)."""
     left = await wallet_balance(db, kind, owner_id)
     plan = False
@@ -230,3 +215,8 @@ async def open_menu(press: Press, db: Database, settings: Settings, *, kind: str
 def top_up_button(locale: str, key: str = "billing.top_up") -> InlineKeyboardButton:
     """Opens the chat's pack menu for whoever presses it."""
     return button(t(locale, key), BuyAction(target="chat"))
+
+
+def buy_button(locale: str, *, group: bool) -> InlineKeyboardButton:
+    """Where someone ran short: topping up the chat in groups, the person's own buy menu in private."""
+    return top_up_button(locale) if group else button(t(locale, "billing.buy"), BuyAction(target="user"))

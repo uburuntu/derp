@@ -7,6 +7,7 @@ from sqlalchemy import select, update
 
 from derp.billing.models import PatronPost, Purchase
 from derp.billing.patrons import PatronAction, expire_hide_buttons
+from derp.billing.refunds import apply_refund
 from derp.history.models import User
 from derp.money.wallets import wallet
 from tests.e2e.fake_api import Call
@@ -109,13 +110,12 @@ async def test_the_patron_post_names_coalesces_and_lets_the_buyer_hide(conversat
     assert link_payloads(conversation, menu)[0] == f"p1:pack_s_v1:650:chat:{PUB.id}"
 
     # Ten minutes later the name can't be hidden any more; half an hour later a purchase posts afresh.
+    earlier = datetime.now(UTC) - timedelta(minutes=31)
     async with conversation.db.transaction() as session:
-        stored = await session.get(PatronPost, row.id)
-        assert stored is not None
-        earlier = int((datetime.now(UTC) - timedelta(minutes=31)).timestamp())
-        stored.buyers = [{**entry, "at": earlier} for entry in stored.buyers]
-        stored.created_at = datetime.now(UTC) - timedelta(minutes=31)
-        stored.hide_until = datetime.now(UTC) - timedelta(minutes=21)
+        await session.execute(update(Purchase).values(created_at=earlier))
+        await session.execute(
+            update(PatronPost).values(created_at=earlier, hide_until=earlier + timedelta(minutes=10))
+        )
     after = conversation.seq
     await conversation.press(ALICE, PUB.id, post_id, hide)
     assert "Too late" in str(conversation.api.calls_of("answerCallbackQuery", after=after)[-1]["text"])
@@ -127,6 +127,20 @@ async def test_the_patron_post_names_coalesces_and_lets_the_buyer_hide(conversat
     [fresh] = posts(conversation, after)
     assert "A mysterious patron" in fresh["rich_message"]["markdown"]  # Bob stays anonymous from now on
     assert buttons(fresh) == ["⭐ Chip in too"]
+
+
+async def test_a_refunded_purchase_drops_out_of_the_post(conversation: Conversation) -> None:
+    conversation.meet(OWNER)
+    for person in (ALICE, BOB, CARL):
+        conversation.meet(person, PUB)
+    await chip_in(conversation, ALICE, 650, "ch-r1")
+    await chip_in(conversation, BOB, 3250, "ch-r2")
+    assert await apply_refund(conversation.db, "ch-r2") is not None
+
+    after = await chip_in(conversation, CARL, 650, "ch-r3")
+    [edit] = conversation.api.calls_of("editMessageText", after=after)
+    text = edit["rich_message"]["markdown"]
+    assert "**Alice** and **Carl**" in text and "**1,300** Derpcoins" in text and "Bob" not in text
 
 
 async def test_asking_derp_to_stay_anonymous_hides_the_name(

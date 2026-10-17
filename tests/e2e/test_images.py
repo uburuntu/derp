@@ -12,6 +12,7 @@ from sqlalchemy import select, update
 
 from derp.agent.approvals import close_expired
 from derp.agent.models import AgentRun, Approval, RunOutput
+from derp.billing.menu import BuyAction
 from derp.inference.api import GeneratedImage, OpenRouterError
 from derp.inference.models import ProviderCall
 from derp.money.wallets import balance, claw_back, credit, wallet
@@ -331,7 +332,7 @@ async def test_expired_approval_prompts_lose_their_buttons(
     assert await close_expired(conversation.db, bot, datetime.now(UTC)) == 0
 
 
-async def test_an_approval_that_cant_be_paid_any_more_links_to_buying(
+async def test_an_approval_that_cant_be_paid_any_more_offers_buying(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
     images = FakeImages()
@@ -343,10 +344,13 @@ async def test_an_approval_that_cant_be_paid_any_more_links_to_buying(
         await claw_back(session, "stars:jo", "refund:jo")
     after = conversation.seq
     await conversation.press(JO, JO.id, prompt_id, run)
-    [notice] = [
-        c
-        for c in conversation.api.calls_of("sendRichMessage", after=after)
-        if "nothing was charged" in c["rich_message"]["markdown"]
-    ]
-    [[top_up]] = notice["reply_markup"]["inline_keyboard"]
-    assert top_up["url"] == "https://t.me/DerpRobot?start=buy" and images.prompts == []
+    notice = conversation.api.message(JO.id, prompt_id)  # the prompt itself becomes the note
+    assert "nothing was charged" in str(notice["rich_message"]) and images.prompts == []
+    [[buy]] = notice["reply_markup"]["inline_keyboard"]
+    assert buy["callback_data"] == BuyAction(target="user").pack()
+    assert not conversation.api.calls_of("sendRichMessage", after=after)
+
+    after = conversation.seq
+    await conversation.press(JO, JO.id, prompt_id, buy["callback_data"])
+    [menu] = conversation.api.calls_of("editMessageText", after=after)
+    assert int(menu["message_id"]) == prompt_id and "Your balance" in menu["rich_message"]["markdown"]

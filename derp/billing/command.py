@@ -10,7 +10,7 @@ a group: the receipt goes to their private chat. A chat purchase gets the patron
 import logging
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BotSubscriptionUpdated, InlineKeyboardButton, Message, PreCheckoutQuery
 from sqlalchemy import select
@@ -20,7 +20,6 @@ from derp.billing.menu import (
     BuyAction,
     group_chooser,
     open_menu,
-    packs_keyboard,
     personal_menu,
     plan_link,
     send_pack_invoice,
@@ -41,7 +40,7 @@ from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, send_markdown, send_privately
 from derp.telegram.text import literal
 
-__all__ = ["BuyAction", "build_router", "personal_menu"]
+__all__ = ["BuyAction", "build_router"]
 log = logging.getLogger("derp.billing")
 
 
@@ -64,26 +63,25 @@ async def on_buy(press: Press, data: BuyAction, db: Database, settings: Settings
     if not data.product:
         if not private:
             return await open_menu(press, db, settings, kind=kind)
-        left = await wallet_balance(db, "user", owner_id)
-        return await press.edit(
-            t(press.locale, "billing.menu", balance=f"{left:,}"),
-            packs_keyboard(settings, "user", press.locale, plan=True),
-        )
+        # In place; the pressed message's other buttons stay (the offer's free models, the showcase's Add to group).
+        rows = message.reply_markup.inline_keyboard if message.reply_markup else []
+        others = [b for row in rows for b in row if not _buys(b)]
+        return await press.edit(*await personal_menu(db, settings, press.user_id, press.locale, others))
     if data.product == settings.plan.id:
         return await _offer_plan(press, db, settings)
     pack = find_pack(settings, data.product)
     if pack is None:
         return await press.deny("billing.stale")
-    # A personal invoice is posted privately: an older group menu must not put one in the group.
-    personal_in_group = kind == "user" and not private
-    chat_id = press.user_id if personal_in_group else press.chat_id
-    thread = message.message_thread_id if message.is_topic_message and not personal_in_group else None
+    thread = message.message_thread_id if message.is_topic_message else None
     try:
-        await send_pack_invoice(press.bot, chat_id, thread, press.locale, pack, kind=kind, owner_id=owner_id)
-    except TelegramAPIError as error:
-        refused_dm = personal_in_group and isinstance(error, TelegramForbiddenError | TelegramBadRequest)
-        return await press.deny("money.dm_first" if refused_dm else "billing.unavailable")
+        await send_pack_invoice(press.bot, press.locale, pack, kind=kind, owner_id=owner_id, thread_id=thread)
+    except TelegramAPIError:
+        return await press.deny("billing.unavailable")
     return None
+
+
+def _buys(b: InlineKeyboardButton) -> bool:
+    return b.callback_data is not None and b.callback_data.partition(":")[0] == BuyAction.__prefix__
 
 
 async def _offer_plan(press: Press, db: Database, settings: Settings) -> None:
@@ -151,7 +149,7 @@ async def on_payment(message: Message, db: Database, settings: Settings, bot: Bo
         return
     added, amount = f"{order.credits:,}", f"{left:,}"
     if order.target == "chat":
-        await _thank_patron(message, db, bot, funder, order, locale, amount)
+        await _thank_patron(message, db, bot, funder, order, purchase.id, locale, amount)
     else:
         if order.kind == "plan":
             renewed = payment.is_recurring and not payment.is_first_recurring
@@ -181,21 +179,26 @@ async def _receipt(bot: Bot, message: Message, locale: str, text: str, added: st
 
 
 async def _thank_patron(
-    message: Message, db: Database, bot: Bot, funder: Funder, order: Order, locale: str, amount: str
+    message: Message,
+    db: Database,
+    bot: Bot,
+    funder: Funder,
+    order: Order,
+    purchase_id: int,
+    locale: str,
+    amount: str,
 ) -> None:
     """The chat's patron post, in the topic the purchase was made in; a link payer also gets a receipt."""
     paid_here = message.chat.id == order.target_id
     thread = order.thread_id or None
     if thread is None and paid_here and message.is_topic_message:
         thread = message.message_thread_id
-    if message.from_user is not None:
-        try:
-            await patrons.thank(
-                db, bot, funder, chat_id=order.target_id, thread_id=thread, buyer_id=message.from_user.id,
-                amount=order.credits, locale=locale,
-            )  # fmt: skip
-        except Exception as error:  # noqa: BLE001 - the purchase is recorded; the post is a courtesy
-            log.warning("patron post failed: %s", type(error).__name__)
+    try:
+        await patrons.thank(
+            db, bot, funder, purchase_id=purchase_id, chat_id=order.target_id, thread_id=thread, locale=locale
+        )
+    except Exception as error:  # noqa: BLE001 - the purchase is recorded; the post is a courtesy
+        log.warning("patron post failed: %s", type(error).__name__)
     if paid_here:
         return
     async with db.session() as session:

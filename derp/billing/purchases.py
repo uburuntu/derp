@@ -56,6 +56,11 @@ class Order:
         return f"{pack}:{self.thread_id}" if self.thread_id else pack
 
 
+def pack_order(pack: Pack, kind: str, owner_id: int, thread_id: int | None = None) -> Order:
+    """A pack for a person or a chat; a chat's carries the topic its thank-you post goes to."""
+    return Order(pack.id, pack.credits, kind, owner_id, thread_id=(thread_id or 0) if kind == "chat" else 0)
+
+
 def plan_order(settings: Settings, user_id: int) -> Order:
     plan = settings.plan
     return Order(plan.id, plan.credits, "user", user_id, nonce=secrets.token_hex(6))
