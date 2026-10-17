@@ -10,19 +10,21 @@ Russian, calls a tool when asked).
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 from pydantic_ai import Agent, capture_run_messages
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models import Model
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.inference.api import OpenRouterAPI
 from derp.inference.ledger import record_usage
-from derp.inference.models import ModelPin, ScoutProposal
+from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
 from derp.inference.openrouter import chat_settings, response_usage, responses
 from derp.inference.pins import PinStore, apply_pin
 from derp.inference.roles import ModelRole, RolePin
@@ -41,6 +43,7 @@ class Route:
     completion: Decimal
     uptime: float | None
     tools: bool
+    cache_read: Decimal | None = None  # USD per 1M cached input tokens; None: no discount known
 
     @property
     def live(self) -> bool:
@@ -112,6 +115,11 @@ def build_catalog(
                 completion=per_million(pricing.get("completion")),
                 uptime=endpoint.get("uptime_last_1d"),
                 tools="tools" in (endpoint.get("supported_parameters") or []),
+                cache_read=(
+                    per_million(pricing["input_cache_read"])
+                    if pricing.get("input_cache_read") is not None
+                    else None
+                ),
             )
         )
     return catalog
@@ -128,8 +136,17 @@ def available(role: ModelRole, model: str, catalog: Catalog) -> bool:
     return bool(catalog.live_routes(model))
 
 
-def turn_cost(prompt: Decimal, completion: Decimal, window: int) -> Decimal:
-    return (prompt * window + completion * OUTPUT_TOKENS_PER_TURN) / 1_000_000
+def turn_cost(route: Route, window: int, cached: float = 0.0) -> Decimal:
+    """A typical turn on this route: ``cached`` of the window is read from the prompt cache."""
+    share = Decimal(str(min(max(cached, 0.0), 1.0)))
+    cache_price = route.cache_read if route.cache_read is not None else route.prompt
+    prompt = route.prompt * window * (1 - share) + cache_price * window * share
+    return (prompt + route.completion * OUTPUT_TOKENS_PER_TURN) / 1_000_000
+
+
+def _cheapest_turn(catalog: Catalog, model: str, window: int, cached: float) -> Route | None:
+    routes = catalog.live_routes(model)
+    return min(routes, key=lambda r: turn_cost(r, window, cached)) if routes else None
 
 
 def plan(
@@ -138,7 +155,9 @@ def plan(
     *,
     allowlist: tuple[str, ...],
     windows: Mapping[ModelRole, int],
+    cached: float = 0.0,
 ) -> list[Change]:
+    """``cached``: the measured share of chat input served from the prompt cache, for turn prices."""
     changes: list[Change] = []
     for role, pin in pins.items():
         current = pin
@@ -159,20 +178,20 @@ def plan(
                     Change(role, current, "price snapshot", safe=True, price=(route.prompt, route.completion))
                 )
         if role in CHAT_ROLES and (
-            challenger := _challenger(role, current, catalog, allowlist, windows[role])
+            challenger := _challenger(role, current, catalog, allowlist, windows[role], cached)
         ):
             changes.append(challenger)
     return changes
 
 
 def _challenger(
-    role: ModelRole, pin: RolePin, catalog: Catalog, allowlist: tuple[str, ...], window: int
+    role: ModelRole, pin: RolePin, catalog: Catalog, allowlist: tuple[str, ...], window: int, cached: float
 ) -> Change | None:
     incumbent = catalog.models.get(pin.model)
-    route = catalog.cheapest(pin.model)
+    route = _cheapest_turn(catalog, pin.model, window, cached)
     if incumbent is None or route is None or incumbent.intelligence is None:
         return None
-    budget = turn_cost(route.prompt, route.completion, window)
+    budget = turn_cost(route, window, cached)
     best: tuple[float, Candidate, Route] | None = None
     for candidate in catalog.models.values():
         if (
@@ -184,8 +203,8 @@ def _challenger(
             or candidate.intelligence < incumbent.intelligence + INTELLIGENCE_MARGIN
         ):
             continue
-        cheapest = catalog.cheapest(candidate.id)
-        if cheapest is None or turn_cost(cheapest.prompt, cheapest.completion, window) > budget:
+        cheapest = _cheapest_turn(catalog, candidate.id, window, cached)
+        if cheapest is None or turn_cost(cheapest, window, cached) > budget:
             continue
         if best is None or candidate.intelligence > best[0]:
             best = (candidate.intelligence, candidate, cheapest)
@@ -195,7 +214,7 @@ def _challenger(
     proposed = pin.model_copy(update={"model": candidate.id, "fallbacks": (pin.model, *pin.fallbacks)[:2]})
     reason = (
         f"{candidate.id}: intelligence {score:g} vs {incumbent.intelligence:g}, "
-        f"≈${turn_cost(cheapest.prompt, cheapest.completion, window):.5f}/turn vs ${budget:.5f}"
+        f"≈${turn_cost(cheapest, window, cached):.5f}/turn vs ${budget:.5f} ({cached:.0%} cached)"
     )
     return Change(role, proposed, reason, safe=False)
 
@@ -235,6 +254,22 @@ async def passes_smoke(model: Model, pin: RolePin) -> tuple[bool, list[ModelResp
     return cyrillic >= 5 and bool(called) and bool(timed.output), paid
 
 
+async def cached_share(session: AsyncSession, days: int = 7) -> float:
+    """The share of paid and sponsored chat input served from the prompt cache lately (0 without data)."""
+    since = datetime.now(UTC) - timedelta(days=days)
+    row = (
+        await session.execute(
+            select(func.sum(ProviderCall.input_tokens), func.sum(ProviderCall.cache_read_tokens)).where(
+                ProviderCall.kind == "chat",
+                ProviderCall.role.in_([role.value for role in CHAT_ROLES]),
+                ProviderCall.created_at >= since,
+            )
+        )
+    ).one()
+    total, cached = row
+    return float(cached or 0) / float(total) if total else 0.0
+
+
 async def run_scout(
     db: Database,
     api: OpenRouterAPI,
@@ -251,7 +286,11 @@ async def run_scout(
         ModelRole.CHAT: settings.context_windows.paid,
         ModelRole.CHAT_SPONSORED: settings.context_windows.sponsored,
     }
-    changes = plan(await store.all(), catalog, allowlist=settings.model_family_allowlist, windows=windows)
+    async with db.session() as session:
+        cached = await cached_share(session)
+    changes = plan(
+        await store.all(), catalog, allowlist=settings.model_family_allowlist, windows=windows, cached=cached
+    )
 
     # Live checks run outside any transaction: they take seconds and cost money.
     async with db.session() as session:

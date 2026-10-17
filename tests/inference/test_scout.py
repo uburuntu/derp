@@ -67,6 +67,25 @@ def test_challenger_needs_more_intelligence_at_no_higher_turn_cost() -> None:
     assert proposal.pin.fallbacks == ("openai/a",)
 
 
+def test_turn_prices_count_the_prompt_cache() -> None:
+    """A smarter model with cheaper output but a dearer cache read only looks cheaper when nothing is cached."""
+    pins = {ModelRole.CHAT: RolePin(model="deepseek/snapshot")}
+    models = [
+        model("deepseek/snapshot", 39.5, "0.00000015", "0.0000006"),
+        model("acme/glm", 41.8, "0.00000015", "0.0000005"),
+    ]
+    routes = [
+        {**route("deepseek/snapshot", "0.00000015", "0.0000006"), "pricing": {
+            "prompt": "0.00000015", "completion": "0.0000006", "input_cache_read": "0.000000003"}},
+        {**route("acme/glm", "0.00000015", "0.0000005"), "pricing": {
+            "prompt": "0.00000015", "completion": "0.0000005", "input_cache_read": "0.00000003"}},
+    ]  # fmt: skip
+    catalog = build_catalog(models, routes, [])
+    uncached = [c for c in plan(pins, catalog, allowlist=ALLOW, windows=WINDOWS) if not c.safe]
+    assert [c.pin.model for c in uncached] == ["acme/glm"]
+    assert not [c for c in plan(pins, catalog, allowlist=ALLOW, windows=WINDOWS, cached=0.7) if not c.safe]
+
+
 def test_free_role_availability_uses_catalog_not_zdr() -> None:
     pins = {ModelRole.CHAT_FREE: RolePin(model="x/free:free", fallbacks=("y/free:free",), zdr=False)}
     catalog = build_catalog([model("y/free:free", None, "0", "0")], [], [])
