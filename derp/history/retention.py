@@ -52,6 +52,15 @@ from derp.history.models import (
 from derp.ops.models import Feedback
 
 
+def default_days(chat: Chat, retention: Retention) -> int:
+    return retention.private_days if chat.type == "private" else retention.group_days
+
+
+def kept_days(chat: Chat, retention: Retention) -> int:
+    """How long this chat's raw history lives; ``retention_days`` is the same rule in SQL."""
+    return chat.retention_days or default_days(chat, retention)
+
+
 def retention_days(retention: Retention) -> ColumnElement[int]:
     """The chat's retention in days (correlates with ``Chat``)."""
     return func.coalesce(

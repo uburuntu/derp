@@ -30,6 +30,7 @@ from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
 from derp.money.models import CreditLot, RunFee
 from derp.money.wallets import balance, credit, wallet
+from derp.ops.owner import from_owner
 from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, send_markdown, send_privately
 from derp.telegram.text import literal
@@ -45,14 +46,6 @@ SCOUT_PING = "Model scout:"
 class ConsoleAction(CallbackData, prefix="own"):
     action: str  # apply | ignore (a scout proposal) | rollback (a role's pin)
     key: str
-
-
-async def from_owner(message: Message, settings: Settings) -> bool:
-    return (
-        message.chat.type == "private"
-        and message.from_user is not None
-        and message.from_user.id in settings.owner_ids
-    )
 
 
 def _usd(value: Decimal | float | None) -> str:

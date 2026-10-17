@@ -1,4 +1,4 @@
-"""Owner pings: short plain-text DMs to the configured owners, best effort; error digests to the ops chat.
+"""Owners: short plain-text DMs to them, best effort; error digests to the ops chat; who counts as one.
 
 Errors are counted by logger name only (content-free) and sent as one digest per
 interval, so an outage produces a line, not a flood.
@@ -9,7 +9,7 @@ from collections import Counter
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,15 @@ from derp.config import Settings
 from derp.history.models import Chat, User
 
 log = logging.getLogger("derp.owner")
+
+
+async def from_owner(message: Message, settings: Settings) -> bool:
+    """The filter on owner commands: an owner, in their private chat (others fall through)."""
+    return (
+        message.chat.type == "private"
+        and message.from_user is not None
+        and message.from_user.id in settings.owner_ids
+    )
 
 
 async def notify_owners(

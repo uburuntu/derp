@@ -17,12 +17,13 @@ from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, Message
-from sqlalchemy import Date, cast, func, select, update
+from sqlalchemy import Date, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.models import AgentRun
 from derp.billing.menu import top_up_button
 from derp.billing.models import PatronPost, Purchase
+from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat, User
 from derp.history.render import one_line
@@ -30,6 +31,7 @@ from derp.locales import resolve, t
 from derp.money.funding import Funder, Funding
 from derp.money.models import Wallet
 from derp.money.wallets import balance, wallet
+from derp.settings.panel import apply_setting
 from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, rich, send_markdown
 from derp.telegram.text import literal
@@ -273,8 +275,14 @@ def build_router() -> Router:
     router = Router(name="patrons")
 
     @on_press(router, PatronAction)
-    async def on_hide(press: Press, data: PatronAction, db: Database, funder: Funder) -> None:
-        """The buyer hides their name on the post (and in future chat purchases); others are refused."""
+    async def on_hide(
+        press: Press, data: PatronAction, db: Database, settings: Settings, funder: Funder
+    ) -> None:
+        """The buyer hides their name on the post (and in future chat purchases); others are refused.
+
+        A refusal leaves the button alone: other buyers may still be in their window, and the sweep
+        (``expire_hide_buttons``) drops it once nobody is.
+        """
         async with _posting:
             now = datetime.now(UTC)
             refusal: str | None = None
@@ -282,10 +290,9 @@ def build_router() -> Router:
             buttons: InlineKeyboardMarkup | None = None
             async with db.transaction() as session:
                 post = await session.get(PatronPost, data.post, with_for_update=True)
-                mine = [] if post is None else [e for e in post.buyers if int(e["user"]) == press.user_id]
                 if post is None or post.chat_id != press.chat_id:
                     refusal = "buttons.stale"
-                elif not mine:
+                elif not any(int(e["user"]) == press.user_id for e in post.buyers):
                     refusal = "patron.not_yours"
                 elif (own := _hide_until(post.buyers, press.user_id)) is None or own <= now:
                     refusal = "patron.too_late"  # already anonymous here, or too late
@@ -294,24 +301,12 @@ def build_router() -> Router:
                         {**e, "named": False} if int(e["user"]) == press.user_id else e for e in post.buyers
                     ]
                     post.hide_until = _hide_until(post.buyers)
-                    person = await session.get(User, press.user_id)
-                    if person is not None:
-                        person.patron_named = False
                     text = await render(session, post, await funder.typical_turn(session, Funding.PAID), now)
-                if post is not None and refusal != "buttons.stale":
                     buttons = keyboard(post, now)
-            if refusal == "patron.too_late":
-                await press.strip(lambda b: b.callback_data != data.pack())
             if refusal is not None:
                 return await press.deny(refusal)
+            await apply_setting(db, settings, press.chat_id, press.user_id, "named", "off")
             await press.edit(text, buttons)
-            await press.toast("patron.hidden")
-            return None
+            return await press.toast("patron.hidden")
 
     return router
-
-
-async def set_named(db: Database, user_id: int, *, named: bool) -> None:
-    """The personal "name me when I chip in" choice (``users.patron_named``), for Derp and the settings panel."""
-    async with db.transaction() as session:
-        await session.execute(update(User).where(User.id == user_id).values(patron_named=named))

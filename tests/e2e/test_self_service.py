@@ -124,9 +124,14 @@ async def test_settings_follow_admin_rules_and_context_off_needs_a_press(
     await conversation.press(REX, DEN.id, prompt_id, purge)
     async with conversation.db.session() as session:
         assert (await session.get(Chat, DEN.id)).ambient  # type: ignore[union-attr]
+    after = conversation.seq
     await conversation.press(ANA, DEN.id, prompt_id, purge)
     async with conversation.db.session() as session:
         assert not (await session.get(Chat, DEN.id)).ambient  # type: ignore[union-attr]
+    assert "Context is off" in conversation.api.calls_of("answerCallbackQuery", after=after)[-1]["text"]
+    ended = conversation.api.message(DEN.id, prompt_id)
+    assert "reply_markup" not in ended and not conversation.api.calls_of("editMessageText", after=after)
+    assert "Turn context off?" in str(ended["rich_message"])  # never someone's panel in the group
 
 
 async def test_feedback_reaches_the_owners_review(conversation: Conversation, model: ScriptedModel) -> None:
@@ -141,7 +146,8 @@ async def test_feedback_reaches_the_owners_review(conversation: Conversation, mo
     await conversation.settle(typed)
     stranger = await conversation.send(REX, text="/feedbacks")
     await conversation.settle(stranger)
-    assert not conversation.api.calls_of("sendRichMessage", after=stranger.after)  # owners only
+    [reply] = conversation.api.calls_of("sendRichMessage", after=stranger.after)
+    assert "/help" in reply["rich_message"]["markdown"]  # owners only: like any unknown command
 
     review = await conversation.send(OWNER, text="/feedbacks")
     await conversation.settle(review)
@@ -212,9 +218,23 @@ async def test_shorter_retention_from_a_tool_asks_for_a_press(
         assert (await session.get(Chat, DEN.id)).retention_days is None  # type: ignore[union-attr]
     prompt_id, confirm = last_button(conversation, DEN.id)
     assert confirm == SettingsAction(action="shorten", value=str(shorter)).pack()
+    after = conversation.seq
+    await conversation.press(ANA, DEN.id, prompt_id, SettingsAction(action="cancel").pack())
+    async with conversation.db.session() as session:
+        assert (await session.get(Chat, DEN.id)).retention_days is None  # type: ignore[union-attr]
+    assert "reply_markup" not in conversation.api.message(DEN.id, prompt_id)  # Back ends it too, no panel
+    assert not conversation.api.calls_of("editMessageText", after=after)
+
+    await ask(
+        conversation, model, ANA, tool_call("change_setting", setting="retention_days", value=str(shorter))
+    )
+    prompt_id, confirm = last_button(conversation, DEN.id)
+    after = conversation.seq
     await conversation.press(ANA, DEN.id, prompt_id, confirm)
     async with conversation.db.session() as session:
         assert (await session.get(Chat, DEN.id)).retention_days == shorter  # type: ignore[union-attr]
+    assert "Done" in conversation.api.calls_of("answerCallbackQuery", after=after)[-1]["text"]
+    assert "reply_markup" not in conversation.api.message(DEN.id, prompt_id)
     longest = max(conversation.settings.retention.options)
     await ask(
         conversation, model, ANA, tool_call("change_setting", setting="retention_days", value=str(longest))

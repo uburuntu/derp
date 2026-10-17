@@ -87,3 +87,16 @@ async def test_anyone_sets_a_missing_zone_admins_change_it_and_repeats_follow(
     assert jobs["pizza"].next_at == pizza_at  # a one-off keeps its instant
     standup = jobs["standup"].next_at.astimezone(MOSCOW)
     assert standup.time() == time(9) and standup.date() == nine.astimezone(berlin).date()
+
+
+async def test_a_first_zone_keeps_the_instants_jobs_were_placed_at(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    at, nine = nine_tomorrow(MOSCOW)  # Moscow keeps +03:00 all year
+    model.reply(tool_call("schedule", text="call mum", at=f"{at}+03:00", repeat="daily"), ".")
+    await conversation.settle(await conversation.send(LEE, text="every day at 9 Moscow time, call mum"))
+    model.reply(tool_call("change_setting", setting="time_zone", value="Asia/Tokyo"), ".")
+    await conversation.settle(await conversation.send(LEE, text="I'm in Tokyo"))
+    async with conversation.db.session() as session:
+        job = await session.scalar(select(Job))
+    assert job is not None and (job.next_at, job.anchor_at) == (nine, nine)  # not moved to 09:00 Tokyo

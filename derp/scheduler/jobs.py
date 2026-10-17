@@ -1,4 +1,4 @@
-"""Job rules: who may schedule what, when it fires next, and how times are shown.
+"""Job rules: who may schedule and touch what, when it fires next, and how times are shown.
 
 Repeats keep the first occurrence's wall-clock time in the chat's time zone (so
 09:00 stays 09:00 across daylight-saving changes, and a time skipped by a
@@ -9,16 +9,25 @@ most once per claim.
 
 A one-off holds an absolute instant, so changing the chat's time zone never
 moves it; repeating jobs are re-anchored to keep their wall-clock time in the
-new zone (``rezone``). Chats without a zone run on UTC.
+new zone (``rezone``). Chats without a zone run on UTC, but their jobs were
+placed as instants (relative times, explicit offsets), so a first zone keeps
+those instants too.
+
+Creators pause, resume and cancel their own jobs, admins any (``act_on_job``,
+behind the agent's tools, the /settings jobs page and the Resume button).
 """
 
 import calendar
 from datetime import UTC, date, datetime, timedelta, tzinfo
+from typing import Literal
+from zoneinfo import ZoneInfo
 
 from aiogram.filters.callback_data import CallbackData
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from derp.history.models import Chat, User
+from derp.history.render import chat_time
 from derp.scheduler.models import Job
 
 MAX_AHEAD = timedelta(days=366)
@@ -26,6 +35,10 @@ MIN_AHEAD = timedelta(seconds=30)
 CHAT_LIMIT = 25  # active jobs per chat
 PERSON_LIMIT = 10  # active jobs per person per chat
 MISS_LIMIT = 3  # unfunded firings in a row before a job pauses
+LIVE = ("active", "paused")  # jobs still scheduled; done and cancelled ones only await deletion
+
+type JobAction = Literal["pause", "resume", "cancel"]
+type Refusal = Literal["gone", "not_yours", "passed"]
 
 
 class ResumeJob(CallbackData, prefix="jobresume"):
@@ -67,8 +80,8 @@ def next_after(job: Job, now: datetime, tz: tzinfo) -> datetime | None:
     return upcoming
 
 
-def rezone(job: Job, old: tzinfo, new: tzinfo, now: datetime) -> None:
-    """Keep a repeating job's local wall time and day when the chat's zone changes (one-offs stay put)."""
+def keep_wall_time(job: Job, old: tzinfo, new: tzinfo, now: datetime) -> None:
+    """Re-anchor a repeating job to the same local wall time and day in a new zone (one-offs stay put)."""
     if job.repeat is None:
         return
     first = job.anchor_at.astimezone(old)
@@ -77,6 +90,21 @@ def rezone(job: Job, old: tzinfo, new: tzinfo, now: datetime) -> None:
     while upcoming <= now:
         upcoming = following(upcoming, job.repeat, new, job.anchor_at)
     job.next_at = upcoming
+
+
+async def rezone(session: AsyncSession, chat: Chat, zone: str, now: datetime) -> None:
+    """Move a (locked) chat to ``zone``; its repeating jobs keep their wall time unless it had no zone."""
+    old = chat_time(chat) if chat.timezone else None
+    chat.timezone = zone
+    if old is None:  # placed as instants: nothing was ever local
+        return
+    repeating = await session.scalars(
+        select(Job)
+        .where(Job.chat_id == chat.id, Job.state.in_(LIVE), Job.repeat.is_not(None))
+        .with_for_update()
+    )
+    for job in repeating:
+        keep_wall_time(job, old, ZoneInfo(zone), now)
 
 
 def resume(job: Job, now: datetime, tz: tzinfo) -> bool:
@@ -88,6 +116,45 @@ def resume(job: Job, now: datetime, tz: tzinfo) -> bool:
         job.next_at = upcoming
     job.state, job.misses = "active", 0
     return True
+
+
+async def live_jobs(session: AsyncSession, chat_id: int) -> list[tuple[Job, str | None]]:
+    """The chat's active and paused jobs, soonest first, with their creator's first name."""
+    rows = await session.execute(
+        select(Job, User.first_name)
+        .outerjoin(User, User.id == Job.creator_id)
+        .where(Job.chat_id == chat_id, Job.state.in_(LIVE))
+        .order_by(Job.next_at)
+    )
+    return [(job, name) for job, name in rows]
+
+
+def may_touch(job: Job, user_id: int | None, admin: bool) -> bool:
+    """Its creator or an admin may pause, resume or cancel a job."""
+    return admin or job.creator_id == user_id
+
+
+async def act_on_job(
+    session: AsyncSession, chat: Chat, job_id: int, user_id: int, admin: bool, action: JobAction
+) -> Job | Refusal:
+    """Pause, resume or cancel one of this chat's jobs; returns the job, or why it was refused.
+
+    Resuming an active job leaves it be.
+    """
+    job = await session.get(Job, job_id, with_for_update=True)
+    if job is None or job.chat_id != chat.id or job.state not in LIVE:
+        return "gone"
+    if not may_touch(job, user_id, admin):
+        return "not_yours"
+    match action:
+        case "pause":
+            job.state = "paused"
+        case "resume" if job.state == "paused":
+            if not resume(job, datetime.now(UTC), chat_time(chat)):
+                return "passed"
+        case "cancel":
+            job.state = "cancelled"
+    return job
 
 
 async def pause_jobs(session: AsyncSession, chat_id: int, creator_id: int | None = None) -> None:
@@ -129,7 +196,7 @@ def show_time(moment: datetime, tz: tzinfo) -> str:
 
 
 async def active_counts(session: AsyncSession, chat_id: int, user_id: int) -> tuple[int, int]:
-    live = (Job.chat_id == chat_id) & Job.state.in_(("active", "paused"))
+    live = (Job.chat_id == chat_id) & Job.state.in_(LIVE)
     total = await session.scalar(select(func.count()).where(live)) or 0
     mine = await session.scalar(select(func.count()).where(live, Job.creator_id == user_id)) or 0
     return int(total), int(mine)

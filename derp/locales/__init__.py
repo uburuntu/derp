@@ -42,5 +42,10 @@ def t(locale: str | None, key: str, /, **values: object) -> str:
     return text.format(**values) if values else text
 
 
+def day_count(locale: str | None, count: int) -> str:
+    """A number of days in words ("1 day", "30 days"), the one count catalogs word by number."""
+    return t(locale, "units.day" if count == 1 else "units.days", days=count)
+
+
 def placeholders(text: str) -> set[str]:
     return {field for _, field, _, _ in Formatter().parse(text) if field}

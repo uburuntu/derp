@@ -107,15 +107,14 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   morning post a fun fact"). Both can repeat daily, on weekdays, weekly or monthly in the chat's time zone.
 - Time zone: each chat has one, set by telling Derp where you are ("I'm in Moscow", "use Berlin time"). Until it is
   set, Derp asks once before scheduling at a clock time. In a group anyone can set a missing zone; changing it needs
-  an admin. Repeating jobs keep their local time when the zone changes; one-off reminders keep their moment. Day
-  summaries and "today" follow the chat's zone; the free daily Derpcoins still refill on the UTC day.
-- /settings shows the zone and a page of the chat's reminders with pause, resume and delete buttons: people manage
-  their own, admins all of them.
-- Anyone can schedule one-offs; repeating jobs in groups need an admin. Creators cancel or resume their own,
-  admins any.
+  an admin. Repeating jobs keep their local time when the zone changes; one-off reminders keep their moment, and
+  setting the first zone moves nothing. Day summaries and "today" follow the chat's zone; the free daily
+  Derpcoins still refill on the UTC day.
+- Anyone can schedule one-offs; repeating jobs in groups need an admin. Creators manage their own jobs and
+  admins any: Derp cancels or resumes them on request, and /settings has a page of the chat's reminders (beside
+  the zone) with pause, resume and delete buttons.
 - A scheduled prompt is paid when it fires, by the usual payer order; after several unpaid firings in a row the
-  job pauses, and the note saying so has a Resume button (its creator or an admin). Removing Derp from a chat
-  pauses its jobs.
+  job pauses, and the note saying so has a Resume button. Removing Derp from a chat pauses its jobs.
 
 ## privacy
 

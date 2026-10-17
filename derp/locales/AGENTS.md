@@ -9,5 +9,5 @@
 - Money, privacy and error copy is plain and calm: outcome first, then the money state ("not charged", "12 dc left"), then the recovery step.
 - Russian avoids choosing ты/вы: prefer impersonal or infinitive phrasing ("Можно пополнить через /buy").
 - Currency: Derpcoins / дерпкоины, short `dc`. The paid plan is Derp+.
-- Counts that can be any number avoid inflected plurals (catalogs have no plural forms): `Stored messages: **{count}**`, `**+{credits}** dc`, `(…) ({count})`. Fixed numbers (30 days, pack sizes) may use ordinary words.
+- Counts that can be any number avoid inflected plurals (catalogs have no plural forms): `Stored messages: **{count}**`, `**+{credits}** dc`, `(…) ({count})`. Fixed numbers (30 days, pack sizes) may use ordinary words. A number of days that varies (retention) goes through `day_count(locale, n)` ("1 day", «7 дн.»).
 - Owner-only console copy (`ops/console.py`) is English and lives in code.
