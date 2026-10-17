@@ -36,6 +36,14 @@ class RolePin(BaseModel, frozen=True):
     def models(self) -> tuple[str, ...]:
         return (self.model, *self.fallbacks)
 
+    def rotated(self) -> RolePin:
+        """The same pin led by its first fallback (the primary goes last): a second try that starts elsewhere."""
+        if not self.fallbacks:
+            return self
+        return self.model_copy(
+            update={"model": self.fallbacks[0], "fallbacks": (*self.fallbacks[1:], self.model)}
+        )
+
 
 DEFAULT_PINS: dict[ModelRole, RolePin] = {
     # GLM's reasoning can't be disabled, but at "low" it emits next to none.
@@ -45,9 +53,11 @@ DEFAULT_PINS: dict[ModelRole, RolePin] = {
     ModelRole.CHAT_SPONSORED: RolePin(
         model="z-ai/glm-5.3-flash", fallbacks=("deepseek/deepseek-v4.1-flash",)
     ),
+    # Free models are rate-limited per model and upstream provider: the chain spans providers, and
+    # OpenRouter's free router (any free model that supports the request's tools) is the last rung.
     ModelRole.CHAT_FREE: RolePin(
         model="thinkingmachines/inkling:free",
-        fallbacks=("thinkingmachines/inkling-small:free", "google/gemma-4-26b-a4b-it:free"),
+        fallbacks=("google/gemma-4-26b-a4b-it:free", "openrouter/free"),
         zdr=False,
         vision=False,
     ),
