@@ -35,7 +35,7 @@ from derp.locales import DEFAULT, LOCALES, resolve, t
 from derp.money.command import bought_total, free_left_today
 from derp.money.wallets import balances, wallet
 from derp.settings.onboarding import context_line
-from derp.telegram.buttons import link, markup
+from derp.telegram.buttons import answer_stale, link, markup
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
 
@@ -233,7 +233,8 @@ def build_router() -> Router:
 
 
 def build_fallback_router() -> Router:
-    """Last among command routers: whatever no handler claimed."""
-    router = Router(name="unknown-commands")
+    """Last among command routers: whatever no handler claimed (commands, and buttons from older versions)."""
+    router = Router(name="unclaimed")
     router.message.register(on_unknown_command, is_command)
+    router.callback_query.register(answer_stale)
     return router

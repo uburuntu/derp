@@ -147,9 +147,7 @@ def on_press(
                 else None
             )
             if press is None:
-                with contextlib.suppress(TelegramAPIError):
-                    await query.answer(t(resolve(query.from_user.language_code), stale), show_alert=True)
-                return
+                return await answer_stale(query, stale)
             available = {**deps, "bot": bot}
             try:
                 await handler(press, callback_data, **{name: available[name] for name in wanted})
@@ -160,3 +158,9 @@ def on_press(
         return handler
 
     return register
+
+
+async def answer_stale(query: CallbackQuery, key: str = "buttons.stale") -> None:
+    """The alert for a press nothing can serve: an inaccessible message, or a button no handler knows any more."""
+    with contextlib.suppress(TelegramAPIError):
+        await query.answer(t(resolve(query.from_user.language_code), key), show_alert=True)

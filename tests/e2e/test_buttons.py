@@ -43,6 +43,18 @@ async def test_a_press_on_a_message_derp_cant_see_gets_the_stale_alert(conversat
     assert {c.method for c in conversation.api.calls[after:]} == {"getUpdates", "answerCallbackQuery"}
 
 
+async def test_a_button_from_an_older_version_gets_the_stale_alert(conversation: Conversation) -> None:
+    conversation.meet(ADMIN, LOFT)
+    sent = await conversation.send(ADMIN, LOFT, "hi")
+    await conversation.settle(sent)
+    old = {"text": "⭐ Buy", "callback_data": "sa:buy"}  # no handler knows it any more
+    conversation.api.messages[(LOFT.id, sent.message_id)]["reply_markup"] = {"inline_keyboard": [[old]]}
+    after = conversation.seq
+    await conversation.press(ADMIN, LOFT.id, sent.message_id, "sa:buy")
+    [answer] = conversation.api.calls_of("answerCallbackQuery", after=after)
+    assert answer["text"] == "These buttons are out of date." and answer["show_alert"]
+
+
 async def test_settings_offer_the_admin_link_when_derp_cant_read_the_chat(conversation: Conversation) -> None:
     conversation.api.bot_user["can_read_all_group_messages"] = False  # privacy mode on, Derp not an admin
     await conversation.restart()
