@@ -2,7 +2,7 @@
 
 LLM answers and system copy are Markdown and go out via ``sendRichMessage``.
 A rejected rich message (BadRequest means nothing was delivered) is resent as
-plain text, split to Telegram's limits. Untrusted (model-written) Markdown is
+plain text, split to Telegram's limits, never with link previews. Untrusted (model-written) Markdown is
 stripped of interactive tags so a prompt-injected answer cannot render
 callback buttons that look like Derp's own controls, and of remote media and
 link previews, which Telegram's servers would fetch — an injected answer could
@@ -38,6 +38,7 @@ _REMOTE_MEDIA = re.compile(
 )  # ![alt](url) / ![alt][ref], not tg:// links
 _FENCE = "```"
 RICH_CHUNK = RICH_LIMIT - 768  # headroom for fence repair and entity overhead
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 def rich(markdown: str) -> InputRichMessage:
@@ -136,7 +137,7 @@ async def send_markdown(
     chunks = split_rich(markdown) if markdown.strip() else ["…"]
     sent: list[Message] = []
     try:
-        await _send_chunks(bot, target, chunks, sent, trusted=trusted, reply_markup=reply_markup)
+        await _send_chunks(bot, target, chunks, sent, reply_markup=reply_markup)
     except TelegramAPIError as error:
         if sent:
             raise PartialDeliveryError(error, sent) from error
@@ -161,7 +162,6 @@ async def _send_chunks(
     chunks: list[str],
     sent: list[Message],
     *,
-    trusted: bool,
     reply_markup: InlineKeyboardMarkup | None,
 ) -> None:
     for index, chunk in enumerate(chunks):
@@ -183,7 +183,6 @@ async def _send_chunks(
                     target_for_chunk,
                     chunk,
                     reply_markup=reply_markup if last else None,
-                    previews=trusted,
                 )
             )
         else:
@@ -196,8 +195,12 @@ async def send_plain(
     text: str,
     *,
     reply_markup: InlineKeyboardMarkup | None = None,
-    previews: bool = True,
 ) -> list[Message]:
+    """Plain text, split to Telegram's limit; link previews are always off.
+
+    Previews are passed explicitly: aiogram drops an explicit ``None`` rather than applying the bot
+    default, and Telegram's own default shows them.
+    """
     chunks = split_text(text, PLAIN_LIMIT) if text.strip() else ["…"]
     sent: list[Message] = []
     for index, chunk in enumerate(chunks):
@@ -207,7 +210,7 @@ async def send_plain(
                 chat_id=target.chat_id,
                 message_thread_id=target.thread_id,
                 text=chunk,
-                link_preview_options=None if previews else LinkPreviewOptions(is_disabled=True),
+                link_preview_options=NO_PREVIEW,
                 reply_parameters=(target if index == 0 else target.replying(None)).reply_parameters,
                 ephemeral_message_parameters=target.ephemeral,
                 reply_markup=reply_markup if last else None,

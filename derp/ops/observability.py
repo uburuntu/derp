@@ -2,9 +2,11 @@
 
 Content-free by default (numeric IDs, kinds, counts, durations, outcomes). The
 only content export is a redacted, truncated exchange when an agent run fails.
-Pydantic AI is deliberately not auto-instrumented (its spans record exception
-messages and prompts); runs emit their own content-free spans. Logfire is optional and fails soft; HTTPX is never instrumented
-globally because Telegram file URLs embed the bot token.
+Pydantic AI is deliberately not instrumented at all (its spans record exception
+messages and prompts), so the only span is the content-free ``telegram.update``
+around each update; agent runs add no spans of their own. Logfire is optional and fails
+soft; HTTPX is never instrumented globally because Telegram file URLs embed the
+bot token.
 """
 
 import logging

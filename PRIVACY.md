@@ -4,7 +4,7 @@
 
 ### What I keep
 
-Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Short daily summaries of a chat, for up to a year. Notes and reminders you ask me to keep, until they finish or you remove them. Quiz points and titles of the day in groups, until /forget. Payment receipts, for accounting.
+Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Contacts and locations shared in a chat are kept like any other message, for the same time. Short daily summaries of a chat, for up to a year. Notes and reminders you ask me to keep, until they finish or you remove them. Quiz points and titles of the day in groups, until /forget. Payment receipts, for accounting. Nothing is used to train AI models, and nothing from one chat is used in another — apart from public stickers, which I may reuse anywhere.
 
 ### Who processes it
 
@@ -22,7 +22,7 @@ Telegram handles payments; I only see the amount and a charge id.
 
 ### Что я храню
 
-Сообщения, в которых меня зовут, и — пока группа это разрешает — остальные сообщения группы для контекста: по умолчанию 30 дней в группах и 365 дней в личке. Короткие сводки дня по чату — до года. Заметки и напоминания, которые меня попросили сохранить, — пока они не сработают или их не удалят. Очки викторин и титулы дня в группах — до /forget. Чеки об оплате — для учёта.
+Сообщения, в которых меня зовут, и — пока группа это разрешает — остальные сообщения группы для контекста: по умолчанию 30 дней в группах и 365 дней в личке. Контакты и геолокации, отправленные в чат, хранятся как обычные сообщения и столько же. Короткие сводки дня по чату — до года. Заметки и напоминания, которые меня попросили сохранить, — пока они не сработают или их не удалят. Очки викторин и титулы дня в группах — до /forget. Чеки об оплате — для учёта. Ничего не идёт на обучение ИИ-моделей, и ничего из одного чата не используется в другом — кроме публичных стикеров, их я могу отправлять где угодно.
 
 ### Кто это обрабатывает
 
