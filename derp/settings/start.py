@@ -27,6 +27,7 @@ from aiogram.types import (
 
 from derp.agent.invocation import Trigger, TriggerKind, message_text
 from derp.billing.command import personal_menu
+from derp.billing.patrons import lately_line
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat
@@ -172,10 +173,11 @@ async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user
         t(locale, "onboarding.summon", username=username),
         t(locale, context, days=kept_days(chat, settings)),
         t(locale, "help.chat_wallet", left=f"{left:,}"),
+        await lately_line(db, chat.id, locale),
         t(locale, "help.commands"),
         t(locale, "help.more_group", username=username),
     ]
-    return "\n\n".join(lines)
+    return "\n\n".join(line for line in lines if line)
 
 
 async def show_help(message: Message, db: Database, settings: Settings, bot: Bot, chat_row: Chat) -> None:

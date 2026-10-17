@@ -59,6 +59,7 @@ class Target:
     reply_to: int | None = None
     ephemeral_to: int | None = None  # the user who alone sees the message
     ephemeral_reply_to: int | None = None  # their ephemeral message being answered
+    callback_query_id: str | None = None  # or the button press it answers (also within 15 seconds)
 
     @classmethod
     def reply_to_message(cls, message: Message) -> Target:
@@ -67,9 +68,21 @@ class Target:
             return cls(message.chat.id, thread, None, message.from_user.id, message.ephemeral_message_id)
         return cls(message.chat.id, thread, message.message_id or None)
 
+    @classmethod
+    def answering_press(cls, chat_id: int, thread_id: int | None, user_id: int, query_id: str) -> Target:
+        """An ephemeral message to the person who pressed a button (callback query ``query_id``)."""
+        return cls(chat_id, thread_id, ephemeral_to=user_id, callback_query_id=query_id)
+
     def replying(self, message_id: int | None) -> Target:
         # Ephemeral chunks all answer the same command: non-admin bots may only send them as replies.
-        return Target(self.chat_id, self.thread_id, message_id, self.ephemeral_to, self.ephemeral_reply_to)
+        return Target(
+            self.chat_id,
+            self.thread_id,
+            message_id,
+            self.ephemeral_to,
+            self.ephemeral_reply_to,
+            self.callback_query_id,
+        )
 
     @property
     def reply_parameters(self) -> ReplyParameters | None:
@@ -81,7 +94,11 @@ class Target:
 
     @property
     def ephemeral(self) -> EphemeralMessageParameters | None:
-        return EphemeralMessageParameters(receiver_user_id=self.ephemeral_to) if self.ephemeral_to else None
+        if not self.ephemeral_to:
+            return None
+        return EphemeralMessageParameters(
+            receiver_user_id=self.ephemeral_to, callback_query_id=self.callback_query_id
+        )
 
 
 def _strip_once(markdown: str) -> str:
@@ -127,17 +144,19 @@ async def send_markdown(
     *,
     trusted: bool = True,
     reply_markup: InlineKeyboardMarkup | None = None,
+    silent: bool = False,
 ) -> list[Message]:
     """Send Markdown as one or more rich messages; the keyboard goes on the last one.
 
-    A failure after some parts went out raises ``PartialDeliveryError`` carrying them.
+    ``silent`` delivers without a notification sound. A failure after some parts went out raises
+    ``PartialDeliveryError`` carrying them.
     """
     if not trusted:
         markdown = sanitize_untrusted(markdown)
     chunks = split_rich(markdown) if markdown.strip() else ["…"]
     sent: list[Message] = []
     try:
-        await _send_chunks(bot, target, chunks, sent, reply_markup=reply_markup)
+        await _send_chunks(bot, target, chunks, sent, reply_markup=reply_markup, silent=silent)
     except TelegramAPIError as error:
         if sent:
             raise PartialDeliveryError(error, sent) from error
@@ -163,6 +182,7 @@ async def _send_chunks(
     sent: list[Message],
     *,
     reply_markup: InlineKeyboardMarkup | None,
+    silent: bool = False,
 ) -> None:
     for index, chunk in enumerate(chunks):
         last = index == len(chunks) - 1
@@ -175,6 +195,7 @@ async def _send_chunks(
                 reply_parameters=target_for_chunk.reply_parameters,
                 reply_markup=reply_markup if last else None,
                 ephemeral_message_parameters=target.ephemeral,
+                disable_notification=True if silent else None,
             )
         except TelegramBadRequest:
             sent.extend(
@@ -183,6 +204,7 @@ async def _send_chunks(
                     target_for_chunk,
                     chunk,
                     reply_markup=reply_markup if last else None,
+                    silent=silent,
                 )
             )
         else:
@@ -195,6 +217,7 @@ async def send_plain(
     text: str,
     *,
     reply_markup: InlineKeyboardMarkup | None = None,
+    silent: bool = False,
 ) -> list[Message]:
     """Plain text, split to Telegram's limit; link previews are always off.
 
@@ -214,6 +237,7 @@ async def send_plain(
                 reply_parameters=(target if index == 0 else target.replying(None)).reply_parameters,
                 ephemeral_message_parameters=target.ephemeral,
                 reply_markup=reply_markup if last else None,
+                disable_notification=True if silent else None,
             )
         )
     return sent

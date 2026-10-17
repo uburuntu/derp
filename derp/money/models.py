@@ -6,7 +6,7 @@ Every change to a lot is mirrored by a ledger entry keyed by the operation
 that caused it.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import CheckConstraint, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -32,6 +32,8 @@ class Wallet(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     kind: Mapped[str] = mapped_column(String(8))
     owner_id: Mapped[int]  # user id or chat id
+    # A chat wallet that ran dry was announced once; cleared when it is topped up again.
+    empty_noticed_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
@@ -130,3 +132,13 @@ class RunFee(Base):
     funding: Mapped[str] = mapped_column(String(9))
     credits: Mapped[int]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class OfferNotice(Base):
+    """The last UTC day a person was shown the out-of-Derpcoins offer in a group (one row per person and chat)."""
+
+    __tablename__ = "offer_notices"
+
+    chat_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    user_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    day: Mapped[date]

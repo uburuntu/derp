@@ -23,8 +23,8 @@ from derp.history.models import User
 from derp.inference.ledger import estimate_cost
 from derp.inference.models import ModelPin, ProviderCall
 from derp.inference.roles import ModelRole
-from derp.money.models import RunFee
-from derp.money.wallets import capture, credit, release, reserve, wallet
+from derp.money.models import RunFee, Wallet
+from derp.money.wallets import balance, capture, credit, release, reserve, wallet
 
 PAID_SOURCES = ("plan", "purchase", "grant", "migration")
 TYPICAL_OUTPUT_TOKENS = 300
@@ -181,6 +181,25 @@ class Funder:
                 f"Sponsored usage hit today's ${self.settings.sponsored_global_daily_usd:g} cap."
             )
         return Funds(Funding.FREE, operation_id, None, None, 0) if free_allowed else None
+
+    async def ran_dry(self, wallet_id: int, *, now: datetime | None = None) -> bool:
+        """After a charge: True once when a chat wallet can no longer pay a typical paid turn.
+
+        Re-armed when the wallet can pay again (a top-up also clears it). Its own short transaction,
+        after the charge committed; the caller posts the notice afterwards, outside any transaction.
+        """
+        async with self.db.transaction() as session:
+            row = await session.get(Wallet, wallet_id, with_for_update=True)
+            if row is None or row.kind != "chat":
+                return False
+            left = await balance(session, wallet_id, sources=PAID_SOURCES, now=now)
+            if left >= await self.typical_turn(session, Funding.PAID):
+                row.empty_noticed_at = None
+                return False
+            if row.empty_noticed_at is not None:
+                return False
+            row.empty_noticed_at = now or datetime.now(UTC)
+            return True
 
     async def settle(self, session: AsyncSession, funds: Funds, run_id: int, *, delivered: bool) -> int:
         """Charge the run's marked-up provider cost plus its fees if Telegram accepted an output, else return the hold."""

@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import time
 import typing
 from collections import defaultdict, deque
 from collections.abc import Callable, Mapping
@@ -31,6 +32,8 @@ METHODS: dict[str, type[TelegramMethod[Any]]] = {
     for cls in vars(aiogram.methods).values()
     if inspect.isclass(cls) and issubclass(cls, TelegramMethod) and hasattr(cls, "__api_method__")
 }
+
+EPHEMERAL_SECONDS = 15  # an ephemeral message must answer its press or command within this
 
 # Methods whose Bot API result is a bare ``true`` and need no state here.
 TRUE_METHODS = frozenset(
@@ -114,6 +117,9 @@ class FakeBotAPI:
         self.poll_ids = 0
         self.inline_results: dict[str, bool] = {}  # result id → has a keyboard
         self.ephemerals: dict[tuple[int, int], JsonObject] = {}  # (chat, ephemeral id) → message
+        # callback query id → (presser, pressed an ephemeral message, when): ephemeral answers to presses
+        self.presses: dict[str, tuple[int, bool, float]] = {}
+        self.invoice_links: dict[str, JsonObject] = {}  # createInvoiceLink URL → its fields
         self.inline_messages: dict[str, JsonObject] = {}  # inline_message_id → last edit
         self.pinned: dict[int, int] = {}
         self.handlers: dict[str, Callable[[JsonObject], Any]] = {}
@@ -189,6 +195,9 @@ class FakeBotAPI:
     async def push_update(self, update: Mapping[str, Any]) -> int:
         raw = dict(update)
         Update.model_validate(raw)
+        if isinstance(query := raw.get("callback_query"), Mapping):
+            pressed_ephemeral = bool((query.get("message") or {}).get("ephemeral_message_id"))
+            self.presses[str(query["id"])] = (int(query["from"]["id"]), pressed_ephemeral, time.monotonic())
         async with self.condition:
             self.updates.append(raw)
             self.updates.sort(key=lambda item: int(item["update_id"]))
@@ -384,7 +393,18 @@ class FakeBotAPI:
             receiver = self.users.get(int(ephemeral["receiver_user_id"]))
             if receiver is None:
                 raise ValueError("ephemeral receiver is not a known user")
-            if not (isinstance(reply, Mapping) and reply.get("ephemeral_message_id")):
+            if (query := ephemeral.get("callback_query_id")) is not None:
+                press = self.presses.get(str(query))
+                if press is None:
+                    raise ValueError(f"callback query {query!r} was never received")
+                presser, from_ephemeral, at = press
+                if presser != int(receiver["id"]):
+                    raise ValueError("an ephemeral answer to a press goes to the presser")
+                if from_ephemeral and ephemeral.get("replace_callback_query_message"):
+                    raise ValueError("presses on ephemeral messages can't be replaced, only edited")
+                if time.monotonic() - at > EPHEMERAL_SECONDS:
+                    raise Refusal(400, "Bad Request: query is too old")
+            elif not (isinstance(reply, Mapping) and reply.get("ephemeral_message_id")):
                 raise ValueError("non-admin bots send ephemeral messages only as replies to ephemeral ones")
             message.update(message_id=0, ephemeral_message_id=len(self.calls), receiver_user=receiver)
             self.ephemerals[(chat_id, int(message["ephemeral_message_id"]))] = message
@@ -444,7 +464,9 @@ class FakeBotAPI:
             int(period) != 2592000 or fields.get("currency") != "XTR" or amount > 10000
         ):
             raise ValueError("subscriptions are 30-day XTR invoices of at most 10000 Stars")
-        return f"https://t.me/$invoice-{len(self.calls)}"
+        url = f"https://t.me/$invoice-{len(self.calls)}"
+        self.invoice_links[url] = dict(fields)
+        return url
 
     def _m_sendDice(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         return self._new_message(fields, dice={"emoji": fields.get("emoji", "🎲"), "value": 4})

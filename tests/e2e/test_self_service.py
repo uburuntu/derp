@@ -67,6 +67,22 @@ async def test_balances_go_by_dm_and_invoices_are_exact(
     await ask(conversation, model, REX, tool_call("purchase_button", stars=7))
     assert "No pack costs 7⭐" in result_of(model, "purchase_button")
 
+    # A personal invoice asked for in a group goes to the private chat, never into the group.
+    after = await ask(conversation, model, ANA, tool_call("purchase_button", stars=50))
+    [invoice] = conversation.api.calls_of("sendInvoice", after=after)
+    assert int(invoice["chat_id"]) == ANA.id and invoice["payload"] == f"p1:pack_s_v1:650:user:{ANA.id}"
+    assert "private chat" in result_of(model, "purchase_button")
+    after = await ask(conversation, model, REX, tool_call("purchase_button", stars=50))
+    assert "haven't opened a private chat" in result_of(model, "purchase_button")
+    # The chat's pack menu uses invoice links: no invoice per pack in the group.
+    after = await ask(conversation, model, REX, tool_call("purchase_button", for_chat=True))
+    assert not conversation.api.calls_of("sendInvoice", after=after)
+    [menu] = [
+        c for c in conversation.api.calls_of("sendRichMessage", after=after) if c.fields.get("reply_markup")
+    ]
+    url = menu["reply_markup"]["inline_keyboard"][0][0]["url"]
+    assert conversation.api.invoice_links[url]["payload"] == f"p1:pack_s_v1:650:chat:{DEN.id}"
+
 
 async def test_an_unconfirmed_invoice_is_not_posted_again(
     conversation: Conversation, model: ScriptedModel
@@ -140,13 +156,14 @@ async def test_feedback_reaches_the_owners_review(conversation: Conversation, mo
         assert await session.scalar(select(Feedback.state).where(Feedback.id == first)) == "done"
 
 
-def last_button(conversation: Conversation, chat_id: int) -> tuple[int, str]:
-    """The newest message in a chat with a button, and its first button's callback data."""
+def last_button(conversation: Conversation, chat_id: int, prefix: str = "") -> tuple[int, str]:
+    """The newest message in a chat with a button, and its first button's callback data (starting with ``prefix``)."""
     message_id = max(
         mid for (cid, mid), m in conversation.api.messages.items() if cid == chat_id and m.get("reply_markup")
     )
     markup = conversation.api.messages[(chat_id, message_id)]["reply_markup"]
-    return message_id, markup["inline_keyboard"][0][0]["callback_data"]
+    datas = [b["callback_data"] for row in markup["inline_keyboard"] for b in row if "callback_data" in b]
+    return message_id, next(data for data in datas if data.startswith(prefix))
 
 
 async def test_free_models_need_the_persons_own_press(
@@ -157,7 +174,7 @@ async def test_free_models_need_the_persons_own_press(
     assert "on only once they press it themselves" in result_of(model, "change_setting")
     async with conversation.db.session() as session:
         assert (await session.get(User, REX.id)).free_models_consent_version is None  # type: ignore[union-attr]
-    notice_id, consent = last_button(conversation, REX.id)
+    notice_id, consent = last_button(conversation, REX.id, "free:consent")
     assert consent == FreeModels(action="consent").pack()
     [notice] = [c for c in conversation.api.calls_of("sendRichMessage") if c.fields.get("reply_markup")]
     assert "may store" in notice["rich_message"]["markdown"] and not notice.fields.get("reply_parameters")
@@ -171,7 +188,7 @@ async def test_free_models_need_the_persons_own_press(
     assert "an admin presses it" in result_of(model, "change_setting")
     async with conversation.db.session() as session:
         assert not (await session.get(Chat, DEN.id)).free_models  # type: ignore[union-attr]
-    notice_id, enable = last_button(conversation, DEN.id)
+    notice_id, enable = last_button(conversation, DEN.id, "free:enable")
     await conversation.press(REX, DEN.id, notice_id, enable)
     async with conversation.db.session() as session:
         assert not (await session.get(Chat, DEN.id)).free_models  # type: ignore[union-attr]

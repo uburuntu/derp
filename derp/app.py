@@ -15,6 +15,7 @@ from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from derp.agent.approvals import close_expired, drop_old
 from derp.agent.runtime import ModelFactory, Runtime
+from derp.billing.patrons import expire_hide_buttons
 from derp.billing.purchases import recover_payments
 from derp.billing.refunds import reconcile_refunds
 from derp.config import Settings, get_settings
@@ -111,6 +112,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         settings=services.settings,
         db=services.db,
         runtime=runtime,
+        funder=runtime.funder,
         transcriber=services.transcriber,
         api=services.api,
         pins=services.pins,
@@ -188,6 +190,9 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
         if left is not None and float(left) < services.settings.openrouter_low_usd:
             await notify_owners(services.bot, services.settings, f"OpenRouter key: ${float(left):.2f} left.")
 
+    async def patron_buttons() -> None:
+        await expire_hide_buttons(services.db, services.bot)
+
     async def expire() -> None:
         async with services.db.transaction() as session:
             await expire_lots(session)
@@ -201,6 +206,7 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
         asyncio.create_task(every("approvals", 300, approvals, initial_delay=90)),
         asyncio.create_task(every("expire-lots", 6 * 3600, expire, initial_delay=300)),
         asyncio.create_task(every("stars-sweep", 24 * 3600, stars, initial_delay=900)),
+        asyncio.create_task(every("patron-buttons", 120, patron_buttons, initial_delay=90)),
         asyncio.create_task(
             every("error-digest", ERROR_DIGEST_SECONDS, errors, initial_delay=ERROR_DIGEST_SECONDS)
         ),

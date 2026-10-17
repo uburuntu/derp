@@ -53,13 +53,27 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   accumulate. Drawing images needs paid Derpcoins (Derp+, bought packs or a group wallet).
 - Packs: bought with Telegram Stars in /buy; bought Derpcoins don't expire.
 - Derp+: a Stars subscription with a monthly allowance that doesn't roll over; nothing else changes. Cancel it in
-  Telegram's Stars settings; it runs to the end of the paid period.
-- Group wallet: anyone can buy Derpcoins for a group; they are spent first in that group.
+  Telegram's Stars settings; it runs to the end of the paid period. If a renewal payment fails, Derp tells the
+  subscriber privately once, with a button to subscribe again.
+- Group wallet: anyone can buy Derpcoins for a group; they are spent first in that group. In a group, /buy asks
+  whose wallet first — the group's (its balance is shown to everyone) or the presser's own — and the pack menu then
+  opens only for the presser, with payment links; the payment happens in their private chat with Derp, where the
+  receipt goes too. A personal purchase never shows anyone's balance in the group.
+- Buying for a group posts one quiet thank-you in that group (in the topic it was bought from): the buyer's name, the
+  exact amount and roughly how long the wallet lasts at the group's recent pace (early on, about how many answers).
+  More purchases soon after update that post instead of adding new ones. Only the buyer can hide their name, with
+  the post's button for a few minutes; that also keeps them "a mysterious patron" in later group purchases. Asking
+  Derp ("don't name me when I chip in", or the opposite) switches it either way. /help and /credits in a group list
+  who chipped in lately (named buyers only, refunds excluded); Derp mentions patrons only when asked.
+- When a group's wallet can no longer pay for an answer, Derp says so once, quietly, with a top-up button, and not
+  again until someone tops it up.
 - Who pays — private chat: the person's paid Derpcoins (Derp+ first, as it expires, then bought packs), then
   their free daily ones. Group: the group wallet, then the asker's paid Derpcoins (unless they turned off "my
   Derpcoins in groups" in /settings), then the asker's free daily ones.
 - When nobody can pay, Derp offers free models: opt-in (an admin turns them on for a group), and their providers
-  may store what they get. Asking Derp to turn them on only brings up the notice; the person (or in a group an admin)
+  may store what they get. The offer says when the free daily Derpcoins refill and offers buying first (in a group,
+  topping up the group's wallet). In a group each person sees it at most once a UTC day; after that Derp only reacts
+  with 🙈. Asking Derp to turn them on only brings up the notice; the person (or in a group an admin)
   presses its button. Free models get read-only and Telegram tools only.
 - An action that costs more than the approval threshold (or a large share of the payer's balance) shows a
   Run / Cancel button first; only the asker decides. An unanswered prompt expires and loses its buttons; asking
