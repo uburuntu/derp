@@ -61,6 +61,9 @@ more_private = "_Everything I can do: /start_"
 more_group = "_Everything I can do: [open me in private](https://t.me/{username}?start=help)_"
 unknown = "There's no /{command}. Just say what you want in words — the real commands are in /help."
 
+[buttons]
+stale = "These buttons are out of date."
+
 [commands]
 start = "What I can do"
 help = "How I work here"

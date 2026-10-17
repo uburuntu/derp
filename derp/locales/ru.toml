@@ -61,6 +61,9 @@ more_private = "_Всё, что я умею: /start_"
 more_group = "_Всё, что я умею: [личный чат со мной](https://t.me/{username}?start=help)_"
 unknown = "Команды /{command} нет. Просто напишите обычным текстом — настоящие команды в /help."
 
+[buttons]
+stale = "Эти кнопки уже неактуальны."
+
 [commands]
 start = "Что я умею"
 help = "Как я здесь работаю"
