@@ -1,6 +1,7 @@
 """Render stored messages as compact transcript lines for models and history tools.
 
-One line per message: ``[10:42] #123 Ann ↩#120: text [photo: a cat] {🔥3}``.
+One line per message: ``[10:42] #123 Ann ↩#120: text [photo: a cat] {🔥3}``; a reply to a
+message in another chat names where it came from instead (``↩ (from News: photo) «quoted part»``).
 Media show their stored description or transcript when one exists; payloads
 (dice, polls, locations, service events…) become short bracketed notes.
 Contacts render without phone numbers: the window never needs them.
@@ -156,6 +157,60 @@ def _forward(origin: dict[str, Any] | None) -> str:
     return f" (fwd from {source})"
 
 
+EXTERNAL_KINDS = (
+    "photo", "video", "animation", "audio", "document", "sticker", "voice", "video_note", "story", "poll",
+    "checklist", "location", "venue", "contact", "dice", "game", "giveaway", "invoice", "paid_media", "live_photo",
+)  # fmt: skip
+EXTERNAL_LABELS = {
+    "animation": "gif",
+    "video_note": "video note",
+    "paid_media": "paid media",
+    "live_photo": "photo",
+}
+
+
+def _origin_name(origin: Any) -> str | None:
+    if not isinstance(origin, dict):
+        return None
+    data = cast(dict[str, Any], origin)
+    user: Any = data.get("sender_user")
+    if isinstance(user, dict):
+        named = cast(dict[str, Any], user)
+        return " ".join(str(n) for n in (named.get("first_name"), named.get("last_name")) if n) or None
+    hidden = data.get("sender_user_name")
+    return (
+        (str(hidden) if hidden else None)
+        or _field(data, "sender_chat", "title")
+        or _field(data, "chat", "title")
+    )
+
+
+def external_reply(info: Any, chat_id: int) -> str:
+    """`` ↩ (from Ann in News: photo)`` for a reply to a message in another chat or topic, else "".
+
+    Telegram sends no text of the original; the quoted part, when there is one, is the line's ``«quote»``.
+    """
+    if not isinstance(info, dict):
+        return ""
+    data = cast(dict[str, Any], info)
+    what = next((kind for kind in EXTERNAL_KINDS if kind in data), "")
+    if what == "poll":
+        what = f"poll {_field(data, 'poll', 'question') or ''}".rstrip()
+    what = EXTERNAL_LABELS.get(what, what)
+    suffix = f": {one_line(what, 120)}" if what else ""
+    chat: Any = data.get("chat")
+    if isinstance(chat, dict) and cast(dict[str, Any], chat).get("id") == chat_id:
+        message_id = data.get("message_id")
+        return f" ↩ (#{message_id} in another topic{suffix})" if message_id else f" ↩ (another topic{suffix})"
+    author = _origin_name(data.get("origin"))
+    place = _field(data, "chat", "title")
+    if author and place and author != place:
+        source = f"{one_line(author)} in {one_line(place)}"
+    else:
+        source = one_line(author or place or "another chat")
+    return f" ↩ (from {source}{suffix})"
+
+
 def render_body(view: MessageView) -> str:
     """Text, media notes and payload note of one message, without the header."""
     row = view.row
@@ -178,7 +233,11 @@ def render_reactions(counts: dict[str, int]) -> str:
 
 def render_line(view: MessageView, tz: tzinfo, *, reactions: bool = True) -> str:
     row = view.row
-    reply = f" ↩#{row.reply_to_message_id}" if row.reply_to_message_id else ""
+    reply = (
+        f" ↩#{row.reply_to_message_id}"
+        if row.reply_to_message_id
+        else external_reply(row.payload.get("external_reply"), row.chat_id)
+    )
     quote = f" «{_clip(row.quote, 200)}»" if row.quote else ""
     edited = " (edited)" if row.edit_date else ""
     totals = render_reactions(view.reactions) if reactions else ""
