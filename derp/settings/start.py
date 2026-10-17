@@ -9,6 +9,7 @@ doesn't have gets a one-line pointer to /help, without a model call.
 """
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from aiogram import Bot, F, Router
@@ -19,6 +20,7 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -67,6 +69,14 @@ GROUP_COMMANDS = (
     "terms",
 )
 EPHEMERAL_IN_GROUPS = {"help", "settings", "credits", "info", "memory", "privacy", "terms"}
+# Owner console: listed only in the owners' own private chats and /help; plain English, not localized.
+OWNER_COMMANDS = {
+    "stats": "spend, revenue, pins and scout proposals",
+    "grant": "<user or chat id> <Derpcoins> — gift Derpcoins",
+    "block": "<user or chat id> — Derp stays silent there",
+    "unblock": "<user or chat id> — undo /block",
+    "refund": "<charge id> — refund a Stars payment",
+}
 
 
 class StartAction(CallbackData, prefix="start"):
@@ -130,6 +140,10 @@ async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user
             t(locale, "help.commands"),
             t(locale, "help.more_private"),
         ]
+        if user_id in settings.owner_ids:
+            lines.append(
+                "**Owner**\n" + "\n".join(f"/{name} {about}" for name, about in OWNER_COMMANDS.items())
+            )
         return "\n\n".join(lines)
     async with db.transaction() as session:
         left = sum((await balances(session, (await wallet(session, "chat", chat.id)).id, now=now)).values())
@@ -173,8 +187,8 @@ async def is_command(message: Message, trigger: Trigger | None = None) -> bool:
     return trigger is not None and trigger.kind is TriggerKind.COMMAND
 
 
-async def publish_commands(bot: Bot) -> None:
-    """Set the command menus for private chats and groups in every locale; best effort."""
+async def publish_commands(bot: Bot, owner_ids: Sequence[int] = ()) -> None:
+    """Set the command menus for private chats and groups in every locale, plus the owners' own; best effort."""
     scopes = (
         (BotCommandScopeAllPrivateChats(), PRIVATE_COMMANDS, set[str]()),
         (BotCommandScopeAllGroupChats(), GROUP_COMMANDS, EPHEMERAL_IN_GROUPS),
@@ -193,6 +207,14 @@ async def publish_commands(bot: Bot) -> None:
                 await bot.set_my_commands(
                     commands, scope=scope, language_code=None if locale == DEFAULT else locale
                 )
+        owner_menu = [
+            BotCommand(command=name, description=t(DEFAULT, f"commands.{name}")) for name in PRIVATE_COMMANDS
+        ]
+        owner_menu += [
+            BotCommand(command=name, description=about[:256]) for name, about in OWNER_COMMANDS.items()
+        ]
+        for owner_id in owner_ids:  # a chat scope replaces the private-chat menu for that chat
+            await bot.set_my_commands(owner_menu, scope=BotCommandScopeChat(chat_id=owner_id))
     except TelegramAPIError as error:
         log.warning("command menus not published: %s", type(error).__name__)
 

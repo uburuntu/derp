@@ -8,10 +8,12 @@ unknown-command reply, so the console doesn't announce itself. Owner copy is
 plain English, not localized.
 """
 
+import contextlib
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -36,6 +38,8 @@ WINDOWS = ((1, "24 h"), (7, "7 d"), (30, "30 d"))
 FUNDINGS = ("paid", "sponsored", "free", "creator")
 TOP_CHATS = 5
 MAX_GRANT = 1_000_000
+
+SCOUT_PING = "Model scout:"
 
 
 class ConsoleAction(CallbackData, prefix="own"):
@@ -160,6 +164,18 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def proposal_buttons(proposal_ids: list[int]) -> InlineKeyboardMarkup | None:
+    """Apply / Ignore for each proposal, attached to the scout's ping (the same actions as in /stats)."""
+    if not proposal_ids:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [_button(f"Apply #{pid}", "apply", str(pid)), _button(f"Ignore #{pid}", "ignore", str(pid))]
+            for pid in proposal_ids
+        ]
+    )
+
+
 def _button(text: str, action: str, key: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=ConsoleAction(action=action, key=key).pack())
 
@@ -208,6 +224,17 @@ async def on_console(
         await query.answer()
         return
     await query.answer(await decide(callback_data.action, callback_data.key, db, pins), show_alert=True)
+    if message.text is not None and message.text.startswith(SCOUT_PING):  # a ping: drop the decided buttons
+        rows = message.reply_markup.inline_keyboard if message.reply_markup else []
+        mine = f"#{callback_data.key}"
+        left = [row for row in rows if not any(b.text.endswith(mine) for b in row)]
+        with contextlib.suppress(TelegramAPIError):
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=left) if left else None,
+            )
+        return
     text, markup = await stats(db, api)
     await bot.edit_message_text(
         chat_id=message.chat.id,

@@ -9,6 +9,7 @@ from collections import Counter
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
+from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,10 +19,12 @@ from derp.history.models import Chat, User
 log = logging.getLogger("derp.owner")
 
 
-async def notify_owners(bot: Bot, settings: Settings, text: str) -> None:
+async def notify_owners(
+    bot: Bot, settings: Settings, text: str, reply_markup: InlineKeyboardMarkup | None = None
+) -> None:
     for owner_id in settings.owner_ids:
         try:
-            await bot.send_message(owner_id, text[:4000])
+            await bot.send_message(owner_id, text[:4000], reply_markup=reply_markup)
         except TelegramAPIError as error:  # the owner may not have started this bot
             log.info("owner ping not delivered: %s", type(error).__name__)
 

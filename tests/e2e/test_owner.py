@@ -9,7 +9,8 @@ from derp.billing.models import Purchase
 from derp.history.models import Chat, Message
 from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
 from derp.money.wallets import balance, wallet
-from derp.ops.console import ConsoleAction
+from derp.ops.console import ConsoleAction, proposal_buttons
+from derp.ops.owner import notify_owners
 from derp.scheduler.models import Job
 from derp.scheduler.worker import run_due
 from tests.e2e.harness import Conversation, Person, Room
@@ -86,6 +87,44 @@ async def test_stats_show_spend_revenue_and_decide_proposals(conversation: Conve
     async with conversation.db.session() as session:
         pin = await session.get(ModelPin, "chat")
         assert pin is not None and pin.pin["model"] == "old/model"
+
+
+async def test_a_scout_ping_carries_its_proposal_buttons(conversation: Conversation) -> None:
+    conversation.meet(OWNER)
+    async with conversation.db.transaction() as session:
+        session.add(ModelPin(role="chat", pin={"model": "old/model"}, source="seed"))
+        proposal = ScoutProposal(
+            role="chat", current={"model": "old/model"}, proposed={"model": "new/model"}, reason="cheaper"
+        )
+        session.add(proposal)
+        await session.flush()
+        proposal_id = proposal.id
+    assert conversation.services is not None
+    services = conversation.services
+    after = conversation.seq
+    await notify_owners(
+        services.bot, services.settings, f"Model scout:\nchat: proposal #{proposal_id} — cheaper",
+        reply_markup=proposal_buttons([proposal_id]),
+    )  # fmt: skip
+    ping = conversation.api.calls_of("sendMessage", after=after)[-1]
+    apply, ignore = ping["reply_markup"]["inline_keyboard"][0]
+    assert (apply["text"], ignore["text"]) == (f"Apply #{proposal_id}", f"Ignore #{proposal_id}")
+    ping_id = max(mid for (cid, mid) in conversation.api.messages if cid == OWNER.id)
+    await conversation.press(OWNER, OWNER.id, ping_id, apply["callback_data"])
+    async with conversation.db.session() as session:
+        pin = await session.get(ModelPin, "chat")
+        assert pin is not None and pin.pin["model"] == "new/model"
+    edited = conversation.api.calls_of("editMessageReplyMarkup", after=after)[-1]
+    assert "reply_markup" not in edited.fields or not edited["reply_markup"]  # the ping keeps its text
+    assert not conversation.api.calls_of("editMessageText", after=after)
+
+
+async def test_owners_see_the_console_in_help(conversation: Conversation) -> None:
+    owner_help = await conversation.send(OWNER, text="/help")
+    text = (await conversation.expect_reply(owner_help))["rich_message"]["markdown"]
+    assert "**Owner**" in text and "/stats" in text and "/refund" in text
+    stranger_help = await conversation.send(PAT, text="/help")
+    assert "/stats" not in (await conversation.expect_reply(stranger_help))["rich_message"]["markdown"]
 
 
 async def test_strangers_dont_find_the_console(conversation: Conversation) -> None:

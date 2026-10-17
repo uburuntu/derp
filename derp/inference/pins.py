@@ -24,12 +24,23 @@ class PinStore:
         self._loaded_at = 0.0
 
     async def seed(self) -> None:
-        """Insert missing roles from settings; never overwrite scout or owner changes."""
+        """Make roles nobody chose follow the code defaults; never overwrite scout or owner changes.
+
+        Missing roles are inserted; a ``seed`` row whose default changed is updated, keeping the old pin as
+        ``previous`` (Rollback). A new model drops the price snapshot until the scout takes a fresh one.
+        """
         async with self.db.transaction() as session:
-            existing = set(await session.scalars(select(ModelPin.role)))
+            rows = {row.role: row for row in await session.scalars(select(ModelPin).with_for_update())}
             for role, pin in self.defaults.items():
-                if role.value not in existing:
-                    session.add(ModelPin(role=role.value, pin=pin.model_dump(mode="json"), source="seed"))
+                wanted = pin.model_dump(mode="json")
+                row = rows.get(role.value)
+                if row is None:
+                    session.add(ModelPin(role=role.value, pin=wanted, source="seed"))
+                elif row.source == "seed" and row.pin != wanted:
+                    if row.pin.get("model") != pin.model:
+                        row.price_prompt = row.price_completion = None
+                    row.previous, row.pin = row.pin, wanted
+                    log.info("model pin for %s follows the new default", role.value)
         self._loaded_at = 0.0
 
     async def get(self, role: ModelRole) -> RolePin:

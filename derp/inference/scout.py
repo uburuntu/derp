@@ -241,7 +241,7 @@ async def run_scout(
     store: PinStore,
     settings: Settings,
     model_factory: ModelFactory,
-    notify: Callable[[str], Awaitable[None]] | None = None,
+    notify: Callable[[str, list[int]], Awaitable[None]] | None = None,
 ) -> list[Change]:
     models = await api.models(supported_parameters="tools", sort="intelligence-high-to-low")
     zdr = await api.zdr_endpoints()
@@ -272,6 +272,7 @@ async def run_scout(
             passed.append(change)
 
     notes: list[str] = []
+    proposed: list[int] = []
     async with db.transaction() as session:
         for change in changes:
             if not change.safe:
@@ -294,16 +295,17 @@ async def run_scout(
         for change in passed:
             row = await session.get(ModelPin, change.role.value)
             current = row.pin if row is not None else (await store.get(change.role)).model_dump(mode="json")
-            session.add(
-                ScoutProposal(
-                    role=change.role.value,
-                    current=current,
-                    proposed=change.pin.model_dump(mode="json"),
-                    reason=change.reason,
-                )
+            proposal = ScoutProposal(
+                role=change.role.value,
+                current=current,
+                proposed=change.pin.model_dump(mode="json"),
+                reason=change.reason,
             )
-            notes.append(f"{change.role}: proposal — {change.reason}")
+            session.add(proposal)
+            await session.flush()
+            proposed.append(proposal.id)
+            notes.append(f"{change.role}: proposal #{proposal.id} — {change.reason}")
     await store.refresh()
     if notes and notify is not None:
-        await notify("Model scout:\n" + "\n".join(notes))
+        await notify("Model scout:\n" + "\n".join(notes), proposed)
     return changes

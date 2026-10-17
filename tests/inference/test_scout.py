@@ -137,9 +137,11 @@ async def test_run_scout_applies_safe_changes_and_files_one_proposal(
     ]
     zdr = [route(m["id"], m["pricing"]["prompt"], m["pricing"]["completion"]) for m in models[1:]]
     notes: list[str] = []
+    announced: list[int] = []
 
-    async def notify(text: str) -> None:
+    async def notify(text: str, proposals: list[int]) -> None:
         notes.append(text)
+        announced.extend(proposals)
 
     factory = lambda _pin: scripted(russian="Небо голубое.", call_tool=True)
     await run_scout(database, FakeAPI(models, zdr), store, configured, factory, notify)  # type: ignore[arg-type]
@@ -149,6 +151,7 @@ async def test_run_scout_applies_safe_changes_and_files_one_proposal(
     async with database.session() as session:
         proposals = list(await session.scalars(select(ScoutProposal)))
         assert [p.proposed["model"] for p in proposals] == ["acme/smart"]
+        assert announced == [proposals[0].id]  # its ping carries Apply / Ignore; the repeat files nothing
         row = await session.get(ModelPin, "chat")
         assert row is not None and row.price_prompt == Decimal("0.1")
     async with database.transaction() as session:
@@ -170,3 +173,25 @@ async def test_unknown_pin_roles_are_ignored(database: Database, settings: Setti
     async with database.transaction() as session:
         session.add(ModelPin(role="retired_role", pin={"model": "x/y"}, source="seed"))
     assert (await store.get(ModelRole.CHAT)).model == settings.model_pins[ModelRole.CHAT].model
+
+
+@pytest.mark.db
+async def test_seed_rows_follow_new_defaults_but_choices_stay(database: Database, settings: Settings) -> None:
+    async with database.transaction() as session:
+        session.add(
+            ModelPin(
+                role=ModelRole.CHAT.value, pin={"model": "old/default"}, source="seed",
+                price_prompt=Decimal(1), price_completion=Decimal(2),
+            )
+        )  # fmt: skip
+        session.add(
+            ModelPin(role=ModelRole.CHAT_SPONSORED.value, pin={"model": "owner/choice"}, source="owner")
+        )
+    await PinStore(database, settings).seed()
+    async with database.session() as session:
+        chat = await session.get(ModelPin, ModelRole.CHAT.value)
+        sponsored = await session.get(ModelPin, ModelRole.CHAT_SPONSORED.value)
+    assert chat is not None and sponsored is not None
+    assert chat.pin == settings.model_pins[ModelRole.CHAT].model_dump(mode="json") and chat.source == "seed"
+    assert chat.previous == {"model": "old/default"} and chat.price_prompt is None  # the scout re-prices it
+    assert sponsored.pin == {"model": "owner/choice"}
