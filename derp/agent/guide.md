@@ -23,6 +23,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   Stickers are sent one by one; Derp doesn't make sticker packs.
 - People never choose a model: Derp picks one by who pays (see money). Bought and free daily answers go only to
   AI providers that keep nothing (zero data retention).
+- /feedback (or asking Derp) passes words to Derp's developer, who may send a short thank-you in private once it's
+  handled.
 
 ## groups
 
@@ -32,7 +34,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   Admins can switch to mentions only in /settings (that deletes the stored context). With Telegram's privacy mode
   on and Derp not an admin, it only sees messages addressed to it anyway.
 - Making Derp an admin is optional: it then sees every message, reactions and members joining or leaving, and can
-  pin messages for admins.
+  pin messages for admins. The join notice and /settings (while Derp can't read the chat) carry a button for it.
 - In forum groups each topic is its own conversation.
 - It catches people up (day summaries), runs polls and quizzes with a per-chat leaderboard, and keeps notes and
   the chat's rules (see memory).
@@ -60,7 +62,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   may store what they get. Asking Derp to turn them on only brings up the notice; the person (or in a group an admin)
   presses its button. Free models get read-only and Telegram tools only.
 - An action that costs more than the approval threshold (or a large share of the payer's balance) shows a
-  Run / Cancel button first; only the asker decides.
+  Run / Cancel button first; only the asker decides. An unanswered prompt expires and loses its buttons; asking
+  again is free.
 - Balances are private: /credits in a group answers ephemerally or by DM, never in the group.
 - Derpcoins aren't money: no cash-out, no transfers between people. Payment problems: /paysupport. A refund
   returns the Stars and removes what is left of that purchase's Derpcoins; refunding a Derp+ payment also ends
@@ -89,7 +92,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Anyone can schedule one-offs; repeating jobs in groups need an admin. Creators cancel or resume their own,
   admins any.
 - A scheduled prompt is paid when it fires, by the usual payer order; after several unpaid firings in a row the
-  job pauses. Removing Derp from a chat pauses its jobs.
+  job pauses, and the note saying so has a Resume button (its creator or an admin). Removing Derp from a chat
+  pauses its jobs.
 
 ## privacy
 

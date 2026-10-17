@@ -234,3 +234,13 @@ async def can_read_group(bot: Bot, chat: Chat) -> bool:
     """Whether Telegram delivers ordinary (non-mention) group messages to Derp here."""
     me = await bot.me()
     return bool(me.can_read_all_group_messages) or (chat.bot_status or "") in ADMIN_STATUSES
+
+
+ADMIN_LINK_RIGHTS = (
+    "invite_users"  # any admin role unlocks reading the chat and member updates; ask the mildest
+)
+
+
+def admin_link(username: str) -> str:
+    """The deep link that lets a group admin add Derp as an admin (Telegram preselects the rights)."""
+    return f"https://t.me/{username}?startgroup=derp&admin={ADMIN_LINK_RIGHTS}"

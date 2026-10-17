@@ -21,8 +21,6 @@ from aiogram.types import (
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
     BotCommandScopeChat,
-    CallbackQuery,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
@@ -38,6 +36,7 @@ from derp.money.command import bought_total, free_left_today
 from derp.money.wallets import balances, wallet
 from derp.settings.onboarding import context_key
 from derp.settings.panel import kept_days
+from derp.telegram.buttons import Press, button, link, markup, on_press
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
 
@@ -89,14 +88,11 @@ async def _username(bot: Bot) -> str:
     return (await bot.me()).username or "DerpRobot"
 
 
-async def showcase(bot: Bot, settings: Settings, locale: str) -> tuple[str, InlineKeyboardMarkup]:
+async def showcase(bot: Bot, settings: Settings, locale: str) -> tuple[str, InlineKeyboardMarkup | None]:
     username = await _username(bot)
     text = t(locale, "start.private", daily=settings.sponsored_daily_credits, username=username)
-    add = InlineKeyboardButton(
-        text=t(locale, "start.add_to_group"), url=f"https://t.me/{username}?startgroup=derp"
-    )
-    buy = InlineKeyboardButton(text=t(locale, "start.buy"), callback_data=StartAction(action="buy").pack())
-    return text, InlineKeyboardMarkup(inline_keyboard=[[add, buy]])
+    add = link(t(locale, "start.add_to_group"), f"https://t.me/{username}?startgroup=derp")
+    return text, markup([add, button(t(locale, "start.buy"), StartAction(action="buy"))])
 
 
 async def start(
@@ -121,11 +117,12 @@ async def start(
     await send_markdown(bot, target, text, reply_markup=markup)
 
 
-async def on_start_action(query: CallbackQuery, db: Database, settings: Settings, bot: Bot) -> None:
-    locale = resolve(query.from_user.language_code)
-    await query.answer()
-    text, markup = await personal_menu(db, settings, query.from_user.id, locale)
-    await send_markdown(bot, Target(query.from_user.id), text, reply_markup=markup)
+async def on_start_action(
+    press: Press, data: StartAction, db: Database, settings: Settings, bot: Bot
+) -> None:
+    """Buy on the showcase: the buy menu as a new message in the private chat."""
+    text, keyboard = await personal_menu(db, settings, press.user_id, press.locale)
+    await send_markdown(bot, Target(press.user_id), text, reply_markup=keyboard)
 
 
 async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user_id: int, locale: str) -> str:
@@ -244,7 +241,7 @@ def build_router() -> Router:
     router = Router(name="start")
     router.message.register(start, CommandStart())
     router.message.register(show_help, Command("help"))
-    router.callback_query.register(on_start_action, StartAction.filter(F.action == "buy"))
+    on_press(router, StartAction, F.action == "buy")(on_start_action)
     return router
 
 

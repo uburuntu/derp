@@ -13,7 +13,7 @@ from aiogram import Bot, Dispatcher
 from pydantic_ai.models import Model
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from derp.agent.approvals import drop_old
+from derp.agent.approvals import close_expired, drop_old
 from derp.agent.runtime import ModelFactory, Runtime
 from derp.billing.purchases import recover_payments
 from derp.billing.refunds import reconcile_refunds
@@ -170,6 +170,9 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
         await enforce_retention(services.db, services.settings)
         await drop_old(services.db, datetime.now(UTC) - timedelta(days=1))
 
+    async def approvals() -> None:
+        await close_expired(services.db, services.bot, datetime.now(UTC))
+
     tally = ErrorTally()
     logging.getLogger().addHandler(tally)
 
@@ -195,6 +198,7 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
         asyncio.create_task(every("stale-holds", 600, free_stale_holds, initial_delay=60)),
         asyncio.create_task(every("jobs", 20, jobs, initial_delay=15)),
         asyncio.create_task(every("retention", 24 * 3600, retention, initial_delay=1800)),
+        asyncio.create_task(every("approvals", 300, approvals, initial_delay=90)),
         asyncio.create_task(every("expire-lots", 6 * 3600, expire, initial_delay=300)),
         asyncio.create_task(every("stars-sweep", 24 * 3600, stars, initial_delay=900)),
         asyncio.create_task(

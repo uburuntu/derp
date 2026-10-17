@@ -205,3 +205,37 @@ async def test_shorter_retention_from_a_tool_asks_for_a_press(
     assert result_of(model, "change_setting").startswith("Done")
     await ask(conversation, model, ANA, tool_call("change_setting", setting="retention_days", value="90"))
     assert "Retention can be" in result_of(model, "change_setting")
+
+
+async def test_owners_thank_feedback_authors_once(conversation: Conversation) -> None:
+    iva = Person(2003, "Iva", language_code="ru")
+    conversation.meet(iva)  # started Derp in private: can be thanked
+    conversation.meet(iva, DEN)
+    conversation.meet(REX, DEN)  # never started Derp in private
+    conversation.meet(OWNER)
+    for person, words in ((iva, "/feedback больше мемов"), (REX, "/feedback more quizzes")):
+        await conversation.settle(await conversation.send(person, DEN, words))
+    async with conversation.db.session() as session:
+        ids = dict((await session.execute(select(Feedback.user_id, Feedback.id))).all())
+    await conversation.settle(await conversation.send(OWNER, text="/feedbacks"))
+    page_id = max(mid for (cid, mid) in conversation.api.messages if cid == OWNER.id)
+    thank_iva = FeedbackAction(action="thank", value=ids[iva.id]).pack()
+    assert thank_iva in str(conversation.api.message(OWNER.id, page_id)["reply_markup"])
+
+    after = conversation.seq
+    await conversation.press(OWNER, OWNER.id, page_id, thank_iva, taps=2)  # a double tap thanks once
+    dms = [
+        c for c in conversation.api.calls_of("sendRichMessage", after=after) if int(c["chat_id"]) == iva.id
+    ]
+    assert len(dms) == 1 and "Спасибо" in dms[0]["rich_message"]["markdown"]
+    first, second = conversation.api.calls_of("answerCallbackQuery", after=after)
+    assert "thanked" in first["text"] and "already done" in second["text"] and second["show_alert"]
+
+    after = conversation.seq
+    thank_rex = FeedbackAction(action="thank", value=ids[REX.id]).pack()
+    await conversation.press(OWNER, OWNER.id, page_id, thank_rex)
+    told = conversation.api.calls_of("answerCallbackQuery", after=after)[-1]
+    assert "couldn't be delivered" in told["text"] and told["show_alert"]
+    async with conversation.db.session() as session:
+        assert set(await session.scalars(select(Feedback.state))) == {"done"}
+    assert "No open feedback" in str(conversation.api.message(OWNER.id, page_id)["rich_message"])

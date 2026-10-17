@@ -6,14 +6,12 @@ membership history and personal notes too). Stored run transcripts that may
 quote what was forgotten are dropped as well; usage and charges stay.
 """
 
-import contextlib
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import Message
 from sqlalchemy import delete, func, select
 
 from derp.agent.models import Approval
@@ -26,6 +24,7 @@ from derp.history.retention import forget_member, forget_message, purge_ambient,
 from derp.locales import resolve, t
 from derp.memory.models import Note
 from derp.scheduler.models import Job
+from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, send_markdown
 
 FINISHED_JOB_DAYS = 30
@@ -111,32 +110,29 @@ async def on_forget(message: Message, db: Database, bot: Bot) -> None:
                 StoredMessage.deleted_at.is_(None),
             )
         )
-    button = InlineKeyboardButton(
-        text=t(locale, "privacy.confirm_button"),
-        callback_data=ForgetAll(user_id=message.from_user.id).pack(),
-        style="danger",
+    confirm = button(
+        t(locale, "privacy.confirm_button"), ForgetAll(user_id=message.from_user.id), style="danger"
     )
-    markup = InlineKeyboardMarkup(inline_keyboard=[[button]])
-    await send_markdown(bot, target, t(locale, "privacy.confirm", count=count or 0), reply_markup=markup)
+    await send_markdown(
+        bot, target, t(locale, "privacy.confirm", count=count or 0), reply_markup=markup(confirm)
+    )
 
 
-async def on_forget_all(query: CallbackQuery, callback_data: ForgetAll, db: Database, bot: Bot) -> None:
-    locale = resolve(query.from_user.language_code)
-    message = query.message
-    if callback_data.user_id != query.from_user.id or not isinstance(message, Message):
-        await query.answer(t(locale, "privacy.not_yours"), show_alert=True)
-        return
-    count = await forget_everything(db, message.chat.id, query.from_user.id)
-    await query.answer(t(locale, "privacy.forgot_all", count=count), show_alert=True)
-    if message.message_id:  # an ephemeral prompt (id 0) simply expires
-        with contextlib.suppress(TelegramAPIError):  # the button is cosmetic once the work is done
-            await bot.edit_message_reply_markup(
-                chat_id=message.chat.id, message_id=message.message_id, reply_markup=None
-            )
+async def on_forget_all(press: Press, data: ForgetAll, db: Database) -> None:
+    """Only the person who asked; the prompt then says what was forgotten, without its button."""
+    if data.user_id != press.user_id:
+        return await press.deny("privacy.not_yours")
+    count = await forget_everything(db, press.chat_id, press.user_id)
+    if (
+        not count
+    ):  # nothing stored (or a second tap after the first one forgot it all): keep the prompt's text
+        await press.strip()
+        return await press.toast("privacy.forgot_all", count=0)
+    await press.edit(t(press.locale, "privacy.forgot_all", count=count))
 
 
 def build_router() -> Router:
     router = Router(name="privacy")
     router.message.register(on_forget, Command("forget"))
-    router.callback_query.register(on_forget_all, ForgetAll.filter(F.user_id > 0))
+    on_press(router, ForgetAll, F.user_id > 0)(on_forget_all)
     return router

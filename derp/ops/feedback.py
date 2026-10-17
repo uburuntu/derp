@@ -1,14 +1,16 @@
 """Feedback for the owners: /feedback, the agent's leave_feedback, and the owners' /feedbacks review.
 
 People's words are stored as they wrote them and shown only to owners, in a
-private chat, a page at a time; an owner marks items done. /forget removes a
-person's feedback from that chat with the rest of what they said.
+private chat, a page at a time; an owner marks items done, or done with a
+thank-you DM to the author (at most once: only the press that closes the item
+sends it). /forget removes a person's feedback from that chat with the rest of
+what they said.
 """
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +21,8 @@ from derp.history.render import one_line
 from derp.locales import resolve, t
 from derp.ops.models import FEEDBACK_KINDS, Feedback
 from derp.ops.owner import is_blocked
-from derp.telegram.sender import Target, rich, sanitize_untrusted, send_markdown
+from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.sender import Target, sanitize_untrusted, send_markdown, send_privately
 from derp.telegram.text import literal
 
 PAGE = 5
@@ -27,7 +30,7 @@ MAX_CHARS = 2000
 
 
 class FeedbackAction(CallbackData, prefix="fb"):
-    action: str  # page | done
+    action: str  # page | done | thank (done, and the author gets a thank-you)
     value: int = 0  # page offset, or the feedback id
 
 
@@ -93,36 +96,26 @@ async def _page(db: Database, offset: int) -> tuple[str, InlineKeyboardMarkup | 
     if not rows:
         return "No open feedback.", None
     lines = [f"**Open feedback: {total}** (showing {offset + 1}–{offset + len(rows)})"]
-    buttons: list[InlineKeyboardButton] = []
+    items: list[list[InlineKeyboardButton]] = []
     for item, name, username, title in rows:
         who = literal(one_line(name or "someone")) + (f" @{username}" if username else "")
         where = "private" if item.chat_id == item.user_id else literal(one_line(title or str(item.chat_id)))
         lines.append(
             f"\n#{item.id} · {item.kind} · {who} · {where} · {item.created_at:%Y-%m-%d}\n> {sanitize_untrusted(one_line(item.text, 600))}"
         )
-        buttons.append(
-            InlineKeyboardButton(
-                text=f"✓ #{item.id}", callback_data=FeedbackAction(action="done", value=item.id).pack()
-            )
+        items.append(
+            [
+                button(f"✓ #{item.id}", FeedbackAction(action="done", value=item.id)),
+                button(f"✓ & thank #{item.id}", FeedbackAction(action="thank", value=item.id)),
+            ]
         )
-    rows_markup = [buttons[i : i + 3] for i in range(0, len(buttons), 3)]
-    nav: list[InlineKeyboardButton] = []
-    if offset > 0:
-        nav.append(
-            InlineKeyboardButton(
-                text="‹ Newer",
-                callback_data=FeedbackAction(action="page", value=max(0, offset - PAGE)).pack(),
-            )
-        )
-    if offset + PAGE < total:
-        nav.append(
-            InlineKeyboardButton(
-                text="Older ›", callback_data=FeedbackAction(action="page", value=offset + PAGE).pack()
-            )
-        )
-    if nav:
-        rows_markup.append(nav)
-    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows_markup)
+    newer = FeedbackAction(action="page", value=max(0, offset - PAGE))
+    older = FeedbackAction(action="page", value=offset + PAGE)
+    nav = [
+        button("‹ Newer", newer) if offset > 0 else None,
+        button("Older ›", older) if offset + PAGE < total else None,
+    ]
+    return "\n".join(lines), markup(*items, nav)
 
 
 async def on_feedbacks(message: Message, db: Database, settings: Settings, bot: Bot) -> None:
@@ -132,38 +125,45 @@ async def on_feedbacks(message: Message, db: Database, settings: Settings, bot: 
         or message.chat.type != "private"
     ):
         return
-    text, markup = await _page(db, 0)
-    await send_markdown(bot, Target(message.chat.id), text, reply_markup=markup)
+    text, keyboard = await _page(db, 0)
+    await send_markdown(bot, Target(message.chat.id), text, reply_markup=keyboard)
 
 
-async def on_review(
-    query: CallbackQuery, callback_data: FeedbackAction, db: Database, settings: Settings, bot: Bot
-) -> None:
-    message = query.message
-    if query.from_user.id not in settings.owner_ids or not isinstance(message, Message):
-        await query.answer()
-        return
+async def _close(db: Database, feedback_id: int) -> tuple[int, str | None] | None:
+    """Mark an open item done: its author and their language, or None when it wasn't open any more."""
+    async with db.transaction() as session:
+        author = await session.scalar(
+            update(Feedback)
+            .where(Feedback.id == feedback_id, Feedback.state == "open")
+            .values(state="done")
+            .returning(Feedback.user_id)
+        )
+        if author is None:
+            return None
+        return author, await session.scalar(select(User.language_code).where(User.id == author))
+
+
+async def on_review(press: Press, data: FeedbackAction, db: Database, settings: Settings, bot: Bot) -> None:
+    if press.user_id not in settings.owner_ids:
+        return  # the console doesn't announce itself: a silent answer
     offset = 0
-    if callback_data.action == "done":
-        async with db.transaction() as session:
-            await session.execute(
-                update(Feedback).where(Feedback.id == callback_data.value).values(state="done")
-            )
-    else:
-        offset = max(0, callback_data.value)
-    await query.answer()
-    text, markup = await _page(db, offset)
-    await bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        rich_message=rich(text),
-        reply_markup=markup,
-    )
+    if data.action == "page":
+        offset = max(0, data.value)
+    elif (closed := await _close(db, data.value)) is None:
+        await press.answer(f"#{data.value} was already done.", alert=True)
+    elif data.action == "thank":
+        author, language = closed
+        if await send_privately(bot, author, t(resolve(language), "feedback.thanked")):
+            await press.answer(f"#{data.value} done; thanked.")
+        else:
+            await press.answer(f"#{data.value} done, but the thank-you couldn't be delivered.", alert=True)
+    text, keyboard = await _page(db, offset)
+    await press.edit(text, keyboard)
 
 
 def build_router() -> Router:
     router = Router(name="feedback")
     router.message.register(on_feedback, Command("feedback"))
     router.message.register(on_feedbacks, Command("feedbacks"))
-    router.callback_query.register(on_review, FeedbackAction.filter(F.action.in_({"page", "done"})))
+    on_press(router, FeedbackAction, F.action.in_({"page", "done", "thank"}))(on_review)
     return router

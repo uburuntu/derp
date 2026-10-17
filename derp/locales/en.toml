@@ -184,7 +184,7 @@ context_on = "I read this chat to keep up with the conversation; messages are ke
 context_needs_admin = "Mentions only for now: Telegram only sends me messages addressed to me until an admin makes me an admin here."
 context_off = "Mentions only: I see just the messages addressed to me, so I won't know what was said before."
 settings = "_Settings: /settings · what I remember: /memory_"
-make_admin = "Make me admin (optional)"
+make_admin = "👀 Let me read the chat (make me admin)"
 
 [pages]
 terms = """
@@ -253,14 +253,18 @@ cancelled = "Cancelled — the image wasn't made, and nothing was charged."
 already_approved = "Already decided: it's being made."
 already_denied = "Already cancelled."
 already_expired = "This request expired. Ask again if you still want it."
+expired = "⌛ This request expired — nothing was made or charged. Ask again if you still want it."
 not_yours = "Only the person who asked can decide."
 no_coins = "Not enough Derpcoins for this anymore — nothing was charged. Top up with /buy."
+top_up = "⭐ Buy Derpcoins"
 failed = "The image didn't come out — nothing was charged."
 
 [scheduler]
 reminder = "⏰ Reminder from {name}: {text}"
 skipped = "⏰ Skipped scheduled job #{id}: not enough Derpcoins to answer it."
-paused = "⏰ Paused scheduled job #{id} after missing several runs for lack of Derpcoins. Top up with /buy and ask me to resume it."
+paused = "⏰ Paused scheduled job #{id} after missing several runs for lack of Derpcoins. Top up with /buy, then resume it."
+resume = "▶️ Resume"
+resumed = "▶️ Scheduled job #{id} is back on."
 
 [inline]
 title = "Ask Derp"
@@ -334,3 +338,4 @@ admins_alert = "Only admins can change this chat's settings."
 [feedback]
 how = "Tell Derp's developer what's broken or what you'd like: `/feedback your words`."
 thanks = "Thanks — passed on to Derp's developer."
+thanked = "🙏 Derp's developer read your feedback and took care of it. Thanks for sending it!"

@@ -172,3 +172,37 @@ async def test_a_public_memory_reply_keeps_personal_notes_out(conversation: Conv
 
     await conversation.settle(await conversation.ephemeral_command(GINA, CLUB, "/memory", 811))
     assert "hates mondays" in conversation.api.calls_of("sendRichMessage")[-1]["rich_message"]["markdown"]
+
+
+async def test_a_decided_proposal_loses_its_buttons_and_the_rest_keep_theirs(
+    conversation: Conversation,
+) -> None:
+    conversation.meet(GINA, CLUB, status="administrator")
+    await conversation.settle(await conversation.send(GINA, CLUB, "hello"))
+    async with conversation.db.transaction() as session:
+        first = Note(chat_id=CLUB.id, text="meetups are on Fridays", author_id=HANK.id, state="proposed")
+        second = Note(chat_id=CLUB.id, text="the cat is called Bob", author_id=HANK.id, state="proposed")
+        session.add_all([first, second])
+        await session.flush()
+        ids = first.id, second.id
+    listing = await conversation.send(GINA, CLUB, "/memory")
+    shown = await conversation.expect_reply(listing)
+    rows = shown["reply_markup"]["inline_keyboard"]
+    assert sorted(row[0]["text"] for row in rows) == [f"✅ #{i}" for i in sorted(ids)]
+    approved = int(rows[0][0]["text"].split("#")[1])
+    menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == CLUB.id)
+
+    after = conversation.seq
+    await conversation.press(GINA, CLUB.id, menu_id, rows[0][0]["callback_data"])
+    toast = conversation.api.calls_of("answerCallbackQuery", after=after)[-1]
+    assert toast["text"] == f"Note #{approved} saved." and not toast.fields.get("show_alert")
+    left = conversation.api.message(CLUB.id, menu_id)["reply_markup"]["inline_keyboard"]
+    assert left == [rows[1]]  # only the undecided proposal keeps its buttons
+
+    after = conversation.seq
+    await conversation.press(GINA, CLUB.id, menu_id, rows[1][1]["callback_data"], taps=2)
+    answers = conversation.api.calls_of("answerCallbackQuery", after=after)
+    assert len(answers) == 2 and answers[1]["text"] == "Already handled." and answers[1]["show_alert"]
+    assert "reply_markup" not in conversation.api.message(CLUB.id, menu_id)
+    async with conversation.db.session() as session:
+        assert [n.state for n in await session.scalars(select(Note))] == ["active"]

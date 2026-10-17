@@ -3,30 +3,36 @@
 An action asks first when it costs more than ``approval_credits`` or more than
 ``approval_balance_fraction`` of what the payer has. The prompt shows only the
 price (never a balance, since groups see it). Only the requester can decide; a
-decision is final, an undecided prompt expires after ``approval_minutes``.
-Running funds the action afresh (the asking run is long settled); denial and
-expiry cost nothing.
+decision is final, an undecided prompt expires after ``approval_minutes``: a
+press then, or the periodic sweep, turns the prompt into the expired notice
+without buttons. Running funds the action afresh (the asking run is long
+settled); denial and expiry cost nothing.
 """
 
 import contextlib
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy import delete
+from aiogram.types import InlineKeyboardMarkup, Message
+from sqlalchemy import delete, select, update
 
 from derp.agent.models import Approval
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.history.models import Chat
+from derp.history.models import Chat, User
 from derp.locales import resolve, t
+from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, rich, send_markdown
 
 if TYPE_CHECKING:  # the runtime imports the tools that create approvals
     from derp.agent.runtime import Runtime
+
+log = logging.getLogger("derp.approvals")
+SWEEP = 50  # expired prompts closed per sweep; the rest wait for the next one
 
 
 class ApprovalAction(CallbackData, prefix="approve"):
@@ -38,21 +44,11 @@ def needs_approval(settings: Settings, price: int, payer_balance: int) -> bool:
     return price > settings.approval_credits or price > settings.approval_balance_fraction * payer_balance
 
 
-def keyboard(approval_id: int, locale: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "approvals.run"),
-                    callback_data=ApprovalAction(id=approval_id, run=True).pack(),
-                    style="success",
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "approvals.cancel"),
-                    callback_data=ApprovalAction(id=approval_id, run=False).pack(),
-                    style="danger",
-                ),
-            ]
+def keyboard(approval_id: int, locale: str) -> InlineKeyboardMarkup | None:
+    return markup(
+        [
+            button(t(locale, "approvals.run"), ApprovalAction(id=approval_id, run=True), style="success"),
+            button(t(locale, "approvals.cancel"), ApprovalAction(id=approval_id, run=False), style="danger"),
         ]
     )
 
@@ -94,40 +90,60 @@ async def ask(
     return sent
 
 
-async def _close_prompt(bot: Bot, message: Message, text: str) -> None:
-    with contextlib.suppress(TelegramAPIError):
-        await bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            rich_message=rich(text),
-        )
-
-
-async def on_decision(
-    query: CallbackQuery, callback_data: ApprovalAction, db: Database, bot: Bot, runtime: Runtime
-) -> None:
-    locale = resolve(query.from_user.language_code)
-    message = query.message
+async def on_decision(press: Press, data: ApprovalAction, db: Database, runtime: Runtime) -> None:
     now = datetime.now(UTC)
+    chat: Chat | None = None
     async with db.transaction() as session:
-        approval = await session.get(Approval, callback_data.id, with_for_update=True)
-        if approval is None or approval.user_id != query.from_user.id:
-            await query.answer(t(locale, "approvals.not_yours"), show_alert=True)
-            return
-        if approval.state == "pending" and approval.expires_at <= now:
+        approval = await session.get(Approval, data.id, with_for_update=True)
+        if approval is not None and approval.state == "pending" and approval.expires_at <= now:
             approval.state = "expired"
-        if approval.state != "pending":
-            await query.answer(t(locale, f"approvals.already_{approval.state}"), show_alert=True)
-            return
-        approval.state, approval.decided_at = ("approved" if callback_data.run else "denied"), now
-        chat = await session.get(Chat, approval.chat_id)
-    await query.answer()
-    if isinstance(message, Message):
-        await _close_prompt(
-            bot, message, t(locale, "approvals.making" if callback_data.run else "approvals.cancelled")
-        )
-    if callback_data.run and chat is not None:
-        await runtime.run_approved(approval, chat, locale)
+        state = approval.state if approval is not None else "expired"  # rows are dropped after a day
+        mine = approval is not None and approval.user_id == press.user_id
+        if approval is not None and mine and state == "pending":
+            approval.state, approval.decided_at = ("approved" if data.run else "denied"), now
+            chat = await session.get(Chat, approval.chat_id)
+    if state == "expired":  # whoever pressed: the prompt is dead, so it says so and loses its buttons
+        await press.edit(t(press.locale, "approvals.expired"))
+        return await press.deny("approvals.already_expired")
+    if not mine:
+        return await press.deny("approvals.not_yours")
+    if state != "pending":
+        return await press.deny(f"approvals.already_{state}")
+    await press.edit(t(press.locale, "approvals.making" if data.run else "approvals.cancelled"))
+    if data.run and approval is not None and chat is not None:
+        await runtime.run_approved(approval, chat, press.locale)
+
+
+async def close_expired(db: Database, bot: Bot, now: datetime) -> int:
+    """Prompts nobody answered in time become the expired notice, without buttons, then are marked expired."""
+    async with db.session() as session:
+        rows = (
+            await session.execute(
+                select(Approval.id, Approval.chat_id, Approval.prompt_message_id, User.language_code)
+                .outerjoin(User, User.id == Approval.user_id)
+                .where(Approval.state == "pending", Approval.expires_at <= now)
+                .order_by(Approval.id)
+                .limit(SWEEP)
+            )
+        ).all()
+    for _, chat_id, message_id, language in rows:
+        if message_id is None:
+            continue
+        with contextlib.suppress(TelegramAPIError):  # deleted or too old to edit: nothing left to tidy
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                rich_message=rich(t(resolve(language), "approvals.expired")),
+            )
+    if rows:
+        async with db.transaction() as session:
+            await session.execute(
+                update(Approval)
+                .where(Approval.id.in_([row[0] for row in rows]), Approval.state == "pending")
+                .values(state="expired")
+            )
+        log.info("closed %d expired approval prompts", len(rows))
+    return len(rows)
 
 
 async def drop_old(db: Database, before: datetime) -> None:
@@ -138,5 +154,5 @@ async def drop_old(db: Database, before: datetime) -> None:
 
 def build_router() -> Router:
     router = Router(name="approvals")
-    router.callback_query.register(on_decision, ApprovalAction.filter(F.id > 0))
+    on_press(router, ApprovalAction, F.id > 0)(on_decision)
     return router
