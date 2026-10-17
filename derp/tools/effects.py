@@ -201,6 +201,14 @@ async def mirror(data: bytes) -> bytes:
         return await asyncio.to_thread(captions.mirror, data)
 
 
+async def sticker(data: bytes) -> bytes:
+    """A picture as a static WebP sticker (512 px on the longer side, transparency kept)."""
+    if len(data) > MAX_INPUT_BYTES:
+        raise EffectError("the file is too large (20 MB at most)")
+    async with POOL.slot():
+        return await asyncio.to_thread(captions.sticker, data)
+
+
 async def still(data: bytes) -> bytes:
     """One JPEG frame from a clip (a second in, or the first frame of a short one)."""
     async with _workspace(data) as source:

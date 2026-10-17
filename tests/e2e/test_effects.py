@@ -272,6 +272,31 @@ async def test_a_member_named_by_the_asker_is_the_source_in_one_call(
     assert results_of(model, "reverse_media")[0].startswith("Sent it as #")
 
 
+async def test_a_cutout_becomes_a_transparent_sticker(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(LIV, PUB)
+    buffer = io.BytesIO()
+    Image.new("RGBA", (300, 200), (255, 0, 0, 0)).save(buffer, format="PNG")
+    cutout = buffer.getvalue()
+    document = {
+        "file_id": "cut",
+        "file_unique_id": "u-cut",
+        "file_name": "cutout.png",
+        "file_size": len(cutout),
+    }
+    posted = await ambient(conversation, "cut", cutout, document=document)
+    model.reply(tool_call("make_sticker", message_id=posted), ".")
+    asked = await conversation.send(LIV, PUB, "derp make that a sticker")
+    sent = await conversation.expect_reply(asked, method="sendSticker")
+    await conversation.settle(asked)
+    sticker = Image.open(io.BytesIO(sent.attachments[0].data))
+    assert sticker.format == "WEBP" and sticker.size == (512, 341) and sticker.mode == "RGBA"
+    assert results_of(model, "make_sticker")[0].startswith("Sent it as #")
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(RunOutput.kind)) == "sticker"
+
+
 @needs_ffmpeg
 async def test_derp_looks_at_a_gif_and_a_video_message_through_a_frame(
     conversation: Conversation, model: ScriptedModel

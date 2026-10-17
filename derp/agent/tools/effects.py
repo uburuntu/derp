@@ -46,7 +46,7 @@ toolset = FunctionToolset[RunDeps]()
 background_tools = FunctionToolset[RunDeps]()
 song_tools = FunctionToolset[RunDeps]()
 profile_tools = FunctionToolset[RunDeps]()
-Sendable = Literal["photo", "video", "animation", "video_note", "voice", "document"]
+Sendable = Literal["photo", "video", "animation", "video_note", "voice", "document", "sticker"]
 
 
 async def _visual(
@@ -114,7 +114,10 @@ async def _send(
             sent = await bot.send_voice(chat, media, message_thread_id=thread, reply_parameters=reply)
         case "document":
             sent = await bot.send_document(chat, media, message_thread_id=thread, reply_parameters=reply)
-    deps.delivered.append((sent.message_id, "image" if kind in ("photo", "document") else "other"))
+        case "sticker":
+            sent = await bot.send_sticker(chat, media, message_thread_id=thread, reply_parameters=reply)
+    output = "image" if kind in ("photo", "document") else "sticker" if kind == "sticker" else "other"
+    deps.delivered.append((sent.message_id, output))
     async with deps.db.transaction() as session:
         if effect is not None:
             paid = deps.funding is Funding.PAID
@@ -233,6 +236,38 @@ async def reverse_media(
         return "Telegram didn't confirm the result; it may have arrived. Don't send it again."
     except TelegramAPIError:
         return "Telegram refused the result; nothing was charged."
+
+
+@toolset.tool(sequential=True)
+async def make_sticker(
+    ctx: RunContext[RunDeps],
+    message_id: int | None = None,
+    profile_photo: bool = False,
+    chat_photo: bool = False,
+    person: str | None = None,
+) -> str:
+    """Turn a picture (a cutout keeps its transparency; clips give a frame) into a sticker and send it.
+
+    Args:
+        message_id: Use the media of this stored message (default: the current message or the one it replies to).
+        profile_photo: Use the profile photo of message_id's sender (or of the person replied to, or the asker).
+        chat_photo: Use this chat's photo.
+        person: Use this member's profile photo (name or @username).
+    """
+    deps = ctx.deps
+    try:
+        _check_outputs(deps)
+        source = await _visual(deps, message_id, profile_photo, chat_photo, person)
+        picture = source.data if source.image else await effects.still(source.data)
+        return _sent(await _send(deps, "sticker", await effects.sticker(picture), "sticker.webp"))
+    except Refused as refused:
+        return str(refused)
+    except EffectError as error:
+        return f"The sticker failed ({error.reason})."
+    except AMBIGUOUS:
+        return "Telegram didn't confirm the sticker; it may have arrived. Don't send it again."
+    except TelegramAPIError:
+        return "Telegram refused the sticker."
 
 
 @toolset.tool

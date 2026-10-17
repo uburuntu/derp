@@ -530,7 +530,7 @@ class FakeBotAPI:
         return {"total_count": 1, "photos": [[size]]}
 
     def _m_sendSticker(self, fields: JsonObject) -> JsonObject:  # noqa: N802
-        file_id = str(fields["sticker"])
+        file_id = f"f-sticker-{len(self.calls)}" if self.calls[-1].attachments else str(fields["sticker"])
         sticker = {
             "file_id": file_id, "file_unique_id": f"u-{file_id}", "type": "regular", "width": 512, "height": 512,
             "is_animated": False, "is_video": False,
