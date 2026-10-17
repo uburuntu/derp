@@ -19,12 +19,23 @@ _FENCE_LINE = re.compile(r" {0,3}(```|~~~)")
 
 
 def hard_breaks(markdown: str) -> str:
-    """Each line break inside a paragraph made a hard break (two trailing spaces), except in code blocks."""
+    """Each line break inside a paragraph made a hard break (two trailing spaces).
+
+    Code blocks and ``$$ … $$`` formulas are left as written: their source is raw (LaTeX for formulas).
+    """
     lines = markdown.split("\n")
     fence: str | None = None
+    math = False
+    paired = markdown.count("$$") % 2 == 0  # a stray "$$$" must not swallow the rest
     for index, line in enumerate(lines[:-1]):
         if marker := _FENCE_LINE.match(line):
             fence = None if fence == marker.group(1) else fence or marker.group(1)
+            continue
+        if fence is None and paired and line.count("$$") % 2:
+            math = not math
+            if math:
+                continue  # this line break is inside the formula
+        elif math:
             continue
         if fence is not None or not line.strip() or not lines[index + 1].strip():
             continue

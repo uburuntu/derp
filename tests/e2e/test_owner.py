@@ -122,7 +122,7 @@ async def test_a_scout_ping_carries_its_proposal_buttons(conversation: Conversat
 async def test_owners_see_the_console_in_help(conversation: Conversation) -> None:
     owner_help = await conversation.send(OWNER, text="/help")
     text = (await conversation.expect_reply(owner_help))["rich_message"]["markdown"]
-    assert "**Owner**" in text and "/stats" in text and "/refund" in text
+    assert "**Owner**" in text and "/stats" in text and "/feedbacks" in text and "/refund" in text
     stranger_help = await conversation.send(PAT, text="/help")
     assert "/stats" not in (await conversation.expect_reply(stranger_help))["rich_message"]["markdown"]
 

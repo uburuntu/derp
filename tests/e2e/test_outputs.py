@@ -101,16 +101,17 @@ async def test_sticker_from_the_chat_replying_to_a_person(
     ] == []  # the sticker was the answer (only the join notice)
 
 
-async def test_react_tool_replaces_the_status_reaction(
+async def test_group_progress_is_a_chat_action_so_the_react_tool_sets_the_only_reaction(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
     conversation.meet(KATE, PARTY)
-    # A later tool call must not swap the reaction back to a status emoji.
+    # Progress in groups is a chat action, so a later tool call never puts a status emoji on the message.
     model.reply(tool_call("react", emoji="🔥"), tool_call("search_history", query="exam"), ".")
     asked = await conversation.send(KATE, PARTY, "derp I passed my exam!")
     await conversation.settle(asked)
     reactions = [c["reaction"] for c in conversation.api.calls_of("setMessageReaction", after=asked.after)]
-    assert reactions[-1] == [{"type": "emoji", "emoji": "🔥"}]
+    assert reactions == [[{"type": "emoji", "emoji": "🔥"}]]
+    assert conversation.api.calls_of("sendChatAction", after=asked.after)
     async with conversation.db.session() as session:
         assert list(await session.scalars(select(RunOutput.kind))) == ["reaction"]
 

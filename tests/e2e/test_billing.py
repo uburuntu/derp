@@ -56,6 +56,7 @@ async def test_private_purchase_credits_once_and_pings_the_owner(conversation: C
     asked = await conversation.send(CARL, text="/buy")
     menu = await conversation.expect_reply(asked)
     assert "balance: **0**" in menu["rich_message"]["markdown"]
+    assert "Telegram Stars; see /terms" in menu["rich_message"]["markdown"]
     buttons = [row[0] for row in menu["reply_markup"]["inline_keyboard"]][1:]  # Derp+ comes first
     assert [b["text"] for b in buttons] == ["50⭐ → 650 dc", "250⭐ → 3,250 dc", "750⭐ → 9,750 dc"]
     menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
@@ -88,7 +89,10 @@ async def test_group_purchase_for_the_chat_can_be_paid_by_anyone(conversation: C
     menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == PUB.id)
     await press(conversation, CARL, PUB.id, menu_id, for_chat)
     edited = conversation.api.calls_of("editMessageText")[-1]
-    assert "Chat balance" in edited["rich_message"]["markdown"]
+    assert (
+        "Chat balance" in edited["rich_message"]["markdown"]
+        and "/terms" in edited["rich_message"]["markdown"]
+    )
     pack = edited["reply_markup"]["inline_keyboard"][1][0]["callback_data"]
     after = conversation.seq
     await press(conversation, CARL, PUB.id, menu_id, pack)

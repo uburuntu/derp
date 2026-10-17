@@ -118,3 +118,47 @@ def test_existing_hard_breaks_and_single_lines_are_left_alone() -> None:
     assert hard_breaks("one  \ntwo\\\nthree") == "one  \ntwo\\\nthree"
     assert hard_breaks("just one line") == "just one line"
     assert hard_breaks("~~~\nx\ny\n~~~\nz\nw") == "~~~\nx\ny\n~~~\nz  \nw"
+
+
+async def test_plain_fallback_never_shows_link_previews() -> None:
+    from datetime import UTC, datetime
+    from typing import Any, cast
+
+    from aiogram import Bot
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import SendRichMessage
+    from aiogram.types import Chat
+
+    from derp.telegram.sender import send_markdown
+
+    class RichRefused:
+        def __init__(self) -> None:
+            self.plain: list[dict[str, Any]] = []
+
+        async def send_rich_message(self, **fields: Any) -> Message:
+            raise TelegramBadRequest(SendRichMessage(chat_id=1, rich_message=fields["rich_message"]), "bad")
+
+        async def send_message(self, **fields: Any) -> Message:
+            self.plain.append(fields)
+            return Message(
+                message_id=len(self.plain), date=datetime.now(UTC), chat=Chat(id=1, type="private")
+            )
+
+    bot = RichRefused()
+    text = "see https://example.com — and $$\\int_0^1 x\\,dx$$ is $\\tfrac12$"
+    for trusted in (True, False):
+        await send_markdown(cast(Bot, bot), Target(1), text, trusted=trusted)
+    assert len(bot.plain) == 2
+    for fields in bot.plain:  # aiogram drops an explicit None, and Telegram's default shows previews
+        preview = fields["link_preview_options"]
+        assert preview is not None and preview.is_disabled
+        assert "$\\tfrac12$" in fields["text"]  # maths stays raw text in the fallback
+
+
+def test_formula_blocks_keep_their_raw_latex() -> None:
+    text = "Area:\n$$\n\\begin{aligned}\nA &= \\pi r^2\n\\end{aligned}\n$$\nso\nthere\n$$E = mc^2$$\nend"
+    assert hard_breaks(text) == (
+        "Area:  \n$$\n\\begin{aligned}\nA &= \\pi r^2\n\\end{aligned}\n$$  \nso  \nthere  \n$$E = mc^2$$  \nend"
+    )
+    assert hard_breaks("$$ x = 1\ny = 2 $$\nz") == "$$ x = 1\ny = 2 $$  \nz"
+    assert hard_breaks("costs $$$\nreally\nmuch") == "costs $$$  \nreally  \nmuch"  # unpaired: not a formula

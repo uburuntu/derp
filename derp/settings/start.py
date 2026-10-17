@@ -72,6 +72,7 @@ EPHEMERAL_IN_GROUPS = {"help", "settings", "credits", "info", "memory", "privacy
 # Owner console: listed only in the owners' own private chats and /help; plain English, not localized.
 OWNER_COMMANDS = {
     "stats": "spend, revenue, pins and scout proposals",
+    "feedbacks": "review open feedback",
     "grant": "<user or chat id> <Derpcoins> — gift Derpcoins",
     "block": "<user or chat id> — Derp stays silent there",
     "unblock": "<user or chat id> — undo /block",

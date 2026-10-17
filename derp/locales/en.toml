@@ -101,8 +101,8 @@ dm_first = "I keep balances out of groups. Open a private chat with me, press St
 
 [billing]
 unavailable = "Payments aren't available right now. Try again in a bit."
-menu = "**Derpcoins** unlock my best model, image generation and full limits. Packs never expire; **Derp+** renews every 30 days.\nYour balance: **{balance}** dc. Pick an option:"
-menu_chat = "**Derpcoins for this chat** — everyone here uses them before their own.\nChat balance: **{balance}** dc. Pick a pack:"
+menu = "**Derpcoins** unlock my best model, image generation and full limits. Packs never expire; **Derp+** renews every 30 days.\nPaid in Telegram Stars; see /terms.\nYour balance: **{balance}** dc. Pick an option:"
+menu_chat = "**Derpcoins for this chat** — everyone here uses them before their own.\nPaid in Telegram Stars; see /terms.\nChat balance: **{balance}** dc. Pick a pack:"
 who = "Who are the Derpcoins for?"
 for_me = "For me"
 for_chat = "For this chat"
@@ -207,7 +207,7 @@ privacy = """
 
 <details><summary>What I keep</summary>
 
-Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Short daily summaries of a chat, for up to a year. Notes and reminders you ask me to keep, until they finish or you remove them. Quiz points and titles of the day in groups, until /forget. Payment receipts, for accounting.
+Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Contacts and locations shared in a chat are kept like any other message, for the same time. Short daily summaries of a chat, for up to a year. Notes and reminders you ask me to keep, until they finish or you remove them. Quiz points and titles of the day in groups, until /forget. Payment receipts, for accounting. Nothing is used to train AI models, and nothing from one chat is used in another — apart from public stickers, which I may reuse anywhere.
 </details>
 
 <details><summary>Who processes it</summary>
