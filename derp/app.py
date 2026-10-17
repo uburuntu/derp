@@ -76,7 +76,14 @@ class Services:
             api=api,
             pins=pins,
             media=media,
-            transcriber=Transcriber(db=db, api=api, gateway=media, pins=pins, settings=settings),
+            transcriber=Transcriber(
+                db=db,
+                api=api,
+                gateway=media,
+                pins=pins,
+                settings=settings,
+                notify=lambda text: notify_owners(bot, settings, text),
+            ),
             lookups=Lookups(settings),
         )
 

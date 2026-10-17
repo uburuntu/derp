@@ -4,14 +4,17 @@ Vision-capable pins get the pixels; every inspected image also gets a one-line
 description stored on ``message_media`` (and folded into search text), so later
 runs — and models without vision — see "[photo: a grey cat on a laptop]"
 instead of a bare placeholder. Descriptions are written only for images a run
-actually inspected.
+actually inspected. Notes for one run are made concurrently under a timeout;
+every provider response is ledgered, and an image whose paid note came back
+empty is marked with an empty description so it is never paid for twice.
 """
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from pydantic_ai import Agent, BinaryContent
+from pydantic_ai import Agent, BinaryContent, capture_run_messages
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models import Model
 from sqlalchemy import false, or_, select
@@ -26,7 +29,9 @@ from derp.telegram.media import Media, MediaGateway, MediaUnavailableError
 
 log = logging.getLogger("derp.media")
 IMAGE_LIKE = ("photo", "sticker", "document", "animation")
-MAX_IMAGES = 4
+MAX_IMAGES = 4  # also bounds the concurrent note calls of one run
+NOTE_TOKENS = 300  # room for a reasoning model's mandatory thinking before the one line
+NOTE_SECONDS = 30
 DESCRIBE_PROMPT = (
     "Describe this image in one line (at most 25 words) for a chat log. "
     "Mention any visible text verbatim. No preamble."
@@ -96,10 +101,19 @@ def as_content(items: Sequence[Inspected]) -> list[str | BinaryContent]:
 
 
 async def describe(model: Model, pin: RolePin, image: Media) -> tuple[str, list[ModelResponse]]:
-    agent = Agent(model, model_settings=chat_settings(pin, max_tokens=120))
-    result = await agent.run([DESCRIBE_PROMPT, BinaryContent(image.data, media_type=image.media_type)])
-    text = " ".join(result.output.split())[:300]
-    return text, [m for m in result.new_messages() if isinstance(m, ModelResponse)]
+    """A one-line note ("" when the model gave none) and every response it was paid for, failures included."""
+    agent = Agent(model, model_settings=chat_settings(pin, max_tokens=NOTE_TOKENS))
+    text = ""
+    with capture_run_messages() as captured:
+        try:
+            async with asyncio.timeout(NOTE_SECONDS):
+                result = await agent.run(
+                    [DESCRIBE_PROMPT, BinaryContent(image.data, media_type=image.media_type)]
+                )
+            text = " ".join(result.output.split())[:300]
+        except Exception as error:  # noqa: BLE001 - a missing note never fails the run
+            log.info("media note failed: %s", type(error).__name__)
+    return text, [m for m in captured if isinstance(m, ModelResponse)]
 
 
 async def store_description(session: AsyncSession, media: MessageMedia, description: str) -> None:
@@ -130,16 +144,17 @@ async def note_images(
     chat_id: int,
     user_id: int,
 ) -> None:
-    """Describe inspected images that have no note yet; each call is ledgered against the run."""
+    """Describe inspected images never noted before, concurrently; each call is ledgered against the run.
+
+    An empty description marks an image whose paid note came back empty: it renders as a bare
+    placeholder and is not described (and paid for) again.
+    """
     if not pin.vision:
         return
-    for item in items:
-        if item.row.description:
-            continue
-        try:
-            text, paid = await describe(model, pin, item.image)
-        except Exception as error:  # noqa: BLE001 - a missing note never fails the run
-            log.info("media note failed: %s", type(error).__name__)
+    pending = [item for item in items if item.row.description is None]
+    notes = await asyncio.gather(*(describe(model, pin, item.image) for item in pending))
+    for item, (text, paid) in zip(pending, notes, strict=True):
+        if not text and not paid:  # nothing came back, nothing was paid: a later run may try again
             continue
         async with db.transaction() as session:
             for response in paid:

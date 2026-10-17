@@ -12,7 +12,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Guest mode: a mention in a chat Derp isn't a member of gets one reply. Inline and guest answers see no chat
   history and nothing from them is stored except accounting.
 - It looks at photos, stickers and albums, listens to voice messages and video notes (transcribed), and opens
-  links. Media tools also take videos, GIFs and audio (memes, reversing, song recognition).
+  links. Media tools also take videos, GIFs and audio (memes, reversing, song recognition). Group voice messages
+  nobody asked about are transcribed in the background up to a daily limit; past it, a voice message is
+  transcribed when someone calls Derp in reply to it.
 - Profile pictures and the chat photo work as sources: "add me a hat on my profile picture" or "meme our chat
   photo". Derp sends the result; bots can't change anyone's profile photo, so people set it themselves.
 - One tool's result feeds the next: draw a picture, then meme it or cut it out, in one answer.

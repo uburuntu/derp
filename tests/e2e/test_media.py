@@ -132,6 +132,36 @@ async def test_replying_to_a_photo_derp_never_kept_still_shows_it(
     assert reply["rich_message"]["markdown"] == "a cat, obviously"
 
 
+async def test_an_empty_image_note_is_paid_once_and_never_retried(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.api.register_file("blur", PNG)
+
+    def thinking_only(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        # A reasoning model that spent its whole note budget thinking: billed, but no text.
+        return ModelResponse(parts=[TextPart("")], finish_reason="length", provider_details={"cost": 0.0003})
+
+    model.reply("blurry, can't tell", thinking_only)
+    sent = await conversation.send(DORA, caption="what is this?", photo=photo("blur"))
+    await conversation.expect_reply(sent)
+    await conversation.settle(sent)
+    async with conversation.db.session() as session:
+        media = await session.scalar(select(MessageMedia).where(MessageMedia.message_id == sent.message_id))
+        assert media is not None and media.description == ""  # tried: never described (or paid) again
+        notes = list(await session.scalars(select(ProviderCall.cost_usd).where(ProviderCall.kind == "media")))
+        assert [float(cost) for cost in notes] == [0.0003]
+
+    model.reply("still blurry")
+    asked = len(model.requests)
+    again = await conversation.send(DORA, text="look again", reply_to=sent.message_id)
+    await conversation.expect_reply(again)
+    await conversation.settle(again)
+    assert len(model.requests) == asked + 1  # the answer only, no second note
+    async with conversation.db.session() as session:
+        notes = list(await session.scalars(select(ProviderCall.id).where(ProviderCall.kind == "media")))
+        assert len(notes) == 1
+
+
 async def test_media_and_stickers_of_another_bot_degrade_instead_of_failing(
     conversation: Conversation, model: ScriptedModel
 ) -> None:

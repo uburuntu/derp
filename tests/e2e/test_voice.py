@@ -7,11 +7,13 @@ from derp.history.models import Message, MessageMedia
 from derp.history.transcription import Transcriber
 from derp.inference.api import OpenRouterError, Transcript
 from derp.inference.models import ProviderCall
+from derp.ops.owner import notify_owners
 from tests.e2e.harness import Conversation, Derived, Person, Room
 from tests.e2e.model import ScriptedModel
 
 OGG = b"OggS" + b"\x00" * 60
 EVA = Person(701, "Eva", language_code="ru")
+OWNER = Person(1000, "Owner")
 
 
 class FakeSTT:
@@ -37,7 +39,14 @@ def voice(file_id: str, duration: int = 5) -> dict[str, object]:
 
 async def use_stt(conversation: Conversation, stt: FakeSTT) -> None:
     conversation.overrides["transcriber"] = Derived(
-        lambda s: Transcriber(db=s.db, api=stt, gateway=s.media, pins=s.pins, settings=s.settings)  # type: ignore[arg-type]
+        lambda s: Transcriber(
+            db=s.db,
+            api=stt,  # type: ignore[arg-type]
+            gateway=s.media,
+            pins=s.pins,
+            settings=s.settings,
+            notify=lambda text: notify_owners(s.bot, s.settings, text),
+        )
     )
     await conversation.restart()
 
@@ -103,3 +112,30 @@ async def test_voice_invocation_is_answered_even_when_transcription_breaks(
     sent = await conversation.send(EVA, voice=voice("v2"))
     reply = await conversation.expect_reply(sent)
     assert reply["rich_message"]["markdown"] == "не расслышал, но я тут"
+
+
+async def test_ambient_voice_stops_at_the_daily_cap_but_invocations_still_hear_it(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    stt = FakeSTT()
+    await use_stt(conversation, stt)
+    conversation.meet(OWNER)
+    group = Room(-1009, title="Chatty")
+    conversation.meet(EVA, group)
+    async with conversation.db.transaction() as session:
+        cap = Decimal(str(conversation.settings.ambient_stt_daily_usd))
+        session.add(ProviderCall(kind="stt", model="m", funding="creator", cost_usd=cap))
+    for file_id in ("v4", "v5"):
+        conversation.api.register_file(file_id, OGG)
+    first = await conversation.send(EVA, group, voice=voice("v4"))
+    second = await conversation.send(EVA, group, voice=voice("v5"))
+    await conversation.settle(second)
+    assert stt.calls == []  # over the cap: ambient voice is kept untranscribed
+    pings = [c for c in conversation.api.calls if c.method == "sendMessage" and int(c["chat_id"]) == OWNER.id]
+    assert len(pings) == 1 and "cap" in str(pings[0]["text"])  # once per day, not per message
+
+    model.reply("хлеба нет")
+    asked = await conversation.send(EVA, group, "дерп, что она сказала?", reply_to=first.message_id)
+    await conversation.expect_reply(asked)
+    assert len(stt.calls) == 1  # the invocation needs it: transcribed on demand
+    assert "купи хлеба" in str(model.requests[-1])

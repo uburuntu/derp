@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     plan: Plan = Plan()
     sponsored_daily_credits: int = 10
     sponsored_global_daily_usd: float = 1.0
+    # Creator-paid speech-to-text per UTC day past which ambient voice is no longer transcribed
+    # (invocations and the messages they reply to still are).
+    ambient_stt_daily_usd: float = 0.5
     openrouter_low_usd: float = 5.0  # owner ping when the API key's spending limit has less left
     approval_credits: int = 60  # a single action costing more asks first
     approval_balance_fraction: float = (
@@ -142,6 +145,7 @@ class Settings(BaseSettings):
     )
     approval_minutes: int = 15
     image_price_usd: float = 0.045  # upper estimate of one standard image on the image pin
+    stt_price_usd_per_minute: float = 0.007  # upper estimate on the STT pin, used when no cost is reported
     effect_credits: int = (
         2  # flat fee on paid runs for heavy local effects (video memes, reversed clips, cutouts)
     )

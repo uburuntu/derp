@@ -115,3 +115,17 @@ async def test_transcribe_requests_zdr_and_reports_errors() -> None:
     with pytest.raises(OpenRouterError) as caught:
         await api.transcribe("bad", b"OggS", "ogg")
     assert caught.value.retryable
+
+
+async def test_missing_cost_falls_back_to_the_configured_estimate() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/images"):
+            return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(b"PNG").decode()}]})
+        return httpx.Response(200, json={"text": "hi", "usage": {"seconds": 90}})
+
+    api = api_with(httpx.MockTransport(handle))
+    defaults = Settings(_env_file=None)  # type: ignore[call-arg]
+    image = await api.generate_image("m/x", "a cat", only=("google-vertex",))
+    assert image.cost_usd == Decimal(str(defaults.image_price_usd))
+    transcript = await api.transcribe("m/stt", b"OggS", "ogg", seconds=90)
+    assert transcript.cost_usd == Decimal(str(defaults.stt_price_usd_per_minute)) * Decimal("1.5")

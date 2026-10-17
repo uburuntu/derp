@@ -4,21 +4,28 @@ Runs inline during capture, before handlers, so an invocation by voice is
 answered from its transcript. Creator-funded and ledgered as ``kind='stt'``;
 nothing is posted. Video notes go through ffmpeg (audio only) first. Long
 recordings, failed downloads and provider errors leave the message without a
-transcript — they never fail capture.
+transcript — they never fail capture. Ambient voice (not part of an invocation)
+stops being transcribed once the day's creator-paid STT reaches
+``ambient_stt_daily_usd``; owners get one ping per UTC day when that happens.
 """
 
 import asyncio
 import logging
 import tempfile
+from collections.abc import Awaitable, Callable
+from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Message, MessageMedia
 from derp.inference.api import OpenRouterAPI, OpenRouterError, Transcript
 from derp.inference.ledger import record_usage, simple_usage
+from derp.inference.models import ProviderCall
 from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole
 from derp.telegram.media import MediaGateway
@@ -26,6 +33,19 @@ from derp.telegram.media import MediaGateway
 log = logging.getLogger("derp.transcription")
 SPOKEN = ("voice", "video_note")
 FFMPEG_SECONDS = 60
+Notify = Callable[[str], Awaitable[None]]
+
+
+async def stt_spent_today(session: AsyncSession, now: datetime) -> Decimal:
+    """Creator-paid speech-to-text since the start of the UTC day."""
+    spent = await session.scalar(
+        select(func.coalesce(func.sum(ProviderCall.cost_usd), 0)).where(
+            ProviderCall.kind == "stt",
+            ProviderCall.funding == "creator",
+            ProviderCall.created_at >= datetime.combine(now.date(), time(), tzinfo=UTC),
+        )
+    )
+    return Decimal(spent or 0)
 
 
 async def extract_audio(video: bytes) -> bytes:
@@ -52,15 +72,36 @@ async def extract_audio(video: bytes) -> bytes:
 
 class Transcriber:
     def __init__(
-        self, *, db: Database, api: OpenRouterAPI, gateway: MediaGateway, pins: PinStore, settings: Settings
+        self,
+        *,
+        db: Database,
+        api: OpenRouterAPI,
+        gateway: MediaGateway,
+        pins: PinStore,
+        settings: Settings,
+        notify: Notify | None = None,
     ) -> None:
         self.db = db
         self.api = api
         self.gateway = gateway
         self.pins = pins
         self.max_seconds = settings.media.voice_max_seconds
+        self.ambient_cap = Decimal(str(settings.ambient_stt_daily_usd))
+        self.notify = notify
+        self._cap_reported: date | None = None
 
-    async def transcribe_message(self, chat_id: int, message_id: int) -> str | None:
+    async def _over_ambient_cap(self) -> bool:
+        now = datetime.now(UTC)
+        async with self.db.session() as session:
+            if await stt_spent_today(session, now) < self.ambient_cap:
+                return False
+        if self.notify is not None and self._cap_reported != now.date():
+            self._cap_reported = now.date()
+            await self.notify(f"Ambient voice transcription hit today's ${self.ambient_cap:g} cap.")
+        return True
+
+    async def transcribe_message(self, chat_id: int, message_id: int, *, ambient: bool = False) -> str | None:
+        """Transcribe a stored voice message or video note; ``ambient`` ones only while under the daily cap."""
         async with self.db.session() as session:
             media = await session.scalar(
                 select(MessageMedia).where(
@@ -75,12 +116,14 @@ class Transcriber:
             )
         if media is None or (media.duration or 0) > self.max_seconds:
             return None
+        if ambient and await self._over_ambient_cap():
+            return None
         try:
             data = await self.gateway.fetch(
                 media.file_id, bot_id=media.bot_id, key=media.file_unique_id, size_hint=media.file_size
             )
             audio = await extract_audio(data) if media.type == "video_note" else data
-            transcript = await self._transcribe(audio)
+            transcript = await self._transcribe(audio, media.duration or 0)
         except Exception as error:  # noqa: BLE001 - capture never fails over a transcript (ffmpeg, network…)
             log.info("no transcript for a %s: %s", media.type, type(error).__name__)
             return None
@@ -104,12 +147,12 @@ class Transcriber:
             message.extra_text = " ".join(filter(None, (message.extra_text, transcript.text))) or None
         return transcript.text
 
-    async def _transcribe(self, audio: bytes) -> Transcript:
+    async def _transcribe(self, audio: bytes, seconds: int) -> Transcript:
         pin = await self.pins.get(ModelRole.STT)
         error: OpenRouterError = OpenRouterError(503, "no speech-to-text model pinned")
         for model in pin.models:  # the next model is a different provider: worth a try on any error
             try:
-                return await self.api.transcribe(model, audio, "ogg", zdr=pin.zdr)
+                return await self.api.transcribe(model, audio, "ogg", zdr=pin.zdr, seconds=seconds)
             except OpenRouterError as failed:
                 error = failed
         raise error
