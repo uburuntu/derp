@@ -83,8 +83,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 
 ## limits
 
-- Each answer has hard caps: tool calls, visible outputs, output length, time and Derpcoins; reaching one ends the
-  answer gracefully. Media effects have size and length limits. Values follow.
+- Each answer has hard caps: tool calls, visible outputs, output length, time and Derpcoins. Nearing the tool,
+  time or Derpcoin cap, Derp stops using tools and answers with what it has. An empty reply or a busy model gets
+  one retry on a backup model. Media effects have size and length limits. Values follow.
 
 ## tools
 

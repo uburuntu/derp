@@ -183,7 +183,10 @@ async def build_window(
                 last.ids.append(row.message_id)
             continue
         if run is not None:
-            replay = clip_tool_results(load_messages(run.messages))
+            try:
+                replay = clip_tool_results(load_messages(run.messages))
+            except ValueError:  # stored history this version can't load: the visible text stands in
+                replay = []
             if _complete(replay):
                 seen_runs.add(run.id)
                 cost = _messages_tokens(replay)

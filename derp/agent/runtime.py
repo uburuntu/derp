@@ -2,9 +2,11 @@
 
 A run is recorded before the model is called and closed exactly once, with
 whatever provider responses happened (so failed runs are still ledgered).
-Hard caps bound every run: tool calls, output tokens per request and wall
-time. Delivery goes through the Telegram sender; Derp's delivered messages are
-stored as history only after Telegram accepted them.
+Caps bound every run: tool calls, output tokens per request, wall time and the
+money hold. Nearing one, the run stops using tools and answers (``guard``);
+the hard limits are the backstop. Delivery goes through the Telegram sender;
+Derp's delivered messages are stored as history only after Telegram accepted
+them.
 """
 
 import asyncio
@@ -40,11 +42,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.context import Window, build_window
 from derp.agent.deps import RunDeps
+from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
 from derp.agent.images import ImageJob, make_image
 from derp.agent.lanes import Lanes
 from derp.agent.media import as_content, inspect, note_images, referenced_media
 from derp.agent.models import AgentRun, Approval
 from derp.agent.persona import PERSONA, situation
+from derp.agent.prefix import prefixes
 from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
 from derp.agent.runs import finish_run, record_output, start_run, totals
 from derp.agent.tools import CAPABILITIES, FAMILIES
@@ -130,7 +134,10 @@ class Runtime:
         self.settings = settings
         self.pins = pins
         self.model_factory = model_factory
-        self.funder = Funder(db, settings, notify=lambda text: notify_owners(bot, settings, text))
+        self.prefix = prefixes(FAMILIES)  # tokens of persona + tool schemas per tier, for turn prices
+        self.funder = Funder(
+            db, settings, notify=lambda text: notify_owners(bot, settings, text), prefix=self.prefix
+        )
         self.gateway = gateway
         self.api = api
         self.lookups = lookups
@@ -204,6 +211,8 @@ class Runtime:
             return Outcome(None, "unfunded", ())
         funding = funds.funding
         run_id: int | None = None
+        deps: RunDeps | None = None
+        spoke = False  # something was (or may have been) sent to the chat for this trigger
         self.in_flight.add(funds.operation_id)
         try:
             pin = await self.pins.get(funding.role)
@@ -308,6 +317,15 @@ class Runtime:
             deps.history_start = len(history)
             new_messages: list[ModelMessage] = []
             stream = _Stream(progress, token, self.settings, funds, start=len(history))
+            guard = Guard(
+                run_id=run.id,
+                pin=pin,
+                model_factory=self.model_factory,
+                tool_calls=caps.tool_calls,
+                requests=caps.tool_calls + 1,
+                deadline=asyncio.get_running_loop().time() + caps.timeout_seconds * WRAP_UP_AT,
+                near_budget=stream.near_budget,
+            )
             await progress.start()
             # Kept locally: the draft id is cleared if drafts fail mid-run.
             draft_key = (chat.id, progress.draft_id) if progress.draft_id is not None else None
@@ -321,16 +339,18 @@ class Runtime:
                                 [request, *as_content(inspected)] if pin.vision and inspected else request,
                                 message_history=history,
                                 deps=deps,
-                                model=model,
+                                model=guard.model(model),
                                 model_settings=chat_settings(
                                     pin,
                                     max_tokens=caps.output_tokens,
                                     session=conversation_id(f"chat:{chat.id}:{target.thread_id or 0}"),
                                 ),
-                                usage_limits=UsageLimits(
-                                    request_limit=caps.tool_calls + 2, tool_calls_limit=caps.tool_calls
+                                usage_limits=UsageLimits(  # backstops: the guard wraps up before these
+                                    request_limit=caps.tool_calls + 1 + BACKSTOP,
+                                    tool_calls_limit=caps.tool_calls + BACKSTOP,
                                 ),
                                 toolsets=toolsets_for(deps, FAMILIES),
+                                capabilities=[guard],
                                 event_stream_handler=stream.handle,
                                 cancellation_token=token,
                             )
@@ -355,11 +375,14 @@ class Runtime:
                 if draft_key is not None:
                     self.active.pop(draft_key, None)
                 await progress.close()
-            await price_interrupted(self.api, self.db, new_messages, funding.role, window.tokens)
+            await price_interrupted(
+                self.api, self.db, new_messages, funding.role, self.prefix[funding] + window.tokens
+            )
             silent = output.strip() in SILENT and bool(
                 deps.delivered or deps.reacted
             )  # a sticker/poll said it all
             if error is None and not silent and (output.strip() or not (deps.delivered or stopped)):
+                spoke = True
                 try:
                     sent = await send_markdown(self.bot, target, output, trusted=False)
                 except PartialDeliveryError as exc:  # what Telegram accepted still counts
@@ -403,10 +426,12 @@ class Runtime:
                     update(AgentRun).where(AgentRun.id == run.id).values(charged_credits=charged)
                 )
             if stream.capped and not deps.delivered:
+                spoke = True
                 await self._say(target, t(locale, "agent.capped"))
             if error is not None:
                 record_run_failure(run.id, error, prompt)
                 if not isinstance(error, TelegramAPIError) and not deps.delivered:
+                    spoke = True
                     await self._apologize(target, locale, error, funds)
             refused = isinstance(error, TelegramForbiddenError | TelegramBadRequest) and not deps.delivered
             return Outcome(run.id, status, tuple(message_id for message_id, _ in deps.delivered), refused)
@@ -414,6 +439,9 @@ class Runtime:
             BaseException
         ) as exc:  # died outside the model call (network, shutdown): never leave it running
             await self._abandon(run_id, funds, exc)
+            answered = spoke or (deps is not None and bool(deps.delivered or deps.reacted))
+            if isinstance(exc, Exception) and not answered:  # not on shutdown or cancellation
+                await self._say(target, t(locale, "agent.failed"))
             raise
         finally:
             self.in_flight.discard(funds.operation_id)
@@ -620,6 +648,17 @@ class _Stream:
         if self.funds.reservation_id is None:
             return False
         spent = totals(messages[self.start :]).cost_usd
+        return self.settings.credits_for_usd(float(spent)) >= self.funds.credits
+
+    def near_budget(self, messages: list[ModelMessage]) -> bool:
+        """One more request costing what the latest one did would reach the hold."""
+        if self.funds.reservation_id is None:
+            return False
+        run = messages[self.start :]
+        latest = next((m for m in reversed(run) if isinstance(m, ModelResponse)), None)
+        if latest is None:
+            return False
+        spent = totals(run).cost_usd + totals([latest]).cost_usd
         return self.settings.credits_for_usd(float(spent)) >= self.funds.credits
 
     async def handle(self, ctx: RunContext[RunDeps], events: AsyncIterable[AgentStreamEvent]) -> None:

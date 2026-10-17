@@ -8,7 +8,7 @@ reservation. Paid runs use the standard chat model, sponsored runs the cheap
 one, and sponsorship also stops at a global daily dollar cap.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -80,10 +80,18 @@ async def sponsored_spent_today(session: AsyncSession, now: datetime) -> Decimal
 
 
 class Funder:
-    def __init__(self, db: Database, settings: Settings, *, notify: Notify = _quiet) -> None:
+    def __init__(
+        self,
+        db: Database,
+        settings: Settings,
+        *,
+        notify: Notify = _quiet,
+        prefix: Mapping[Funding, int] | None = None,
+    ) -> None:
         self.db = db
         self.settings = settings
         self.notify = notify
+        self.prefix = prefix or {}  # tokens every request carries before the window (persona, tool schemas)
         self._cap_reported: date | None = None
 
     def window(self, funding: Funding) -> int:
@@ -93,12 +101,15 @@ class Funder:
         ]
 
     async def typical_turn(self, session: AsyncSession, funding: Funding) -> int:
-        """Credits a plain turn usually costs on this tier's model: the least worth starting a run for."""
+        """Credits a plain turn usually costs on this tier's model: the least worth starting a run for.
+
+        Input is the prompt prefix (persona, tool schemas) plus half the window, priced uncached.
+        """
         prices = await session.get(ModelPin, funding.role.value)
         if prices is None or prices.price_prompt is None:
             return 1
         usd = estimate_cost(
-            self.window(funding) // 2,
+            self.prefix.get(funding, 0) + self.window(funding) // 2,
             TYPICAL_OUTPUT_TOKENS,
             float(prices.price_prompt),
             float(prices.price_completion or 0),

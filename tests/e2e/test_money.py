@@ -116,6 +116,7 @@ async def test_a_run_that_dies_outside_the_model_is_closed_and_released(
     conversation.overrides["model_factory"] = broken
     await conversation.restart()
     sent = await conversation.send(CARL, text="hi derp")
+    assert "Something broke" in (await conversation.expect_reply(sent))["rich_message"]["markdown"]
     await conversation.settle(sent)
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun))
@@ -196,7 +197,7 @@ async def test_busy_free_models_say_so(
     def busy(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         raise ModelHTTPError(status_code=429, model_name="free")
 
-    model.reply(busy)
+    model.reply(busy, busy)  # the retry on the rotated free chain is busy too
     asked = await conversation.send(CARL, text="hi")
     assert "free models are busy" in (await conversation.expect_reply(asked))["rich_message"]["markdown"]
 
@@ -213,6 +214,7 @@ async def test_a_failure_before_the_model_runs_returns_the_hold(
         await credit(session, (await wallet(session, "user", CARL.id)).id, "stars:c", 650, "purchase")
     monkeypatch.setattr(runtime, "build_window", broken)
     sent = await conversation.send(CARL, text="hi derp")
+    assert "weren't charged" in (await conversation.expect_reply(sent))["rich_message"]["markdown"]
     await conversation.settle(sent)
     async with conversation.db.session() as session:
         assert await session.scalar(select(Reservation.state)) == "released"
