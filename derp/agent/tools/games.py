@@ -1,11 +1,13 @@
-"""Chat games: poll series with scored quizzes, and "who's most likely to…" polls.
+"""Chat games: poll series with scored quizzes, "who's most likely to…" polls and titles of the day.
 
 A series mixes regular polls and quizzes. Quizzes are Derp's own non-anonymous
 quiz polls, so answers arrive as ``poll_answer`` updates and score the chat's
 quiz leaderboard (see ``derp.history.polls``; read it with the
 ``quiz_leaderboard`` chat query). A whole series takes one output slot however
-many polls it has.
+many polls it has. Titles of the day are drawn and kept by ``derp.history.titles``.
 """
+
+from datetime import UTC, datetime
 
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InputPollOption
@@ -16,7 +18,9 @@ from pydantic_ai.toolsets import FunctionToolset
 from derp.agent.deps import RunDeps
 from derp.agent.tools.telegram import OutputRefused, check_budget, delivered, reply_parameters
 from derp.agent.toolsets import Family
+from derp.history.models import User
 from derp.history.queries import ChatQuery, Scope, run_query
+from derp.history.titles import crown, leaderboard, normalize
 
 toolset = FunctionToolset[RunDeps]()
 MAX_POLLS = 5
@@ -125,6 +129,36 @@ async def most_likely_poll(ctx: RunContext[RunDeps], question: str) -> str:
         return f"Telegram refused the poll ({type(error).__name__})."
     await delivered(deps, sent, "poll")
     return f"Poll posted as #{sent.message_id} with {len(names)} members."
+
+
+@toolset.tool
+async def title_of_the_day(ctx: RunContext[RunDeps], title: str) -> str:
+    """Name today's "<title> of the day" (e.g. красавчик дня), drawn at random among the group's active members.
+
+    The same title asked again today gives the same winner. Announce it in your own words.
+
+    Args:
+        title: The title alone, in the chat's language (e.g. "красавчик").
+    """
+    deps = ctx.deps
+    if deps.chat.type == "private":
+        return "Titles of the day are a group game."
+    key = normalize(title)
+    if not key:
+        return "Give the title a name."
+    now = datetime.now(UTC)
+    async with deps.db.transaction() as session:
+        picked = await crown(session, deps.chat.id, key, now.astimezone(deps.tz).date(), now)
+        if picked is None:
+            return "Nobody has been active here lately to pick from."
+        user_id, fresh = picked
+        winner = await session.get(User, user_id)
+        board = await leaderboard(session, deps.chat.id, title=key, limit=5)
+    name = " ".join(p for p in (winner.first_name, winner.last_name) if p) if winner else "someone"
+    handle = f" (@{winner.username})" if winner and winner.username else ""
+    when = "just drawn" if fresh else "already drawn earlier today"
+    wins = "; ".join(f"{who} {count}" for _title, who, count in board)
+    return f"{key} of the day: {name}{handle}, {when}. All-time: {wins}."
 
 
 family = Family("games", toolset, deferred=True)

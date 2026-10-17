@@ -4,7 +4,7 @@
 
 ### What I keep
 
-Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Short daily summaries of a chat, for up to a year. Notes you ask me to remember, until you remove them. Payment receipts, for accounting.
+Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Short daily summaries of a chat, for up to a year. Notes you ask me to remember, until you remove them. Quiz points and titles of the day in groups, until /forget. Payment receipts, for accounting.
 
 ### Who processes it
 
@@ -22,7 +22,7 @@ Telegram handles payments; I only see the amount and a charge id.
 
 ### Что я храню
 
-Сообщения, в которых меня зовут, и — пока группа это разрешает — остальные сообщения группы для контекста: по умолчанию 30 дней в группах и 365 дней в личке. Короткие сводки дня по чату — до года. Заметки, которые меня попросили запомнить, — пока их не удалят. Чеки об оплате — для учёта.
+Сообщения, в которых меня зовут, и — пока группа это разрешает — остальные сообщения группы для контекста: по умолчанию 30 дней в группах и 365 дней в личке. Короткие сводки дня по чату — до года. Заметки, которые меня попросили запомнить, — пока их не удалят. Очки викторин и титулы дня в группах — до /forget. Чеки об оплате — для учёта.
 
 ### Кто это обрабатывает
 

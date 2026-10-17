@@ -7,7 +7,7 @@
   gone can't be rebuilt and is dropped.
 - ``forget_message`` / ``forget_member``: a person's own message, or all of
   theirs in one chat. Rows are tombstoned and scrubbed (text, files, notes on
-  files, reactions, polls); digests covering them turn stale and are never
+  files, reactions, polls; quiz points and titles of the day go too); digests covering them turn stale and are never
   shown again until rebuilt without them.
 - ``purge_ambient``: the chat's context was switched off — every ambient row
   goes, and with it every digest of the chat.
@@ -37,6 +37,7 @@ from derp.config import Retention
 from derp.history.models import (
     Chat,
     ChatMember,
+    DailyTitle,
     Digest,
     GameScore,
     MemberEvent,
@@ -146,6 +147,9 @@ async def forget_member(session: AsyncSession, chat_id: int, user_id: int, now: 
         delete(MemberEvent).where(MemberEvent.chat_id == chat_id, MemberEvent.user_id == user_id)
     )
     await session.execute(delete(GameScore).where(GameScore.chat_id == chat_id, GameScore.user_id == user_id))
+    await session.execute(
+        delete(DailyTitle).where(DailyTitle.chat_id == chat_id, DailyTitle.user_id == user_id)
+    )
     await session.execute(delete(Feedback).where(Feedback.chat_id == chat_id, Feedback.user_id == user_id))
     return count
 

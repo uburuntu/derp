@@ -26,6 +26,7 @@ from derp.history.models import (
     ReactionCount,
     User,
 )
+from derp.history.titles import leaderboard
 
 MAX_ROWS = 200
 TRIGRAM_THRESHOLD = 0.3
@@ -158,6 +159,7 @@ class ChatQuery(BaseModel):
         Literal[
             "reaction_leaderboard",
             "quiz_leaderboard",
+            "title_leaderboard",
             "top_messages",
             "member_activity",
             "poll_results",
@@ -167,7 +169,8 @@ class ChatQuery(BaseModel):
     ) = Field(
         default=None,
         description="reaction_leaderboard: people by reactions received; quiz_leaderboard: points from Derp's "
-        "quizzes (days/since/until apply); top_messages: most-reacted messages; "
+        "quizzes (days/since/until apply); title_leaderboard: titles of the day won (contains filters the title); "
+        "top_messages: most-reacted messages; "
         "member_activity: people by message count; poll_results: polls and their known results; "
         "joins_leaves: membership events. Other fields still filter a preset.",
     )
@@ -294,6 +297,18 @@ async def run_query(session: AsyncSession, scope: Scope, query: ChatQuery) -> Qu
             query = query.model_copy(update={"group_by": "user", "order": "count", "from_derp": False})
         case "quiz_leaderboard":
             return QueryResult("groups", [], await _quiz_points(session, scope, query), [], [])
+        case "title_leaderboard":
+            since, until = _period(query)
+            titles = await leaderboard(
+                session,
+                scope.chat_id,
+                contains=query.contains,
+                since=since.date() if since else None,
+                until=until.date() if until else None,
+                limit=query.limit,
+            )
+            groups = [(f"{title}: {name}", wins) for title, name, wins in titles]
+            return QueryResult("groups", [], groups, [], [])
         case "poll_results":
             return QueryResult("polls", [], [], await _polls(session, scope, query), [])
         case "joins_leaves":
