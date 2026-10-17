@@ -8,7 +8,7 @@ comes from ``getChat`` on joins, title changes and a daily refresh.
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal, NamedTuple
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError
@@ -230,12 +230,6 @@ def build_router() -> Router:
     return router
 
 
-async def can_read_group(bot: Bot, chat: Chat) -> bool:
-    """Whether Telegram delivers ordinary (non-mention) group messages to Derp here."""
-    me = await bot.me()
-    return bool(me.can_read_all_group_messages) or (chat.bot_status or "") in ADMIN_STATUSES
-
-
 ADMIN_LINK_RIGHTS = (
     "invite_users"  # any admin role unlocks reading the chat and member updates; ask the mildest
 )
@@ -244,3 +238,24 @@ ADMIN_LINK_RIGHTS = (
 def admin_link(username: str) -> str:
     """The deep link that lets a group admin add Derp as an admin (Telegram preselects the rights)."""
     return f"https://t.me/{username}?startgroup=derp&admin={ADMIN_LINK_RIGHTS}"
+
+
+class Context(NamedTuple):
+    state: Literal["on", "off", "needs_admin"]
+    admin_url: str | None  # the make-me-admin link, offered while Telegram hides the chat from Derp
+
+
+async def context_state(bot: Bot, chat: Chat) -> Context:
+    """What Derp sees of a chat: everything (on), only what's addressed to it by choice (off) or
+    until it's made an admin (needs_admin), as Telegram delivers ordinary group messages only to
+    admins and bots without privacy mode."""
+    me = await bot.me()
+    readable = (
+        chat.type == "private"
+        or bool(me.can_read_all_group_messages)
+        or (chat.bot_status or "") in ADMIN_STATUSES
+    )
+    url = admin_link(me.username) if not readable and me.username else None
+    if not chat.ambient:
+        return Context("off", url)
+    return Context("on" if readable else "needs_admin", url)

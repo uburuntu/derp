@@ -24,7 +24,7 @@ from derp.agent.deps import RunDeps
 from derp.agent.outputs import Refused, deliver, unconfirmed
 from derp.agent.toolsets import Family
 from derp.billing.menu import link_menu, personal_menu, send_pack_invoice
-from derp.billing.patrons import lately_line, set_named
+from derp.billing.patrons import lately_line
 from derp.history.models import Chat, User
 from derp.history.render import describe_time
 from derp.memory.notes import is_admin
@@ -172,7 +172,9 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
             return "Context is a group setting; private chats always keep what's said to Derp."
         case "context" if value == "off":
             async with deps.db.session() as session:
-                text, markup = await render(session, deps.settings, chat, None, deps.locale, "ambient_off")
+                text, markup = await render(
+                    session, deps.bot, deps.settings, chat, None, deps.locale, "ambient_off"
+                )
             if refused := await _card(deps, deps.target, text, markup):
                 return refused
             return "Posted a confirmation button: turning context off deletes stored history, so an admin must press it."
@@ -185,7 +187,7 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
             if shortens(chat, deps.settings, arg):
                 async with deps.db.session() as session:
                     text, markup = await render(
-                        session, deps.settings, chat, None, deps.locale, f"shorten:{arg}"
+                        session, deps.bot, deps.settings, chat, None, deps.locale, f"shorten:{arg}"
                     )
                 if refused := await _card(deps, deps.target, text, markup):
                     return refused
@@ -217,10 +219,10 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
         case "my_coins_in_groups":
             action, arg = "spend", "on" if value in ("on", "true", "yes") else "off"
         case "name_me_when_i_chip_in":
-            named = value in ("on", "true", "yes")
-            await set_named(deps.db, deps.user_id, named=named)
-            return f"Done: they're {'named' if named else 'anonymous'} when they buy Derpcoins for a chat."
+            action, arg = "named", "on" if value in ("on", "true", "yes") else "off"
     await apply_setting(deps.db, deps.settings, deps.chat.id, deps.user_id, action, arg)
+    if setting == "name_me_when_i_chip_in":
+        return f"Done: they're {'named' if arg == 'on' else 'anonymous'} when they buy Derpcoins for a chat."
     if setting == "time_zone":
         deps.chat.timezone, deps.tz = arg, ZoneInfo(arg)  # later tools in this run use it
         return f"Done: this chat's time zone is now {arg} (local time {describe_time(datetime.now(UTC), deps.tz)})."

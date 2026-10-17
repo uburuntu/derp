@@ -16,11 +16,9 @@ from typing import Literal
 
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
-from sqlalchemy import select
 
 from derp.agent.deps import RunDeps
 from derp.agent.toolsets import Family
-from derp.history.models import User
 from derp.history.render import one_line
 from derp.memory.notes import is_admin
 from derp.scheduler.jobs import (
@@ -28,19 +26,17 @@ from derp.scheduler.jobs import (
     MAX_AHEAD,
     MIN_AHEAD,
     PERSON_LIMIT,
+    JobAction,
+    act_on_job,
     active_counts,
     has_offset,
+    live_jobs,
     parse_local,
-    resume,
     show_time,
 )
 from derp.scheduler.models import Job
 
 toolset = FunctionToolset[RunDeps]()
-
-
-async def _is_admin(deps: RunDeps) -> bool:
-    return deps.chat.type == "private" or await is_admin(deps.bot, deps.chat, deps.user_id)
 
 
 @toolset.tool
@@ -77,7 +73,7 @@ async def schedule(
         return "Give `at` (ISO local date-time) or `in_minutes`."
     if not now + MIN_AHEAD <= when <= now + MAX_AHEAD:
         return "The time must be between a minute and a year from now."
-    if repeat and not await _is_admin(deps):
+    if repeat and not await is_admin(deps.bot, deps.chat, deps.user_id):
         return "Only admins can schedule repeating jobs in this group; one-off reminders are fine."
     async with deps.db.transaction() as session:
         total, mine = await active_counts(session, deps.chat.id, deps.user_id)
@@ -106,14 +102,7 @@ async def list_jobs(ctx: RunContext[RunDeps]) -> str:
     """Scheduled reminders and prompts in this chat."""
     deps = ctx.deps
     async with deps.db.session() as session:
-        rows = (
-            await session.execute(
-                select(Job, User.first_name)
-                .outerjoin(User, User.id == Job.creator_id)
-                .where(Job.chat_id == deps.chat.id, Job.state.in_(("active", "paused")))
-                .order_by(Job.next_at)
-            )
-        ).all()
+        rows = await live_jobs(session, deps.chat.id)
     if not rows:
         return "Nothing is scheduled here."
     lines: list[str] = []
@@ -128,6 +117,22 @@ async def list_jobs(ctx: RunContext[RunDeps]) -> str:
     return "\n".join(lines)
 
 
+async def _act(deps: RunDeps, job_id: int, action: JobAction) -> Job | str:
+    """The job after ``action``, or what to tell the model instead."""
+    admin = await is_admin(deps.bot, deps.chat, deps.user_id)
+    async with deps.db.transaction() as session:
+        outcome = await act_on_job(session, deps.chat, job_id, deps.user_id, admin, action)
+    match outcome:
+        case "gone":
+            return "No such scheduled job here."
+        case "not_yours":
+            return f"Only its creator or an admin can {action} that one."
+        case "passed":
+            return "That one-off time has passed; schedule a new one instead."
+        case job:
+            return job
+
+
 @toolset.tool
 async def cancel_job(ctx: RunContext[RunDeps], job_id: int) -> str:
     """Cancel a scheduled job of this chat (your own, or any if you're an admin).
@@ -135,15 +140,8 @@ async def cancel_job(ctx: RunContext[RunDeps], job_id: int) -> str:
     Args:
         job_id: The #id from list_jobs.
     """
-    deps = ctx.deps
-    async with deps.db.transaction() as session:
-        job = await session.get(Job, job_id, with_for_update=True)
-        if job is None or job.chat_id != deps.chat.id or job.state in ("done", "cancelled"):
-            return "No such scheduled job here."
-        if job.creator_id != deps.user_id and not await _is_admin(deps):
-            return "Only its creator or an admin can cancel that one."
-        job.state = "cancelled"
-    return f"Cancelled #{job_id}."
+    outcome = await _act(ctx.deps, job_id, "cancel")
+    return outcome if isinstance(outcome, str) else f"Cancelled #{job_id}."
 
 
 @toolset.tool
@@ -153,18 +151,10 @@ async def resume_job(ctx: RunContext[RunDeps], job_id: int) -> str:
     Args:
         job_id: The #id from list_jobs.
     """
-    deps = ctx.deps
-    now = datetime.now(UTC)
-    async with deps.db.transaction() as session:
-        job = await session.get(Job, job_id, with_for_update=True)
-        if job is None or job.chat_id != deps.chat.id or job.state != "paused":
-            return "No paused job with that id here."
-        if job.creator_id != deps.user_id and not await _is_admin(deps):
-            return "Only its creator or an admin can resume that one."
-        if not resume(job, now, deps.tz):
-            return "That one-off time has passed; schedule a new one instead."
-        when = job.next_at
-    return f"Resumed #{job_id}; next run {show_time(when, deps.tz)}."
+    outcome = await _act(ctx.deps, job_id, "resume")
+    if isinstance(outcome, str):
+        return outcome
+    return f"Resumed #{job_id}; next run {show_time(outcome.next_at, ctx.deps.tz)}."
 
 
 family = Family("scheduler", toolset, deferred=("list_jobs", "cancel_job", "resume_job"))

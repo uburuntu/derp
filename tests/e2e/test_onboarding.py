@@ -20,7 +20,7 @@ def added(room: Room, by: Person, bot_user: dict[str, object], status: str = "me
     }
 
 
-async def test_join_notice_in_the_inviters_language_with_admin_offer(conversation: Conversation) -> None:
+async def test_join_notice_in_the_inviters_language(conversation: Conversation) -> None:
     conversation.meet(IVAN, NEW, status="creator")
     before = conversation.seq
     update_id = await conversation.push("my_chat_member", added(NEW, IVAN, conversation.api.bot_user))
@@ -31,8 +31,7 @@ async def test_join_notice_in_the_inviters_language_with_admin_offer(conversatio
     text = notice["rich_message"]["markdown"]
     assert text.startswith("👋 **Дерп на связи**") and "@DerpRobot" in text
     assert "хранятся 30 дн." in text  # ambient is on and Derp reads all messages
-    (button,) = notice["reply_markup"]["inline_keyboard"][0]
-    assert button["url"] == "https://t.me/DerpRobot?startgroup=derp&admin=invite_users"
+    assert not notice.fields.get("reply_markup")  # so no make-me-admin link
 
     # Added again later (e.g. after being removed): no second notice.
     await conversation.settle(

@@ -11,45 +11,38 @@ from aiogram.types import ChatMemberUpdated, InlineKeyboardMarkup
 
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.history.members import ADMIN_STATUSES, admin_link, can_read_group
+from derp.history.members import ADMIN_STATUSES, context_state
 from derp.history.members import on_my_chat_member as record_membership
 from derp.history.models import Chat
-from derp.locales import resolve, t
-from derp.settings.panel import kept_days
+from derp.history.retention import kept_days
+from derp.locales import day_count, resolve, t
 from derp.telegram.buttons import link, markup
 from derp.telegram.sender import Target, send_markdown
 
 GROUP_TYPES = {"group", "supergroup"}
 
 
-async def sees_everything(bot: Bot, chat: Chat) -> bool:
-    """Ambient context is on and Telegram actually delivers ordinary group messages."""
-    return chat.ambient and await can_read_group(bot, chat)
-
-
-async def context_key(bot: Bot, chat: Chat) -> str:
-    if not chat.ambient:
-        return "onboarding.context_off"
-    return "onboarding.context_on" if await can_read_group(bot, chat) else "onboarding.context_needs_admin"
+async def context_line(bot: Bot, settings: Settings, chat: Chat, locale: str) -> tuple[str, str | None]:
+    """What Derp sees here, in a sentence (with the retention when it reads the chat), and the make-me-admin link."""
+    context = await context_state(bot, chat)
+    kept = day_count(locale, kept_days(chat, settings.retention))
+    return t(locale, f"onboarding.context_{context.state}", days=kept), context.admin_url
 
 
 async def notice(
     bot: Bot, settings: Settings, chat: Chat, locale: str
 ) -> tuple[str, InlineKeyboardMarkup | None]:
     me = await bot.me()
-    context = await context_key(bot, chat)
-    days = kept_days(chat, settings)
+    context, admin_url = await context_line(bot, settings, chat, locale)
     text = "\n\n".join(
         [
             t(locale, "onboarding.title"),
             t(locale, "onboarding.summon", username=me.username or "DerpRobot"),
-            t(locale, context, days=days),
+            context,
             t(locale, "onboarding.settings"),
         ]
     )
-    if (chat.bot_status or "") in ADMIN_STATUSES or not me.username:
-        return text, None
-    return text, markup(link(t(locale, "onboarding.make_admin"), admin_link(me.username)))
+    return text, markup(link(t(locale, "onboarding.make_admin"), admin_url) if admin_url else None)
 
 
 async def ensure_onboarded(

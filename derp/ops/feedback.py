@@ -20,7 +20,7 @@ from derp.history.models import Chat, User
 from derp.history.render import one_line
 from derp.locales import resolve, t
 from derp.ops.models import FEEDBACK_KINDS, Feedback
-from derp.ops.owner import is_blocked
+from derp.ops.owner import from_owner, is_blocked
 from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, sanitize_untrusted, send_markdown, send_privately
 from derp.telegram.text import literal
@@ -118,13 +118,7 @@ async def _page(db: Database, offset: int) -> tuple[str, InlineKeyboardMarkup | 
     return "\n".join(lines), markup(*items, nav)
 
 
-async def on_feedbacks(message: Message, db: Database, settings: Settings, bot: Bot) -> None:
-    if (
-        message.from_user is None
-        or message.from_user.id not in settings.owner_ids
-        or message.chat.type != "private"
-    ):
-        return
+async def on_feedbacks(message: Message, db: Database, bot: Bot) -> None:
     text, keyboard = await _page(db, 0)
     await send_markdown(bot, Target(message.chat.id), text, reply_markup=keyboard)
 
@@ -164,6 +158,6 @@ async def on_review(press: Press, data: FeedbackAction, db: Database, settings: 
 def build_router() -> Router:
     router = Router(name="feedback")
     router.message.register(on_feedback, Command("feedback"))
-    router.message.register(on_feedbacks, Command("feedbacks"))
+    router.message.register(on_feedbacks, Command("feedbacks"), from_owner)
     on_press(router, FeedbackAction, F.action.in_({"page", "done", "thank"}))(on_review)
     return router

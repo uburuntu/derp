@@ -92,10 +92,10 @@ async def summarize(model: Model, pin: RolePin, transcript: str) -> tuple[str, l
 async def build(deps: RunDeps, scope: Scope, key: int, day: date) -> Digest | None:
     """Summarize the day and cache it; None when the day has no stored messages."""
     async with deps.db.session() as session:
-        rows = await day_messages(session, scope, day, deps.tz)
+        rows = await day_messages(session, scope, day)
         if not rows:
             return None
-        transcript = render_transcript(await load_views(session, rows), deps.tz)
+        transcript = render_transcript(await load_views(session, rows), scope.tz)
     stats = DayStats(rows[0].message_id, rows[-1].message_id, len(rows))
     role = ModelRole.CHAT_FREE if deps.funding is Funding.FREE else ModelRole.CHAT_SPONSORED
     pin = await deps.pins.get(role)

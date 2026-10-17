@@ -96,6 +96,12 @@ async def test_the_patron_post_names_coalesces_and_lets_the_buyer_hide(conversat
         assert (await session.get(User, BOB.id)).patron_named is False  # type: ignore[union-attr]
 
     after = conversation.seq
+    await conversation.press(BOB, PUB.id, post_id, hide)  # already anonymous: refused, the button stays
+    assert "Too late" in str(conversation.api.calls_of("answerCallbackQuery", after=after)[-1]["text"])
+    assert not conversation.api.calls_of("editMessageReplyMarkup", after=after)
+    assert buttons(conversation.api.message(PUB.id, post_id)) == ["⭐ Chip in too", "🙈 Hide my name"]
+
+    after = conversation.seq
     chip = conversation.api.message(PUB.id, post_id)["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
     await conversation.press(CARL, PUB.id, post_id, chip)
     menu = ephemeral_menu(conversation, after)
@@ -109,9 +115,12 @@ async def test_the_patron_post_names_coalesces_and_lets_the_buyer_hide(conversat
         earlier = int((datetime.now(UTC) - timedelta(minutes=31)).timestamp())
         stored.buyers = [{**entry, "at": earlier} for entry in stored.buyers]
         stored.created_at = datetime.now(UTC) - timedelta(minutes=31)
+        stored.hide_until = datetime.now(UTC) - timedelta(minutes=21)
     after = conversation.seq
     await conversation.press(ALICE, PUB.id, post_id, hide)
     assert "Too late" in str(conversation.api.calls_of("answerCallbackQuery", after=after)[-1]["text"])
+    assert conversation.services is not None
+    await expire_hide_buttons(conversation.db, conversation.services.bot)  # the sweep drops the button
     assert buttons(conversation.api.message(PUB.id, post_id)) == ["⭐ Chip in too"]
 
     after = await chip_in(conversation, BOB, 650, "ch-b2")
