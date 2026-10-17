@@ -224,7 +224,8 @@ async def send_sticker(
 
 @toolset.tool(sequential=True)
 async def react(ctx: RunContext[RunDeps], emoji: str, message_id: int | None = None) -> str:
-    """Put a reaction on a message (default: the message that invoked you). Doesn't count as an answer.
+    """React to a message (default: the one that invoked you). Uses no output slot; a reaction alone can be the
+    whole answer (then end with ".").
 
     Args:
         emoji: One of Telegram's standard reaction emoji (e.g. 👍 🔥 😁 🤔 🤯 🎉 💩 🤡 🗿 👀 ❤).
