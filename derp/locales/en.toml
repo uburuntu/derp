@@ -40,7 +40,6 @@ Answers cost Derpcoins: {daily} free every day, more with Telegram Stars via /bu
 Works inline too: type @{username} in any chat.
 """
 add_to_group = "➕ Add to a group"
-buy = "⭐ Buy Derpcoins"
 
 [help]
 title_private = "**Derp — help**"
@@ -106,8 +105,7 @@ free_ask_group = "Free models can answer here when nobody can pay. Their provide
 free_enabled = "An admin allowed free models here: when Derpcoins run out, I answer with free models, whose providers may store the messages they get."
 sent_privately = "Sent you the details in our private chat."
 dm_first = "I keep balances out of groups. Open a private chat with me, press Start, then ask again."
-buy = "⭐ Buy Derpcoins"
-wallet_empty = "🪫 Chat wallet's empty — everyone's back on their own free daily Derpcoins."
+wallet_empty = "🪫 Chat wallet's empty — from now on each person's own Derpcoins pay: bought ones (unless they keep those out of groups), then the free daily ones."
 
 [billing]
 unavailable = "Payments aren't available right now. Try again in a bit."
@@ -134,6 +132,7 @@ already_subscribed_short = "You already have Derp+."
 plan_thanks = "Welcome to Derp+! **+{credits}** Derpcoins until {date}. Your balance: **{balance}** dc."
 plan_renewed = "Derp+ renewed: **+{credits}** Derpcoins until {date}. Your balance: **{balance}** dc."
 thanks_group = "Thanks! **+{credits}** Derpcoins are in your wallet."
+buy = "⭐ Buy Derpcoins"
 top_up = "⭐ Top up this chat"
 renewal_failed = "Derp+ renewal didn't go through — your Derp+ Derpcoins stop on {date}. Subscribe again to keep them coming."
 subscribe_again = "Subscribe again"
@@ -282,8 +281,7 @@ already_denied = "Already cancelled."
 already_expired = "This request expired. Ask again if you still want it."
 expired = "⌛ This request expired — nothing was made or charged. Ask again if you still want it."
 not_yours = "Only the person who asked can decide."
-no_coins = "Not enough Derpcoins for this anymore — nothing was charged. Top up with /buy."
-top_up = "⭐ Buy Derpcoins"
+no_coins = "Not enough Derpcoins for this anymore — nothing was charged."
 failed = "The image didn't come out — nothing was charged."
 unconfirmed = "Telegram didn't confirm the image arrived — nothing was charged."
 

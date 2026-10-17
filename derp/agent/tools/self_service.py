@@ -11,6 +11,7 @@ prompts.
 """
 
 from datetime import UTC, datetime
+from functools import partial
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -23,8 +24,8 @@ from pydantic_ai.toolsets import FunctionToolset
 from derp.agent.deps import RunDeps
 from derp.agent.outputs import Refused, deliver, unconfirmed
 from derp.agent.toolsets import Family
-from derp.billing.menu import link_menu, personal_menu, send_pack_invoice
-from derp.billing.patrons import lately_line, set_named
+from derp.billing.menu import link_menu, pack_label, personal_menu, send_pack_invoice
+from derp.billing.patrons import lately, set_named
 from derp.history.models import Chat, User
 from derp.history.render import describe_time
 from derp.memory.notes import is_admin
@@ -51,19 +52,21 @@ PERSONAL: tuple[Setting, ...] = ("my_coins_in_groups", "name_me_when_i_chip_in")
 
 @toolset.tool
 async def wallet_status(ctx: RunContext[RunDeps]) -> str:
-    """Check the asker's balance: Derpcoins bought, Derp+, free today and this chat's; sent to them privately."""
+    """Check the asker's balance: Derpcoins bought, Derp+, free today and this chat's; sent to them privately.
+
+    In groups it also says who chipped in for the chat lately: mention them only when asked.
+    """
     deps = ctx.deps
     text = await credits_card(deps.db, deps.settings, deps.bot, deps.chat, deps.user_id, deps.locale)
     if deps.chat.type == "private":
         return text + "\n\n(Shown only to them in this private chat; summarize it.)"
-    patrons = await lately_line(deps.db, deps.chat.id, "en")
-    aside = f" (Bring up only if asked — {patrons})" if patrons else ""
     if await send_privately(deps.bot, deps.user_id, text):
-        return "Sent their balances to them privately. Say so; never guess or repeat amounts here." + aside
-    return (
-        "They haven't opened a private chat with Derp, so balances can't be sent; ask them to DM Derp /credits."
-        + aside
-    )
+        result = "Sent their balances to them privately. Say so; never guess or repeat amounts here."
+    else:
+        result = "They haven't opened a private chat with Derp, so balances can't be sent; ask them to DM Derp /credits."
+    async with deps.db.session() as session:
+        patrons = await lately(session, deps.chat.id, datetime.now(UTC))
+    return f"{result} Chipped in for this chat lately: {', '.join(patrons)}." if patrons else result
 
 
 @toolset.tool(sequential=True)
@@ -79,16 +82,23 @@ async def purchase_button(ctx: RunContext[RunDeps], for_chat: bool = False, star
     group = deps.chat.type != "private"
     kind, owner = ("chat", deps.chat.id) if for_chat and group else ("user", deps.user_id)
     personal_in_group = kind == "user" and group  # a personal balance or invoice never shows in the group
-    packs = ", ".join(f"{p.stars}⭐ → {p.credits:,}" for p in settings.packs)
+    packs = ", ".join(pack_label(p) for p in settings.packs)
     if stars is not None:
         pack = next((p for p in settings.packs if p.stars == stars), None)
         if pack is None:
             return f"No pack costs {stars}⭐. Packs: {packs}."
-        if personal_in_group:  # by DM: not an output of this chat
+        invoice = partial(
+            send_pack_invoice,
+            deps.bot,
+            deps.locale,
+            pack,
+            kind=kind,
+            owner_id=owner,
+            thread_id=deps.target.thread_id,
+        )
+        if personal_in_group:  # it goes to their private chat: not an output of this one
             try:
-                await send_pack_invoice(
-                    deps.bot, deps.user_id, None, deps.locale, pack, kind=kind, owner_id=owner
-                )
+                await invoice()
             except AMBIGUOUS:
                 return unconfirmed("invoice")
             except TelegramForbiddenError, TelegramBadRequest:
@@ -97,20 +107,7 @@ async def purchase_button(ctx: RunContext[RunDeps], for_chat: bool = False, star
                 return f"Telegram refused the invoice ({type(error).__name__})."
             return f"Sent them the invoice for {pack.credits:,} Derpcoins in their private chat with Derp."
         try:
-            await deliver(
-                deps,
-                "invoice",
-                "invoice",
-                lambda: send_pack_invoice(
-                    deps.bot,
-                    deps.chat.id,
-                    deps.target.thread_id,
-                    deps.locale,
-                    pack,
-                    kind=kind,
-                    owner_id=owner,
-                ),
-            )
+            await deliver(deps, "invoice", "invoice", invoice)
         except Refused as refused:
             return str(refused)
         who = "this chat's wallet (anyone here can pay)" if kind == "chat" else "the asker"

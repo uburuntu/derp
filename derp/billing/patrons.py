@@ -2,16 +2,17 @@
 
 One silent post goes to the chat (and topic) the purchase was made for: the buyer's name (or "a
 mysterious patron"), the exact amount, and the wallet's runway at the chat's pace. Another chat
-purchase within ``COALESCE`` edits that post instead of adding one. The buyer alone may hide their
-name for ``HIDE_WINDOW``; that also makes their future chat purchases anonymous (``users.patron_named``).
-State lives in ``patron_posts``, so the buttons survive deploys. Never pinned.
+purchase within ``COALESCE`` edits that post instead of adding one. A post lists the paid purchases
+that point at it (``purchases.patron_post_id``), so a refund drops out of its next edit, and names
+each buyer as they chose (``users.patron_named``). The buyer alone may hide their name for
+``HIDE_WINDOW``; that also makes their future chat purchases anonymous. State lives in rows, so the
+buttons survive deploys. Never pinned.
 """
 
 import asyncio
 import contextlib
 import math
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -98,22 +99,25 @@ def _who(locale: str, names: list[str], anonymous: int) -> str:
     return who[0].upper() + who[1:] if who[0].islower() else who
 
 
-def _named_users(buyers: list[dict[str, Any]]) -> tuple[list[int], dict[int, bool]]:
-    """Buyers in order of their first purchase, and whether each is named (their latest choice)."""
-    order: list[int] = []
-    named: dict[int, bool] = {}
-    for entry in buyers:
-        user = int(entry["user"])
-        if user not in named:
-            order.append(user)
-        named[user] = bool(entry["named"])
-    return order, named
+async def _bought(session: AsyncSession, post_id: int) -> list[tuple[Purchase, User | None]]:
+    """The purchases a post thanks for, in order, each with its buyer; refunded ones drop out."""
+    rows = await session.execute(
+        select(Purchase, User)
+        .outerjoin(User, User.id == Purchase.user_id)
+        .where(Purchase.patron_post_id == post_id, Purchase.status == "paid")
+        .order_by(Purchase.id)
+    )
+    return [(purchase, buyer) for purchase, buyer in rows]
 
 
-def _hide_until(buyers: list[dict[str, Any]], user: int | None = None) -> datetime | None:
-    """``HIDE_WINDOW`` after the latest named purchase (of ``user``, if given); None when nobody is named."""
-    times = [int(e["at"]) for e in buyers if e["named"] and user in (None, int(e["user"]))]
-    return datetime.fromtimestamp(max(times), UTC) + HIDE_WINDOW if times else None
+def _named(buyer: User | None) -> bool:
+    return buyer is None or buyer.patron_named
+
+
+def _hide_until(purchases: list[tuple[Purchase, User | None]], user: int | None = None) -> datetime | None:
+    """``HIDE_WINDOW`` after the latest purchase of a named buyer (``user``, if given); None when nobody is named."""
+    times = [p.created_at for p, buyer in purchases if _named(buyer) and user in (None, p.user_id)]
+    return max(times) + HIDE_WINDOW if times else None
 
 
 def keyboard(post: PatronPost, now: datetime) -> InlineKeyboardMarkup | None:
@@ -126,17 +130,24 @@ def keyboard(post: PatronPost, now: datetime) -> InlineKeyboardMarkup | None:
     )
 
 
-async def render(session: AsyncSession, post: PatronPost, turn_price: int, now: datetime) -> str:
+async def render(
+    session: AsyncSession,
+    post: PatronPost,
+    purchases: list[tuple[Purchase, User | None]],
+    turn_price: int,
+    now: datetime,
+) -> str:
+    """The post: who chipped in (named as each buyer chose; in order of their first purchase), how much, runway."""
     locale = post.locale
-    order, named = _named_users(post.buyers)
-    users = {u.id: u for u in await session.scalars(select(User).where(User.id.in_(order)))}
-    names = [_name(users.get(user), locale) for user in order if named[user]]
-    who = _who(locale, names, sum(1 for user in order if not named[user]))
+    buyers = {p.user_id: buyer for p, buyer in purchases}
+    names = [_name(buyer, locale) for buyer in buyers.values() if _named(buyer)]
+    who = _who(locale, names, sum(1 for buyer in buyers.values() if not _named(buyer)))
     chat_wallet = await wallet(session, "chat", post.chat_id)
     left = await balance(session, chat_wallet.id, now=now)
     line = await runway(session, locale, chat_wallet.id, left, turn_price, now)
     variant = f"patron.hype_{post.id % HYPES + 1}"
-    return t(locale, variant, who=who, credits=f"{post.credits:,}", runway=line)
+    total = sum(p.credits for p, _ in purchases)
+    return t(locale, variant, who=who, credits=f"{total:,}", runway=line)
 
 
 async def thank(
@@ -144,10 +155,9 @@ async def thank(
     bot: Bot,
     funder: Funder,
     *,
+    purchase_id: int,
     chat_id: int,
     thread_id: int | None,
-    buyer_id: int,
-    amount: int,
     locale: str,
 ) -> None:
     """Post (or extend the chat's recent) thank-you post for a chat purchase; best effort."""
@@ -155,13 +165,6 @@ async def thank(
         now = datetime.now(UTC)
         async with db.transaction() as session:
             chat = await session.get(Chat, chat_id)
-            buyer = await session.get(User, buyer_id)
-            entry = {
-                "user": buyer_id,
-                "credits": amount,
-                "named": buyer.patron_named if buyer else True,
-                "at": int(now.timestamp()),
-            }
             post = await session.scalar(
                 select(PatronPost)
                 .where(
@@ -181,16 +184,17 @@ async def thank(
                     chat_id=chat_id,
                     thread_id=thread_id,
                     locale=resolve(chat.locale if chat and chat.locale else locale),
-                    credits=amount,
-                    buyers=[entry],
                 )
                 session.add(post)
-            else:
-                post.buyers = [*post.buyers, entry]
-                post.credits += amount
-            post.hide_until = _hide_until(post.buyers)
-            await session.flush()
-            text = await render(session, post, await funder.typical_turn(session, Funding.PAID), now)
+                await session.flush()
+            await session.execute(
+                update(Purchase).where(Purchase.id == purchase_id).values(patron_post_id=post.id)
+            )
+            purchases = await _bought(session, post.id)
+            post.hide_until = _hide_until(purchases)
+            text = await render(
+                session, post, purchases, await funder.typical_turn(session, Funding.PAID), now
+            )
             buttons = keyboard(post, now)
             post_id, message_id = post.id, post.message_id
         if message_id is not None:
@@ -224,10 +228,10 @@ async def thank(
 
 
 async def lately(session: AsyncSession, chat_id: int, now: datetime) -> list[str]:
-    """Named people who bought the most Derpcoins for this chat lately (refunds excluded), escaped."""
+    """Named people who bought the most Derpcoins for this chat lately (refunds excluded)."""
     total = func.sum(Purchase.credits)
     rows = await session.execute(
-        select(User.first_name, User.last_name, total)
+        select(User, total)
         .join(User, User.id == Purchase.user_id)
         .join(Wallet, Wallet.id == Purchase.wallet_id)
         .where(
@@ -237,18 +241,17 @@ async def lately(session: AsyncSession, chat_id: int, now: datetime) -> list[str
             Purchase.created_at >= now - timedelta(days=LATELY_DAYS),
             User.patron_named,
         )
-        .group_by(User.id, User.first_name, User.last_name)
+        .group_by(User.id)
         .order_by(total.desc(), User.id)
         .limit(LATELY_SHOWN)
     )
-    names = (" ".join(part for part in (first, last) if part) for first, last, _ in rows)
-    return [literal(one_line(name)) for name in names if name]
+    return [name for user, _ in rows if (name := one_line(user.full_name))]
 
 
 async def lately_line(db: Database, chat_id: int, locale: str) -> str | None:
     async with db.session() as session:
         names = await lately(session, chat_id, datetime.now(UTC))
-    return t(locale, "patron.lately", names=", ".join(names)) if names else None
+    return t(locale, "patron.lately", names=", ".join(map(literal, names))) if names else None
 
 
 async def expire_hide_buttons(db: Database, bot: Bot) -> int:
@@ -282,22 +285,23 @@ def build_router() -> Router:
             buttons: InlineKeyboardMarkup | None = None
             async with db.transaction() as session:
                 post = await session.get(PatronPost, data.post, with_for_update=True)
-                mine = [] if post is None else [e for e in post.buyers if int(e["user"]) == press.user_id]
+                purchases = [] if post is None else await _bought(session, post.id)
+                mine = [p for p, _ in purchases if p.user_id == press.user_id]
                 if post is None or post.chat_id != press.chat_id:
                     refusal = "buttons.stale"
                 elif not mine:
                     refusal = "patron.not_yours"
-                elif (own := _hide_until(post.buyers, press.user_id)) is None or own <= now:
+                elif (own := _hide_until(purchases, press.user_id)) is None or own <= now:
                     refusal = "patron.too_late"  # already anonymous here, or too late
                 else:
-                    post.buyers = [
-                        {**e, "named": False} if int(e["user"]) == press.user_id else e for e in post.buyers
-                    ]
-                    post.hide_until = _hide_until(post.buyers)
                     person = await session.get(User, press.user_id)
                     if person is not None:
                         person.patron_named = False
-                    text = await render(session, post, await funder.typical_turn(session, Funding.PAID), now)
+                    post.hide_until = _hide_until(
+                        purchases
+                    )  # the buyer rows are the session's: now anonymous
+                    turn = await funder.typical_turn(session, Funding.PAID)
+                    text = await render(session, post, purchases, turn, now)
                 if post is not None and refusal != "buttons.stale":
                     buttons = keyboard(post, now)
             if refusal == "patron.too_late":

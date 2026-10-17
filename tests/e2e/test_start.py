@@ -1,7 +1,8 @@
 from sqlalchemy import func, select
 
+from derp.billing.menu import BuyAction
 from derp.history.models import Message
-from derp.settings.start import StartAction, publish_commands
+from derp.settings.start import publish_commands
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel
 
@@ -24,13 +25,19 @@ async def test_start_showcases_and_leads_to_buying(conversation: Conversation) -
     assert "<details><summary>🎨 Pictures and memes</summary>" in text and "@DerpRobot" in text
     add, buy = reply["reply_markup"]["inline_keyboard"][0]
     assert add["url"] == "https://t.me/DerpRobot?startgroup=derp"
-    assert buy["callback_data"] == StartAction(action="buy").pack()
+    assert buy["callback_data"] == BuyAction(target="user").pack()
 
     showcase = max(mid for (cid, mid) in conversation.api.messages if cid == BEN.id)
     after = conversation.seq
     await conversation.press(BEN, BEN.id, showcase, buy["callback_data"])
-    [menu] = conversation.api.calls_of("sendRichMessage", after)
-    assert menu["rich_message"]["markdown"].startswith("**Derpcoins**")
+    [menu] = conversation.api.calls_of("editMessageText", after)  # the showcase becomes the menu
+    assert int(menu["message_id"]) == showcase and menu["rich_message"]["markdown"].startswith(
+        "**Derpcoins**"
+    )
+    *packs, [kept] = menu["reply_markup"]["inline_keyboard"]
+    assert kept["url"] == add["url"] and all(
+        b["callback_data"].startswith("buy:") for row in packs for b in row
+    )
 
     deep_link = await conversation.send(BEN, text="/start buy")
     menu = await conversation.expect_reply(deep_link)

@@ -7,10 +7,10 @@ decision is final, an undecided prompt expires after ``approval_minutes``: a
 press then, or the periodic sweep, turns the prompt into the expired notice
 without buttons. Running funds the action afresh (the asking run is long
 settled); denial and expiry cost nothing. Once the action ran, its prompt is
-deleted if the result arrived, else it becomes the failure note.
+deleted if the result arrived, else it becomes the failure note; an action the
+payer can no longer cover turns it into that note with a buy button.
 """
 
-import contextlib
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -144,27 +144,20 @@ async def close_expired(db: Database, bot: Bot, now: datetime) -> int:
     async with db.session() as session:
         rows = (
             await session.execute(
-                select(Approval.id, Approval.chat_id, Approval.prompt_message_id, User.language_code)
+                select(Approval, User.language_code)
                 .outerjoin(User, User.id == Approval.user_id)
                 .where(Approval.state == "pending", Approval.expires_at <= now)
                 .order_by(Approval.id)
                 .limit(SWEEP)
             )
         ).all()
-    for _, chat_id, message_id, language in rows:
-        if message_id is None:
-            continue
-        with contextlib.suppress(TelegramAPIError):  # deleted or too old to edit: nothing left to tidy
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                rich_message=rich(t(resolve(language), "approvals.expired")),
-            )
+    for approval, language in rows:  # deleted or too old to edit: nothing left to tidy
+        await close_prompt(bot, approval, t(resolve(language), "approvals.expired"))
     if rows:
         async with db.transaction() as session:
             await session.execute(
                 update(Approval)
-                .where(Approval.id.in_([row[0] for row in rows]), Approval.state == "pending")
+                .where(Approval.id.in_([approval.id for approval, _ in rows]), Approval.state == "pending")
                 .values(state="expired")
             )
         log.info("closed %d expired approval prompts", len(rows))

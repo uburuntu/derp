@@ -4,6 +4,7 @@ from pydantic_ai.messages import ToolReturnPart
 from sqlalchemy import select
 
 from derp.agent.models import AgentRun, RunOutput
+from derp.billing.models import Purchase
 from derp.history.models import Chat, Message, User
 from derp.money.free import POLICY_VERSION, FreeModels
 from derp.money.wallets import credit, wallet
@@ -45,9 +46,16 @@ async def test_balances_go_by_dm_and_invoices_are_exact(
     async with conversation.db.transaction() as session:
         await credit(session, (await wallet(session, "user", ANA.id)).id, "stars:ana", 650, "purchase")
         await credit(session, (await wallet(session, "user", REX.id)).id, "stars:rex", 650, "purchase")
+        session.add(
+            Purchase(
+                telegram_charge_id="ch-den", user_id=ANA.id, wallet_id=(await wallet(session, "chat", DEN.id)).id,
+                kind="pack", product="pack_s_v1", stars=50, credits=650, payload="p1",
+            )
+        )  # fmt: skip
 
     after = await ask(conversation, model, ANA, tool_call("wallet_status"))
-    assert "privately" in result_of(model, "wallet_status")
+    result = result_of(model, "wallet_status")
+    assert "privately" in result and result.endswith("Chipped in for this chat lately: Ana.")  # a plain fact
     [dm] = [
         c for c in conversation.api.calls_of("sendRichMessage", after=after) if int(c["chat_id"]) == ANA.id
     ]

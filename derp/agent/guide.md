@@ -74,7 +74,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   Derp ("don't name me when I chip in", or the opposite) switches it either way. /help and /credits in a group list
   who chipped in lately (named buyers only, refunds excluded); Derp mentions patrons only when asked.
 - When a group's wallet can no longer pay for an answer, Derp says so once, quietly, with a top-up button, and not
-  again until someone tops it up.
+  again until someone tops it up; from then on each asker's own Derpcoins pay, as below.
 - Who pays — private chat: the person's paid Derpcoins (Derp+ first, as it expires, then bought packs), then
   their free daily ones. Group: the group wallet, then the asker's paid Derpcoins (unless they turned off "my
   Derpcoins in groups" in /settings), then the asker's free daily ones.
@@ -86,7 +86,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - An action that costs more than the approval threshold (or a large share of the payer's balance) shows a
   Run / Cancel button first; only the asker decides. An unanswered prompt expires and loses its buttons; asking
   again is free. Once the picture arrives the prompt disappears; if it fails, the prompt says so and nothing is
-  charged.
+  charged. If the payer can no longer cover it when Run is pressed, the prompt says so, with a button to buy (in a
+  group, to top up the group).
 - Balances are private: /credits in a group answers ephemerally or by DM, never in the group.
 - Derpcoins aren't money: no cash-out, no transfers between people. Payment problems: /paysupport. A refund
   returns the Stars and removes what is left of that purchase's Derpcoins; refunding a Derp+ payment also ends

@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
-from aiogram.types import InlineKeyboardMarkup, ReactionTypeEmoji
+from aiogram.types import InlineKeyboardMarkup
 from aiogram.types import Message as TgMessage
 from aiogram.types import User as TgUser
 from pydantic_ai import Agent, CancellationToken, RunCancelled, RunContext, capture_run_messages
@@ -55,6 +55,7 @@ from derp.agent.runs import finish_run, price_unreported, record_output, start_r
 from derp.agent.tools import CAPABILITIES, DETACHED, FAMILIES
 from derp.agent.tools.memory import family as memory_family
 from derp.agent.toolsets import toolsets_for
+from derp.billing.menu import buy_button
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.capture import record_outgoing
@@ -78,12 +79,12 @@ from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole
 from derp.locales import resolve, t
 from derp.memory.notes import load_memory, notes_block
-from derp.money.free import consented, empty_wallet_notice, offer, offer_due
+from derp.money.free import answer_unfunded, consented, note_empty_wallet
 from derp.money.funding import Funder, Funding, Funds
 from derp.money.wallets import release
 from derp.ops.observability import record_run_failure
 from derp.ops.owner import is_blocked, notify_owners
-from derp.telegram.buttons import link, markup
+from derp.telegram.buttons import markup
 from derp.telegram.media import MediaGateway
 from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import PartialDeliveryError, Target, send_markdown
@@ -219,7 +220,7 @@ class Runtime:
         if funds is None and trigger == "job":  # the scheduler posts its own note
             return Outcome(None, "unfunded", ())
         if funds is None:  # nobody can pay: offer Derpcoins or free models (consent / admin opt-in)
-            await self._offer(message, chat, target, locale)
+            await answer_unfunded(self.db, self.bot, message, chat, target, locale)
             return Outcome(None, "unfunded", ())
         funding = funds.funding
         run_id: int | None = None
@@ -437,8 +438,7 @@ class Runtime:
                 await session.execute(
                     update(AgentRun).where(AgentRun.id == run.id).values(charged_credits=charged)
                 )
-            if charged and funds.wallet_id is not None and not private:
-                await self._check_wallet(chat, funds.wallet_id, target.thread_id, locale)
+            await note_empty_wallet(self.bot, self.funder, chat, funds, charged, target.thread_id, locale)
             # A reaction alone settles as delivered: the notice must not claim nothing was charged.
             suffix = "_partial" if charged else ""
             if stream.capped and not deps.delivered:
@@ -596,14 +596,10 @@ class Runtime:
             if funds is not None and funds.reservation_id is not None:
                 async with self.db.transaction() as session:
                     await release(session, funds.operation_id)
-            username = (await self.bot.me()).username
-            top_up = (
-                link(t(locale, "approvals.top_up"), f"https://t.me/{username}?start=buy")
-                if username
-                else None
-            )
-            await close_prompt(self.bot, approval)  # no "drawing…" left behind
-            await self._say(target, t(locale, "approvals.no_coins"), markup(top_up))
+            no_coins = t(locale, "approvals.no_coins")
+            buy = markup(buy_button(locale, group=chat.type != "private"))
+            if not await close_prompt(self.bot, approval, no_coins, buy):  # no "drawing…" left behind
+                await self._say(target, no_coins, buy)
             return
         async with self.db.transaction() as session:
             run = await start_run(
@@ -640,8 +636,7 @@ class Runtime:
             self.in_flight.discard(funds.operation_id)
         if sent is not None:  # the image says it all: the "drawing…" prompt goes
             await close_prompt(self.bot, approval)
-            if charged and funds.wallet_id is not None and chat.type != "private":
-                await self._check_wallet(chat, funds.wallet_id, approval.thread_id, locale)
+            await note_empty_wallet(self.bot, self.funder, chat, funds, charged, approval.thread_id, locale)
             return
         unsure = isinstance(error, TelegramAPIError) and isinstance(error, AMBIGUOUS)  # it may have arrived
         note = t(locale, "approvals.unconfirmed" if unsure else "approvals.failed")
@@ -649,29 +644,6 @@ class Runtime:
             await self._say(target, note)
         if error is not None and not isinstance(error, OpenRouterError | TelegramAPIError):
             raise error
-
-    async def _offer(self, message: TgMessage, chat: Chat, target: Target, locale: str) -> None:
-        """The out-of-Derpcoins offer; in groups once per person per UTC day, later just a 🙈 on the ask."""
-        private = chat.type == "private"
-        if private or await offer_due(self.db, chat.id, message.from_user.id if message.from_user else 0):
-            text, markup = offer(locale, group=not private)
-            with contextlib.suppress(TelegramAPIError):
-                await send_markdown(self.bot, target, text, reply_markup=markup)
-        elif message.message_id:
-            with contextlib.suppress(TelegramAPIError):
-                await self.bot.set_message_reaction(
-                    chat_id=chat.id, message_id=message.message_id, reaction=[ReactionTypeEmoji(emoji="🙈")]
-                )
-
-    async def _check_wallet(self, chat: Chat, wallet_id: int, thread_id: int | None, locale: str) -> None:
-        """One silent line when the chat wallet that paid can no longer pay a turn, once per depletion."""
-        try:
-            if not await self.funder.ran_dry(wallet_id):
-                return
-            text, markup = empty_wallet_notice(chat.locale or locale)
-            await send_markdown(self.bot, Target(chat.id, thread_id), text, reply_markup=markup, silent=True)
-        except Exception:  # noqa: BLE001 - a notice never fails the run that already answered
-            log.info("empty wallet notice not delivered")
 
     async def _abandon(self, run_id: int | None, funds: Funds, error: BaseException) -> None:
         """Mark a run that escaped its normal close as failed and return its hold (no-op once settled)."""

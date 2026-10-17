@@ -205,6 +205,7 @@ class ChatMember(Base):
     message_count: Mapped[int] = mapped_column(default=0, server_default="0")
     first_seen: Mapped[datetime] = mapped_column(server_default=func.now())
     last_seen: Mapped[datetime] = mapped_column(server_default=func.now())
+    offered_on: Mapped[date | None]  # the last UTC day they got the out-of-Derpcoins offer here (money.free)
 
 
 class MemberEvent(Base):

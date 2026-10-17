@@ -1,7 +1,6 @@
 """Receipts for Stars payments, kept for accounting (never deleted), and the chats' thank-you posts."""
 
 from datetime import datetime
-from typing import Any
 
 from sqlalchemy import CheckConstraint, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -17,6 +16,7 @@ class Purchase(Base):
         CheckConstraint("kind in ('pack', 'plan')", name="kind"),
         CheckConstraint("status in ('paid', 'refunded')", name="status"),
         CheckConstraint("stars > 0 and credits > 0", name="amounts_positive"),
+        Index("ix_purchases_patron_post_id", "patron_post_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -34,6 +34,8 @@ class Purchase(Base):
     status: Mapped[str] = mapped_column(String(8), default="paid")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     refunded_at: Mapped[datetime | None]
+    # A chat pack: the thank-you post that lists it (None: not posted, e.g. recovered by the sweep).
+    patron_post_id: Mapped[int | None] = mapped_column(ForeignKey("patron_posts.id", ondelete="SET NULL"))
 
 
 class Subscription(Base):
@@ -60,13 +62,12 @@ class Subscription(Base):
 class PatronPost(Base):
     """The thank-you post for Derpcoins bought for a chat; purchases soon after it edit it instead of posting.
 
-    ``buyers`` lists each purchase: ``{"user": id, "credits": n, "named": bool, "at": unix seconds}``.
-    ``hide_until`` is when the "hide my name" button stops working (None once it was removed).
+    The purchases it lists point at it (``purchases.patron_post_id``). ``hide_until`` is when the
+    "hide my name" button stops working (None once it was removed).
     """
 
     __tablename__ = "patron_posts"
     __table_args__ = (
-        CheckConstraint("credits > 0", name="credits_positive"),
         Index("ix_patron_posts_chat_id_created_at", "chat_id", "created_at"),
         Index("ix_patron_posts_hide_until", "hide_until"),
     )
@@ -76,8 +77,6 @@ class PatronPost(Base):
     thread_id: Mapped[int | None]
     message_id: Mapped[int | None]  # None until Telegram accepted the post
     locale: Mapped[str] = mapped_column(String(8))
-    credits: Mapped[int]
-    buyers: Mapped[list[Any]]
     hide_until: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
