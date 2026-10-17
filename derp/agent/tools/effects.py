@@ -32,6 +32,7 @@ from derp.agent.tools.sources import (
     chat_photo_source,
     message_media,
 )
+from derp.agent.tools.telegram import unconfirmed
 from derp.agent.toolsets import Family
 from derp.history.capture import record_outgoing
 from derp.money.funding import Funding
@@ -181,7 +182,7 @@ async def make_meme(
     except EffectError as error:
         return f"The meme failed ({error.reason}); nothing was charged."
     except AMBIGUOUS:
-        return "Telegram didn't confirm the meme; it may have arrived. Don't send it again."
+        return unconfirmed("meme")
     except TelegramAPIError:
         return "Telegram refused the meme; nothing was charged."
 
@@ -233,7 +234,7 @@ async def reverse_media(
     except EffectError as error:
         return f"Reversing failed ({error.reason}); nothing was charged."
     except AMBIGUOUS:
-        return "Telegram didn't confirm the result; it may have arrived. Don't send it again."
+        return unconfirmed("result")
     except TelegramAPIError:
         return "Telegram refused the result; nothing was charged."
 
@@ -265,7 +266,7 @@ async def make_sticker(
     except EffectError as error:
         return f"The sticker failed ({error.reason})."
     except AMBIGUOUS:
-        return "Telegram didn't confirm the sticker; it may have arrived. Don't send it again."
+        return unconfirmed("sticker")
     except TelegramAPIError:
         return "Telegram refused the sticker."
 
@@ -339,7 +340,7 @@ async def remove_background(
     except EffectError as error:
         return f"Background removal failed ({error.reason}); nothing was charged."
     except AMBIGUOUS:
-        return "Telegram didn't confirm the file; it may have arrived. Don't send it again."
+        return unconfirmed("file")
     except TelegramAPIError:
         return "Telegram refused the file; nothing was charged."
 

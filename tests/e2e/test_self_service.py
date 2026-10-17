@@ -67,6 +67,17 @@ async def test_balances_go_by_dm_and_invoices_are_exact(
     assert "No pack costs 7⭐" in result_of(model, "purchase_button")
 
 
+async def test_an_unconfirmed_invoice_is_not_posted_again(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(REX, DEN)
+    conversation.api.fail_next("sendInvoice", error_code=504, description="Gateway Timeout")
+    after = await ask(conversation, model, REX, tool_call("purchase_button", stars=50))
+    assert len(conversation.api.calls_of("sendInvoice", after=after)) == 1
+    result = result_of(model, "purchase_button")
+    assert "didn't confirm the invoice" in result and "Don't send it again" in result
+
+
 async def test_settings_follow_admin_rules_and_context_off_needs_a_press(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
