@@ -177,6 +177,7 @@ async def inspect_media(ctx: RunContext[RunDeps], message_id: int) -> list[str |
         inspected,
         run_id=deps.run_id,
         funding=deps.funding.value,
+        role=deps.funding.role,
         chat_id=deps.chat.id,
         user_id=deps.user_id,
     )

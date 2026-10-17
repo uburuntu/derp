@@ -31,7 +31,7 @@ from derp.billing.purchases import (
     record_payment,
     refusal,
 )
-from derp.billing.refunds import apply_refund, refund
+from derp.billing.refunds import apply_refund, refund, stop_renewal
 from derp.config import Pack, Settings
 from derp.db.engine import Database
 from derp.locales import resolve, t
@@ -292,7 +292,7 @@ async def on_refund_command(
     if not charge:
         await send_markdown(bot, Target.reply_to_message(message), "Usage: `/refund <charge id>`")
         return
-    result = await refund(db, bot, charge)
+    result = await refund(db, bot, settings, charge)
     if result is None:
         text = "No purchase with that charge id."
     elif not result.first:
@@ -309,6 +309,7 @@ async def on_refunded(message: Message, db: Database, settings: Settings, bot: B
         return
     result = await apply_refund(db, message.refunded_payment.telegram_payment_charge_id)
     if result is not None and result.first:
+        await stop_renewal(db, bot, settings, result.purchase)
         p = result.purchase
         await notify_owners(
             bot, settings, f"Refund reported: {p.stars}⭐ {p.product}, took back {result.clawed} dc"

@@ -14,6 +14,23 @@ from derp.inference.roles import ModelRole, RolePin
 
 log = logging.getLogger("derp.pins")
 CACHE_SECONDS = 300
+CEILING_ROLES = (ModelRole.CHAT, ModelRole.CHAT_SPONSORED)
+# OpenRouter's provider.max_price (USD per 1M tokens) at this multiple of the price snapshot: routing
+# may still pick a pricier provider for speed or uptime, but a swap can't silently multiply the cost.
+MAX_PRICE_HEADROOM = 2
+
+
+def with_ceiling(pin: RolePin, row: ModelPin) -> RolePin:
+    """The pin with a ``max_price`` from its price snapshot, unless it sets its own or has no snapshot.
+
+    The ceiling covers the whole request, so OpenRouter skips a fallback priced above it.
+    """
+    if row.price_prompt is None or pin.max_price_prompt is not None or pin.max_price_completion is not None:
+        return pin
+    update: dict[str, float] = {"max_price_prompt": float(row.price_prompt) * MAX_PRICE_HEADROOM}
+    if row.price_completion is not None:
+        update["max_price_completion"] = float(row.price_completion) * MAX_PRICE_HEADROOM
+    return pin.model_copy(update=update)
 
 
 class PinStore:
@@ -21,6 +38,7 @@ class PinStore:
         self.db = db
         self.defaults = settings.model_pins
         self._cache: dict[ModelRole, RolePin] = {}
+        self._routed: dict[ModelRole, RolePin] = {}
         self._loaded_at = 0.0
 
     async def seed(self) -> None:
@@ -44,22 +62,28 @@ class PinStore:
         self._loaded_at = 0.0
 
     async def get(self, role: ModelRole) -> RolePin:
+        """The pin to route a request with (chat roles carry their price ceiling)."""
         if time.monotonic() - self._loaded_at > CACHE_SECONDS:
             await self.refresh()
-        return self._cache.get(role) or self.defaults[role]
+        return self._routed.get(role) or self.defaults[role]
 
     async def refresh(self) -> None:
         cache: dict[ModelRole, RolePin] = {}
+        routed: dict[ModelRole, RolePin] = {}
         async with self.db.session() as session:
             for row in await session.scalars(select(ModelPin)):
                 try:  # a role retired from code or a malformed pin must not break the other roles
-                    cache[ModelRole(row.role)] = RolePin.model_validate(row.pin)
+                    role, pin = ModelRole(row.role), RolePin.model_validate(row.pin)
                 except ValueError:
                     log.warning("ignoring unusable model pin for role %r", row.role)
-        self._cache = cache
+                    continue
+                cache[role] = pin
+                routed[role] = with_ceiling(pin, row) if role in CEILING_ROLES else pin
+        self._cache, self._routed = cache, routed
         self._loaded_at = time.monotonic()
 
     async def all(self) -> dict[ModelRole, RolePin]:
+        """The stored pins as chosen (no derived ceiling), for the scout and the owner console."""
         await self.refresh()
         return {role: self._cache.get(role, pin) for role, pin in self.defaults.items()}
 
@@ -70,6 +94,8 @@ async def apply_pin(session: AsyncSession, role: ModelRole, pin: RolePin, *, sou
         session.add(ModelPin(role=role.value, pin=pin.model_dump(mode="json"), source=source))
         return
     if row.pin != pin.model_dump(mode="json"):
+        if row.pin.get("model") != pin.model:  # the snapshot priced the old model; the scout re-prices
+            row.price_prompt = row.price_completion = None
         row.previous = row.pin
         row.pin = pin.model_dump(mode="json")
         row.source = source
@@ -80,6 +106,8 @@ async def rollback_pin(session: AsyncSession, role: ModelRole) -> bool:
     row = await session.get(ModelPin, role.value)
     if row is None or row.previous is None:
         return False
+    if row.previous.get("model") != row.pin.get("model"):
+        row.price_prompt = row.price_completion = None
     row.pin, row.previous = row.previous, row.pin
     row.source = "owner"
     return True

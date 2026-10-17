@@ -16,7 +16,6 @@ import uuid
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
-from decimal import Decimal
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
@@ -50,7 +49,7 @@ from derp.agent.models import AgentRun, Approval
 from derp.agent.persona import PERSONA, situation
 from derp.agent.prefix import prefixes
 from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
-from derp.agent.runs import finish_run, record_output, start_run, totals
+from derp.agent.runs import finish_run, price_unreported, record_output, start_run, totals
 from derp.agent.tools import CAPABILITIES, FAMILIES
 from derp.agent.toolsets import toolsets_for
 from derp.config import Settings
@@ -68,8 +67,6 @@ from derp.history.render import (
     render_line,
 )
 from derp.inference.api import OpenRouterAPI, OpenRouterError
-from derp.inference.ledger import cancelled_cost, estimate_cost
-from derp.inference.models import ModelPin
 from derp.inference.openrouter import chat_settings, conversation_id
 from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole, RolePin
@@ -376,8 +373,8 @@ class Runtime:
                 if draft_key is not None:
                     self.active.pop(draft_key, None)
                 await progress.close()
-            await price_interrupted(
-                self.api, self.db, new_messages, funding.role, self.prefix[funding] + window.tokens
+            await price_unreported(
+                self.db, new_messages, funding.role, self.prefix[funding] + window.tokens, api=self.api
             )
             silent = output.strip() in SILENT and bool(
                 deps.delivered or deps.reacted
@@ -416,6 +413,7 @@ class Runtime:
                 inspected,
                 run_id=run.id,
                 funding=funding.value,
+                role=funding.role,
                 chat_id=chat.id,
                 user_id=asker.id,
             )
@@ -426,14 +424,16 @@ class Runtime:
                 await session.execute(
                     update(AgentRun).where(AgentRun.id == run.id).values(charged_credits=charged)
                 )
+            # A reaction alone settles as delivered: the notice must not claim nothing was charged.
+            suffix = "_partial" if charged else ""
             if stream.capped and not deps.delivered:
                 spoke = True
-                await self._say(target, t(locale, "agent.capped"))
+                await self._say(target, t(locale, f"agent.capped{suffix}"))
             if error is not None:
                 record_run_failure(run.id, error, prompt)
                 if not isinstance(error, TelegramAPIError) and not deps.delivered:
                     spoke = True
-                    await self._apologize(target, locale, error, funds)
+                    await self._apologize(target, locale, error, funds, charged=bool(charged))
             refused = isinstance(error, TelegramForbiddenError | TelegramBadRequest) and not deps.delivered
             return Outcome(run.id, status, tuple(message_id for message_id, _ in deps.delivered), refused)
         except (
@@ -513,6 +513,9 @@ class Runtime:
                     text, messages = result.output, result.new_messages()
                 except Exception as exc:  # noqa: BLE001 - the caller says so; nothing is charged
                     status, error_type, messages = "failed", type(exc).__name__, list(captured)
+            await price_unreported(
+                self.db, messages, funds.funding.role, estimate_tokens(request), api=self.api
+            )
             async with self.db.transaction() as session:
                 stored = await session.merge(run)
                 finish_run(session, stored, messages, status=status, error_type=error_type)
@@ -617,13 +620,14 @@ class Runtime:
         token.cancel()
         return True
 
-    async def _apologize(self, target: Target, locale: str, error: BaseException, funds: Funds) -> None:
+    async def _apologize(
+        self, target: Target, locale: str, error: BaseException, funds: Funds, *, charged: bool
+    ) -> None:
         if funds.funding is Funding.FREE and isinstance(error, ModelHTTPError) and error.status_code == 429:
             await self._say(target, t(locale, "agent.free_busy"))  # OpenRouter's shared free limits
             return
-        await self._say(
-            target, t(locale, "agent.timeout" if isinstance(error, TimeoutError) else "agent.failed")
-        )
+        key = "agent.timeout" if isinstance(error, TimeoutError) else "agent.failed"
+        await self._say(target, t(locale, f"{key}_partial" if charged else key))
 
     async def _say(self, target: Target, text: str) -> None:
         try:
@@ -684,42 +688,6 @@ class _Stream:
                     self.capped = True
                     self.token.cancel()
                 await self.progress.stage(stage_for_tool(event.part.tool_name))
-
-
-async def price_interrupted(
-    api: OpenRouterAPI, db: Database, messages: list[ModelMessage], role: ModelRole, context_tokens: int
-) -> None:
-    """Responses cut off mid-stream never got a cost; ask OpenRouter, else estimate from the pin's prices."""
-    cut = [
-        m
-        for m in messages
-        if isinstance(m, ModelResponse)
-        and m.state == "interrupted"
-        and not (m.provider_details or {}).get("cost")
-    ]
-    if not cut:
-        return
-    async with db.session() as session:
-        prices = await session.get(ModelPin, role.value)
-    for response in cut:
-        cost: Decimal | None = None
-        if response.provider_response_id:
-            with contextlib.suppress(OpenRouterError):
-                cost = await cancelled_cost(api, response.provider_response_id)
-        if cost is None and prices is not None and prices.price_prompt is not None:
-            written = sum(estimate_tokens(p.content) for p in response.parts if isinstance(p, TextPart))
-            cost = estimate_cost(
-                response.usage.input_tokens or context_tokens,
-                response.usage.output_tokens or written,
-                float(prices.price_prompt),
-                float(prices.price_completion or 0),
-            )
-        if cost is not None:
-            response.provider_details = {
-                **(response.provider_details or {}),
-                "cost": float(cost),
-                "estimated": True,
-            }
 
 
 async def current_prompt(session: AsyncSession, message: TgMessage, window: Window, tz: tzinfo) -> str:

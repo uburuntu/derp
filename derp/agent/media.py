@@ -21,11 +21,12 @@ from pydantic_ai.models import Model
 from sqlalchemy import false, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from derp.agent.runs import price_unreported
 from derp.db.engine import Database
 from derp.history.models import Message, MessageMedia
 from derp.inference.ledger import record_usage
 from derp.inference.openrouter import chat_settings, response_usage
-from derp.inference.roles import RolePin
+from derp.inference.roles import ModelRole, RolePin
 from derp.telegram.media import Media, MediaGateway, MediaUnavailableError, sniff_image
 from derp.tools.effects import still
 from derp.tools.workers import EffectError
@@ -36,6 +37,7 @@ CLIPS = ("animation", "video", "video_note")
 MAX_IMAGES = 4  # also bounds the concurrent note calls of one run
 NOTE_TOKENS = 300  # room for a reasoning model's mandatory thinking before the one line
 NOTE_SECONDS = 30
+NOTE_INPUT_TOKENS = 1_500  # prompt plus one image, for pricing a note that came back without a cost
 DESCRIBE_PROMPT = (
     "Describe this image in one line (at most 25 words) for a chat log. "
     "Mention any visible text verbatim. No preamble."
@@ -159,6 +161,7 @@ async def note_images(
     *,
     run_id: int,
     funding: str,
+    role: ModelRole,
     chat_id: int,
     user_id: int,
 ) -> None:
@@ -174,6 +177,7 @@ async def note_images(
     for item, (text, paid) in zip(pending, notes, strict=True):
         if not text and not paid:  # nothing came back, nothing was paid: a later run may try again
             continue
+        await price_unreported(db, paid, role, NOTE_INPUT_TOKENS)
         async with db.transaction() as session:
             for response in paid:
                 record_usage(

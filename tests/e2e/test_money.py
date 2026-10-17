@@ -10,7 +10,8 @@ from sqlalchemy import func, select
 from derp.agent.models import AgentRun
 from derp.config import Settings
 from derp.history.models import Chat, User
-from derp.inference.models import ProviderCall
+from derp.inference.models import ModelPin, ProviderCall
+from derp.inference.roles import DEFAULT_PINS, ModelRole
 from derp.money.free import POLICY_VERSION
 from derp.money.models import Reservation
 from derp.money.wallets import balance, credit, wallet
@@ -48,6 +49,26 @@ async def test_paid_answer_is_charged_its_marked_up_cost(
         assert await balance(session, wallet_id) == 488
 
 
+async def test_a_paid_answer_without_a_reported_cost_is_charged_an_estimate(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    wallet_id = await buy(conversation, CARL, 500)
+    async with conversation.db.transaction() as session:
+        chat = DEFAULT_PINS[ModelRole.CHAT].model_dump(mode="json")
+        prices = {"price_prompt": Decimal(1), "price_completion": Decimal(4)}  # USD per 1M tokens
+        session.add(ModelPin(role="chat", pin=chat, **prices))
+    model.reply("sure")  # the scripted model reports no cost
+    sent = await conversation.send(CARL, text="hi derp")
+    await conversation.expect_reply(sent)
+    await conversation.settle(sent)
+    async with conversation.db.session() as session:
+        call = await session.scalar(select(ProviderCall).where(ProviderCall.kind == "chat"))
+        run = await session.scalar(select(AgentRun))
+        assert call is not None and call.cost_usd > 0
+        assert run is not None and run.charged_credits > 0
+        assert await balance(session, wallet_id) == 500 - run.charged_credits
+
+
 async def test_failed_run_releases_the_hold(conversation: Conversation, model: ScriptedModel) -> None:
     wallet_id = await buy(conversation, CARL, 500)
 
@@ -79,6 +100,42 @@ async def test_run_stops_at_the_credits_it_could_hold(
         run = await session.scalar(select(AgentRun))
         assert run is not None and (run.status, run.charged_credits) == ("cancelled", 0)
         assert await balance(session, wallet_id) == 5  # nothing was delivered, so nothing is charged
+
+
+async def test_a_failure_after_a_reaction_doesnt_claim_nothing_was_charged(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    wallet_id = await buy(conversation, CARL, 500)
+    model.cost = 0.01  # 12 credits for the turn that reacted
+
+    def boom(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        raise RuntimeError("provider exploded")
+
+    model.reply(tool_call("react", emoji="🔥"), boom)
+    sent = await conversation.send(CARL, text="hi derp")
+    reply = (await conversation.expect_reply(sent))["rich_message"]["markdown"]
+    assert "work so far was charged" in reply and "weren't charged" not in reply
+    await conversation.settle(sent)
+    async with conversation.db.session() as session:
+        run = await session.scalar(select(AgentRun))
+        assert run is not None and (run.status, run.charged_credits) == ("failed", 12)
+        assert await balance(session, wallet_id) == 488
+
+
+async def test_a_capped_run_that_reacted_says_it_was_charged(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    wallet_id = await buy(conversation, CARL, 5)
+    model.cost = 0.003  # 4 credits a turn: the second one reaches the 5 held
+    model.reply(tool_call("react", emoji="🔥"), tool_call("search_history", query="cats"), "never reached")
+    sent = await conversation.send(CARL, text="find cats")
+    reply = (await conversation.expect_reply(sent))["rich_message"]["markdown"]
+    assert "too expensive" in reply and "work so far was charged" in reply
+    await conversation.settle(sent)
+    async with conversation.db.session() as session:
+        run = await session.scalar(select(AgentRun))
+        assert run is not None and run.charged_credits == 5  # never past the hold
+        assert await balance(session, wallet_id) == 0
 
 
 async def test_no_allowance_left_says_so_without_running(

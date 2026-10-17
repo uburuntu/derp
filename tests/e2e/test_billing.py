@@ -267,6 +267,84 @@ async def test_refunding_derp_plus_stops_renewal(conversation: Conversation) -> 
     assert (await checkout(conversation, CARL, again, 500))["ok"] in (True, "true")  # can subscribe again
 
 
+async def subscribe(conversation: Conversation, person: Person, charge: str) -> None:
+    payload = f"s1:derp_plus_v1:7150:{person.id}:{charge}"
+    await checkout(conversation, person, payload, 500)
+    expires = int(datetime.now(UTC).timestamp()) + 30 * 86400
+    first = paid(payload, 500, charge) | {
+        "is_recurring": True,
+        "is_first_recurring": True,
+        "subscription_expiration_date": expires,
+    }
+    await conversation.settle(await conversation.send(person, successful_payment=first))
+
+
+def cancels(conversation: Conversation) -> list[tuple[int, str]]:
+    return [
+        (int(c["user_id"]), c["telegram_payment_charge_id"])
+        for c in conversation.api.calls_of("editUserStarSubscription")
+        if c["is_canceled"] in (True, "true")
+    ]
+
+
+async def test_a_refund_reported_by_telegram_cancels_the_renewal(conversation: Conversation) -> None:
+    conversation.meet(OWNER)
+    await subscribe(conversation, CARL, "sub-n1")
+    refunded = {
+        "currency": "XTR",
+        "total_amount": 500,
+        "invoice_payload": "x",
+        "telegram_payment_charge_id": "sub-n1",
+    }
+    await conversation.settle(await conversation.send(CARL, refunded_payment=refunded))
+    assert cancels(conversation) == [(CARL.id, "sub-n1")]
+    await conversation.settle(await conversation.send(CARL, refunded_payment=refunded))  # redelivered
+    assert len(cancels(conversation)) == 1
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(Subscription.state)) == "canceled"
+
+
+async def test_the_sweep_cancels_the_renewal_of_a_charged_back_subscription(
+    conversation: Conversation,
+) -> None:
+    conversation.meet(OWNER)
+    await subscribe(conversation, CARL, "sub-s1")
+    conversation.api.star_transactions = [
+        {
+            "id": "sub-s1",
+            "amount": 500,
+            "date": 1,
+            "receiver": {"type": "user", "transaction_type": "invoice_payment", "user": CARL.payload()},
+        },
+    ]
+    assert conversation.services is not None
+    assert await reconcile_refunds(conversation.db, conversation.services.bot, conversation.settings) == 1
+    assert cancels(conversation) == [(CARL.id, "sub-s1")]
+
+
+async def test_a_failed_renewal_cancel_tells_the_owner_and_refund_retries_it(
+    conversation: Conversation,
+) -> None:
+    conversation.meet(OWNER)
+    await subscribe(conversation, CARL, "sub-f1")
+    conversation.api.fail_next(
+        "editUserStarSubscription", error_code=400, description="Bad Request: something went wrong"
+    )
+    asked = await conversation.send(OWNER, text="/refund sub-f1")
+    await conversation.expect_reply(asked)
+    pings = [
+        str(c["text"])
+        for c in conversation.api.calls_of("sendMessage", after=asked.after)
+        if int(c["chat_id"]) == OWNER.id
+    ]
+    assert any("renewal wasn't canceled" in ping and "sub-f1" in ping for ping in pings)
+    assert cancels(conversation) == [(CARL.id, "sub-f1")]  # attempted once, refused
+    again = await conversation.send(OWNER, text="/refund sub-f1")
+    assert "Already refunded" in (await conversation.expect_reply(again))["rich_message"]["markdown"]
+    assert len(cancels(conversation)) == 2  # the repeat retried the cancel
+    assert len(conversation.api.calls_of("refundStarPayment")) == 1
+
+
 async def test_daily_sweep_applies_chargebacks_nobody_announced(conversation: Conversation) -> None:
     conversation.meet(OWNER)
     await buy_pack(conversation, CARL, "ch-s1")
@@ -293,8 +371,8 @@ async def test_daily_sweep_applies_chargebacks_nobody_announced(conversation: Co
     ]
     assert conversation.services is not None
     bot = conversation.services.bot
-    assert await reconcile_refunds(conversation.db, bot) == 1
-    assert await reconcile_refunds(conversation.db, bot) == 0
+    assert await reconcile_refunds(conversation.db, bot, conversation.settings) == 1
+    assert await reconcile_refunds(conversation.db, bot, conversation.settings) == 0
     assert await wallet_balance(conversation, "user", CARL.id) == 0
     assert await wallet_balance(conversation, "user", DANA.id) == 650
 

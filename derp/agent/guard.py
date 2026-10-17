@@ -48,6 +48,7 @@ log = logging.getLogger("derp.agent")
 WRAP_UP_AT = 0.75  # share of the wall-time cap after which no new tool round starts
 WRAP_UP_NOTE = "No more tools this turn. Answer the current message now with what you have."
 EMPTY_NOTE = "Your last reply came back empty. Answer the current message now."
+SEARCH_NOTE = "Web search is out of budget for this answer; answer without it (say so if it matters)."
 BACKSTOP = 4  # requests and tool calls past the soft caps before the hard limits stop the run
 RETRYABLE_STATUS = frozenset({408, 429})
 
@@ -136,12 +137,18 @@ class Guard(AbstractCapability[RunDeps]):
     async def before_model_request(
         self, ctx: RunContext[RunDeps], request_context: ModelRequestContext
     ) -> ModelRequestContext:
-        if not self.check(ctx):
+        notes: list[str] = []
+        settings: dict[str, Any] = dict(request_context.model_settings or {})
+        if self.check(ctx):
+            settings["tool_choice"] = "none"
+            notes.append(WRAP_UP_NOTE)
+        elif ctx.deps.search_withheld:  # web search was left out of this request (see tools/web.py)
+            notes.append(SEARCH_NOTE)
+        if not notes:
             return request_context
-        settings: dict[str, Any] = {**(request_context.model_settings or {}), "tool_choice": "none"}
-        return replace(  # the note is request-only: history keeps what actually happened
+        return replace(  # notes are request-only: history keeps what actually happened
             request_context,
-            messages=[*request_context.messages, ModelRequest(parts=[UserPromptPart(WRAP_UP_NOTE)])],
+            messages=[*request_context.messages, ModelRequest(parts=[UserPromptPart(n) for n in notes])],
             model_settings=cast(ModelSettings, settings),
         )
 

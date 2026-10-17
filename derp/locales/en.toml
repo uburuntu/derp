@@ -82,6 +82,9 @@ paysupport = "Payment problems"
 failed = "Something broke on my side — nothing was charged. Try again in a moment."
 timeout = "That took too long, so I stopped — nothing was charged. Try a simpler request."
 capped = "That got too expensive for one message, so I stopped — nothing was charged. Try a smaller request."
+failed_partial = "Something broke on my side — part of the answer got through, so the work so far was charged. Try again in a moment."
+timeout_partial = "That took too long, so I stopped — part of the answer got through, so the work so far was charged. Try a simpler request."
+capped_partial = "That got too expensive for one message, so I stopped — part of the answer got through, so the work so far was charged. Try a smaller request."
 free_busy = "The free models are busy right now. Try again in a bit, or /buy Derpcoins."
 
 [progress]
