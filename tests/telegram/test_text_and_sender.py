@@ -1,7 +1,7 @@
 from aiogram.types import Message
 
 from derp.telegram.sender import Target, sanitize_untrusted, split_rich
-from derp.telegram.text import split_text, truncate, utf16_len
+from derp.telegram.text import hard_breaks, split_text, truncate, utf16_len
 
 
 def test_utf16_measure_counts_astral_as_two() -> None:
@@ -105,3 +105,16 @@ async def test_a_failure_after_the_first_part_reports_what_was_delivered() -> No
     with pytest.raises(PartialDeliveryError) as caught:
         await send_markdown(cast(Bot, Flaky()), Target(1), long)
     assert [m.message_id for m in caught.value.sent] == [10]
+
+
+def test_line_breaks_stay_line_breaks_outside_code() -> None:
+    text = "**Commands**\n/settings — settings\n/buy — buy\n\nNext\n```py\na = 1\nb = 2\n```\n- one\n- two"
+    assert hard_breaks(text) == (
+        "**Commands**  \n/settings — settings  \n/buy — buy\n\nNext\n```py\na = 1\nb = 2\n```\n- one  \n- two"
+    )
+
+
+def test_existing_hard_breaks_and_single_lines_are_left_alone() -> None:
+    assert hard_breaks("one  \ntwo\\\nthree") == "one  \ntwo\\\nthree"
+    assert hard_breaks("just one line") == "just one line"
+    assert hard_breaks("~~~\nx\ny\n~~~\nz\nw") == "~~~\nx\ny\n~~~\nz  \nw"

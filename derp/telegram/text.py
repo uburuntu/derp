@@ -1,14 +1,37 @@
-"""Telegram text measures and splitting.
+"""Telegram text measures, splitting and line breaks.
 
 Plain messages are limited in UTF-16 code units (4096); rich messages allow
 32768 characters. Splits prefer paragraph, then line, then word boundaries.
+Rich Markdown follows GitHub Flavored Markdown, where a single newline inside a
+paragraph is a soft break rendered as a space; ``hard_breaks`` keeps every line
+on its own line, as written.
 """
 
+import re
 from collections.abc import Callable
 
 PLAIN_LIMIT = 4096
 CAPTION_LIMIT = 1024
 RICH_LIMIT = 32_768
+
+
+_FENCE_LINE = re.compile(r" {0,3}(```|~~~)")
+
+
+def hard_breaks(markdown: str) -> str:
+    """Each line break inside a paragraph made a hard break (two trailing spaces), except in code blocks."""
+    lines = markdown.split("\n")
+    fence: str | None = None
+    for index, line in enumerate(lines[:-1]):
+        if marker := _FENCE_LINE.match(line):
+            fence = None if fence == marker.group(1) else fence or marker.group(1)
+            continue
+        if fence is not None or not line.strip() or not lines[index + 1].strip():
+            continue
+        if _FENCE_LINE.match(lines[index + 1]) or line.endswith(("  ", "\\")):
+            continue
+        lines[index] = line + "  "
+    return "\n".join(lines)
 
 
 def utf16_len(text: str) -> int:

@@ -14,7 +14,7 @@ from decimal import Decimal
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputRichMessage, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import distinct, func, select
 
 from derp.agent.models import AgentRun
@@ -30,7 +30,7 @@ from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
 from derp.money.models import CreditLot, RunFee
 from derp.money.wallets import balance, credit, wallet
-from derp.telegram.sender import Target, send_markdown, send_privately
+from derp.telegram.sender import Target, rich, send_markdown, send_privately
 
 WINDOWS = ((1, "24 h"), (7, "7 d"), (30, "30 d"))
 FUNDINGS = ("paid", "sponsored", "free", "creator")
@@ -212,7 +212,7 @@ async def on_console(
     await bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=message.message_id,
-        rich_message=InputRichMessage(markdown=text),
+        rich_message=rich(text),
         reply_markup=markup,
     )
 

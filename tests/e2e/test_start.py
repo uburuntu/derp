@@ -42,6 +42,7 @@ async def test_help_describes_the_chat(conversation: Conversation) -> None:
     text = (await conversation.expect_reply(sent))["rich_message"]["markdown"]
     free = conversation.settings.sponsored_daily_credits
     assert f"Derpcoins: **{free}** of {free} free left today, **0** bought" in text and "/memory" in text
+    assert "**Commands**  \n/settings — settings  \n" in text  # each command on its own line
 
     conversation.meet(BEN, LOUNGE)
     await conversation.settle(await conversation.ephemeral_command(BEN, LOUNGE, "/help", 601))

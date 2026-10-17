@@ -17,9 +17,8 @@ from typing import Protocol
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import InputRichMessage
 
-from derp.telegram.sender import Target, sanitize_untrusted
+from derp.telegram.sender import Target, rich, sanitize_untrusted
 from derp.telegram.text import RICH_LIMIT
 
 log = logging.getLogger("derp.progress")
@@ -146,7 +145,7 @@ class DraftProgress:
                 await self.bot.send_rich_message_draft(
                     chat_id=self.target.chat_id,
                     draft_id=self.draft_id or 1,
-                    rich_message=InputRichMessage(markdown=self.render()),
+                    rich_message=rich(self.render()),
                     can_stop=True,
                 )
             except TelegramAPIError as error:

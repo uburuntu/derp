@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import InputPollOption, InputRichMessage, ReactionTypeEmoji, ReplyParameters
+from aiogram.types import InputPollOption, ReactionTypeEmoji, ReplyParameters
 from aiogram.types import Message as TgMessage
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
@@ -25,7 +25,7 @@ from derp.history.digests import mark_stale
 from derp.history.models import Message, MessageMedia, Sticker
 from derp.history.queries import resolve_members
 from derp.memory.notes import is_admin
-from derp.telegram.sender import sanitize_untrusted
+from derp.telegram.sender import rich, sanitize_untrusted
 
 toolset = FunctionToolset[RunDeps]()
 ops = FunctionToolset[RunDeps]()
@@ -270,7 +270,7 @@ async def edit_own_message(ctx: RunContext[RunDeps], message_id: int, new_text: 
         await deps.bot.edit_message_text(
             chat_id=deps.chat.id,
             message_id=message_id,
-            rich_message=InputRichMessage(markdown=sanitize_untrusted(new_text)[:30000]),
+            rich_message=rich(sanitize_untrusted(new_text)[:30000]),
         )
     except TelegramAPIError as error:
         return f"Telegram refused the edit ({type(error).__name__})."

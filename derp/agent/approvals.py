@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputRichMessage, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import delete
 
 from derp.agent.models import Approval
@@ -23,7 +23,7 @@ from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat
 from derp.locales import resolve, t
-from derp.telegram.sender import Target, send_markdown
+from derp.telegram.sender import Target, rich, send_markdown
 
 if TYPE_CHECKING:  # the runtime imports the tools that create approvals
     from derp.agent.runtime import Runtime
@@ -99,7 +99,7 @@ async def _close_prompt(bot: Bot, message: Message, text: str) -> None:
         await bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=message.message_id,
-            rich_message=InputRichMessage(markdown=text),
+            rich_message=rich(text),
         )
 
 

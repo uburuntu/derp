@@ -15,7 +15,6 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputRichMessage,
     LabeledPrice,
     Message,
     PreCheckoutQuery,
@@ -38,7 +37,7 @@ from derp.db.engine import Database
 from derp.locales import resolve, t
 from derp.money.wallets import balance, wallet
 from derp.ops.owner import notify_owners
-from derp.telegram.sender import Target, send_markdown, send_privately
+from derp.telegram.sender import Target, rich, send_markdown, send_privately
 
 
 class BuyAction(CallbackData, prefix="buy"):
@@ -149,7 +148,7 @@ async def on_buy(
         await bot.edit_message_text(
             chat_id=chat.id,
             message_id=message.message_id,
-            rich_message=InputRichMessage(markdown=t(locale, key, balance=f"{left:,}")),
+            rich_message=rich(t(locale, key, balance=f"{left:,}")),
             reply_markup=packs_keyboard(settings, kind, locale, plan=chat.type == "private"),
         )
         await query.answer()

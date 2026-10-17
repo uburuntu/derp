@@ -19,7 +19,6 @@ from aiogram.types import (
     InlineQuery,
     InlineQueryResultArticle,
     InlineQueryResultsButton,
-    InputRichMessage,
     InputRichMessageContent,
     InputTextMessageContent,
     Message,
@@ -29,7 +28,7 @@ from derp.agent.runtime import Runtime
 from derp.db.engine import Database
 from derp.locales import resolve, t
 from derp.ops.owner import is_blocked
-from derp.telegram.sender import sanitize_untrusted
+from derp.telegram.sender import rich, sanitize_untrusted
 
 log = logging.getLogger("derp.inline")
 QUERY_LIMIT = 256  # Telegram caps inline queries at 256 characters
@@ -86,9 +85,7 @@ async def on_chosen(result: ChosenInlineResult, bot: Bot, runtime: Runtime) -> N
         text = question + sanitize_untrusted(detached.text)
     delivered = False
     try:
-        await bot.edit_message_text(
-            inline_message_id=result.inline_message_id, rich_message=InputRichMessage(markdown=text)
-        )
+        await bot.edit_message_text(inline_message_id=result.inline_message_id, rich_message=rich(text))
         delivered = bool(detached and detached.text)
     except TelegramAPIError as error:
         log.info("inline answer not delivered: %s", type(error).__name__)
@@ -115,7 +112,7 @@ async def on_guest(message: Message, bot: Bot, runtime: Runtime, db: Database) -
     reply = InlineQueryResultArticle(
         id=uuid.uuid4().hex,
         title="Derp",
-        input_message_content=InputRichMessageContent(rich_message=InputRichMessage(markdown=text)),
+        input_message_content=InputRichMessageContent(rich_message=rich(text)),
     )
     delivered = False
     try:

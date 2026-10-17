@@ -17,7 +17,7 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputRichMessage, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +31,7 @@ from derp.memory.notes import is_admin
 from derp.money.free import POLICY_VERSION, consented
 from derp.scheduler.models import Job
 from derp.settings.privacy import switch_context
-from derp.telegram.sender import Target, send_markdown
+from derp.telegram.sender import Target, rich, send_markdown
 
 RETENTION_CHOICES = (7, 30, 90, 365)
 NOTES_MODES = ("auto", "members", "admins", "off")
@@ -159,19 +159,22 @@ async def on_settings(message: Message, db: Database, settings: Settings, bot: B
 async def _show(
     bot: Bot, query: CallbackQuery, message: Message, text: str, markup: InlineKeyboardMarkup
 ) -> None:
-    rich = InputRichMessage(markdown=text)
+    content = rich(text)
     with contextlib.suppress(TelegramAPIError):  # an unchanged panel or an expired ephemeral message
         if message.message_id == 0 and message.ephemeral_message_id:
             await bot.edit_ephemeral_message_text(
                 chat_id=message.chat.id,
                 receiver_user_id=query.from_user.id,
                 ephemeral_message_id=message.ephemeral_message_id,
-                rich_message=rich,
+                rich_message=content,
                 reply_markup=markup,
             )
         else:
             await bot.edit_message_text(
-                chat_id=message.chat.id, message_id=message.message_id, rich_message=rich, reply_markup=markup
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                rich_message=content,
+                reply_markup=markup,
             )
 
 

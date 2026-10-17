@@ -27,7 +27,7 @@ from aiogram.types import (
     ReplyParameters,
 )
 
-from derp.telegram.text import PLAIN_LIMIT, RICH_LIMIT, split_text
+from derp.telegram.text import PLAIN_LIMIT, RICH_LIMIT, hard_breaks, split_text
 
 _INTERACTIVE_TAGS = re.compile(r"</?\s*tg-(?:button|button-row|thinking)\b[^>]*>", re.IGNORECASE)
 _MEDIA_TAGS = re.compile(
@@ -38,6 +38,11 @@ _REMOTE_MEDIA = re.compile(
 )  # ![alt](url) / ![alt][ref], not tg:// links
 _FENCE = "```"
 RICH_CHUNK = RICH_LIMIT - 768  # headroom for fence repair and entity overhead
+
+
+def rich(markdown: str) -> InputRichMessage:
+    """Rich Markdown as written: line breaks stay line breaks (Telegram would join them into one line)."""
+    return InputRichMessage(markdown=hard_breaks(markdown))
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,7 +171,7 @@ async def _send_chunks(
             message = await bot.send_rich_message(
                 chat_id=target.chat_id,
                 message_thread_id=target.thread_id,
-                rich_message=InputRichMessage(markdown=chunk),
+                rich_message=rich(chunk),
                 reply_parameters=target_for_chunk.reply_parameters,
                 reply_markup=reply_markup if last else None,
                 ephemeral_message_parameters=target.ephemeral,

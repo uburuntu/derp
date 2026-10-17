@@ -8,7 +8,7 @@ person's feedback from that chat with the rest of what they said.
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputRichMessage, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +19,7 @@ from derp.history.render import one_line
 from derp.locales import resolve, t
 from derp.ops.models import FEEDBACK_KINDS, Feedback
 from derp.ops.owner import is_blocked
-from derp.telegram.sender import Target, sanitize_untrusted, send_markdown
+from derp.telegram.sender import Target, rich, sanitize_untrusted, send_markdown
 
 PAGE = 5
 MAX_CHARS = 2000
@@ -155,7 +155,7 @@ async def on_review(
     await bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=message.message_id,
-        rich_message=InputRichMessage(markdown=text),
+        rich_message=rich(text),
         reply_markup=markup,
     )
 
