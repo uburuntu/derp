@@ -145,9 +145,20 @@ async def test_consenting_to_free_models_answers_the_waiting_question(
     asked = await conversation.send(CARL, text="what's 2+2?")
     offer = await conversation.expect_reply(asked)
     assert "may store" in offer["rich_message"]["markdown"]
+    assert len(offer["reply_markup"]["inline_keyboard"]) == 2
+    offer_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
+    buy_data = offer["reply_markup"]["inline_keyboard"][1][0]["callback_data"]
+    after_buy = conversation.seq
+    await conversation.press(CARL, CARL.id, offer_id, buy_data)
+    assert any(
+        "Pick an option:" in c["rich_message"]["markdown"]
+        for c in conversation.api.calls_of("sendRichMessage", after=after_buy)
+    )
     model.reply("4, on the house")
     after = conversation.seq
-    await press_button(conversation, CARL, CARL.id, offer)
+    await conversation.press(
+        CARL, CARL.id, offer_id, offer["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    )
     answers = [
         c
         for c in conversation.api.calls_of("sendRichMessage", after=after)

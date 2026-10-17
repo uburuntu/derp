@@ -133,10 +133,29 @@ async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user
             mine = await balances(session, (await wallet(session, "user", user_id)).id, now=now)
             free = await free_left_today(session, settings, user_id, now)
         bought = bought_total(mine)
+        plan = mine.get("plan", 0)
+        coins = (
+            t(
+                locale,
+                "help.coins_plan",
+                plan=f"{plan:,}",
+                bought=f"{bought:,}",
+                free=free,
+                daily=settings.sponsored_daily_credits,
+            )
+            if plan
+            else t(
+                locale,
+                "help.coins",
+                free=free,
+                daily=settings.sponsored_daily_credits,
+                bought=f"{bought:,}",
+            )
+        )
         lines = [
             t(locale, "help.title_private"),
             t(locale, "help.private"),
-            t(locale, "help.coins", free=free, daily=settings.sponsored_daily_credits, bought=f"{bought:,}"),
+            coins,
             t(locale, "help.commands"),
             t(locale, "help.more_private"),
         ]

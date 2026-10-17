@@ -57,7 +57,7 @@ async def test_private_purchase_credits_once_and_pings_the_owner(conversation: C
     menu = await conversation.expect_reply(asked)
     assert "balance: **0**" in menu["rich_message"]["markdown"]
     buttons = [row[0] for row in menu["reply_markup"]["inline_keyboard"]][1:]  # Derp+ comes first
-    assert [b["text"] for b in buttons] == ["50⭐ → 650", "250⭐ → 3,250", "750⭐ → 9,750"]
+    assert [b["text"] for b in buttons] == ["50⭐ → 650 dc", "250⭐ → 3,250 dc", "750⭐ → 9,750 dc"]
     menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
     after = conversation.seq
     await press(conversation, CARL, CARL.id, menu_id, buttons[0]["callback_data"])

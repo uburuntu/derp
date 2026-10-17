@@ -16,6 +16,8 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from derp.billing.command import group_chooser, personal_menu
+from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat, User
 from derp.locales import resolve, t
@@ -29,7 +31,7 @@ POLICY_VERSION = "2026-10"  # bump when the free-model notice changes: consent i
 
 
 class FreeModels(CallbackData, prefix="free"):
-    action: str  # consent (a person, private chats) | enable (an admin, this group)
+    action: str  # consent (a person, private chats) | enable (an admin, this group) | buy
 
 
 def consented(user: User | None) -> bool:
@@ -37,27 +39,41 @@ def consented(user: User | None) -> bool:
 
 
 def offer(locale: str, *, group: bool) -> tuple[str, InlineKeyboardMarkup]:
-    """The out-of-Derpcoins notice with the button that turns free models on."""
+    """The out-of-Derpcoins notice with buttons to turn free models on or buy Derpcoins."""
     action, text, button = (
         ("enable", "money.free_offer_group", "money.free_enable")
         if group
         else ("consent", "money.free_offer", "money.free_consent")
     )
-    markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=t(locale, button), callback_data=FreeModels(action=action).pack())]
-        ]
+    free_button = InlineKeyboardButton(text=t(locale, button), callback_data=FreeModels(action=action).pack())
+    buy_button = InlineKeyboardButton(
+        text=t(locale, "start.buy"), callback_data=FreeModels(action="buy").pack()
     )
-    return t(locale, text), markup
+    return t(locale, text), InlineKeyboardMarkup(inline_keyboard=[[free_button], [buy_button]])
 
 
 async def on_free(
-    query: CallbackQuery, callback_data: FreeModels, db: Database, bot: Bot, runtime: Runtime
+    query: CallbackQuery,
+    callback_data: FreeModels,
+    db: Database,
+    settings: Settings,
+    bot: Bot,
+    runtime: Runtime,
 ) -> None:
     locale = resolve(query.from_user.language_code)
     message = query.message
     if not isinstance(message, Message):
         await query.answer()
+        return
+    if callback_data.action == "buy":
+        await query.answer()
+        thread = message.message_thread_id if message.is_topic_message else None
+        target = Target(message.chat.id, thread)
+        if message.chat.type == "private":
+            text, markup = await personal_menu(db, settings, query.from_user.id, locale)
+            await send_markdown(bot, target, text, reply_markup=markup)
+        else:
+            await send_markdown(bot, target, t(locale, "billing.who"), reply_markup=group_chooser(locale))
         return
     if callback_data.action == "consent":
         async with db.transaction() as session:
@@ -97,5 +113,5 @@ async def on_free(
 
 def build_router() -> Router:
     router = Router(name="free-models")
-    router.callback_query.register(on_free, FreeModels.filter(F.action.in_({"consent", "enable"})))
+    router.callback_query.register(on_free, FreeModels.filter(F.action.in_({"consent", "enable", "buy"})))
     return router

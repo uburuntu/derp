@@ -51,7 +51,7 @@ def packs_keyboard(
     rows = [
         [
             InlineKeyboardButton(
-                text=f"{pack.stars}⭐ → {pack.credits:,}",
+                text=f"{pack.stars}⭐ → {pack.credits:,} dc",
                 callback_data=BuyAction(target=target, product=pack.id).pack(),
             )
         ]
@@ -66,6 +66,21 @@ def packs_keyboard(
         )
         rows.insert(0, [button])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def group_chooser(locale: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "billing.for_me"), callback_data=BuyAction(target="user").pack()
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "billing.for_chat"), callback_data=BuyAction(target="chat").pack()
+                ),
+            ]
+        ]
+    )
 
 
 async def send_pack_invoice(
@@ -108,19 +123,7 @@ async def show_buy(message: Message, db: Database, settings: Settings, bot: Bot)
         text, markup = await personal_menu(db, settings, message.from_user.id, locale)
         await send_markdown(bot, target, text, reply_markup=markup)
         return
-    chooser = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "billing.for_me"), callback_data=BuyAction(target="user").pack()
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "billing.for_chat"), callback_data=BuyAction(target="chat").pack()
-                ),
-            ]
-        ]
-    )
-    await send_markdown(bot, target, t(locale, "billing.who"), reply_markup=chooser)
+    await send_markdown(bot, target, t(locale, "billing.who"), reply_markup=group_chooser(locale))
 
 
 async def on_buy(
