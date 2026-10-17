@@ -252,7 +252,11 @@ async def read_source(ctx: RunContext[RunDeps], path: str, start_line: int = 1) 
     return f"{key}, lines {start}–{end} of {len(lines)}: {url}\n{body}"
 
 
-family = Family("about", toolset)
+family = Family("about", toolset, detached="about_derp")
 source_family = Family(
-    "source", source_toolset, tiers=frozenset({Funding.PAID, Funding.SPONSORED}), deferred=True
+    "source",
+    source_toolset,
+    tiers=frozenset({Funding.PAID, Funding.SPONSORED}),
+    deferred=True,
+    detached="Derp's own source code",
 )

@@ -22,11 +22,13 @@ from derp.agent.deps import RunDeps
 from derp.agent.outputs import Refused, check_budget, deliver, unconfirmed
 from derp.agent.toolsets import ALL_TIERS, Family
 from derp.history.digests import mark_stale
+from derp.history.links import message_links
 from derp.history.models import Message, MessageMedia, Sticker
 from derp.history.queries import resolve_members
 from derp.memory.notes import is_admin
 from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import rich, sanitize_untrusted
+from derp.telegram.text import plain_emoji
 
 toolset = FunctionToolset[RunDeps]()
 ops = FunctionToolset[RunDeps]()
@@ -160,8 +162,8 @@ async def send_dice(
     return f"Dice #{sent.message_id} landed on {value}."
 
 
-# Telegram tags each sticker with one emoji, so one mood has several spellings (en and ru chats alike).
-# Kept without variation selectors; an emoji belongs to one mood at most.
+# Telegram tags each sticker with one emoji, so one mood has several emojis (en and ru chats alike).
+# Written plain (``plain_emoji``), like the sticker index; an emoji belongs to one mood at most.
 MOODS: tuple[tuple[str, ...], ...] = (
     ("😂", "🤣", "😆", "😹", "😁", "😄", "😃", "😀", "😅"),  # laughing
     ("❤", "😍", "🥰", "😘", "😻", "💕", "💖", "💘", "💗", "💞", "💓", "♥", "🫶", "❤‍🔥"),  # love
@@ -182,31 +184,28 @@ MOODS: tuple[tuple[str, ...], ...] = (
     ("👋", "🙋", "🖐"),  # hi
     ("👏", "🙌"),  # applause
 )  # fmt: skip
-VS16 = "\ufe0f"  # emoji presentation selector: Telegram tags have it, models often don't
-SKIN_TONES = str.maketrans("", "", "".join(map(chr, range(0x1F3FB, 0x1F400))))
 MOOD_OF = {emoji: mood for mood in MOODS for emoji in mood}
 EMOJIS_SHOWN = 10  # emojis listed when nothing matches, so the model can pick one that works
 
 
 async def pick_sticker(session: AsyncSession, chat_id: int, bot_id: int, emoji: str) -> str | None:
     """The emoji's sticker, else its mood's: each time the chat's most used first, then the global index."""
-    exact = emoji.strip().replace(VS16, "")
-    mood = [e for e in MOOD_OF.get(exact.translate(SKIN_TONES), ()) if e != exact]
-    tag = func.replace(Sticker.emoji, VS16, "")
+    exact = plain_emoji(emoji)
+    mood = [e for e in MOOD_OF.get(exact, ()) if e != exact]
     for wanted in ([exact], mood):
         if not wanted:
             continue
         favorite = await session.scalar(
             select(Sticker.file_id)
             .join(MessageMedia, MessageMedia.file_unique_id == Sticker.file_unique_id)
-            .where(MessageMedia.chat_id == chat_id, tag.in_(wanted), Sticker.bot_id == bot_id)
+            .where(MessageMedia.chat_id == chat_id, Sticker.emoji.in_(wanted), Sticker.bot_id == bot_id)
             .group_by(Sticker.file_id)
             .order_by(func.count().desc())
             .limit(1)
         )
         found = favorite or await session.scalar(
             select(Sticker.file_id)
-            .where(tag.in_(wanted), Sticker.bot_id == bot_id)
+            .where(Sticker.emoji.in_(wanted), Sticker.bot_id == bot_id)
             .order_by(Sticker.curated.desc(), Sticker.uses.desc())
             .limit(1)
         )
@@ -290,6 +289,7 @@ async def react(ctx: RunContext[RunDeps], emoji: str, message_id: int | None = N
         message_id: Message id in this chat.
     """
     deps = ctx.deps
+    emoji = plain_emoji(emoji)  # "❤️" is Telegram's "❤"
     if emoji not in REACTIONS:
         return "Not a reaction Telegram allows; pick a standard one like 👍 🔥 😁 🤔 🎉."
     try:
@@ -326,18 +326,19 @@ async def edit_own_message(ctx: RunContext[RunDeps], message_id: int, new_text: 
     row = await _own_message(deps, message_id)
     if row is None or row.kind != "text":
         return "I can only edit my own text messages that are still stored."
+    text = sanitize_untrusted(new_text)[:30000]
+    async with deps.db.session() as session:  # "#id" references open the message, as in answers
+        links = await message_links(session, deps.chat, text)
     try:
         await deps.bot.edit_message_text(
-            chat_id=deps.chat.id,
-            message_id=message_id,
-            rich_message=rich(sanitize_untrusted(new_text)[:30000]),
+            chat_id=deps.chat.id, message_id=message_id, rich_message=rich(text, links)
         )
     except TelegramAPIError as error:
         return f"Telegram refused the edit ({type(error).__name__})."
     async with deps.db.transaction() as session:
         stored = await session.get(Message, (deps.chat.id, message_id))
         if stored is not None:
-            stored.text = new_text
+            stored.text = text
     return f"Edited #{message_id}."
 
 

@@ -99,7 +99,7 @@ async def test_ambient_voice_is_transcribed_silently_and_long_ones_are_skipped(
     async with conversation.db.session() as session:
         rows = await session.execute(select(MessageMedia.message_id, MessageMedia.transcript))
         transcripts = {row[0]: row[1] for row in rows}
-    assert transcripts == {short.message_id: "купи хлеба", long.message_id: None}
+    assert transcripts == {short.message_id: "купи хлеба", long.message_id: ""}  # too long: settled empty
 
 
 class BrokenSTT(FakeSTT):
@@ -224,8 +224,8 @@ async def test_derp_is_told_why_a_voice_note_has_no_transcript(
     await conversation.expect_reply(long)
     assert "[voice 12:04 — too long to transcribe]" in str(model.requests[-1][-1])
     async with conversation.db.session() as session:
-        reasons = set(await session.scalars(select(MessageMedia.transcript_model)))
-    assert reasons == {UNHEARD, TOO_LONG}
+        rows = (await session.execute(select(MessageMedia.transcript, MessageMedia.transcript_model))).all()
+    assert set(rows) == {("", UNHEARD), ("", TOO_LONG)}  # tried, nothing: empty, like an empty image note
 
 
 class WatchedTranscriber(Transcriber):

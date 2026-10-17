@@ -132,10 +132,23 @@ async def run_program(ctx: RunContext[RunDeps], language: str, source: str, stdi
         return _failed("The code runner", error)
 
 
-family = Family("utilities", toolset, deferred=True)
+family = Family(
+    "utilities",
+    toolset,
+    deferred=True,
+    detached="lookups (weather, exchange rates, time zones, Wikipedia and the like)",
+)
 wolfram_family = Family(
-    "wolfram", wolfram_tools, deferred=True, available=lambda deps: bool(deps.settings.wolfram_app_id)
+    "wolfram",
+    wolfram_tools,
+    deferred=True,
+    available=lambda deps: bool(deps.settings.wolfram_app_id),
+    detached="WolframAlpha",
 )
 code_family = Family(
-    "code", code_tools, deferred=True, available=lambda deps: bool(deps.settings.jdoodle_client_secret)
+    "code",
+    code_tools,
+    deferred=True,
+    available=lambda deps: bool(deps.settings.jdoodle_client_secret),
+    detached="a runner for programs in other languages",
 )

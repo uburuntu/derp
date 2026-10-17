@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from derp.db.base import Base
 
-# ``message_media.transcript_model`` of a recording without a transcript: why there is none.
+# ``message_media.transcript_model`` of a recording whose transcript is empty because none was made: why.
 TOO_LONG = "too-long"  # over ``media.voice_max_seconds``: never transcribed
 UNHEARD = "failed"  # the last attempt failed (download, ffmpeg, provider); an invocation may retry
 
@@ -181,8 +181,10 @@ class MessageMedia(Base):
     file_name: Mapped[str | None]
     sticker_emoji: Mapped[str | None]
     sticker_set: Mapped[str | None]
-    transcript: Mapped[str | None]
-    transcript_model: Mapped[str | None]  # the model; while there's no transcript, why: TOO_LONG / UNHEARD
+    transcript: Mapped[
+        str | None
+    ]  # None: not tried yet; "": tried, nothing (``transcript_model`` may say why)
+    transcript_model: Mapped[str | None]  # the model, or why the transcript is empty: TOO_LONG / UNHEARD
     description: Mapped[str | None]
     description_run_id: Mapped[int | None]  # the run whose note it is; cleared with the note
 

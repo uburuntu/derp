@@ -3,10 +3,12 @@
 A result an earlier tool of the run kept (``from_result``, see ``derp.agent.outputs``)
 comes first when named.
 
-Message media is the one named, or else the current message or the one it
-replies to. A profile photo belongs to a person named in this chat (name or
-@username, matched against members seen here), else a stored message's sender,
-else the person replied to, else the asker; tools never take a user id.
+Message media is the one named, or else the current message's, the one it
+replies to, or the images the run looks at (``RunDeps.seen``: the asker's photo
+just before, the image behind an answered run). A profile photo belongs to a
+person named in this chat (name or @username, matched against members seen
+here), else a stored message's sender, else the person replied to, else the
+asker; tools never take a user id.
 Failures raise ``Refused``, whose text is meant for the model.
 """
 
@@ -54,7 +56,11 @@ async def replied_to(deps: RunDeps) -> int | None:
 
 
 async def message_media(deps: RunDeps, message_id: int | None, types: tuple[str, ...]) -> Source:
-    anchors = [message_id] if message_id is not None else [deps.trigger_message_id, await replied_to(deps)]
+    anchors = (
+        [message_id]
+        if message_id is not None
+        else list(dict.fromkeys([deps.trigger_message_id, await replied_to(deps), *deps.seen]))
+    )
     async with deps.db.session() as session:
         rows = list(
             await session.scalars(
@@ -75,9 +81,7 @@ async def message_media(deps: RunDeps, message_id: int | None, types: tuple[str,
         )
     rows.sort(key=lambda r: anchors.index(r.message_id))
     if not rows:
-        where = (
-            f"message #{message_id}" if message_id is not None else "this message or the one it replies to"
-        )
+        where = f"message #{message_id}" if message_id is not None else "the messages this one is about"
         raise Refused(f"No usable media in {where}; name the message with message_id.")
     row = rows[0]
     try:

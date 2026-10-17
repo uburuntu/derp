@@ -2,20 +2,28 @@ from datetime import UTC, datetime
 
 import pytest
 
-from derp.agent.tools.telegram import MOOD_OF, MOODS, VS16, pick_sticker, sticker_emojis
+from derp.agent.tools.telegram import MOOD_OF, MOODS, REACTIONS, pick_sticker, sticker_emojis
 from derp.db.engine import Database
 from derp.history.models import Chat, Message, MessageMedia, Sticker
+from derp.telegram.text import plain_emoji
 
 BOT = 77
 CHAT = -900
 OTHER = -901
 
 
-def test_moods_are_disjoint_and_without_selectors() -> None:
+def test_moods_are_disjoint_and_plain() -> None:
     emojis = [emoji for mood in MOODS for emoji in mood]
     assert len(emojis) == len(set(emojis)) == len(MOOD_OF)
-    assert not any(VS16 in emoji for emoji in emojis)
+    assert all(plain_emoji(emoji) == emoji for emoji in (*emojis, *REACTIONS))  # compared plain everywhere
     assert MOOD_OF["😂"] is MOOD_OF["🤣"] is MOOD_OF["😆"]
+
+
+def test_one_spelling_per_emoji() -> None:
+    assert plain_emoji(" ❤️ ") == "❤"  # Telegram's reaction list writes it without the selector
+    assert plain_emoji("👍🏽") == "👍"
+    assert plain_emoji("🤦🏻‍♂️") == "🤦‍♂"
+    assert plain_emoji("❤‍🔥") == "❤‍🔥"  # the joiner stays: another emoji
 
 
 def sticker(unique: str, emoji: str, *, uses: int = 1, curated: bool = False) -> Sticker:
@@ -35,7 +43,7 @@ async def stickers(database: Database) -> Database:
             [
                 sticker("rofl-global", "🤣", uses=50),
                 sticker("joy-global", "😂", uses=3),
-                sticker("heart", "❤️", uses=9),  # Telegram's tag carries the selector
+                sticker("heart", "❤", uses=9),  # indexed plain: Telegram's tag was "❤️"
                 sticker("rofl-chat", "🤣"),
                 sticker("grin-other", "😆", uses=1),
                 sticker("cool", "😎", uses=2),
@@ -76,7 +84,7 @@ async def test_the_exact_emoji_wins_then_its_mood_with_chat_favourites_first(sti
         assert await pick_sticker(session, CHAT, BOT, "😹") == "f-rofl-chat"  # mood: this chat's own first
         assert await pick_sticker(session, OTHER, BOT, "😹") == "f-grin-other"  # …that chat's own
         assert await pick_sticker(session, -1, BOT, "😹") == "f-rofl-global"  # else the index, most used
-        assert await pick_sticker(session, CHAT, BOT, "❤") == "f-heart"  # selectors don't matter
+        assert await pick_sticker(session, CHAT, BOT, "❤️") == "f-heart"  # selectors don't matter
         assert await pick_sticker(session, CHAT, BOT, "😍") == "f-heart"
         assert await pick_sticker(session, CHAT, BOT, "👍🏽") is None  # nothing in that mood
         assert await pick_sticker(session, CHAT, BOT, "🦖") is None
@@ -88,5 +96,5 @@ async def test_a_miss_lists_emojis_there_are_stickers_for(stickers: Database) ->
     async with stickers.session() as session:
         listed = await sticker_emojis(session, CHAT, BOT)
         assert listed[:2] == ["🤣", "😎"]  # this chat's, most used first
-        assert set(listed) == {"🤣", "😎", "😂", "❤️", "😆"} and len(listed) == len(set(listed))
+        assert set(listed) == {"🤣", "😎", "😂", "❤", "😆"} and len(listed) == len(set(listed))
         assert await sticker_emojis(session, CHAT, BOT + 1) == []

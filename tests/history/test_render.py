@@ -88,7 +88,10 @@ def test_reply_to_another_chat_names_its_origin_and_quote() -> None:
         "poll": {"question": "pizza?"},
     }
     other = MessageView(row(text="+1", payload={"external_reply": person}), "Ann")
-    assert render_line(other, tz) == "[09:05] #10 Ann ↩ (from Zed Q in Elsewhere: poll pizza?): +1"
+    # Named like a forward from them would be: by first name.
+    assert render_line(other, tz) == "[09:05] #10 Ann ↩ (from Zed in Elsewhere: poll pizza?): +1"
+    forwarded = MessageView(row(text="+1", forward_origin=person["origin"]), "Ann")
+    assert render_line(forwarded, tz) == "[09:05] #10 Ann (fwd from Zed): +1"
 
     hidden = {"origin": {"type": "hidden_user", "sender_user_name": "Ghost"}}
     ghost = MessageView(row(text="?", payload={"external_reply": hidden}), "Ann")
@@ -104,17 +107,19 @@ def test_reply_to_another_chat_names_its_origin_and_quote() -> None:
 
 
 def test_recordings_without_a_transcript_say_why() -> None:
-    long = MessageMedia(type="voice", duration=724, transcript_model=TOO_LONG)
-    failed = MessageMedia(type="video_note", duration=18, transcript_model=UNHEARD)
+    long = MessageMedia(type="voice", duration=724, transcript="", transcript_model=TOO_LONG)
+    failed = MessageMedia(type="video_note", duration=18, transcript="", transcript_model=UNHEARD)
     pending = MessageMedia(type="audio", duration=30)  # not tried (yet): no reason to give
+    silent = MessageMedia(type="voice", duration=2, transcript="", transcript_model="m/stt")  # heard nothing
     heard = MessageMedia(type="voice", duration=5, transcript="hi", transcript_model="m/stt")
     lines = [
         render_line(MessageView(row(kind="voice"), "Ann", [m]), ZoneInfo("UTC"))
-        for m in (long, failed, pending, heard)
+        for m in (long, failed, pending, silent, heard)
     ]
     assert [line.split(": ", 1)[1] for line in lines] == [
         "[voice 12:04 — too long to transcribe]",
         "[video note 0:18 — couldn't transcribe]",
         "[audio 0:30]",
+        "[voice 0:02]",
         "[voice 0:05: hi]",
     ]

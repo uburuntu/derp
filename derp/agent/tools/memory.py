@@ -54,16 +54,16 @@ async def remember(ctx: RunContext[RunDeps], text: str, about: Literal["chat", "
     if isinstance(result, str):
         return f"Not saved: {result}."
     if state == "proposed":
-        return f"Proposed as note #{result.id}; an admin has to approve it in /memory."
-    return f"Saved as note #{result.id}."
+        return f"Proposed as note {result.id}; an admin has to approve it in /memory."
+    return f"Saved as note {result.id}."
 
 
 @toolset.tool
 async def forget_note(ctx: RunContext[RunDeps], note_id: int) -> str:
-    """Delete a saved note by its #id (chat notes or the current person's own notes).
+    """Delete a saved note by its number (chat notes or the current person's own notes).
 
     Args:
-        note_id: The note number shown as #id.
+        note_id: The number of "note 42".
     """
     deps = ctx.deps
     async with deps.db.transaction() as session:
@@ -79,7 +79,7 @@ async def forget_note(ctx: RunContext[RunDeps], note_id: int) -> str:
         ):
             return "Only admins can remove chat notes here."
         await session.delete(note)
-    return f"Forgot note #{note_id}."
+    return f"Forgot note {note_id}."
 
 
 @toolset.tool(sequential=True)

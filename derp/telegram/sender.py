@@ -7,11 +7,13 @@ stripped of interactive tags so a prompt-injected answer cannot render
 callback buttons that look like Derp's own controls, and of remote media and
 link previews, which Telegram's servers would fetch — an injected answer could
 otherwise leak chat content in a URL. Rich messages come back from Telegram as
-blocks without text, so the sent Markdown is kept as their ``text`` for history.
+blocks without text, so the sent Markdown is kept as their ``text`` for history:
+as written, before ``links`` (a caller's rewrite of message references into
+links) was applied to what Telegram renders.
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from aiogram import Bot
@@ -39,11 +41,15 @@ _REMOTE_MEDIA = re.compile(
 _FENCE = "```"
 RICH_CHUNK = RICH_LIMIT - 768  # headroom for fence repair and entity overhead
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+type Links = Callable[[str], str]  # rewrites message references into links (``history.links``)
 
 
-def rich(markdown: str) -> InputRichMessage:
-    """Rich Markdown as written: line breaks stay line breaks (Telegram would join them into one line)."""
-    return InputRichMessage(markdown=as_written(markdown))
+def rich(markdown: str, links: Links | None = None) -> InputRichMessage:
+    """Rich Markdown as written: line breaks stay line breaks (Telegram would join them into one line).
+
+    ``links`` applies to what Telegram renders only; the caller keeps ``markdown`` as written.
+    """
+    return InputRichMessage(markdown=as_written(links(markdown) if links else markdown))
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,20 +149,22 @@ async def send_markdown(
     markdown: str,
     *,
     trusted: bool = True,
+    links: Links | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
     silent: bool = False,
 ) -> list[Message]:
     """Send Markdown as one or more rich messages; the keyboard goes on the last one.
 
-    ``silent`` delivers without a notification sound. A failure after some parts went out raises
-    ``PartialDeliveryError`` carrying them.
+    ``links`` turns references into links in what is rendered (the returned messages keep the text as
+    written; a plain-text fallback shows it as written). ``silent`` delivers without a notification
+    sound. A failure after some parts went out raises ``PartialDeliveryError`` carrying them.
     """
     if not trusted:
         markdown = sanitize_untrusted(markdown)
     chunks = split_rich(markdown) if markdown.strip() else ["…"]
     sent: list[Message] = []
     try:
-        await _send_chunks(bot, target, chunks, sent, reply_markup=reply_markup, silent=silent)
+        await _send_chunks(bot, target, chunks, sent, links=links, reply_markup=reply_markup, silent=silent)
     except TelegramAPIError as error:
         if sent:
             raise PartialDeliveryError(error, sent) from error
@@ -181,6 +189,7 @@ async def _send_chunks(
     chunks: list[str],
     sent: list[Message],
     *,
+    links: Links | None,
     reply_markup: InlineKeyboardMarkup | None,
     silent: bool = False,
 ) -> None:
@@ -191,7 +200,7 @@ async def _send_chunks(
             message = await bot.send_rich_message(
                 chat_id=target.chat_id,
                 message_thread_id=target.thread_id,
-                rich_message=rich(chunk),
+                rich_message=rich(chunk, links),
                 reply_parameters=target_for_chunk.reply_parameters,
                 reply_markup=reply_markup if last else None,
                 ephemeral_message_parameters=target.ephemeral,

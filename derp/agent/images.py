@@ -63,9 +63,10 @@ async def _references(
     db: Database, gateway: MediaGateway, chat_id: int, ids: Sequence[int]
 ) -> list[tuple[bytes, str]]:
     async with db.session() as session:
-        rows = [
+        found = [
             row for message_id in ids for row in await referenced_media(session, chat_id, message_id, None)
         ]
+    rows = list({(row.message_id, row.idx): row for row in found}.values())  # an album's photos come once
     return [(item.image.data, item.image.media_type) for item in await inspect(gateway, rows)]
 
 

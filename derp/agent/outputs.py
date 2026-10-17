@@ -40,12 +40,15 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BufferedInputFile
 from aiogram.types import Message as TgMessage
+from pydantic_ai import RunContext
+from pydantic_ai.messages import ModelResponse
 
 from derp.agent.deps import RunDeps
 from derp.agent.images import record_image
+from derp.agent.runs import totals
 from derp.history.capture import record_outgoing
 from derp.inference.api import GeneratedImage
-from derp.money.funding import Funding
+from derp.money.funding import Funding, run_cost, run_fees
 from derp.money.models import RunFee
 from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import PartialDeliveryError, Target
@@ -178,6 +181,29 @@ def pending_cost(deps: RunDeps) -> tuple[Decimal, int]:
     """Provider USD and fees (count) carried by the run's kept results, not yet ledgered."""
     usd = sum((i.cost_usd for k in deps.kept.values() for i in k.made.pending.images), Decimal(0))
     return usd, sum(len(k.made.pending.fees) for k in deps.kept.values())
+
+
+async def hold_left(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> int | None:
+    """Credits of the run's hold not yet used; None when the run holds nothing (free models: no money cap).
+
+    Used: side calls in the ledger (images, media notes, digests), the run's own model turns, its fees,
+    and what its kept results carry. ``next_turn`` also sets aside one more request like the latest (at
+    least a credit). The one measure of the money cap: the guard wraps up, the stream stops the run and
+    web search is sized by it.
+    """
+    deps = ctx.deps
+    if deps.funds.reservation_id is None:
+        return None
+    async with deps.db.session() as session:
+        side = await run_cost(session, deps.run_id)
+        fees = await run_fees(session, deps.run_id)
+    run = ctx.messages[deps.history_start :]
+    kept_usd, kept_fees = pending_cost(deps)
+    paid_fees = kept_fees * deps.settings.effect_credits if deps.funding is Funding.PAID else 0
+    spent = deps.settings.credits_for_usd(float(totals(run).cost_usd + side + kept_usd)) + fees + paid_fees
+    latest = next((m for m in reversed(run) if isinstance(m, ModelResponse)), None)
+    turn = max(deps.settings.credits_for_usd(float(totals([latest]).cost_usd)) if latest else 0, 1)
+    return deps.funds.credits - spent - (turn if next_turn else 0)
 
 
 async def settle(deps: RunDeps, pending: Pending, *, delivered: bool) -> None:

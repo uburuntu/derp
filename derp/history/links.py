@@ -1,8 +1,10 @@
 """Message references as links: "#970746" in an answer opens that message.
 
-Transcripts name messages by id (``#id``), so that is how Derp cites them; on the way out each
-reference to a stored message of this chat becomes its link (``Chat.message_link``). Numbers that
-aren't this chat's messages ("#1 pick"), code and existing links are left as written, and chats
+Transcripts name messages by id (``#id``), so that is how Derp cites them; notes and scheduled jobs
+have their own numbers and are named "note 42" / "job 12", never ``#``. ``message_links`` resolves an
+answer's references to stored messages of this chat (``Chat.message_link``) and hands the sender the
+rewrite to apply to what goes out: Derp's history keeps the text as written, without URLs. Numbers
+that aren't this chat's messages ("#1 pick"), code and existing links are left as written, and chats
 without message links (basic groups, private chats) keep plain references.
 """
 
@@ -15,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from derp.history.models import Chat, Message
 from derp.telegram.text import map_prose
 
-_REFERENCE = re.compile(r"(?<![\w\[\\/#&])#(\d{1,12})(?![\w\]])")
+_REFERENCE = re.compile(r"(?<![\w\[\\/#&!])#(\d{1,12})(?![\w\]])")
 
 
 def references(markdown: str) -> set[int]:
@@ -39,11 +41,11 @@ def link_references(markdown: str, link: Callable[[int], str | None]) -> str:
     return map_prose(markdown, lambda text: _REFERENCE.sub(replace, text))
 
 
-async def link_messages(session: AsyncSession, chat: Chat, markdown: str) -> str:
-    """``markdown`` with references to this chat's stored messages linked."""
+async def message_links(session: AsyncSession, chat: Chat, markdown: str) -> Callable[[str], str] | None:
+    """The rewrite linking ``markdown``'s references to this chat's stored messages; None when there are none."""
     wanted = references(markdown) if chat.link_prefix else set[int]()
     if not wanted:
-        return markdown
+        return None
     stored = set(
         await session.scalars(
             select(Message.message_id).where(
@@ -51,6 +53,8 @@ async def link_messages(session: AsyncSession, chat: Chat, markdown: str) -> str
             )
         )
     )
-    return link_references(
-        markdown, lambda message_id: chat.message_link(message_id) if message_id in stored else None
+    if not stored:
+        return None
+    return lambda text: link_references(
+        text, lambda message_id: chat.message_link(message_id) if message_id in stored else None
     )

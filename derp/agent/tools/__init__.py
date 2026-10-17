@@ -1,4 +1,4 @@
-"""Tool families available to the agent (``toolsets_for`` filters them per run) and run-wide capabilities."""
+"""Tool families available to the agent (``toolsets.offered`` picks them per run) and run-wide capabilities."""
 
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai_harness import ToolOutputLimits
@@ -40,15 +40,6 @@ FAMILIES: tuple[Family, ...] = (
     effects.background_family,
     effects.song_family,
     effects.profile_family,
-)
-# Inline and guest answers have no chat behind them: only families that neither read chat data nor write or
-# send anything (each still limited to its tiers). Code Mode's sandbox is a capability, so they have it too.
-DETACHED: tuple[Family, ...] = (
-    about.family,
-    about.source_family,
-    utilities.family,
-    utilities.wolfram_family,
-    utilities.code_family,
 )
 
 

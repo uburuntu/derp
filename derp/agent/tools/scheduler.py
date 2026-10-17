@@ -98,7 +98,9 @@ async def schedule(
         job_id = job.id
     again = f", repeating {repeat}" if repeat else ""
     paid = " Each run is paid like a normal answer from their Derpcoins." if answer_it else ""
-    return f"Scheduled #{job_id} for {show_time(when, deps.tz)}{again}.{paid} Show the time exactly as given."
+    return (
+        f"Scheduled job {job_id} for {show_time(when, deps.tz)}{again}.{paid} Show the time exactly as given."
+    )
 
 
 @toolset.tool
@@ -122,7 +124,7 @@ async def list_jobs(ctx: RunContext[RunDeps]) -> str:
         repeat = f", {job.repeat}" if job.repeat else ""
         kind = "prompt" if job.kind == "prompt" else "reminder"
         lines.append(
-            f"#{job.id} {show_time(job.next_at, deps.tz)}{repeat}{state} — {kind} by {one_line(name or 'someone')}: "
+            f"job {job.id} {show_time(job.next_at, deps.tz)}{repeat}{state} — {kind} by {one_line(name or 'someone')}: "
             f"{one_line(job.text, 120)}"
         )
     return "\n".join(lines)
@@ -133,7 +135,7 @@ async def cancel_job(ctx: RunContext[RunDeps], job_id: int) -> str:
     """Cancel a scheduled job of this chat (your own, or any if you're an admin).
 
     Args:
-        job_id: The #id from list_jobs.
+        job_id: The job number from list_jobs.
     """
     deps = ctx.deps
     async with deps.db.transaction() as session:
@@ -143,7 +145,7 @@ async def cancel_job(ctx: RunContext[RunDeps], job_id: int) -> str:
         if job.creator_id != deps.user_id and not await _is_admin(deps):
             return "Only its creator or an admin can cancel that one."
         job.state = "cancelled"
-    return f"Cancelled #{job_id}."
+    return f"Cancelled job {job_id}."
 
 
 @toolset.tool
@@ -151,7 +153,7 @@ async def resume_job(ctx: RunContext[RunDeps], job_id: int) -> str:
     """Resume a paused scheduled job of this chat (its creator or an admin).
 
     Args:
-        job_id: The #id from list_jobs.
+        job_id: The job number from list_jobs.
     """
     deps = ctx.deps
     now = datetime.now(UTC)
@@ -164,7 +166,7 @@ async def resume_job(ctx: RunContext[RunDeps], job_id: int) -> str:
         if not resume(job, now, deps.tz):
             return "That one-off time has passed; schedule a new one instead."
         when = job.next_at
-    return f"Resumed #{job_id}; next run {show_time(when, deps.tz)}."
+    return f"Resumed job {job_id}; next run {show_time(when, deps.tz)}."
 
 
 family = Family("scheduler", toolset, deferred=("list_jobs", "cancel_job", "resume_job"))
