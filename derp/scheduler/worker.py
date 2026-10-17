@@ -76,7 +76,7 @@ def as_message(job: Job, chat: Chat, user: User | None, now: datetime) -> TgMess
         date=now,
         chat=tg_chat,
         from_user=sender,
-        text=f"⏰ (scheduled task) {job.text}",
+        text=f"⏰ (scheduled task firing now — carry it out, don't schedule it again) {job.text}",
         message_thread_id=job.thread_id,
         is_topic_message=job.thread_id is not None or None,
     )

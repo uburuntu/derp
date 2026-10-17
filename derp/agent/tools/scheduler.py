@@ -56,6 +56,8 @@ async def schedule(
         answer_it: True for "every morning, tell us the weather"-style requests.
     """
     deps = ctx.deps
+    if deps.trigger_message_id == 0:
+        return "This is a scheduled task firing now; carry out the request instead of scheduling a new one."
     now = datetime.now(UTC)
     when = parse_local(at, deps.tz) if at else now + timedelta(minutes=in_minutes) if in_minutes else None
     if when is None:

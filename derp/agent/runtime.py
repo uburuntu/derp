@@ -111,8 +111,8 @@ class Detached:
 
 WINDOW_STARTS_KEPT = 10_000  # topics remembered; forgetting one only costs a cache miss
 DETACHED_BRIEF = (
-    "You were summoned {where}: you can't see that chat, its history or its members, and you have no "
-    "tools except the web. Answer the request on its own, briefly. The asker is “{asker}”. Now: {now}."
+    "You were summoned {where}: you can't see that chat, its history or its members, and you have {tools}. "
+    "Answer the request on its own, briefly. The asker is “{asker}”. Now: {now}."
 )
 
 
@@ -484,8 +484,12 @@ class Runtime:
                 gateway=self.gateway, pin=pin, model=model, digest_pin=pin, digest_model=model,
                 digest_role=funds.funding.role.value, api=self.api, pins=self.pins, lookups=self.lookups,
             )  # fmt: skip
+            tools = "no tools" if funds.funding is Funding.FREE else "no tools except the web"
             brief = DETACHED_BRIEF.format(
-                where=where, asker=one_line(asker.full_name), now=describe_time(datetime.now(UTC), UTC)
+                where=where,
+                tools=tools,
+                asker=one_line(asker.full_name),
+                now=describe_time(datetime.now(UTC), UTC),
             )
             request = f"<situation>\n{brief}\n</situation>\n\n{neutralize(prompt)}"
             caps = self.settings.run_caps
