@@ -13,24 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.history.models import Chat, Message
+from derp.telegram.text import map_prose
 
 _REFERENCE = re.compile(r"(?<![\w\[\\/#&])#(\d{1,12})(?![\w\]])")
-_FENCE = re.compile(r" {0,3}(```|~~~)")
-_CODE_SPAN = re.compile(r"(`[^`\n]*`)")
-
-
-def _prose(markdown: str, change: Callable[[str], str]) -> str:
-    """``markdown`` with ``change`` applied to everything outside code blocks and code spans."""
-    lines: list[str] = []
-    fence: str | None = None
-    for line in markdown.split("\n"):
-        if marker := _FENCE.match(line):
-            fence = None if fence == marker.group(1) else fence or marker.group(1)
-        elif fence is None:
-            parts = _CODE_SPAN.split(line)
-            line = "".join(part if index % 2 else change(part) for index, part in enumerate(parts))
-        lines.append(line)
-    return "\n".join(lines)
 
 
 def references(markdown: str) -> set[int]:
@@ -40,7 +25,7 @@ def references(markdown: str) -> set[int]:
         found.update(int(match.group(1)) for match in _REFERENCE.finditer(text))
         return text
 
-    _prose(markdown, collect)
+    map_prose(markdown, collect)
     return found
 
 
@@ -51,7 +36,7 @@ def link_references(markdown: str, link: Callable[[int], str | None]) -> str:
         url = link(int(match.group(1)))
         return f"[{match.group(0)}]({url})" if url else match.group(0)
 
-    return _prose(markdown, lambda text: _REFERENCE.sub(replace, text))
+    return map_prose(markdown, lambda text: _REFERENCE.sub(replace, text))
 
 
 async def link_messages(session: AsyncSession, chat: Chat, markdown: str) -> str:

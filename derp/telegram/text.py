@@ -28,6 +28,42 @@ def literal(text: str) -> str:
     return _PUNCTUATION.sub(r"\\\1", text)
 
 
+_CODE_SPAN = re.compile(r"(`[^`\n]*`)")
+
+
+def _prose_mask(lines: list[str]) -> list[bool]:
+    """Which lines are prose: not code-block fences or contents, not inside a ``$$ … $$`` formula.
+
+    A formula's opening line belongs to the formula; its closing line is prose again (text may follow).
+    """
+    mask: list[bool] = []
+    fence: str | None = None
+    math = False
+    paired = sum(line.count("$$") for line in lines) % 2 == 0  # a stray "$$$" must not swallow the rest
+    for line in lines:
+        if marker := _FENCE_LINE.match(line):
+            fence = None if fence == marker.group(1) else fence or marker.group(1)
+            mask.append(False)
+        elif fence is not None:
+            mask.append(False)
+        elif paired and line.count("$$") % 2:
+            math = not math
+            mask.append(not math)
+        else:
+            mask.append(not math)
+    return mask
+
+
+def map_prose(markdown: str, change: Callable[[str], str]) -> str:
+    """``markdown`` with ``change`` applied to its prose: code blocks, code spans and formulas untouched."""
+    lines = markdown.split("\n")
+    for index, prose in enumerate(_prose_mask(lines)):
+        if prose:
+            parts = _CODE_SPAN.split(lines[index])
+            lines[index] = "".join(part if odd % 2 else change(part) for odd, part in enumerate(parts))
+    return "\n".join(lines)
+
+
 def as_written(markdown: str) -> str:
     """Markdown that Telegram renders as written: every line on its own line, "#3" not a heading.
 
@@ -36,21 +72,11 @@ def as_written(markdown: str) -> str:
     formulas are left as written: their source is raw (LaTeX for formulas).
     """
     lines = markdown.split("\n")
-    fence: str | None = None
-    math = False
-    paired = markdown.count("$$") % 2 == 0  # a stray "$$$" must not swallow the rest
     last = len(lines) - 1
-    for index, line in enumerate(lines):
-        if marker := _FENCE_LINE.match(line):
-            fence = None if fence == marker.group(1) else fence or marker.group(1)
+    for index, prose in enumerate(_prose_mask(lines)):
+        if not prose:
             continue
-        if fence is None and paired and line.count("$$") % 2:
-            math = not math
-            if math:
-                continue  # this line break is inside the formula
-        elif math or fence is not None:
-            continue
-        line = lines[index] = _HASH_START.sub(r"\1\\#", line)
+        line = lines[index] = _HASH_START.sub(r"\1\\#", lines[index])
         if index == last or not line.strip() or not lines[index + 1].strip():
             continue
         if _FENCE_LINE.match(lines[index + 1]) or line.endswith(("  ", "\\")):
