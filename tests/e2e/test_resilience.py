@@ -13,9 +13,10 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo
+from pydantic_ai.native_tools import WebFetchTool, WebSearchTool
 from sqlalchemy import select
 
-from derp.agent.guard import EMPTY_NOTE, WRAP_UP_NOTE
+from derp.agent.guard import EMPTY_NOTE, SEARCH_NOTE, WRAP_UP_NOTE
 from derp.agent.models import AgentRun
 from derp.config import RunCaps, Settings
 from derp.history.models import User
@@ -170,3 +171,41 @@ async def test_a_busy_free_model_falls_back_to_the_next(
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun))
         assert run is not None and (run.status, run.funding) == ("completed", "free")
+
+
+def searches_allowed(info: AgentInfo) -> int | None:
+    """The request's web search allowance; None when search was left out."""
+    tool = next((t for t in info.model_request_parameters.native_tools if isinstance(t, WebSearchTool)), None)
+    return None if tool is None else tool.max_uses
+
+
+async def test_web_search_is_left_out_when_the_hold_cant_cover_it(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    # Sponsored: the day's free Derpcoins hold less than one search's fee (plus markup).
+    sent = await conversation.send(DORA, text="derp what's new in the news")
+    await conversation.expect_reply(sent)
+    await conversation.settle(sent)
+    assert searches_allowed(model.infos[-1]) is None
+    assert any(isinstance(t, WebFetchTool) for t in model.infos[-1].model_request_parameters.native_tools)
+    assert SEARCH_NOTE in notes(model.requests[-1])
+
+
+async def test_web_searches_are_limited_to_what_the_hold_covers(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    async with conversation.db.transaction() as session:
+        wallet_id = (await wallet(session, "user", DORA.id)).id
+        await credit(session, wallet_id, "stars:dora", 20, "purchase")
+    sent = await conversation.send(DORA, text="derp look it up")
+    await conversation.expect_reply(sent)
+    await conversation.settle(sent)
+    assert searches_allowed(model.infos[-1]) == 1  # 20 held: one turn, then one 12-credit search fits
+    assert SEARCH_NOTE not in notes(model.requests[-1])
+
+    async with conversation.db.transaction() as session:
+        await credit(session, wallet_id, "stars:dora-more", 500, "purchase")
+    sent = await conversation.send(DORA, text="derp look it up again")
+    await conversation.expect_reply(sent)
+    await conversation.settle(sent)
+    assert searches_allowed(model.infos[-1]) == 2

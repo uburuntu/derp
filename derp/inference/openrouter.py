@@ -151,6 +151,7 @@ def response_usage(response: ModelResponse) -> CallUsage:
     usage = response.usage
     server_tools: Mapping[str, Any] = details.get("server_tool_use") or {}
     return CallUsage(
+        # 0 only for free models: paid responses without a cost are priced first (agent.runs.price_unreported)
         cost_usd=Decimal(str(details.get("cost") or 0)),
         model=response.model_name,
         downstream_provider=details.get("downstream_provider"),

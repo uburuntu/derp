@@ -51,6 +51,7 @@ class RunDeps:
         default_factory=list[tuple[int, str]]
     )  # (message id, kind) so far
     reacted: set[int] = field(default_factory=set[int])  # messages Derp reacted to with the react tool
+    search_withheld: bool = False  # the hold can't cover a web search in the coming request
 
     @property
     def funding(self) -> Funding:

@@ -12,14 +12,15 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models import Model
 
+from derp.agent.runs import price_unreported
 from derp.db.engine import Database
 from derp.history.digests import DayStats, day_messages, save
 from derp.history.models import Digest
 from derp.history.queries import Scope
-from derp.history.render import load_views, render_transcript
+from derp.history.render import estimate_tokens, load_views, render_transcript
 from derp.inference.ledger import record_usage
 from derp.inference.openrouter import chat_settings, response_usage
-from derp.inference.roles import RolePin
+from derp.inference.roles import ModelRole, RolePin
 
 CHUNK_CHARS = 40_000  # transcript characters per summarizing call
 MAX_CHUNKS = 6
@@ -110,6 +111,7 @@ async def build(
         transcript = render_transcript(await load_views(session, rows), tz)
     stats = DayStats(rows[0].message_id, rows[-1].message_id, len(rows))
     text, paid = await summarize(model, pin, transcript)
+    await price_unreported(db, paid, ModelRole(role), estimate_tokens(transcript))
     served = next((r.model_name for r in reversed(paid) if r.model_name), None) or pin.model
     async with db.transaction() as session:
         for response in paid:

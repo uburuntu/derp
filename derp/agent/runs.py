@@ -1,20 +1,32 @@
 """Agent run records: start, outputs, finish (usage, cost, provider calls, history)."""
 
+import contextlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, ModelResponse, ToolCallPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+)
 from sqlalchemy import null, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.models import AgentRun, RunOutput
 from derp.config import Retention
+from derp.db.engine import Database
+from derp.history.render import estimate_tokens
 from derp.history.retention import expired
-from derp.inference.ledger import record_usage
+from derp.inference.api import OpenRouterAPI, OpenRouterError
+from derp.inference.ledger import cancelled_cost, estimate_cost, record_usage
+from derp.inference.models import ModelPin
 from derp.inference.openrouter import response_usage
+from derp.inference.roles import ModelRole
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +68,51 @@ def totals(messages: Sequence[ModelMessage]) -> RunTotals:
         tool_calls=sum(isinstance(p, ToolCallPart) for r in responses for p in r.parts),
         served_model=next((u.model for u in reversed(usages) if u.model), None),
     )
+
+
+async def price_unreported(
+    db: Database,
+    messages: Sequence[ModelMessage],
+    role: ModelRole,
+    context_tokens: int,
+    *,
+    api: OpenRouterAPI | None = None,
+) -> None:
+    """Give every paid response that came back without a cost one, so none is ledgered as free.
+
+    Streams cut off by stop or timeout never get their usage chunk, and a completed response
+    may lack ``usage.cost`` too. OpenRouter is asked by generation id (when ``api`` is given);
+    otherwise the cost is estimated from the response's tokens (``context_tokens`` and the
+    written text when it has none) at the pin's price snapshot. Free models stay free.
+    """
+    if role is ModelRole.CHAT_FREE:
+        return
+    unpriced = [
+        m for m in messages if isinstance(m, ModelResponse) and (m.provider_details or {}).get("cost") is None
+    ]
+    if not unpriced:
+        return
+    async with db.session() as session:
+        prices = await session.get(ModelPin, role.value)
+    for response in unpriced:
+        cost: Decimal | None = None
+        if api is not None and response.provider_response_id:
+            with contextlib.suppress(OpenRouterError):
+                cost = await cancelled_cost(api, response.provider_response_id)
+        if cost is None and prices is not None and prices.price_prompt is not None:
+            written = sum(estimate_tokens(p.content) for p in response.parts if isinstance(p, TextPart))
+            cost = estimate_cost(
+                response.usage.input_tokens or context_tokens,
+                response.usage.output_tokens or written,
+                float(prices.price_prompt),
+                float(prices.price_completion or 0),
+            )
+        if cost is not None:
+            response.provider_details = {
+                **(response.provider_details or {}),
+                "cost": float(cost),
+                "estimated": True,
+            }
 
 
 async def start_run(

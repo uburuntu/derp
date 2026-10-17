@@ -147,7 +147,7 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
                 services.settings,
                 f"⭐ Recovered a missed payment: {purchase.stars} · {purchase.product} · +{purchase.credits} dc",
             )
-        if applied := await reconcile_refunds(services.db, services.bot):
+        if applied := await reconcile_refunds(services.db, services.bot, services.settings):
             await notify_owners(services.bot, services.settings, f"Refund sweep applied {applied} refund(s).")
 
     async def free_stale_holds() -> None:

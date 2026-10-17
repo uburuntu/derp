@@ -44,7 +44,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 ## money
 
 - Answers cost Derpcoins: what the AI providers actually charged plus a margin, rounded up. If nothing reached
-  the chat, nothing is charged. Reply /info to any answer to see its model, tokens, cost and who paid.
+  the chat, nothing is charged. If an answer breaks or gets too expensive after part of it (even just a
+  reaction) reached the chat, the work so far is charged, and Derp says so. Reply /info to any answer to see its
+  model, tokens, cost and who paid.
 - Free daily Derpcoins: everyone gets an allowance each UTC day on a cheaper model with fewer tools; it doesn't
   accumulate. Drawing images needs bought Derpcoins.
 - Packs: bought with Telegram Stars in /buy; bought Derpcoins don't expire.
@@ -60,7 +62,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   Run / Cancel button first; only the asker decides.
 - Balances are private: /credits in a group answers ephemerally or by DM, never in the group.
 - Derpcoins aren't money: no cash-out, no transfers between people. Payment problems: /paysupport. A refund
-  returns the Stars and removes what is left of that purchase's Derpcoins.
+  returns the Stars and removes what is left of that purchase's Derpcoins; refunding a Derp+ payment also ends
+  Derp+ and stops its renewal.
 
 ## memory
 
@@ -99,7 +102,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Tiers: "paid" is bought Derpcoins, Derp+ or the group wallet; "sponsored" is the free daily allowance; "free" is
   free models. On free models, toolbox tools are found on demand; they work the same.
 - Every answer can also search the web and open links (paid and sponsored) and run exact maths in a Python sandbox
-  with no network or files (every tier).
+  with no network or files (every tier). A web search has its own fee, so it runs only while the answer's budget
+  still covers it; the free daily allowance usually doesn't.
 
 ## source
 
