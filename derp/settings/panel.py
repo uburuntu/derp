@@ -2,9 +2,11 @@
 
 Everyone sees the chat's settings; only admins (anyone, in a private chat)
 change them, and the role is checked again on every press. Personal choices
-(using my Derpcoins in groups) are each person's own. In groups /settings is
-an ephemeral command, so the panel is ephemeral and its buttons edit it
-through the ephemeral edit methods. While Telegram hides the chat from Derp,
+(using my Derpcoins in groups, being named when chipping in) are each
+person's own and show only on a panel nobody else sees. In groups /settings
+is an ephemeral command, so the panel is ephemeral and its buttons edit it
+through the ephemeral edit methods; one typed out in full is public and
+leaves them out. While Telegram hides the chat from Derp,
 the panel offers the make-me-admin link.
 
 Destructive changes ask first: turning context off deletes the chat's stored
@@ -125,7 +127,10 @@ async def render(
     admin: bool = False,
     viewer: int | None = None,
 ) -> tuple[str, InlineKeyboardMarkup | None]:
-    """The panel page for this viewer; ``admin`` decides which jobs they get buttons for."""
+    """The panel page for this viewer; ``admin`` decides which jobs they get buttons for.
+
+    ``user`` is the viewer whose own choices the page shows: None on a panel the whole group sees.
+    """
     group = chat.type != "private"
     on, off = t(locale, "settings.on"), t(locale, "settings.off")
     back = button(t(locale, "settings.back"), _act("page", "main"))
@@ -178,10 +183,21 @@ async def render(
     else:
         lines.append(t(locale, "settings.free_private", state=on if consented(user) else off))
     lines.append(t(locale, "settings.jobs", count=jobs))
-    spends = user is None or user.group_spending
-    lines.append(t(locale, "settings.spend_on" if spends else "settings.spend_off"))
-    named = user is None or user.patron_named
-    lines.append(t(locale, "settings.named_on" if named else "settings.named_off"))
+    personal: list[InlineKeyboardButton] = []
+    if user is not None:
+        spends, named = user.group_spending, user.patron_named
+        lines.append(t(locale, "settings.spend_on" if spends else "settings.spend_off"))
+        lines.append(t(locale, "settings.named_on" if named else "settings.named_off"))
+        personal = [
+            button(
+                t(locale, "settings.spend_button", state=on if spends else off),
+                _act("spend", "off" if spends else "on"),
+            ),
+            button(
+                t(locale, "settings.named_button", state=on if named else off),
+                _act("named", "off" if named else "on"),
+            ),
+        ]
     if group:
         lines.append(t(locale, "settings.admins_only"))
 
@@ -192,7 +208,6 @@ async def render(
     mode = t(locale, f"settings.notes_{chat.notes_mode}")
     free_on = chat.free_models if group else consented(user)
     free = t(locale, "settings.free_button", state=on if free_on else off)
-    spend = t(locale, "settings.spend_button", state=on if spends else off)
     keyboard = markup(
         link(t(locale, "onboarding.make_admin"), context.admin_url) if context.admin_url else None,
         [ambient, button(t(locale, "settings.retention_button", days=kept), _act("page", "retention"))],
@@ -200,11 +215,7 @@ async def render(
         button(free, _act("free", "off" if free_on else "on")),
         button(t(locale, "settings.rules_clear"), _act("rules", "clear")) if chat.rules else None,
         button(t(locale, "settings.jobs_button", count=jobs), _act("page", "jobs")) if jobs else None,
-        button(spend, _act("spend", "off" if spends else "on")),
-        button(
-            t(locale, "settings.named_button", state=on if named else off),
-            _act("named", "off" if named else "on"),
-        ),
+        *personal,
     )
     return "\n".join(lines), keyboard
 
@@ -218,7 +229,8 @@ async def on_settings(message: Message, db: Database, settings: Settings, bot: B
         user = await session.get(User, message.from_user.id)
         if chat is None:
             return
-        text, keyboard = await render(session, bot, settings, chat, user, locale)
+        own = chat.type == "private" or bool(message.ephemeral_message_id)  # else the whole group sees it
+        text, keyboard = await render(session, bot, settings, chat, user if own else None, locale)
     await send_markdown(bot, Target.reply_to_message(message), text, reply_markup=keyboard)
 
 
@@ -317,7 +329,8 @@ async def on_action(press: Press, data: SettingsAction, db: Database, bot: Bot, 
         return await press.strip()  # posted in the group on request: it ends here, not as someone's panel
     async with db.session() as session:
         fresh = await session.get(Chat, chat.id)
-        user = await session.get(User, press.user_id)
+        own = chat.type == "private" or press.ephemeral  # else the whole group sees it
+        user = await session.get(User, press.user_id) if own else None
         if fresh is None:
             return
         text, keyboard = await render(

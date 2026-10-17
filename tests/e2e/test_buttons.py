@@ -65,3 +65,7 @@ async def test_settings_offer_the_admin_link_when_derp_cant_read_the_chat(conver
     first = panel["reply_markup"]["inline_keyboard"][0][0]
     assert first["url"] == "https://t.me/DerpRobot?startgroup=derp&admin=invite_users"
     assert first["text"] == "👀 Let me read the chat (make me admin)"
+    # Typed out in full, the panel is public: nobody's own choices are on it.
+    assert "Your Derpcoins in groups" not in panel["rich_message"]["markdown"]
+    labels = [b["text"] for row in panel["reply_markup"]["inline_keyboard"] for b in row]
+    assert not any(label.startswith(("💰", "🎖")) for label in labels)
