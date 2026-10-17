@@ -7,6 +7,12 @@ the run fails. ``Lenient`` repairs arguments against each tool's JSON schema
 before the tool's own validator sees them: JSON text where the schema wants an
 array or object is parsed, and "" for an optional argument means "not given".
 Arguments that already fit pass through unchanged.
+
+The run's other repair layer, Harness ``RepairToolArguments`` (``tools.CAPABILITIES``),
+does a different job one step earlier: its ``before_tool_validate`` hook fixes
+malformed JSON *text* (unclosed braces, trailing commas) and leaves valid JSON
+alone. ``Lenient`` then fixes *valid* JSON whose values are quoted against the
+schema, which no JSON repair can see. Both are needed; neither covers the other.
 """
 
 import json
