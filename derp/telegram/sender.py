@@ -27,7 +27,7 @@ from aiogram.types import (
     ReplyParameters,
 )
 
-from derp.telegram.text import PLAIN_LIMIT, RICH_LIMIT, hard_breaks, split_text
+from derp.telegram.text import PLAIN_LIMIT, RICH_LIMIT, as_written, split_text
 
 _INTERACTIVE_TAGS = re.compile(r"</?\s*tg-(?:button|button-row|thinking)\b[^>]*>", re.IGNORECASE)
 _MEDIA_TAGS = re.compile(
@@ -43,7 +43,7 @@ NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 def rich(markdown: str) -> InputRichMessage:
     """Rich Markdown as written: line breaks stay line breaks (Telegram would join them into one line)."""
-    return InputRichMessage(markdown=hard_breaks(markdown))
+    return InputRichMessage(markdown=as_written(markdown))
 
 
 @dataclass(frozen=True, slots=True)

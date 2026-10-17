@@ -3,8 +3,8 @@
 Plain messages are limited in UTF-16 code units (4096); rich messages allow
 32768 characters. Splits prefer paragraph, then line, then word boundaries.
 Rich Markdown follows GitHub Flavored Markdown, where a single newline inside a
-paragraph is a soft break rendered as a space; ``hard_breaks`` keeps every line
-on its own line, as written.
+paragraph is a soft break rendered as a space, and Telegram reads "#" at the start
+of a block as a heading; ``as_written`` keeps both as written.
 """
 
 import re
@@ -16,18 +16,24 @@ RICH_LIMIT = 32_768
 
 
 _FENCE_LINE = re.compile(r" {0,3}(```|~~~)")
+# Telegram reads "#" at the start of a block as a heading even without the space GFM requires
+# ("#3 chat", "#news"); a real heading ("# Title", "## Title") keeps its space.
+_HASH_START = re.compile(r"^((?:\s*(?:[-*+]|\d{1,9}[.)])\s+|\s*>\s*)*\s*)#(?=[^#\s])")
 
 
-def hard_breaks(markdown: str) -> str:
-    """Each line break inside a paragraph made a hard break (two trailing spaces).
+def as_written(markdown: str) -> str:
+    """Markdown that Telegram renders as written: every line on its own line, "#3" not a heading.
 
-    Code blocks and ``$$ … $$`` formulas are left as written: their source is raw (LaTeX for formulas).
+    A line break inside a paragraph becomes a hard break (two trailing spaces); a "#" that starts a
+    block without a space is escaped (a hashtag stays a hashtag). Code blocks and ``$$ … $$``
+    formulas are left as written: their source is raw (LaTeX for formulas).
     """
     lines = markdown.split("\n")
     fence: str | None = None
     math = False
     paired = markdown.count("$$") % 2 == 0  # a stray "$$$" must not swallow the rest
-    for index, line in enumerate(lines[:-1]):
+    last = len(lines) - 1
+    for index, line in enumerate(lines):
         if marker := _FENCE_LINE.match(line):
             fence = None if fence == marker.group(1) else fence or marker.group(1)
             continue
@@ -35,14 +41,23 @@ def hard_breaks(markdown: str) -> str:
             math = not math
             if math:
                 continue  # this line break is inside the formula
-        elif math:
+        elif math or fence is not None:
             continue
-        if fence is not None or not line.strip() or not lines[index + 1].strip():
+        line = lines[index] = _HASH_START.sub(r"\1\\#", line)
+        if index == last or not line.strip() or not lines[index + 1].strip():
             continue
         if _FENCE_LINE.match(lines[index + 1]) or line.endswith(("  ", "\\")):
             continue
         lines[index] = line + "  "
     return "\n".join(lines)
+
+
+_MARKUP = re.compile(r"([\\`*_~|\[\]<>#=$])")
+
+
+def literal(text: str) -> str:
+    """Untrusted text (a chat title, a name) shown as-is inside trusted Markdown, table cells included."""
+    return _MARKUP.sub(r"\\\1", text)
 
 
 def utf16_len(text: str) -> int:

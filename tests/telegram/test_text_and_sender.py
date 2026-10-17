@@ -1,7 +1,7 @@
 from aiogram.types import Message
 
 from derp.telegram.sender import Target, sanitize_untrusted, split_rich
-from derp.telegram.text import hard_breaks, split_text, truncate, utf16_len
+from derp.telegram.text import as_written, split_text, truncate, utf16_len
 
 
 def test_utf16_measure_counts_astral_as_two() -> None:
@@ -109,15 +109,15 @@ async def test_a_failure_after_the_first_part_reports_what_was_delivered() -> No
 
 def test_line_breaks_stay_line_breaks_outside_code() -> None:
     text = "**Commands**\n/settings — settings\n/buy — buy\n\nNext\n```py\na = 1\nb = 2\n```\n- one\n- two"
-    assert hard_breaks(text) == (
+    assert as_written(text) == (
         "**Commands**  \n/settings — settings  \n/buy — buy\n\nNext\n```py\na = 1\nb = 2\n```\n- one  \n- two"
     )
 
 
 def test_existing_hard_breaks_and_single_lines_are_left_alone() -> None:
-    assert hard_breaks("one  \ntwo\\\nthree") == "one  \ntwo\\\nthree"
-    assert hard_breaks("just one line") == "just one line"
-    assert hard_breaks("~~~\nx\ny\n~~~\nz\nw") == "~~~\nx\ny\n~~~\nz  \nw"
+    assert as_written("one  \ntwo\\\nthree") == "one  \ntwo\\\nthree"
+    assert as_written("just one line") == "just one line"
+    assert as_written("~~~\nx\ny\n~~~\nz\nw") == "~~~\nx\ny\n~~~\nz  \nw"
 
 
 async def test_plain_fallback_never_shows_link_previews() -> None:
@@ -157,8 +157,17 @@ async def test_plain_fallback_never_shows_link_previews() -> None:
 
 def test_formula_blocks_keep_their_raw_latex() -> None:
     text = "Area:\n$$\n\\begin{aligned}\nA &= \\pi r^2\n\\end{aligned}\n$$\nso\nthere\n$$E = mc^2$$\nend"
-    assert hard_breaks(text) == (
+    assert as_written(text) == (
         "Area:  \n$$\n\\begin{aligned}\nA &= \\pi r^2\n\\end{aligned}\n$$  \nso  \nthere  \n$$E = mc^2$$  \nend"
     )
-    assert hard_breaks("$$ x = 1\ny = 2 $$\nz") == "$$ x = 1\ny = 2 $$  \nz"
-    assert hard_breaks("costs $$$\nreally\nmuch") == "costs $$$  \nreally  \nmuch"  # unpaired: not a formula
+    assert as_written("$$ x = 1\ny = 2 $$\nz") == "$$ x = 1\ny = 2 $$  \nz"
+    assert as_written("costs $$$\nreally\nmuch") == "costs $$$  \nreally  \nmuch"  # unpaired: not a formula
+
+
+def test_a_hash_starting_a_block_is_not_a_heading() -> None:
+    # Telegram makes "#3 chat" a heading without GFM's space; escaped, "#news" still links as a hashtag.
+    text = "#3 chat\n- #4 x\n1. #5 y\n> #news\n## Real heading\nmid #6 and `#7`\n```\n#8\n```"
+    assert as_written(text) == (
+        "\\#3 chat  \n- \\#4 x  \n1. \\#5 y  \n> \\#news  \n## Real heading  \nmid #6 and `#7`\n```\n#8\n```"
+    )
+    assert as_written("#") == "#" and as_written("# Title") == "# Title"

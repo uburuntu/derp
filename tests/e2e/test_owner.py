@@ -67,10 +67,10 @@ async def test_stats_show_spend_revenue_and_decide_proposals(conversation: Conve
     sent = await conversation.send(OWNER, text="/stats")
     reply = await conversation.expect_reply(sent)
     text = reply["rich_message"]["markdown"]
-    assert "Provider cost (24 h · 7 d · 30 d): $0.32 · $0.32 · $0.32" in text
-    assert "paid $0.30" in text and "creator $0.02" in text and "Revenue (24 h · 7 d · 30 d): 50⭐" in text
-    assert "Yard (`-1040`) — $0.30" in text and "OpenRouter key: $12.50 left of $50.00" in text
-    assert "#1 chat: `old/model` → `new/model` — cheaper" in text
+    assert "| Provider cost | $0.32 | $0.32 | $0.32 |" in text and "| Revenue | 50⭐ |" in text
+    assert "paid $0.30" in text and "creator $0.02" in text
+    assert "| Yard | `-1040` | $0.30 |" in text and "**OpenRouter key:** $12.50 left of $50.00" in text
+    assert "**Proposal 1** · chat: `old/model` → `new/model`  \ncheaper" in text
     apply, _ = reply["reply_markup"]["inline_keyboard"][0]
     assert apply["callback_data"] == ConsoleAction(action="apply", key="1").pack()
 
@@ -81,7 +81,7 @@ async def test_stats_show_spend_revenue_and_decide_proposals(conversation: Conve
         pin = await session.get(ModelPin, "chat")
         assert pin is not None and pin.pin["model"] == "new/model" and pin.source == "owner"
     edited = conversation.api.calls_of("editMessageText")[-1]["rich_message"]["markdown"]
-    assert "Roll back" not in edited and "`new/model` (owner)" in edited
+    assert "Roll back" not in edited and "| chat | `new/model` | owner |" in edited
     rollback = ConsoleAction(action="rollback", key="chat").pack()
     await conversation.press(OWNER, OWNER.id, stats_id, rollback)
     async with conversation.db.session() as session:

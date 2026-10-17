@@ -26,6 +26,7 @@ from derp.money.funding import day_end, sponsored_lot_id
 from derp.money.models import CreditLot, Wallet
 from derp.money.wallets import balances, wallet
 from derp.telegram.sender import Target, send_markdown, send_privately
+from derp.telegram.text import literal
 
 USAGE_DAYS = 30
 USAGE_ROWS = 10
@@ -117,7 +118,7 @@ async def _chat_usage(db: Database, wallet_id: int, locale: str, now: datetime) 
         ).all()
     if not rows:
         return [t(locale, "credits.usage_none", days=USAGE_DAYS)]
-    lines = [f"- {one_line(' '.join(p for p in (r[0], r[1]) if p))} — {int(r[2]):,}" for r in rows]
+    lines = [f"- {literal(one_line(' '.join(p for p in (r[0], r[1]) if p)))} — {int(r[2]):,}" for r in rows]
     return [t(locale, "credits.usage", days=USAGE_DAYS), *lines]
 
 

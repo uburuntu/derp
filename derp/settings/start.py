@@ -39,6 +39,7 @@ from derp.money.wallets import balances, wallet
 from derp.settings.onboarding import context_key
 from derp.settings.panel import kept_days
 from derp.telegram.sender import Target, send_markdown
+from derp.telegram.text import literal
 
 log = logging.getLogger("derp.start")
 
@@ -170,7 +171,7 @@ async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user
     username = await _username(bot)
     context = await context_key(bot, chat)
     lines = [
-        t(locale, "help.title_group", title=one_line(chat.title or t(locale, "settings.this_chat"))),
+        t(locale, "help.title_group", title=literal(one_line(chat.title or t(locale, "settings.this_chat")))),
         t(locale, "onboarding.summon", username=username),
         t(locale, context, days=kept_days(chat, settings)),
         t(locale, "help.chat_wallet", left=f"{left:,}"),

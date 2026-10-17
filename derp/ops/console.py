@@ -33,6 +33,7 @@ from derp.locales import resolve, t
 from derp.money.models import CreditLot, RunFee
 from derp.money.wallets import balance, credit, wallet
 from derp.telegram.sender import Target, rich, send_markdown, send_privately
+from derp.telegram.text import literal
 
 WINDOWS = ((1, "24 h"), (7, "7 d"), (30, "30 d"))
 FUNDINGS = ("paid", "sponsored", "free", "creator")
@@ -63,10 +64,16 @@ async def _key_line(api: OpenRouterAPI) -> str:
     try:
         key = await api.key_info()
     except OpenRouterError:
-        return "OpenRouter key: unavailable"
+        return "unavailable"
     if key.get("limit_remaining") is None:
-        return f"OpenRouter key: {_usd(key.get('usage'))} used, no limit"
-    return f"OpenRouter key: {_usd(key['limit_remaining'])} left of {_usd(key.get('limit'))}"
+        return f"{_usd(key.get('usage'))} used, no limit"
+    return f"{_usd(key['limit_remaining'])} left of {_usd(key.get('limit'))}"
+
+
+def _table(header: list[str], align: str, rows: list[list[str]]) -> list[str]:
+    """A Markdown table; ``align`` has one letter per column: l (left) or r (right)."""
+    rule = "|" + "|".join(":--" if a == "l" else "--:" for a in align) + "|"
+    return ["| " + " | ".join(header) + " |", rule, *("| " + " | ".join(row) + " |" for row in rows)]
 
 
 async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMarkup]:
@@ -124,37 +131,53 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
         blocked = await session.scalar(select(func.count()).where(User.blocked_at.is_not(None)))
         blocked_chats = await session.scalar(select(func.count()).where(Chat.blocked_at.is_not(None)))
 
-    spans = " · ".join(label for _, label in WINDOWS)
     lines = [
-        "📊 **Derp stats**",
-        f"Provider cost ({spans}): " + " · ".join(_usd(c) for c in cost),
-        "7 d by funding: " + " · ".join(f"{f} {_usd(by_funding.get(f))}" for f in FUNDINGS),
-        f"Revenue ({spans}): " + " · ".join(f"{s or 0}⭐" for s in stars),
-        f"Refunds ({spans}): " + " · ".join(str(r or 0) for r in refunds),
-        f"Derp fees (7 d): {fees or 0} dc",
-        f"Runs ({spans}): "
-        + " · ".join(str(r or 0) for r in runs)
-        + f"; 7 d: {people} people in {chats} chats",
-        f"Blocked: {blocked or 0} people, {blocked_chats or 0} chats",
-        await _key_line(api),
+        "## 📊 Derp stats",
+        *_table(
+            ["", *(label for _, label in WINDOWS)],
+            "lrrr",
+            [
+                ["Provider cost", *(_usd(c) for c in cost)],
+                ["Revenue", *(f"{s or 0}⭐" for s in stars)],
+                ["Refunds", *(str(r or 0) for r in refunds)],
+                ["Runs", *(str(r or 0) for r in runs)],
+            ],
+        ),
+        "",
+        "### Last 7 days",
+        "- **Cost by funding:** " + " · ".join(f"{f} {_usd(by_funding.get(f))}" for f in FUNDINGS),
+        f"- **Derp fees:** {fees or 0} dc",
+        f"- **Active:** {people} people in {chats} chats",
+        f"- **Blocked:** {blocked or 0} people, {blocked_chats or 0} chats",
+        f"- **OpenRouter key:** {await _key_line(api)}",
     ]
     if top:
-        lines.append("**Top chats by cost (7 d)**")
-        lines.extend(f"- {one_line(title or '—')} (`{chat_id}`) — {_usd(c)}" for chat_id, title, c in top)
+        lines += ["", "### Top chats by cost (7 d)"]
+        lines += _table(
+            ["Chat", "ID", "Cost"],
+            "llr",
+            [[literal(one_line(title or "—")), f"`{chat_id}`", _usd(c)] for chat_id, title, c in top],
+        )
     buttons: list[list[InlineKeyboardButton]] = []
     if pins:
-        lines.append("**Pins**")
-        for pin in pins:
-            lines.append(f"- {pin.role}: `{pin.pin.get('model')}` ({pin.source})")
-            if pin.previous:
-                label = f"Roll back {pin.role} → {pin.previous.get('model')}"
-                buttons.append([_button(label, "rollback", pin.role)])
+        lines += ["", "### Model pins"]
+        lines += _table(
+            ["Role", "Model", "Source"],
+            "lll",
+            [[pin.role, f"`{pin.pin.get('model')}`", pin.source] for pin in pins],
+        )
+        buttons += [
+            [_button(f"Roll back {pin.role} → {pin.previous.get('model')}", "rollback", pin.role)]
+            for pin in pins
+            if pin.previous
+        ]
     if proposals:
-        lines.append("**Scout proposals**")
+        lines += ["", "### Scout proposals"]
         for p in proposals:
-            lines.append(
-                f"- #{p.id} {p.role}: `{p.current.get('model')}` → `{p.proposed.get('model')}` — {p.reason}"
-            )
+            lines += [
+                f"**Proposal {p.id}** · {p.role}: `{p.current.get('model')}` → `{p.proposed.get('model')}`",
+                literal(p.reason),
+            ]
             buttons.append(
                 [
                     _button(f"Apply #{p.id}", "apply", str(p.id)),

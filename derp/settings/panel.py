@@ -33,6 +33,7 @@ from derp.scheduler.models import Job
 from derp.settings.onboarding import can_read_group
 from derp.settings.privacy import switch_context
 from derp.telegram.sender import Target, rich, send_markdown
+from derp.telegram.text import literal
 
 RETENTION_CHOICES = (7, 30, 90, 365)
 NOTES_MODES = ("auto", "members", "admins", "off")
@@ -93,7 +94,9 @@ async def render(
     jobs = await session.scalar(
         select(func.count()).where(Job.chat_id == chat.id, Job.state.in_(("active", "paused")))
     )
-    lines = [t(locale, "settings.title", title=one_line(chat.title or t(locale, "settings.this_chat")))]
+    lines = [
+        t(locale, "settings.title", title=literal(one_line(chat.title or t(locale, "settings.this_chat"))))
+    ]
     if group:
         context_line = (
             "settings.context_off"
@@ -106,7 +109,7 @@ async def render(
     lines.append(t(locale, "settings.retention", days=kept_days(chat, settings)))
     lines.append(t(locale, "settings.notes", mode=t(locale, f"settings.notes_{chat.notes_mode}")))
     if chat.rules:
-        lines.append(t(locale, "settings.rules", rules=one_line(chat.rules, RULES_PREVIEW)))
+        lines.append(t(locale, "settings.rules", rules=literal(one_line(chat.rules, RULES_PREVIEW))))
     else:
         lines.append(t(locale, "settings.no_rules"))
     if group:

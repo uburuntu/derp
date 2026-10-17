@@ -20,6 +20,7 @@ from derp.locales import resolve, t
 from derp.ops.models import FEEDBACK_KINDS, Feedback
 from derp.ops.owner import is_blocked
 from derp.telegram.sender import Target, rich, sanitize_untrusted, send_markdown
+from derp.telegram.text import literal
 
 PAGE = 5
 MAX_CHARS = 2000
@@ -94,8 +95,8 @@ async def _page(db: Database, offset: int) -> tuple[str, InlineKeyboardMarkup | 
     lines = [f"**Open feedback: {total}** (showing {offset + 1}–{offset + len(rows)})"]
     buttons: list[InlineKeyboardButton] = []
     for item, name, username, title in rows:
-        who = one_line(name or "someone") + (f" @{username}" if username else "")
-        where = "private" if item.chat_id == item.user_id else one_line(title or str(item.chat_id))
+        who = literal(one_line(name or "someone")) + (f" @{username}" if username else "")
+        where = "private" if item.chat_id == item.user_id else literal(one_line(title or str(item.chat_id)))
         lines.append(
             f"\n#{item.id} · {item.kind} · {who} · {where} · {item.created_at:%Y-%m-%d}\n> {sanitize_untrusted(one_line(item.text, 600))}"
         )
