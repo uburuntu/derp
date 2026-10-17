@@ -8,6 +8,7 @@ from derp.db.engine import Database
 from derp.history.models import (
     Chat,
     ChatMember,
+    DailyTitle,
     Digest,
     MemberEvent,
     Message,
@@ -99,6 +100,9 @@ async def test_history_expires_per_chat_retention(seeded: Database) -> None:
 @pytest.mark.db
 async def test_forgetting_a_member_scrubs_their_rows_in_that_chat(seeded: Database) -> None:
     async with seeded.transaction() as session:
+        for chat_id, user_id in ((GROUP, 1), (GROUP, 2), (SHORT, 1)):
+            session.add(DailyTitle(chat_id=chat_id, title=f"king {user_id}", day=NOW.date(), user_id=user_id))
+    async with seeded.transaction() as session:
         assert await forget_member(session, GROUP, 1, NOW) == 2
     async with seeded.session() as session:
         rows = {
@@ -109,6 +113,8 @@ async def test_forgetting_a_member_scrubs_their_rows_in_that_chat(seeded: Databa
         assert await session.scalar(select(func.count()).select_from(MessageMedia)) == 0
         assert await session.scalar(select(func.count()).select_from(Reaction)) == 0  # theirs, and on theirs
         assert await session.scalar(select(func.count()).select_from(ChatMember)) == 0
+        titles = {tuple(r) for r in await session.execute(select(DailyTitle.chat_id, DailyTitle.user_id))}
+        assert titles == {(GROUP, 2), (SHORT, 1)}
         stale = {d.last_message_id: d.stale for d in await session.scalars(select(Digest))}
     assert stale[3] and stale[1] and stale[2]  # message 2's digest was already stale
 

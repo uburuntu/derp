@@ -12,12 +12,15 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Guest mode: a mention in a chat Derp isn't a member of gets one reply. Inline and guest answers see no chat
   history and nothing from them is stored except accounting.
 - It looks at photos, stickers and albums, listens to voice messages and video notes (transcribed), and opens
-  links. Media tools also take videos, GIFs and audio (memes, reversing, song recognition). Group voice messages
-  nobody asked about are transcribed in the background up to a daily limit; past it, a voice message is
-  transcribed when someone calls Derp in reply to it.
-- Profile pictures and the chat photo work as sources: "add me a hat on my profile picture" or "meme our chat
-  photo". Derp sends the result; bots can't change anyone's profile photo, so people set it themselves.
-- One tool's result feeds the next: draw a picture, then meme it or cut it out, in one answer.
+  links. Asked about a video, GIF or video note, it looks at a still frame of it. Media tools also take videos,
+  GIFs and audio (memes, reversing, song recognition). Group voice messages nobody asked about are transcribed
+  in the background up to a daily limit; past it, a voice message is transcribed when someone calls Derp in
+  reply to it.
+- Profile pictures and the chat photo work as sources: "add me a hat on my profile picture", "draw Vasya as a
+  knight", "meme @vasya's avatar" or "meme our chat photo". People are found by name or @username among those
+  seen in this chat. Derp sends the result; bots can't change anyone's profile photo, so people set it themselves.
+- One tool's result feeds the next: draw a picture, then meme it, cut it out or make it a sticker, in one answer.
+  Stickers are sent one by one; Derp doesn't make sticker packs.
 - People never choose a model: Derp picks one by who pays (see money). Bought and free daily answers go only to
   AI providers that keep nothing (zero data retention).
 
@@ -33,6 +36,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - In forum groups each topic is its own conversation.
 - It catches people up (day summaries), runs polls and quizzes with a per-chat leaderboard, and keeps notes and
   the chat's rules (see memory).
+- Titles of the day ("who's the красавчик дня?"): Derp draws one of the recently active members at random; asking
+  again the same day gives the same person, and the chat keeps a leaderboard. /forget removes a person's titles.
 - Commands in groups work as /command@username or from the command menu; the menu's personal commands are
   ephemeral (only the sender sees the answer). Bare commands may belong to another bot and are ignored.
 

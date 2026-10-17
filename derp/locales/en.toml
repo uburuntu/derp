@@ -199,7 +199,7 @@ privacy = """
 
 <details><summary>What I keep</summary>
 
-Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Short daily summaries of a chat, for up to a year. Notes you ask me to remember, until you remove them. Payment receipts, for accounting.
+Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Short daily summaries of a chat, for up to a year. Notes you ask me to remember, until you remove them. Quiz points and titles of the day in groups, until /forget. Payment receipts, for accounting.
 </details>
 
 <details><summary>Who processes it</summary>
@@ -223,7 +223,7 @@ support_sent = "Sent to the person who runs Derp. Refunds come back to your Star
 [privacy]
 forgot_one = "Done — I've forgotten that message."
 only_own = "I can only forget your own messages. Reply /forget to one of yours, or send /forget on its own to forget everything you've said here."
-confirm = "Forget everything you've said in this chat? Stored messages: **{count}**, plus your reactions, poll votes and personal notes here. This can't be undone."
+confirm = "Forget everything you've said in this chat? Stored messages: **{count}**, plus your reactions, poll votes, quiz points, titles of the day and personal notes here. This can't be undone."
 confirm_button = "Forget it all"
 not_yours = "This button is for the person who asked."
 forgot_all = "Done — your messages here ({count}) and everything attached to them are forgotten."

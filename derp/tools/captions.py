@@ -251,3 +251,21 @@ def encode_jpeg(image: Image.Image) -> bytes:
 def mirror(data: bytes) -> bytes:
     image = open_image(data)
     return encode_jpeg(ImageOps.mirror(image.resize(media_size(*image.size), Image.Resampling.LANCZOS)))
+
+
+STICKER_SIDE = 512
+STICKER_BYTES = 512 * 1024
+
+
+def sticker(data: bytes) -> bytes:
+    """A static sticker: WebP with transparency kept, the longer side exactly 512 px, under 512 KB."""
+    image = open_image(data)
+    scale = STICKER_SIDE / max(image.size)
+    size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+    image = image.resize(size, Image.Resampling.LANCZOS)
+    for quality in (90, 75, 60, 40):
+        buffer = io.BytesIO()
+        image.save(buffer, format="WEBP", quality=quality, method=6)
+        if buffer.tell() <= STICKER_BYTES:
+            break
+    return buffer.getvalue()

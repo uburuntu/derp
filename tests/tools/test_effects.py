@@ -86,6 +86,17 @@ def test_mirror_flips_left_to_right() -> None:
     assert red > 200
 
 
+def test_stickers_are_512_px_webp_within_the_size_cap() -> None:
+    noise = Image.effect_noise((1600, 3000), 100).convert("RGB")  # hard to compress
+    buffer = io.BytesIO()
+    noise.save(buffer, format="PNG")
+    data = captions.sticker(buffer.getvalue())
+    sticker = Image.open(io.BytesIO(data))
+    assert sticker.format == "WEBP" and sticker.size == (273, 512) and len(data) <= captions.STICKER_BYTES
+    small = Image.open(io.BytesIO(captions.sticker(picture(64, 32))))
+    assert small.size == (512, 256)
+
+
 async def test_workers_are_killed_at_their_deadline_and_output_cap() -> None:
     with pytest.raises(EffectError, match="took too long"):
         await workers.run([sys.executable, "-c", "import time; time.sleep(5)"], seconds=0.3)

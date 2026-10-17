@@ -279,6 +279,19 @@ class GameScore(Base):
     answers: Mapped[int] = mapped_column(default=0, server_default="0")
 
 
+class DailyTitle(Base):
+    """One "<title> of the day" winner per chat, title (normalized) and chat-local day; counted for leaderboards."""
+
+    __tablename__ = "daily_titles"
+    __table_args__ = (Index("ix_daily_titles_chat_user", "chat_id", "user_id"),)
+
+    chat_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    title: Mapped[str] = mapped_column(String(64), primary_key=True)
+    day: Mapped[date] = mapped_column(primary_key=True)
+    user_id: Mapped[int]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
 class Sticker(Base):
     """A sticker a bot has seen anywhere (public assets, no sender kept); the pool ``send_sticker`` draws from.
 

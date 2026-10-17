@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
 from derp.agent.digests import build
-from derp.agent.media import as_content, inspect, note_images, referenced_media
+from derp.agent.media import CLIPS, IMAGE_LIKE, as_content, inspect, note_images, referenced_media
 from derp.agent.toolsets import Family
 from derp.history.digests import day_stats, is_current, scope_key
 from derp.history.models import Digest, ForumTopic, Message, Poll
@@ -156,19 +156,19 @@ async def chat_info(ctx: RunContext[RunDeps]) -> str:
 
 @toolset.tool
 async def inspect_media(ctx: RunContext[RunDeps], message_id: int) -> list[str | BinaryContent] | str:
-    """Look at the image of a stored message in this chat (photo, sticker, image file, album).
+    """Look at a stored message's picture (photo, sticker, image file, album) or a frame of its video/GIF/video message.
 
     Args:
         message_id: The message id shown as #id in the history.
     """
     deps = ctx.deps
     async with deps.db.session() as session:
-        rows = await referenced_media(session, deps.chat.id, message_id, None)
+        rows = await referenced_media(session, deps.chat.id, message_id, None, (*IMAGE_LIKE, *CLIPS))
     if not rows:
-        return "That message has no image I can open."
-    inspected = await inspect(deps.gateway, rows)
+        return "That message has no picture or video I can open."
+    inspected = await inspect(deps.gateway, rows, frames=True)
     if not inspected:
-        return "The image can't be downloaded any more (too big, animated, or expired)."
+        return "That media can't be opened (too big, expired, or no picture in it)."
     await note_images(
         deps.db,
         deps.model,
@@ -179,7 +179,10 @@ async def inspect_media(ctx: RunContext[RunDeps], message_id: int) -> list[str |
         chat_id=deps.chat.id,
         user_id=deps.user_id,
     )
-    notes = [f"#{item.row.message_id}: {item.row.description or 'image'}" for item in inspected]
+    notes = [
+        f"#{item.row.message_id}{' (one frame)' if item.frame else ''}: {item.row.description or item.row.type}"
+        for item in inspected
+    ]
     if not deps.pin.vision:
         return "\n".join(notes)
     return [*notes, *as_content(inspected)]

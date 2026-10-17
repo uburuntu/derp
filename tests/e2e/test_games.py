@@ -1,10 +1,11 @@
 import json
+from datetime import date
 from typing import Any
 
 from pydantic_ai.messages import RetryPromptPart, ToolReturnPart
 from sqlalchemy import select
 
-from derp.history.models import GameScore
+from derp.history.models import DailyTitle, GameScore
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
@@ -114,3 +115,51 @@ async def test_most_likely_polls_use_active_members(conversation: Conversation, 
         o["text"] for o in poll["options"]
     } == {"Ben", "Ada", "Cy"}
     assert str(poll["is_anonymous"]).lower() == "false"
+
+
+async def test_a_title_of_the_day_sticks_for_the_day_and_counts(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    for person in (ADA, BEN, CY):
+        conversation.meet(person, QUIZ_ROOM)
+    for person in (BEN, CY):
+        await conversation.settle(await conversation.send(person, QUIZ_ROOM, "hi"))
+    async with conversation.db.transaction() as session:
+        session.add(DailyTitle(chat_id=QUIZ_ROOM.id, title="красавчик", day=date(2026, 1, 1), user_id=CY.id))
+        session.add(DailyTitle(chat_id=QUIZ_ROOM.id, title="соня", day=date(2026, 1, 1), user_id=BEN.id))
+
+    model.reply(tool_call("title_of_the_day", title="Красавчик"), "🎉")
+    first = await conversation.send(ADA, QUIZ_ROOM, "дерп кто сегодня красавчик дня?")
+    await conversation.settle(first)
+    picked = result_of(model, "title_of_the_day")
+    assert picked.startswith("красавчик of the day: ") and "just drawn" in picked
+    winner = picked.removeprefix("красавчик of the day: ").split(",")[0]
+    assert winner in {"Ada", "Ben", "Cy"}
+
+    model.reply(tool_call("title_of_the_day", title="  красавчик "), "same as before")
+    again = await conversation.send(BEN, QUIZ_ROOM, "derp reroll the красавчик")
+    await conversation.settle(again)
+    *_replayed, repeated = [
+        str(p.content)
+        for m in model.requests[-1]
+        for p in m.parts
+        if isinstance(p, ToolReturnPart) and p.tool_name == "title_of_the_day"
+    ]
+    assert repeated.startswith(f"красавчик of the day: {winner}, already drawn earlier today")
+    expected = "Cy 2" if winner == "Cy" else "Cy 1"
+    assert expected in repeated and "соня" not in repeated
+
+    model.reply(tool_call("chat_query", query={"preset": "title_leaderboard"}), "ok")
+    board = await conversation.send(CY, QUIZ_ROOM, "derp title leaderboard?")
+    await conversation.settle(board)
+    lines = result_of(model, "chat_query").splitlines()
+    assert "соня: Ben: 1" in lines and any(line.startswith("красавчик: ") for line in lines)
+
+
+async def test_titles_of_the_day_need_a_group(conversation: Conversation, model: ScriptedModel) -> None:
+    model.reply(tool_call("title_of_the_day", title="king"), "groups only")
+    asked = await conversation.send(ADA, text="who's king of the day?")
+    await conversation.settle(asked)
+    assert result_of(model, "title_of_the_day") == "Titles of the day are a group game."
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(DailyTitle.user_id)) is None

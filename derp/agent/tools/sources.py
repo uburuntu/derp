@@ -1,9 +1,10 @@
 """Where a tool's picture or clip comes from: a stored message, a member's profile photo or the chat photo.
 
 Message media is the one named, or else the current message or the one it
-replies to. A profile photo belongs to a stored message's sender, else the
-person replied to, else the asker; tools never take a user id. Failures raise
-``Refused``, whose text is meant for the model.
+replies to. A profile photo belongs to a person named in this chat (name or
+@username, matched against members seen here), else a stored message's sender,
+else the person replied to, else the asker; tools never take a user id.
+Failures raise ``Refused``, whose text is meant for the model.
 """
 
 from dataclasses import dataclass
@@ -11,7 +12,8 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from derp.agent.deps import RunDeps
-from derp.history.models import Message, MessageMedia
+from derp.history.models import Message, MessageMedia, User
+from derp.history.queries import resolve_members
 from derp.telegram.media import MediaUnavailableError, chat_photo_bytes, profile_photo_bytes, sniff_image
 
 VISUAL = ("photo", "sticker", "document", "animation", "video", "video_note")
@@ -75,8 +77,36 @@ async def message_media(deps: RunDeps, message_id: int | None, types: tuple[str,
     return Source(data, row.type, image=kind is not None and kind != "image/gif")
 
 
-async def photo_owner(deps: RunDeps, message_id: int | None) -> int:
-    """Whose profile photo: message_id's sender, else the person replied to, else the asker."""
+def _name(user: User) -> str:
+    full = " ".join(p for p in (user.first_name, user.last_name) if p)
+    return f"{full} (@{user.username})" if user.username else full
+
+
+async def resolve_person(deps: RunDeps, name: str) -> int:
+    """The one member of this chat a name or @username points at."""
+    wanted = name.strip().lstrip("@").casefold()
+    async with deps.db.session() as session:
+        ids = await resolve_members(session, deps.chat.id, [name])
+        users = list(await session.scalars(select(User).where(User.id.in_(ids)))) if ids else []
+    if not users:
+        raise Refused(f"No one called {name!r} here; ask who they mean.")
+    if len(users) > 1:  # an exact @username or first name beats partial matches
+        exact = [
+            u
+            for u in users
+            if wanted in ((u.username or "").casefold(), u.first_name.casefold(), _name(u).casefold())
+        ]
+        users = exact or users
+    if len(users) > 1:
+        options = ", ".join(_name(u) for u in users[:8])
+        raise Refused(f"{name!r} could be: {options}. Ask which one, or use their @username.")
+    return users[0].id
+
+
+async def photo_owner(deps: RunDeps, message_id: int | None, name: str | None = None) -> int:
+    """Whose profile photo: the named person, else message_id's sender, else the person replied to, else the asker."""
+    if name:
+        return await resolve_person(deps, name)
     anchor = message_id if message_id is not None else await replied_to(deps)
     if anchor is None:
         return deps.user_id
@@ -89,9 +119,10 @@ async def photo_owner(deps: RunDeps, message_id: int | None) -> int:
     return sender or deps.user_id
 
 
-async def avatar_source(deps: RunDeps, message_id: int | None) -> Source:
+async def avatar_source(deps: RunDeps, message_id: int | None, name: str | None = None) -> Source:
+    owner = await photo_owner(deps, message_id, name)
     try:
-        data = await profile_photo_bytes(deps.bot, deps.gateway, await photo_owner(deps, message_id))
+        data = await profile_photo_bytes(deps.bot, deps.gateway, owner)
     except MediaUnavailableError as unavailable:
         raise Refused(f"No profile photo to use: {unavailable.reason}.") from None
     return Source(data, "profile_photo", image=sniff_image(data) is not None)
