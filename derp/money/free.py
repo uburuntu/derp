@@ -38,12 +38,16 @@ def consented(user: User | None) -> bool:
     return user is not None and user.free_models_consent_version == POLICY_VERSION
 
 
-def offer(locale: str, *, group: bool) -> tuple[str, InlineKeyboardMarkup]:
-    """The out-of-Derpcoins notice with buttons to turn free models on or buy Derpcoins."""
+def offer(locale: str, *, group: bool, asked: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+    """The notice with buttons to turn free models on or buy Derpcoins: out of Derpcoins, or ``asked`` for.
+
+    Only the press turns them on — the person themselves in private, an admin in groups —
+    so the model can bring this up but never consent for anyone.
+    """
     action, text, button = (
-        ("enable", "money.free_offer_group", "money.free_enable")
+        ("enable", "money.free_ask_group" if asked else "money.free_offer_group", "money.free_enable")
         if group
-        else ("consent", "money.free_offer", "money.free_consent")
+        else ("consent", "money.free_ask" if asked else "money.free_offer", "money.free_consent")
     )
     free_button = InlineKeyboardButton(text=t(locale, button), callback_data=FreeModels(action=action).pack())
     buy_button = InlineKeyboardButton(

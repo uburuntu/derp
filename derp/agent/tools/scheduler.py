@@ -4,6 +4,11 @@ Anyone may schedule a one-off; in groups only admins may schedule repeating
 jobs, members cancel their own jobs and admins any. A reminder just posts its
 text; a scheduled prompt is answered by Derp when it fires, paid by its
 creator's funding at that moment.
+
+Wall-clock times are read in the chat's time zone. While a chat has none, a
+wall-clock time is refused with a nudge to ask where they are and set it, since
+a silent UTC guess fires at the wrong local hour; relative times and times with
+an explicit offset need no zone.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -24,8 +29,9 @@ from derp.scheduler.jobs import (
     MIN_AHEAD,
     PERSON_LIMIT,
     active_counts,
-    next_after,
+    has_offset,
     parse_local,
+    resume,
     show_time,
 )
 from derp.scheduler.models import Job
@@ -50,7 +56,8 @@ async def schedule(
 
     Args:
         text: The reminder text, or the request Derp should answer when it fires.
-        at: Local date-time in the chat's time zone, ISO like 2026-10-20 09:00.
+        at: Local date-time in the chat's time zone, ISO like 2026-10-20 09:00 (add +00:00 only if they
+            said UTC).
         in_minutes: Alternatively, minutes from now.
         repeat: Repeat at the same local time (repeating jobs in groups need an admin).
         answer_it: True for "every morning, tell us the weather"-style requests.
@@ -59,6 +66,12 @@ async def schedule(
     if deps.trigger_message_id == 0:
         return "This is a scheduled task firing now; carry out the request instead of scheduling a new one."
     now = datetime.now(UTC)
+    if at and not deps.chat.timezone and not has_offset(at):
+        return (
+            "This chat's time zone isn't set, so a wall-clock time can't be placed. Ask once where they are, "
+            "set it with change_setting(time_zone, <IANA zone>), then schedule again. If they said UTC, give "
+            "`at` with +00:00."
+        )
     when = parse_local(at, deps.tz) if at else now + timedelta(minutes=in_minutes) if in_minutes else None
     if when is None:
         return "Give `at` (ISO local date-time) or `in_minutes`."
@@ -148,12 +161,8 @@ async def resume_job(ctx: RunContext[RunDeps], job_id: int) -> str:
             return "No paused job with that id here."
         if job.creator_id != deps.user_id and not await _is_admin(deps):
             return "Only its creator or an admin can resume that one."
-        if job.next_at <= now:
-            upcoming = next_after(job, now, deps.tz)
-            if upcoming is None:
-                return "That one-off time has passed; schedule a new one instead."
-            job.next_at = upcoming
-        job.state, job.misses = "active", 0
+        if not resume(job, now, deps.tz):
+            return "That one-off time has passed; schedule a new one instead."
         when = job.next_at
     return f"Resumed #{job_id}; next run {show_time(when, deps.tz)}."
 

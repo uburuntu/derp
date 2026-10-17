@@ -85,9 +85,9 @@ def situation(
     )
     if topic:
         where += f", topic “{one_line(topic)}”"
-    parts = [
-        f"You are in {where}. Now: {describe_time(now, tz)}. The current message is from “{one_line(asker)}”."
-    ]
+    zone = "" if chat.timezone else " (this chat's time zone isn't set)"
+    now_line = f"Now: {describe_time(now, tz)}{zone}."
+    parts = [f"You are in {where}. {now_line} The current message is from “{one_line(asker)}”."]
     if rules:
         parts.append(f"Chat rules set by the admins (follow them):\n{rules}")
     profile = _profile_lines(chat.profile) if chat.type != "private" else []

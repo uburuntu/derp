@@ -2,12 +2,14 @@
 
 Every function takes the chat id from its caller (the run context), never from
 model input. ``ChatQuery`` is the typed request the model fills in; this module
-compiles it to SQL itself — no model-written SQL ever runs.
+compiles it to SQL itself — no model-written SQL ever runs. Days are the
+chat's: ``since``/``until`` without an offset and ``group_by='day'`` follow the
+chat's time zone (``Scope.tz``).
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -44,6 +46,11 @@ class Scope:
     chat_id: int
     thread_id: int | None = None
     whole_chat: bool = True
+    tz: tzinfo = UTC  # the chat's time zone: day boundaries and offset-less times
+
+    @property
+    def zone_name(self) -> str:
+        return str(getattr(self.tz, "key", "UTC"))
 
     def messages(self) -> ColumnElement[bool]:
         clauses = [Message.chat_id == self.chat_id, Message.deleted_at.is_(None)]
@@ -179,8 +186,8 @@ class ChatQuery(BaseModel):
         default=None, description="Only messages from these people (names or @usernames)."
     )
     days: float | None = Field(default=None, gt=0, description="Only the last N days.")
-    since: datetime | None = None
-    until: datetime | None = None
+    since: datetime | None = Field(default=None, description="Local time in the chat's time zone.")
+    until: datetime | None = Field(default=None, description="Local time in the chat's time zone.")
     whole_chat: bool = Field(default=False, description="Search every forum topic, not only the current one.")
     media_type: (
         Literal["photo", "video", "voice", "video_note", "audio", "document", "sticker", "animation"] | None
@@ -222,18 +229,25 @@ def _reaction_total() -> Any:
     return func.coalesce(counted, per_actor, literal(0))
 
 
-def _period(query: ChatQuery) -> tuple[datetime | None, datetime | None]:
-    since = query.since
+def _period(query: ChatQuery, tz: tzinfo) -> tuple[datetime | None, datetime | None]:
+    def local(moment: datetime | None) -> datetime | None:
+        return moment.replace(tzinfo=tz) if moment is not None and moment.tzinfo is None else moment
+
+    since = local(query.since)
     if query.days is not None:
         since = datetime.now(UTC) - timedelta(days=query.days)
-    return since, query.until
+    return since, local(query.until)
+
+
+def _day(moment: datetime | None, tz: tzinfo) -> Any:
+    return moment.astimezone(tz).date() if moment is not None else None
 
 
 async def _message_filters(
     session: AsyncSession, scope: Scope, query: ChatQuery
 ) -> list[ColumnElement[bool]] | None:
     filters: list[ColumnElement[bool]] = [scope.messages()]
-    since, until = _period(query)
+    since, until = _period(query, scope.tz)
     if since is not None:
         filters.append(Message.date >= since)
     if until is not None:
@@ -298,13 +312,13 @@ async def run_query(session: AsyncSession, scope: Scope, query: ChatQuery) -> Qu
         case "quiz_leaderboard":
             return QueryResult("groups", [], await _quiz_points(session, scope, query), [], [])
         case "title_leaderboard":
-            since, until = _period(query)
+            since, until = _period(query, scope.tz)
             titles = await leaderboard(
                 session,
                 scope.chat_id,
                 contains=query.contains,
-                since=since.date() if since else None,
-                until=until.date() if until else None,
+                since=_day(since, scope.tz),
+                until=_day(until, scope.tz),
                 limit=query.limit,
             )
             groups = [(f"{title}: {name}", wins) for title, name, wins in titles]
@@ -329,11 +343,11 @@ async def run_query(session: AsyncSession, scope: Scope, query: ChatQuery) -> Qu
             }[query.order]
         )
         return QueryResult("messages", list(await session.scalars(statement.limit(query.limit))), [], [], [])
-    return QueryResult("groups", [], await _groups(session, filters, query), [], [])
+    return QueryResult("groups", [], await _groups(session, scope, filters, query), [], [])
 
 
 async def _groups(
-    session: AsyncSession, filters: list[ColumnElement[bool]], query: ChatQuery
+    session: AsyncSession, scope: Scope, filters: list[ColumnElement[bool]], query: ChatQuery
 ) -> list[tuple[str, int]]:
     if query.group_by == "reaction":
         by_reaction = (
@@ -354,7 +368,8 @@ async def _groups(
                 case((Message.is_derp, literal("Derp")), else_=literal("anonymous")),
             )
         case "day":
-            label = func.to_char(func.date_trunc("day", Message.date), "YYYY-MM-DD")
+            local = func.timezone(scope.zone_name, Message.date)
+            label = func.to_char(func.date_trunc("day", local), "YYYY-MM-DD")
         case "kind":
             label = Message.kind
         case _:
@@ -381,7 +396,7 @@ async def _groups(
 
 
 async def _quiz_points(session: AsyncSession, scope: Scope, query: ChatQuery) -> list[tuple[str, int]]:
-    since, until = _period(query)
+    since, until = _period(query, scope.tz)
     points = func.sum(GameScore.points)
     statement = (
         select(
@@ -395,14 +410,14 @@ async def _quiz_points(session: AsyncSession, scope: Scope, query: ChatQuery) ->
         .order_by(points.desc())
     )
     if since is not None:
-        statement = statement.where(GameScore.day >= since.date())
+        statement = statement.where(GameScore.day >= _day(since, scope.tz))
     if until is not None:
-        statement = statement.where(GameScore.day <= until.date())
+        statement = statement.where(GameScore.day <= _day(until, scope.tz))
     return [(str(row[0]), int(row[1])) for row in await session.execute(statement.limit(query.limit))]
 
 
 async def _polls(session: AsyncSession, scope: Scope, query: ChatQuery) -> list[Poll]:
-    since, until = _period(query)
+    since, until = _period(query, scope.tz)
     statement = select(Poll).where(Poll.chat_id == scope.chat_id)
     if since is not None:
         statement = statement.where(Poll.created_at >= since)
@@ -412,7 +427,7 @@ async def _polls(session: AsyncSession, scope: Scope, query: ChatQuery) -> list[
 
 
 async def _events(session: AsyncSession, scope: Scope, query: ChatQuery) -> list[tuple[MemberEvent, str]]:
-    since, until = _period(query)
+    since, until = _period(query, scope.tz)
     statement = (
         select(MemberEvent, func.concat_ws(" ", User.first_name, User.last_name))
         .outerjoin(User, User.id == MemberEvent.user_id)

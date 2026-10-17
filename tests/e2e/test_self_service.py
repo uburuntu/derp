@@ -3,7 +3,8 @@ from typing import Any
 from pydantic_ai.messages import ToolReturnPart
 from sqlalchemy import select
 
-from derp.history.models import Chat
+from derp.history.models import Chat, User
+from derp.money.free import POLICY_VERSION, FreeModels
 from derp.money.wallets import credit, wallet
 from derp.ops.feedback import FeedbackAction
 from derp.ops.models import Feedback
@@ -137,3 +138,70 @@ async def test_feedback_reaches_the_owners_review(conversation: Conversation, mo
     await conversation.press(OWNER, OWNER.id, page_id, FeedbackAction(action="done", value=first or 0).pack())
     async with conversation.db.session() as session:
         assert await session.scalar(select(Feedback.state).where(Feedback.id == first)) == "done"
+
+
+def last_button(conversation: Conversation, chat_id: int) -> tuple[int, str]:
+    """The newest message in a chat with a button, and its first button's callback data."""
+    message_id = max(
+        mid for (cid, mid), m in conversation.api.messages.items() if cid == chat_id and m.get("reply_markup")
+    )
+    markup = conversation.api.messages[(chat_id, message_id)]["reply_markup"]
+    return message_id, markup["inline_keyboard"][0][0]["callback_data"]
+
+
+async def test_free_models_need_the_persons_own_press(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    model.reply(tool_call("change_setting", setting="free_models", value="on"), ".")
+    await conversation.settle(await conversation.send(REX, text="turn on free models"))
+    assert "on only once they press it themselves" in result_of(model, "change_setting")
+    async with conversation.db.session() as session:
+        assert (await session.get(User, REX.id)).free_models_consent_version is None  # type: ignore[union-attr]
+    notice_id, consent = last_button(conversation, REX.id)
+    assert consent == FreeModels(action="consent").pack()
+    [notice] = [c for c in conversation.api.calls_of("sendRichMessage") if c.fields.get("reply_markup")]
+    assert "may store" in notice["rich_message"]["markdown"] and not notice.fields.get("reply_parameters")
+    await conversation.press(REX, REX.id, notice_id, consent)
+    async with conversation.db.session() as session:
+        assert (await session.get(User, REX.id)).free_models_consent_version == POLICY_VERSION  # type: ignore[union-attr]
+
+    conversation.meet(ANA, DEN, status="administrator")
+    conversation.meet(REX, DEN)
+    await ask(conversation, model, ANA, tool_call("change_setting", setting="free_models", value="on"))
+    assert "an admin presses it" in result_of(model, "change_setting")
+    async with conversation.db.session() as session:
+        assert not (await session.get(Chat, DEN.id)).free_models  # type: ignore[union-attr]
+    notice_id, enable = last_button(conversation, DEN.id)
+    await conversation.press(REX, DEN.id, notice_id, enable)
+    async with conversation.db.session() as session:
+        assert not (await session.get(Chat, DEN.id)).free_models  # type: ignore[union-attr]
+    await conversation.press(ANA, DEN.id, notice_id, enable)
+    async with conversation.db.session() as session:
+        assert (await session.get(Chat, DEN.id)).free_models  # type: ignore[union-attr]
+
+
+async def test_shorter_retention_from_a_tool_asks_for_a_press(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(ANA, DEN, status="administrator")
+    shorter = min(conversation.settings.retention.options)
+    after = await ask(
+        conversation, model, ANA, tool_call("change_setting", setting="retention_days", value=str(shorter))
+    )
+    assert "Posted a confirmation button" in result_of(model, "change_setting")
+    sent = [c["rich_message"]["markdown"] for c in conversation.api.calls_of("sendRichMessage", after=after)]
+    assert any(f"older than {shorter} day" in text for text in sent)
+    async with conversation.db.session() as session:
+        assert (await session.get(Chat, DEN.id)).retention_days is None  # type: ignore[union-attr]
+    prompt_id, confirm = last_button(conversation, DEN.id)
+    assert confirm == SettingsAction(action="shorten", value=str(shorter)).pack()
+    await conversation.press(ANA, DEN.id, prompt_id, confirm)
+    async with conversation.db.session() as session:
+        assert (await session.get(Chat, DEN.id)).retention_days == shorter  # type: ignore[union-attr]
+    longest = max(conversation.settings.retention.options)
+    await ask(
+        conversation, model, ANA, tool_call("change_setting", setting="retention_days", value=str(longest))
+    )
+    assert result_of(model, "change_setting").startswith("Done")
+    await ask(conversation, model, ANA, tool_call("change_setting", setting="retention_days", value="90"))
+    assert "Retention can be" in result_of(model, "change_setting")

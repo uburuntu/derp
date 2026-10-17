@@ -28,7 +28,8 @@ toolset = FunctionToolset[RunDeps]()
 
 
 def _scope(ctx: RunContext[RunDeps], whole_chat: bool) -> Scope:
-    return Scope(ctx.deps.chat.id, ctx.deps.thread_id, whole_chat=whole_chat or ctx.deps.thread_id is None)
+    deps = ctx.deps
+    return Scope(deps.chat.id, deps.thread_id, whole_chat=whole_chat or deps.thread_id is None, tz=deps.tz)
 
 
 async def _render(ctx: RunContext[RunDeps], rows: list[Message]) -> str:

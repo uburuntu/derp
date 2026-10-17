@@ -228,3 +228,9 @@ def build_router() -> Router:
     router = Router(name="members")
     router.chat_member.register(on_chat_member)
     return router
+
+
+async def can_read_group(bot: Bot, chat: Chat) -> bool:
+    """Whether Telegram delivers ordinary (non-mention) group messages to Derp here."""
+    me = await bot.me()
+    return bool(me.can_read_all_group_messages) or (chat.bot_status or "") in ADMIN_STATUSES

@@ -6,6 +6,10 @@ spring-forward gap returns the next day) and its day of month (a job on the
 31st fires on the last day of shorter months, then on the 31st again).
 Firings missed while Derp was down are skipped, not replayed: a job fires at
 most once per claim.
+
+A one-off holds an absolute instant, so changing the chat's time zone never
+moves it; repeating jobs are re-anchored to keep their wall-clock time in the
+new zone (``rezone``). Chats without a zone run on UTC.
 """
 
 import calendar
@@ -56,6 +60,29 @@ def next_after(job: Job, now: datetime, tz: tzinfo) -> datetime | None:
     return upcoming
 
 
+def rezone(job: Job, old: tzinfo, new: tzinfo, now: datetime) -> None:
+    """Keep a repeating job's local wall time and day when the chat's zone changes (one-offs stay put)."""
+    if job.repeat is None:
+        return
+    first = job.anchor_at.astimezone(old)
+    job.anchor_at = datetime.combine(first.date(), first.time(), new).astimezone(UTC)
+    upcoming = datetime.combine(job.next_at.astimezone(old).date(), first.time(), new).astimezone(UTC)
+    while upcoming <= now:
+        upcoming = following(upcoming, job.repeat, new, job.anchor_at)
+    job.next_at = upcoming
+
+
+def resume(job: Job, now: datetime, tz: tzinfo) -> bool:
+    """Reactivate a paused job, moving a missed time on; False when a one-off's time has passed."""
+    if job.next_at <= now:
+        upcoming = next_after(job, now, tz)
+        if upcoming is None:
+            return False
+        job.next_at = upcoming
+    job.state, job.misses = "active", 0
+    return True
+
+
 async def pause_jobs(session: AsyncSession, chat_id: int, creator_id: int | None = None) -> None:
     """Pause a chat's active jobs (Derp was removed), or one member's (they left)."""
     where = [Job.chat_id == chat_id, Job.state == "active"]
@@ -64,19 +91,34 @@ async def pause_jobs(session: AsyncSession, chat_id: int, creator_id: int | None
     await session.execute(update(Job).where(*where).values(state="paused"))
 
 
+def _iso(text: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(text.strip().replace(" ", "T", 1))
+    except ValueError:
+        return None
+
+
 def parse_local(text: str, tz: tzinfo) -> datetime | None:
     """An ISO date-time written in the chat's time zone (an explicit offset wins)."""
-    try:
-        moment = datetime.fromisoformat(text.strip().replace(" ", "T", 1))
-    except ValueError:
+    moment = _iso(text)
+    if moment is None:
         return None
     return (moment if moment.tzinfo else moment.replace(tzinfo=tz)).astimezone(UTC)
 
 
+def has_offset(text: str) -> bool:
+    """The ISO time names its own offset (``+03:00``, ``Z``), so it needs no chat time zone."""
+    moment = _iso(text)
+    return moment is not None and moment.tzinfo is not None
+
+
+def local_time(moment: datetime, tz: tzinfo) -> str:
+    return moment.astimezone(tz).strftime("%a %d %b %H:%M")
+
+
 def show_time(moment: datetime, tz: tzinfo) -> str:
     """Markdown that Telegram renders in each viewer's own time zone, with a chat-local fallback."""
-    fallback = moment.astimezone(tz).strftime("%a %d %b %H:%M")
-    return f"![{fallback}](tg://time?unix={int(moment.timestamp())}&format=wDT)"
+    return f"![{local_time(moment, tz)}](tg://time?unix={int(moment.timestamp())}&format=wDT)"
 
 
 async def active_counts(session: AsyncSession, chat_id: int, user_id: int) -> tuple[int, int]:

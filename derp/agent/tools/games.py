@@ -127,7 +127,7 @@ async def most_likely_poll(ctx: RunContext[RunDeps], question: str) -> str:
         return f"Not sent: {refused}."
     query = ChatQuery(preset="member_activity", days=ACTIVE_DAYS, whole_chat=True, limit=10)
     async with deps.db.session() as session:
-        result = await run_query(session, Scope(deps.chat.id), query)
+        result = await run_query(session, Scope(deps.chat.id, tz=deps.tz), query)
     names = list(dict.fromkeys(label[:100] for label, _count in result.groups if label != "anonymous"))
     if len(names) < 2:
         return "Not enough active members in the stored history for that poll."

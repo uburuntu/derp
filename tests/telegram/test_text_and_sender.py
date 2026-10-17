@@ -1,7 +1,7 @@
 from aiogram.types import Message
 
 from derp.telegram.sender import Target, sanitize_untrusted, split_rich
-from derp.telegram.text import as_written, split_text, truncate, utf16_len
+from derp.telegram.text import as_written, literal, split_text, truncate, utf16_len
 
 
 def test_utf16_measure_counts_astral_as_two() -> None:
@@ -171,3 +171,9 @@ def test_a_hash_starting_a_block_is_not_a_heading() -> None:
         "\\#3 chat  \n- \\#4 x  \n1. \\#5 y  \n> \\#news  \n## Real heading  \nmid #6 and `#7`\n```\n#8\n```"
     )
     assert as_written("#") == "#" and as_written("# Title") == "# Title"
+
+
+def test_literal_text_cannot_format_or_add_buttons() -> None:
+    assert literal("*hi* <tg-button>x</tg-button> [a](b) ok") == (
+        r"\*hi\* \<tg\-button\>x\<\/tg\-button\> \[a\]\(b\) ok"
+    )

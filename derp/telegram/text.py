@@ -20,6 +20,13 @@ _FENCE_LINE = re.compile(r" {0,3}(```|~~~)")
 # ("#3 chat", "#news"); a real heading ("# Title", "## Title") keeps its space.
 _HASH_START = re.compile(r"^((?:\s*(?:[-*+]|\d{1,9}[.)])\s+|\s*>\s*)*\s*)#(?=[^#\s])")
 
+_PUNCTUATION = re.compile(r"([!-/:-@\[-`{-~])")
+
+
+def literal(text: str) -> str:
+    """Untrusted text shown as-is inside trusted rich Markdown: every ASCII punctuation mark escaped."""
+    return _PUNCTUATION.sub(r"\\\1", text)
+
 
 def as_written(markdown: str) -> str:
     """Markdown that Telegram renders as written: every line on its own line, "#3" not a heading.
@@ -50,14 +57,6 @@ def as_written(markdown: str) -> str:
             continue
         lines[index] = line + "  "
     return "\n".join(lines)
-
-
-_MARKUP = re.compile(r"([\\`*_~|\[\]<>#=$])")
-
-
-def literal(text: str) -> str:
-    """Untrusted text (a chat title, a name) shown as-is inside trusted Markdown, table cells included."""
-    return _MARKUP.sub(r"\\\1", text)
 
 
 def utf16_len(text: str) -> int:

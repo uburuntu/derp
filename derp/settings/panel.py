@@ -6,12 +6,16 @@ change them, and the role is checked again on every press. Personal choices
 an ephemeral command, so the panel is ephemeral and its buttons edit it
 through the ephemeral edit methods.
 
-Turning context off deletes the chat's stored ambient history, so it asks for
-confirmation first.
+Destructive changes ask first: turning context off deletes the chat's stored
+ambient history, and a shorter retention deletes older messages. The jobs page
+lists the chat's reminders and scheduled prompts; people pause, resume or
+delete their own, admins any. Callback data carries only ids, and every press
+re-checks that the job belongs to this chat and who may touch it.
 """
 
 import contextlib
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
@@ -23,25 +27,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.config import Settings
 from derp.db.engine import Database
+from derp.history.members import can_read_group
 from derp.history.models import Chat, User
 from derp.history.models import Message as StoredMessage
-from derp.history.render import one_line
+from derp.history.render import chat_time, one_line
 from derp.locales import resolve, t
 from derp.memory.notes import is_admin
 from derp.money.free import POLICY_VERSION, consented
+from derp.scheduler.jobs import local_time, resume, rezone
 from derp.scheduler.models import Job
-from derp.settings.onboarding import can_read_group
 from derp.settings.privacy import switch_context
 from derp.telegram.sender import Target, rich, send_markdown
 from derp.telegram.text import literal
+from derp.tools.timezones import TimeZoneError, iana
 
-RETENTION_CHOICES = (7, 30, 90, 365)
 NOTES_MODES = ("auto", "members", "admins", "off")
 RULES_PREVIEW = 300
+JOB_ACTIONS = ("jpause", "jresume", "jdrop")
+JOB_TEXT = 60  # characters of a job's text on the jobs page
+JOBS_BUDGET = 3500  # characters of job lines before "…and N more"
+LIVE = ("active", "paused")
 
 
 class SettingsAction(CallbackData, prefix="set"):
-    action: str  # page | ambient (on / purge) | retention | notes | free | rules | spend
+    # page | ambient (on / purge) | retention | shorten (confirmed) | notes | free | rules | spend
+    # | jpause / jresume / jdrop (value: the job id)
+    action: str
     value: str = ""
 
 
@@ -50,10 +61,75 @@ def _button(text: str, action: str, value: str = "", *, style: str | None = None
     return InlineKeyboardButton(text=text, callback_data=data, style=style)
 
 
-def kept_days(chat: Chat, settings: Settings) -> int:
-    if chat.retention_days:
-        return chat.retention_days
+def default_days(chat: Chat, settings: Settings) -> int:
     return settings.retention.private_days if chat.type == "private" else settings.retention.group_days
+
+
+def kept_days(chat: Chat, settings: Settings) -> int:
+    return chat.retention_days or default_days(chat, settings)
+
+
+def _days(locale: str, days: int) -> str:
+    return t(locale, "settings.day" if days == 1 else "settings.days", days=days)
+
+
+def chosen_days(value: str, settings: Settings) -> int | None:
+    """The retention a choice stands for: an offered number of days, 0 for the default; None if not offered."""
+    days = int(value) if value.isdigit() else -1
+    return days if days == 0 or days in settings.retention.options else None
+
+
+def shortens(chat: Chat, settings: Settings, value: str) -> bool:
+    days = chosen_days(value, settings)
+    return days is not None and (days or default_days(chat, settings)) < kept_days(chat, settings)
+
+
+async def _jobs_page(
+    session: AsyncSession, chat: Chat, user_id: int | None, admin: bool, locale: str
+) -> tuple[str, list[list[InlineKeyboardButton]]]:
+    rows = (
+        await session.execute(
+            select(Job, User.first_name)
+            .outerjoin(User, User.id == Job.creator_id)
+            .where(Job.chat_id == chat.id, Job.state.in_(LIVE))
+            .order_by(Job.next_at)
+        )
+    ).all()
+    tz = chat_time(chat)
+    lines = [t(locale, "settings.jobs_page", zone=chat.timezone or "UTC")]
+    if not rows:
+        lines.append(t(locale, "settings.jobs_none"))
+    buttons: list[list[InlineKeyboardButton]] = []
+    used = 0
+    for index, (job, name) in enumerate(rows):
+        line = t(
+            locale,
+            "settings.job_line",
+            kind="💬" if job.kind == "prompt" else "⏰",
+            id=job.id,
+            when=local_time(job.next_at, tz),
+            repeat=t(locale, f"settings.repeat_{job.repeat or 'once'}"),
+            paused=t(locale, "settings.job_paused") if job.state == "paused" else "",
+            name=literal(one_line(name or "?", 32)),
+            text=literal(one_line(job.text, JOB_TEXT)),
+        )
+        if used + len(line) > JOBS_BUDGET:
+            lines.append(t(locale, "settings.jobs_more", count=len(rows) - index))
+            break
+        used += len(line)
+        lines.append(line)
+        if admin or job.creator_id == user_id:
+            toggle = (
+                _button(t(locale, "settings.job_resume", id=job.id), "jresume", str(job.id))
+                if job.state == "paused"
+                else _button(t(locale, "settings.job_pause", id=job.id), "jpause", str(job.id))
+            )
+            buttons.append(
+                [toggle, _button(t(locale, "settings.job_delete", id=job.id), "jdrop", str(job.id))]
+            )
+    if rows and chat.type != "private":
+        lines.append(t(locale, "settings.jobs_own"))
+    return "\n".join(lines), buttons
 
 
 async def render(
@@ -65,21 +141,28 @@ async def render(
     page: str = "main",
     *,
     can_read: bool = True,
+    admin: bool = False,
+    viewer: int | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
+    """The panel page for this viewer; ``admin`` decides which jobs they get buttons for."""
     group = chat.type != "private"
     on, off = t(locale, "settings.on"), t(locale, "settings.off")
     back = [_button(t(locale, "settings.back"), "page", "main")]
     if page == "retention":
-        default = settings.retention.private_days if not group else settings.retention.group_days
-        choices = [
-            _button(t(locale, "settings.days", days=d), "retention", str(d)) for d in RETENTION_CHOICES
-        ]
+        choices = [_button(_days(locale, d), "retention", str(d)) for d in settings.retention.options]
+        default = _days(locale, default_days(chat, settings))
         rows = [
             choices[:2],
             choices[2:],
             [_button(t(locale, "settings.default_days", days=default), "retention", "0")],
         ]
         return t(locale, "settings.retention_page"), InlineKeyboardMarkup(inline_keyboard=[*rows, back])
+    if page.startswith("shorten:"):
+        value = page.removeprefix("shorten:")
+        days = _days(locale, chosen_days(value, settings) or default_days(chat, settings))
+        confirm = _button(t(locale, "settings.shorten_confirm", days=days), "shorten", value, style="danger")
+        markup = InlineKeyboardMarkup(inline_keyboard=[[confirm], back])
+        return t(locale, "settings.shorten_page", days=days), markup
     if page == "notes":
         rows = [[_button(t(locale, f"settings.notes_{mode}"), "notes", mode)] for mode in NOTES_MODES]
         return t(locale, "settings.notes_page"), InlineKeyboardMarkup(inline_keyboard=[*rows, back])
@@ -90,10 +173,11 @@ async def render(
         confirm = _button(t(locale, "settings.context_off_confirm"), "ambient", "purge", style="danger")
         markup = InlineKeyboardMarkup(inline_keyboard=[[confirm], back])
         return t(locale, "settings.context_off_page", count=ambient_count or 0), markup
+    if page == "jobs":
+        text, rows = await _jobs_page(session, chat, viewer or (user.id if user else None), admin, locale)
+        return text, InlineKeyboardMarkup(inline_keyboard=[*rows, back])
 
-    jobs = await session.scalar(
-        select(func.count()).where(Job.chat_id == chat.id, Job.state.in_(("active", "paused")))
-    )
+    jobs = await session.scalar(select(func.count()).where(Job.chat_id == chat.id, Job.state.in_(LIVE)))
     lines = [
         t(locale, "settings.title", title=literal(one_line(chat.title or t(locale, "settings.this_chat"))))
     ]
@@ -106,7 +190,11 @@ async def render(
             else "settings.context_needs_admin"
         )
         lines.append(t(locale, context_line))
-    lines.append(t(locale, "settings.retention", days=kept_days(chat, settings)))
+    lines.append(t(locale, "settings.retention", days=_days(locale, kept_days(chat, settings))))
+    if chat.timezone:
+        lines.append(t(locale, "settings.zone", zone=chat.timezone))
+    else:
+        lines.append(t(locale, "settings.zone_unset"))
     lines.append(t(locale, "settings.notes", mode=t(locale, f"settings.notes_{chat.notes_mode}")))
     if chat.rules:
         lines.append(t(locale, "settings.rules", rules=literal(one_line(chat.rules, RULES_PREVIEW))))
@@ -123,9 +211,8 @@ async def render(
         lines.append(t(locale, "settings.admins_only"))
 
     rows: list[list[InlineKeyboardButton]] = []
-    first = [
-        _button(t(locale, "settings.retention_button", days=kept_days(chat, settings)), "page", "retention")
-    ]
+    kept = _days(locale, kept_days(chat, settings))
+    first = [_button(t(locale, "settings.retention_button", days=kept), "page", "retention")]
     if group:
         label = t(locale, "settings.context_button", state=on if chat.ambient else off)
         first.insert(
@@ -153,6 +240,8 @@ async def render(
     )
     if chat.rules:
         rows.append([_button(t(locale, "settings.rules_clear"), "rules", "clear")])
+    if jobs:
+        rows.append([_button(t(locale, "settings.jobs_button", count=jobs), "page", "jobs")])
     rows.append(
         [
             _button(
@@ -201,8 +290,15 @@ async def _show(
             )
 
 
-async def apply_setting(db: Database, chat_id: int, user_id: int, action: str, value: str) -> str | None:
-    """Change one setting (the caller checked the role); returns an alert key, if any."""
+async def apply_setting(
+    db: Database, settings: Settings, chat_id: int, user_id: int, action: str, value: str
+) -> str | None:
+    """Change one setting; returns an alert key, if any.
+
+    The caller checked the role and asked first where it must: a shorter retention and
+    context off are confirmed presses, and free-model consent (``free`` on in a private
+    chat) only ever comes from the person's own press, never from a tool.
+    """
     if action == "ambient" and value == "purge":
         await switch_context(db, chat_id, on=False)
         return "settings.context_purged"
@@ -216,9 +312,10 @@ async def apply_setting(db: Database, chat_id: int, user_id: int, action: str, v
                 person.group_spending = value == "on"
             case "ambient":
                 chat.ambient = True
-            case "retention":
-                days = int(value) if value.isdigit() else 0
-                chat.retention_days = days if days in RETENTION_CHOICES else None
+            case "retention" | "shorten":
+                days = chosen_days(value, settings)
+                if days is not None:
+                    chat.retention_days = days or None
             case "notes" if value in NOTES_MODES:
                 chat.notes_mode = value
             case "free" if chat.type != "private":
@@ -229,6 +326,46 @@ async def apply_setting(db: Database, chat_id: int, user_id: int, action: str, v
                 person.free_models_consent_version = POLICY_VERSION if on else None
             case "rules":
                 chat.rules, chat.rules_draft, chat.rules_draft_by = None, None, None
+            case "timezone":
+                try:
+                    name = iana(value)
+                except TimeZoneError:
+                    return None
+                old, new = chat_time(chat), ZoneInfo(name)
+                chat.timezone = name
+                now = datetime.now(UTC)
+                repeating = await session.scalars(
+                    select(Job)
+                    .where(Job.chat_id == chat.id, Job.state.in_(LIVE), Job.repeat.is_not(None))
+                    .with_for_update()
+                )
+                for job in repeating:
+                    rezone(job, old, new, now)
+            case _:
+                pass
+    return None
+
+
+async def apply_job(
+    db: Database, chat: Chat, user_id: int, admin: bool, action: str, value: str
+) -> str | None:
+    """Pause, resume or delete one job of this chat (its creator or an admin); returns an alert key, if any."""
+    if not value.isdigit():
+        return "settings.job_gone"
+    async with db.transaction() as session:
+        job = await session.get(Job, int(value), with_for_update=True)
+        if job is None or job.chat_id != chat.id or job.state not in LIVE:
+            return "settings.job_gone"
+        if job.creator_id != user_id and not admin:
+            return "settings.job_not_yours"
+        match action:
+            case "jpause":
+                job.state = "paused"
+            case "jresume" if job.state == "paused":
+                if not resume(job, datetime.now(UTC), chat_time(chat)):
+                    return "settings.job_passed"
+            case "jdrop":
+                job.state = "cancelled"
             case _:
                 pass
     return None
@@ -248,13 +385,26 @@ async def on_action(
         await query.answer()
         return
     action, value = callback_data.action, callback_data.value
-    personal = action == "spend" or (action == "page" and value == "main")
-    if not personal and chat.type != "private" and not await is_admin(bot, chat, query.from_user.id):
+    jobs = action in JOB_ACTIONS or (action == "page" and value == "jobs")
+    personal = jobs or action == "spend" or (action == "page" and value == "main")
+    admin = chat.type == "private" or (
+        (jobs or not personal) and await is_admin(bot, chat, query.from_user.id)
+    )
+    if not personal and not admin:
         await query.answer(t(locale, "settings.admins_alert"), show_alert=True)
         return
-    page = value if action == "page" else "main"
-    alert = None if action == "page" else await apply_setting(db, chat.id, query.from_user.id, action, value)
-    await query.answer(t(locale, alert) if alert else None)
+    alert: str | None = None
+    if action == "page":
+        page = value
+    elif action in JOB_ACTIONS:
+        page = "jobs"
+        alert = await apply_job(db, chat, query.from_user.id, admin, action, value)
+    elif action == "retention" and shortens(chat, settings, value):
+        page = f"shorten:{value}"  # deletes older history: confirm first
+    else:
+        page = "main"
+        alert = await apply_setting(db, settings, chat.id, query.from_user.id, action, value)
+    await query.answer(t(locale, alert) if alert else None, show_alert=alert is not None and jobs)
     if action == "free" and value == "on" and chat.type != "private":
         await send_markdown(bot, Target(chat.id), t(chat.locale or locale, "money.free_enabled"))
     async with db.session() as session:
@@ -263,13 +413,23 @@ async def on_action(
         if fresh is None:
             return
         can_read = True if fresh.type == "private" else await can_read_group(bot, fresh)
-        text, markup = await render(session, settings, fresh, user, locale, page, can_read=can_read)
+        text, markup = await render(
+            session,
+            settings,
+            fresh,
+            user,
+            locale,
+            page,
+            can_read=can_read,
+            admin=admin,
+            viewer=query.from_user.id,
+        )
     await _show(bot, query, message, text, markup)
 
 
 def build_router() -> Router:
     router = Router(name="settings")
     router.message.register(on_settings, Command("settings"))
-    actions = {"page", "ambient", "retention", "notes", "free", "rules", "spend"}
+    actions = {"page", "ambient", "retention", "shorten", "notes", "free", "rules", "spend", *JOB_ACTIONS}
     router.callback_query.register(on_action, SettingsAction.filter(F.action.in_(actions)))
     return router
