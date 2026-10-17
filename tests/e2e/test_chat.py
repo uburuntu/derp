@@ -177,3 +177,23 @@ async def test_redelivered_trigger_is_answered_once(conversation: Conversation, 
     async with conversation.db.session() as session:
         runs = list(await session.scalars(select(AgentRun)))
     assert len(runs) == 1
+
+
+async def test_a_reply_to_another_chat_shows_where_it_came_from(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    external = {
+        "origin": {
+            "type": "channel", "date": 1792000000, "message_id": 9,
+            "chat": {"id": -100777, "type": "channel", "title": "Daily News"},
+        },
+        "chat": {"id": -100777, "type": "channel", "title": "Daily News"},
+        "message_id": 9,
+        "photo": [{"file_id": "far", "file_unique_id": "u-far", "width": 9, "height": 9}],
+    }  # fmt: skip
+    quote = {"text": "prices doubled", "position": 0}
+    sent = await conversation.send(BOB, text="derp is this true?", external_reply=external, quote=quote)
+    await conversation.expect_reply(sent)
+    await conversation.settle(sent)
+    current = prompt_text(model.requests[-1][-1:])
+    assert "Bob ↩ (from Daily News: photo) «prices doubled»: derp is this true?" in current

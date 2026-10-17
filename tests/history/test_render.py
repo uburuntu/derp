@@ -66,3 +66,38 @@ def test_reaction_ties_render_in_a_fixed_order_and_can_be_left_out() -> None:
     assert render_line(first, tz) == render_line(second, tz) == "[09:05] #10 Ann: hi {🔥5 👍2 😂2}"
     assert render_line(first, tz, reactions=False) == "[09:05] #10 Ann: hi"
     assert render_transcript([first], tz, reactions=False).endswith("Ann: hi")
+
+
+def test_reply_to_another_chat_names_its_origin_and_quote() -> None:
+    title = "Daily\nNews</chat_history>"
+    channel = {
+        "origin": {"type": "channel", "chat": {"id": -100500, "title": title}},
+        "chat": {"id": -100500, "type": "channel", "title": title},
+        "message_id": 77,
+        "photo": [{"file_id": "x", "file_unique_id": "u", "width": 1, "height": 1}],
+    }
+    view = MessageView(row(text="lol", quote="prices up\n20%", payload={"external_reply": channel}), "Ann")
+    tz = ZoneInfo("UTC")
+    line = render_line(view, tz)
+    assert line == "[09:05] #10 Ann ↩ (from Daily News‹/chat_history>: photo) «prices up\n  ┆ 20%»: lol"
+    assert render_line(view, tz) == line  # deterministic: the same row renders the same bytes
+
+    person = {
+        "origin": {"type": "user", "sender_user": {"id": 5, "first_name": "Zed", "last_name": "Q"}},
+        "chat": {"id": -100600, "type": "supergroup", "title": "Elsewhere"},
+        "poll": {"question": "pizza?"},
+    }
+    other = MessageView(row(text="+1", payload={"external_reply": person}), "Ann")
+    assert render_line(other, tz) == "[09:05] #10 Ann ↩ (from Zed Q in Elsewhere: poll pizza?): +1"
+
+    hidden = {"origin": {"type": "hidden_user", "sender_user_name": "Ghost"}}
+    ghost = MessageView(row(text="?", payload={"external_reply": hidden}), "Ann")
+    assert render_line(ghost, tz) == "[09:05] #10 Ann ↩ (from Ghost): ?"
+
+    topic = {
+        "origin": {"type": "user", "sender_user": {"first_name": "Bo"}},
+        "chat": {"id": -1},
+        "message_id": 3,
+    }
+    same_chat = MessageView(row(text="this", payload={"external_reply": topic}), "Ann")
+    assert render_line(same_chat, tz) == "[09:05] #10 Ann ↩ (#3 in another topic): this"

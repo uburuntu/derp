@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -82,7 +84,8 @@ async def test_inspect_media_tool_opens_an_older_image(
     group = Room(-1007, title="Pics")
     conversation.meet(DORA, group)
     conversation.api.register_file("meme", PNG)
-    posted = await conversation.send(DORA, group, photo=photo("meme"))
+    earlier = int(datetime.now(UTC).timestamp()) - 600  # too old to come along with the question by itself
+    posted = await conversation.send(DORA, group, photo=photo("meme"), date=earlier)
     await conversation.settle(posted)
     assert model.requests == []  # ambient photos are not downloaded
 
