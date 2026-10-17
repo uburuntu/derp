@@ -149,6 +149,17 @@ async def test_grant_credits_a_wallet_and_tells_the_person(conversation: Convers
         assert await balance(session, (await wallet(session, "user", PAT.id)).id) == 300
 
 
+async def test_a_grant_to_a_chat_rearms_its_empty_wallet_line(conversation: Conversation) -> None:
+    conversation.meet(PAT, YARD)
+    await conversation.settle(await conversation.send(PAT, YARD, "hello yard"))
+    async with conversation.db.transaction() as session:
+        (await wallet(session, "chat", YARD.id)).empty_noticed_at = datetime.now(UTC)  # said it ran dry
+    await conversation.expect_reply(await conversation.send(OWNER, text=f"/grant {YARD.id} 300"))
+    async with conversation.db.session() as session:
+        topped = await wallet(session, "chat", YARD.id)
+        assert topped.empty_noticed_at is None and await balance(session, topped.id) == 300
+
+
 async def test_blocked_people_and_chats_get_no_answers(
     conversation: Conversation, model: ScriptedModel
 ) -> None:

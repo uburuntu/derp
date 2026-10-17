@@ -259,7 +259,9 @@ async def grant(message: Message, command: CommandObject, db: Database, bot: Bot
         recipient = await session.get(Chat if kind == "chat" else User, owner_id)
         if recipient is not None:
             known = True
-            wallet_id = (await wallet(session, kind, owner_id)).id
+            account = await wallet(session, kind, owner_id)
+            account.empty_noticed_at = None  # a chat wallet topped up may be announced as empty again
+            wallet_id = account.id
             fresh = (
                 await session.scalar(select(CreditLot.id).where(CreditLot.operation_id == operation_id))
                 is None
