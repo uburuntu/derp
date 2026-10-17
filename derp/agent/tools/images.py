@@ -23,6 +23,7 @@ from derp.inference.api import OpenRouterError
 from derp.inference.roles import ModelRole
 from derp.money.funding import PAID_SOURCES, Funding, run_cost, run_fees
 from derp.money.wallets import balance
+from derp.telegram.policy import AMBIGUOUS
 
 toolset = FunctionToolset[RunDeps]()
 
@@ -49,7 +50,7 @@ async def _references(deps: RunDeps, edit_message_id: int | None) -> tuple[int, 
     return (deps.trigger_message_id, *([replied] if replied else []))
 
 
-@toolset.tool
+@toolset.tool(sequential=True)  # the budget check and the send must not interleave
 async def generate_image(
     ctx: RunContext[RunDeps],
     prompt: str,
@@ -107,6 +108,8 @@ async def generate_image(
         )  # fmt: skip
     except OpenRouterError as error:
         return f"The image failed ({error.status}); nothing was charged for it."
+    except AMBIGUOUS:
+        return "Telegram didn't confirm the image; it may have arrived. Don't send it again."
     except TelegramAPIError:
         return "Telegram refused the image; nothing was charged for it."
     deps.delivered.append((sent.message_id, "image"))

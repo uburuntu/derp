@@ -17,6 +17,9 @@ from aiogram.methods.base import TelegramType
 
 from derp.telegram.heartbeat import mark_poll_success
 
+# A send that failed this way may still have been delivered: never replay it, and never call it refused.
+AMBIGUOUS = (TelegramNetworkError, TelegramServerError, TimeoutError)
+
 
 def is_read(method: str) -> bool:
     return method.startswith("get")
@@ -50,7 +53,7 @@ class TelegramRequestPolicy(BaseRequestMiddleware):
                 if attempt == self.attempts or error.retry_after > self.max_retry_after:
                     raise
                 await self._sleep(error.retry_after)
-            except TelegramNetworkError, TelegramServerError, TimeoutError:
+            except AMBIGUOUS:
                 if not is_read(name) or attempt == self.attempts:
                     raise
                 await self._sleep(2 ** (attempt - 1))

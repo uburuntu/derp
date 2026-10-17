@@ -1,6 +1,7 @@
+import json
 from typing import Any
 
-from pydantic_ai.messages import ToolReturnPart
+from pydantic_ai.messages import RetryPromptPart, ToolReturnPart
 from sqlalchemy import select
 
 from derp.history.models import GameScore
@@ -73,6 +74,28 @@ async def test_a_quiz_scores_first_answers_into_the_leaderboard(
     board = await conversation.send(CY, QUIZ_ROOM, "derp who's winning?")
     await conversation.settle(board)
     assert result_of(model, "chat_query") == "Ben: 2\nCy: 1"
+
+
+async def test_quoted_arguments_are_repaired(conversation: Conversation, model: ScriptedModel) -> None:
+    """Some models (GLM) quote every argument: arrays as JSON text, numbers as strings, unset ones as ""."""
+    for person in (ADA, BEN):
+        conversation.meet(person, QUIZ_ROOM)
+    polls = [{"question": "2+2?", "options": ["3", "4"], "correct": 1}]
+    quoted_query = {
+        "preset": "top_messages", "kinds": "[\"text\"]", "users": "[]", "days": "30", "since": "", "until": "",
+        "media_type": "", "contains": "", "reaction": "", "min_reactions": "", "from_derp": "false",
+        "group_by": "", "limit": 20, "whole_chat": True, "order": "count",
+    }  # fmt: skip
+    model.reply(
+        tool_call("post_polls", polls=json.dumps(polls), seconds_per_poll="60"),
+        tool_call("chat_query", **quoted_query),
+        ".",
+    )
+    asked = await conversation.send(ADA, QUIZ_ROOM, "derp quiz us and show the top messages")
+    await conversation.settle(asked)
+    assert [p["type"] for p in conversation.api.calls_of("sendPoll", after=asked.after)] == ["quiz"]
+    retries = [p for m in model.requests[-1] for p in m.parts if isinstance(p, RetryPromptPart)]
+    assert retries == [] and result_of(model, "chat_query")
 
 
 async def test_most_likely_polls_use_active_members(conversation: Conversation, model: ScriptedModel) -> None:

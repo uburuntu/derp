@@ -37,6 +37,7 @@ from derp.history.capture import record_outgoing
 from derp.money.funding import Funding
 from derp.money.models import RunFee
 from derp.telegram.media import sniff_image
+from derp.telegram.policy import AMBIGUOUS
 from derp.tools import background, effects, lookups
 from derp.tools.captions import Style
 from derp.tools.workers import EffectError
@@ -167,6 +168,8 @@ async def make_meme(
         return str(refused)
     except EffectError as error:
         return f"The meme failed ({error.reason}); nothing was charged."
+    except AMBIGUOUS:
+        return "Telegram didn't confirm the meme; it may have arrived. Don't send it again."
     except TelegramAPIError:
         return "Telegram refused the meme; nothing was charged."
 
@@ -206,6 +209,8 @@ async def reverse_media(ctx: RunContext[RunDeps], message_id: int | None = None)
         return str(refused)
     except EffectError as error:
         return f"Reversing failed ({error.reason}); nothing was charged."
+    except AMBIGUOUS:
+        return "Telegram didn't confirm the result; it may have arrived. Don't send it again."
     except TelegramAPIError:
         return "Telegram refused the result; nothing was charged."
 
@@ -276,6 +281,8 @@ async def remove_background(
         return str(refused)
     except EffectError as error:
         return f"Background removal failed ({error.reason}); nothing was charged."
+    except AMBIGUOUS:
+        return "Telegram didn't confirm the file; it may have arrived. Don't send it again."
     except TelegramAPIError:
         return "Telegram refused the file; nothing was charged."
 

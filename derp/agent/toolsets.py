@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 
+from derp.agent.arguments import Lenient
 from derp.agent.deps import RunDeps
 from derp.money.funding import Funding
 
@@ -43,4 +44,6 @@ class Family:
 
 def toolsets_for(deps: RunDeps, families: Sequence[Family]) -> list[AbstractToolset[RunDeps]]:
     toolbox = deps.funding is Funding.FREE
-    return [f.for_run(toolbox=toolbox) for f in families if deps.funding in f.tiers and f.available(deps)]
+    return [
+        Lenient(f.for_run(toolbox=toolbox)) for f in families if deps.funding in f.tiers and f.available(deps)
+    ]
