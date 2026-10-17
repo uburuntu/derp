@@ -16,16 +16,19 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from aiogram.types import SuccessfulPayment
+from aiogram import Bot
+from aiogram.types import SuccessfulPayment, TransactionPartnerUser
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.billing.models import Purchase, Subscription
 from derp.config import Pack, Plan, Settings
+from derp.db.engine import Database
 from derp.money.wallets import credit, wallet
 
 PACK_PAYLOAD, PLAN_PAYLOAD = "p1", "s1"
 TARGETS = ("user", "chat")
+TRANSACTIONS_PAGE = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +122,47 @@ async def record_payment(
     source = "plan" if order.kind == "plan" else "purchase"
     await credit(session, target.id, f"stars:{charge}", order.credits, source, expires_at=expires)
     return purchase, True
+
+
+async def recover_payments(db: Database, bot: Bot) -> list[Purchase]:
+    """Record incoming Stars payments that have no receipt (their handler failed); returns the new receipts.
+
+    An incoming invoice payment's transaction id is its ``telegram_payment_charge_id``, so a payment
+    recorded either way is recorded once.
+    """
+    async with db.session() as session:
+        known = set(await session.scalars(select(Purchase.telegram_charge_id)))
+    recovered: list[Purchase] = []
+    offset = 0
+    while True:
+        page = await bot.get_star_transactions(offset=offset, limit=TRANSACTIONS_PAGE)
+        for transaction in page.transactions:
+            source = transaction.source
+            if not isinstance(source, TransactionPartnerUser) or transaction.id in known:
+                continue
+            order = parse_payload(source.invoice_payload or "")
+            if source.transaction_type != "invoice_payment" or order is None:
+                continue
+            expires = None
+            if source.subscription_period:
+                paid_at = _when(transaction.date) or datetime.now(UTC)
+                expires = int((paid_at + timedelta(seconds=source.subscription_period)).timestamp())
+            payment = SuccessfulPayment(
+                currency="XTR",
+                total_amount=transaction.amount,
+                invoice_payload=source.invoice_payload or "",
+                telegram_payment_charge_id=transaction.id,
+                provider_payment_charge_id="",
+                subscription_expiration_date=expires,
+                is_recurring=bool(source.subscription_period) or None,
+            )
+            async with db.transaction() as session:
+                purchase, new = await record_payment(session, order, payment, source.user.id)
+            if new:
+                recovered.append(purchase)
+        if len(page.transactions) < TRANSACTIONS_PAGE:
+            return recovered
+        offset += TRANSACTIONS_PAGE
 
 
 def _when(value: datetime | int | None) -> datetime | None:

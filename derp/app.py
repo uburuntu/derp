@@ -15,6 +15,7 @@ from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from derp.agent.approvals import drop_old
 from derp.agent.runtime import ModelFactory, Runtime
+from derp.billing.purchases import recover_payments
 from derp.billing.refunds import reconcile_refunds
 from derp.config import Settings, get_settings
 from derp.db.engine import Database
@@ -129,7 +130,13 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
     async def profiles() -> None:
         await refresh_stale_profiles(services.bot, services.db)
 
-    async def refunds() -> None:
+    async def stars() -> None:
+        for purchase in await recover_payments(services.db, services.bot):
+            await notify_owners(
+                services.bot,
+                services.settings,
+                f"⭐ Recovered a missed payment: {purchase.stars} · {purchase.product} · +{purchase.credits} dc",
+            )
         if applied := await reconcile_refunds(services.db, services.bot):
             await notify_owners(services.bot, services.settings, f"Refund sweep applied {applied} refund(s).")
 
@@ -179,7 +186,7 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
         asyncio.create_task(every("jobs", 20, jobs, initial_delay=15)),
         asyncio.create_task(every("retention", 24 * 3600, retention, initial_delay=1800)),
         asyncio.create_task(every("expire-lots", 6 * 3600, expire, initial_delay=300)),
-        asyncio.create_task(every("refund-sweep", 24 * 3600, refunds, initial_delay=900)),
+        asyncio.create_task(every("stars-sweep", 24 * 3600, stars, initial_delay=900)),
         asyncio.create_task(
             every("error-digest", ERROR_DIGEST_SECONDS, errors, initial_delay=ERROR_DIGEST_SECONDS)
         ),

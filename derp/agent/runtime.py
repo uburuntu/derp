@@ -144,6 +144,7 @@ class Runtime:
             deps_type=RunDeps,
             instructions=PERSONA,
             capabilities=CAPABILITIES,
+            retries=2,  # a second chance at a bad tool call: two misses in a row would end the turn
         )
 
     async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome | None:
@@ -501,7 +502,14 @@ class Runtime:
             self.in_flight.discard(detached.funds.operation_id)
 
     async def run_approved(self, approval: Approval, chat: Chat, locale: str) -> None:
-        """Carry out an approved action as its own run, funded now from the requester's paid order."""
+        """Carry out an approved action as its own run, funded now from the requester's paid order.
+
+        It queues in the chat topic's lane: the run that posted the button may still hold its turn's money.
+        """
+        async with self.lanes.turn((approval.chat_id, approval.thread_id), approval.user_id, 0):
+            await self._run_approved(approval, chat, locale)
+
+    async def _run_approved(self, approval: Approval, chat: Chat, locale: str) -> None:
         target = Target(approval.chat_id, approval.thread_id, approval.reply_to)
         async with self.db.session() as session:
             if await is_blocked(session, chat.id, approval.user_id):
@@ -511,6 +519,7 @@ class Runtime:
             private=chat.type == "private",
             user_id=approval.user_id,
             operation_id=f"approval:{approval.id}",
+            paid_minimum=approval.credits,
         )
         if funds is None or funds.funding is not Funding.PAID or funds.credits < approval.credits:
             if funds is not None and funds.reservation_id is not None:

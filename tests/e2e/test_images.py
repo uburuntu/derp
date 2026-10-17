@@ -109,6 +109,34 @@ async def test_an_image_over_a_quarter_of_the_balance_asks_first(
     assert closed["rich_message"]["markdown"] == "On it — drawing…" and "reply_markup" not in closed.fields
 
 
+async def test_an_approved_image_falls_through_to_the_payer_who_can_cover_it(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    """A group wallet that covers a turn but not the image: the asker's own Derpcoins pay for it."""
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    club = Room(-1503, title="Club")
+    conversation.meet(JO, club)
+    async with conversation.db.transaction() as session:
+        group_wallet = (await wallet(session, "chat", club.id)).id
+        await credit(session, group_wallet, "stars:club", 20, "purchase")
+    own_wallet = await fund(conversation, 650)
+    model.reply(tool_call("generate_image", prompt="a party hat"), ".")
+    asked = await conversation.send(JO, club, "derp draw a party hat")
+    prompt = await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    run_button, _cancel = prompt["reply_markup"]["inline_keyboard"][0]
+    prompt_id = max(mid for (cid, mid) in conversation.api.messages if cid == club.id)
+    after = conversation.seq
+    await conversation.press(JO, club.id, prompt_id, run_button["callback_data"])
+    assert conversation.api.calls_of("sendPhoto", after=after) and images.prompts == ["a party hat"]
+    async with conversation.db.session() as session:
+        approved = await session.scalar(select(AgentRun).where(AgentRun.trigger == "callback"))
+        assert approved is not None and approved.wallet_id == own_wallet and approved.charged_credits == 48
+        assert await balance(session, own_wallet) == 650 - 48
+
+
 async def test_images_need_paid_derpcoins(conversation: Conversation, model: ScriptedModel) -> None:
     images = FakeImages()
     conversation.overrides["api"] = images

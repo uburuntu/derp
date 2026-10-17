@@ -232,9 +232,18 @@ async def on_payment(message: Message, db: Database, settings: Settings, bot: Bo
             bot, settings, f"Unrecognized Stars payment {payment.telegram_payment_charge_id}."
         )
         return
-    async with db.transaction() as session:
-        purchase, new = await record_payment(session, order, payment, message.from_user.id)
-        left = await balance(session, purchase.wallet_id)
+    try:
+        async with db.transaction() as session:
+            purchase, new = await record_payment(session, order, payment, message.from_user.id)
+            left = await balance(session, purchase.wallet_id)
+    except Exception as error:
+        await notify_owners(
+            bot,
+            settings,
+            f"Stars payment {payment.telegram_payment_charge_id} wasn't recorded ({type(error).__name__}); "
+            "the Star transaction sweep will retry it.",
+        )
+        raise
     if not new:
         return
     if order.kind == "plan":

@@ -4,6 +4,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from derp.billing.models import Purchase, Subscription
+from derp.billing.purchases import recover_payments
 from derp.billing.refunds import reconcile_refunds
 from derp.money.models import CreditLot
 from derp.money.wallets import balance, capture, reserve, wallet
@@ -291,4 +292,47 @@ async def test_daily_sweep_applies_chargebacks_nobody_announced(conversation: Co
     assert await reconcile_refunds(conversation.db, bot) == 1
     assert await reconcile_refunds(conversation.db, bot) == 0
     assert await wallet_balance(conversation, "user", CARL.id) == 0
+    assert await wallet_balance(conversation, "user", DANA.id) == 650
+
+
+async def test_long_charge_ids_are_recorded(conversation: Conversation) -> None:
+    payload = f"p1:pack_s_v1:650:chat:{PUB.id}"
+    conversation.meet(OWNER)
+    conversation.meet(CARL, PUB)
+    charge = "stxn" + "x" * 127  # Telegram's charge ids have no documented length; 131 seen in production
+    assert (await checkout(conversation, CARL, payload, 50))["ok"] in (True, "true")
+    sent = await conversation.send(CARL, PUB, successful_payment=paid(payload, 50, charge))
+    await conversation.settle(sent)
+    assert await wallet_balance(conversation, "chat", PUB.id) == 650
+
+
+async def test_the_sweep_recovers_payments_that_were_never_recorded(conversation: Conversation) -> None:
+    """A payment whose handler failed shows up among the Star transactions and is credited once."""
+    conversation.meet(OWNER)
+    await buy_pack(conversation, DANA, "ch-known")
+    conversation.api.star_transactions = [
+        {
+            "id": "ch-known",
+            "amount": 50,
+            "date": 0,
+            "source": {
+                "type": "user", "transaction_type": "invoice_payment", "user": DANA.payload(),
+                "invoice_payload": f"p1:pack_s_v1:650:user:{DANA.id}",
+            },
+        },
+        {
+            "id": "ch-missed",
+            "amount": 50,
+            "date": 0,
+            "source": {
+                "type": "user", "transaction_type": "invoice_payment", "user": CARL.payload(),
+                "invoice_payload": f"p1:pack_s_v1:650:chat:{PUB.id}",
+            },
+        },
+    ]  # fmt: skip
+    assert conversation.services is not None
+    bot = conversation.services.bot
+    assert [p.telegram_charge_id for p in await recover_payments(conversation.db, bot)] == ["ch-missed"]
+    assert await recover_payments(conversation.db, bot) == []
+    assert await wallet_balance(conversation, "chat", PUB.id) == 650
     assert await wallet_balance(conversation, "user", DANA.id) == 650

@@ -47,7 +47,7 @@ class CreditLot(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     wallet_id: Mapped[int] = mapped_column(ForeignKey("wallets.id"))
-    operation_id: Mapped[str] = mapped_column(String(128), unique=True)
+    operation_id: Mapped[str] = mapped_column(String(512), unique=True)
     source: Mapped[str] = mapped_column(String(10))
     amount: Mapped[int]
     remaining: Mapped[int]
@@ -68,7 +68,7 @@ class Reservation(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     wallet_id: Mapped[int] = mapped_column(ForeignKey("wallets.id"))
-    operation_id: Mapped[str] = mapped_column(String(128), unique=True)
+    operation_id: Mapped[str] = mapped_column(String(512), unique=True)
     amount: Mapped[int]
     captured: Mapped[int] = mapped_column(default=0)
     state: Mapped[str] = mapped_column(String(10), default="held")
@@ -101,7 +101,7 @@ class LedgerEntry(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     wallet_id: Mapped[int] = mapped_column(ForeignKey("wallets.id"))
     lot_id: Mapped[int] = mapped_column(ForeignKey("credit_lots.id"))
-    operation_id: Mapped[str] = mapped_column(String(128))
+    operation_id: Mapped[str] = mapped_column(String(512))
     kind: Mapped[str] = mapped_column(String(10))
     # Always positive; direction comes from the kind: credit/release add to the lot, the rest take from it
     # (a capture moves held credits out for good, so it does not change the lot).

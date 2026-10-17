@@ -113,12 +113,14 @@ class Funder:
         user_id: int,
         operation_id: str,
         free_allowed: bool = False,
+        paid_minimum: int | None = None,
         now: datetime | None = None,
     ) -> Funds | None:
         """Hold money for a run from the first payer that can cover a typical turn.
 
         Free models (nothing held) come last and only when allowed (consent / admin opt-in);
-        None means nobody can pay.
+        None means nobody can pay. ``paid_minimum`` funds an action of known price: only paid
+        Derpcoins, from the first payer whose balance covers it.
         """
         moment = now or datetime.now(UTC)
         cap = self.settings.run_caps.credits
@@ -129,13 +131,15 @@ class Funder:
             person = await session.get(User, user_id)
             if private or person is None or person.group_spending:
                 payers.append(mine)
-            minimum = await self.typical_turn(session, Funding.PAID)
+            minimum = paid_minimum or await self.typical_turn(session, Funding.PAID)
             for wallet_id in payers:
                 held = await reserve(
                     session, wallet_id, operation_id, cap, sources=PAID_SOURCES, minimum=minimum, now=moment
                 )
                 if held is not None:
                     return Funds(Funding.PAID, operation_id, wallet_id, held.id, held.amount)
+            if paid_minimum is not None:
+                return None
             if await sponsored_spent_today(session, moment) >= Decimal(
                 str(self.settings.sponsored_global_daily_usd)
             ):
