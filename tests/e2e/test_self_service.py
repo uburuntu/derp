@@ -274,7 +274,9 @@ async def test_a_confirmation_card_is_the_answer_so_a_dot_finish_adds_nothing(
     assert outputs == ["other"] and stored is None  # an output, but UI copy rather than history
 
 
-async def test_the_free_models_notice_is_the_answer_too(conversation: Conversation, model: ScriptedModel) -> None:
+async def test_the_free_models_notice_is_the_answer_too(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
     model.reply(tool_call("change_setting", setting="free_models", value="on"), ".")
     asked = await conversation.send(REX, text="turn on free models")
     await conversation.settle(asked)

@@ -1,8 +1,9 @@
 """Making images: OpenRouter's Images API on the image pin, then a photo reply.
 
 Billing is all-or-nothing per image. The provider call is ledgered against the
-run only once Telegram accepted the photo; if sending fails the cost is
-absorbed (ledgered without a run) and nothing is charged. Edits use the
+run only once Telegram accepted the photo (or, for an image kept for a next
+step, the result made from it: ``derp.agent.outputs``); if nothing arrives the
+cost is absorbed (ledgered without a run) and nothing is charged. Edits use the
 images of stored messages in the same chat, a member's profile photo or the
 chat photo as references.
 """
@@ -14,6 +15,7 @@ from typing import cast
 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, Message
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.media import inspect, referenced_media
 from derp.db.engine import Database
@@ -96,9 +98,13 @@ async def draw(
     pin: RolePin,
     chat_id: int,
     job: ImageJob,
+    extra: Sequence[tuple[bytes, str]] = (),
 ) -> GeneratedImage:
-    """Generate one image (not yet ledgered: the caller ledgers it once it knows whether it was delivered)."""
-    references = await _references(db, gateway, chat_id, job.references)
+    """Generate one image (not yet ledgered: the caller ledgers it once it knows whether it was delivered).
+
+    ``extra`` adds reference pictures by content (a result an earlier tool of the run kept).
+    """
+    references = [*await _references(db, gateway, chat_id, job.references), *extra]
     photos = [
         *([await profile_photo_bytes(bot, gateway, job.avatar_of)] if job.avatar_of is not None else []),
         *([await chat_photo_bytes(bot, gateway, chat_id)] if job.chat_photo else []),
@@ -145,16 +151,28 @@ async def make_image(
 async def ledger_image(
     db: Database, image: GeneratedImage, chat_id: int, user_id: int, *, funding: str, run_id: int | None
 ) -> None:
-    """Ledger the provider call: against the run once delivered, else as ``creator`` without a run."""
     async with db.transaction() as session:
-        record_usage(
-            session,
-            simple_usage(image.model, image.cost_usd),
-            kind="image",
-            funding=funding,
-            role=ModelRole.IMAGE.value,
-            run_id=run_id,
-            chat_id=chat_id,
-            user_id=user_id,
-            units=1,
-        )
+        record_image(session, image, chat_id, user_id, funding=funding, run_id=run_id)
+
+
+def record_image(
+    session: AsyncSession,
+    image: GeneratedImage,
+    chat_id: int,
+    user_id: int,
+    *,
+    funding: str,
+    run_id: int | None,
+) -> None:
+    """Ledger the provider call: against the run once delivered, else as ``creator`` without a run."""
+    record_usage(
+        session,
+        simple_usage(image.model, image.cost_usd),
+        kind="image",
+        funding=funding,
+        role=ModelRole.IMAGE.value,
+        run_id=run_id,
+        chat_id=chat_id,
+        user_id=user_id,
+        units=1,
+    )

@@ -6,6 +6,7 @@ their own arguments — so a prompt can't point a tool at another chat.
 
 from dataclasses import dataclass, field
 from datetime import tzinfo
+from typing import TYPE_CHECKING
 
 from aiogram import Bot
 from pydantic_ai.models import Model
@@ -20,6 +21,9 @@ from derp.money.funding import Funding, Funds
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import Target
 from derp.tools.lookups import Lookups
+
+if TYPE_CHECKING:
+    from derp.agent.outputs import Kept
 
 
 @dataclass(slots=True)
@@ -50,6 +54,7 @@ class RunDeps:
     delivered: list[tuple[int, str]] = field(
         default_factory=list[tuple[int, str]]
     )  # (message id, kind) so far
+    kept: dict[str, Kept] = field(default_factory=dict[str, "Kept"])  # results kept for the next tool, by ref
     reacted: set[int] = field(default_factory=set[int])  # messages Derp reacted to with the react tool
     search_withheld: bool = False  # the hold can't cover a web search in the coming request
 
@@ -59,5 +64,9 @@ class RunDeps:
 
     @property
     def tool_outputs_left(self) -> int:
-        """Visible outputs tools may still send; one slot stays free for the final text answer."""
-        return self.settings.run_caps.visible_outputs - 1 - len(self.delivered)
+        """Visible outputs tools may still send; one slot stays free for the final text answer.
+
+        A kept result holds a slot: it is posted at the end unless a tool uses it.
+        """
+        waiting = sum(not kept.used for kept in self.kept.values())
+        return self.settings.run_caps.visible_outputs - 1 - len(self.delivered) - waiting

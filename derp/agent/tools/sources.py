@@ -1,5 +1,8 @@
 """Where a tool's picture or clip comes from: a stored message, a member's profile photo or the chat photo.
 
+A result an earlier tool of the run kept (``from_result``, see ``derp.agent.outputs``)
+comes first when named.
+
 Message media is the one named, or else the current message or the one it
 replies to. A profile photo belongs to a person named in this chat (name or
 @username, matched against members seen here), else a stored message's sender,
@@ -12,7 +15,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from derp.agent.deps import RunDeps
-from derp.agent.outputs import Refused
+from derp.agent.outputs import Kept, Refused
 from derp.history.models import Message, MessageMedia, User
 from derp.history.queries import resolve_members
 from derp.telegram.media import MediaUnavailableError, chat_photo_bytes, profile_photo_bytes, sniff_image
@@ -26,6 +29,19 @@ class Source:
     data: bytes
     type: str  # the Telegram media type it came from ("profile_photo" / "chat_photo" for avatars)
     image: bool  # a still picture Pillow can open (GIFs count as clips)
+    kept: Kept | None = None  # the run's kept result it is
+
+
+def kept_source(deps: RunDeps, ref: str, types: tuple[str, ...]) -> Source:
+    """A result kept earlier in this run, by the id the tool returned (e.g. "r1")."""
+    kept = deps.kept.get(ref.strip().strip('"#').lower())
+    if kept is None:
+        known = ", ".join(f'"{r}"' for r in deps.kept) or "none"
+        raise Refused(f"No kept result {ref!r} in this answer (kept: {known}).")
+    if kept.made.sendable not in types:
+        raise Refused(f'Result "{kept.ref}" is a {kept.made.sendable}, which this tool can\'t use.')
+    kind = sniff_image(kept.made.data)
+    return Source(kept.made.data, kept.made.sendable, kind is not None and kind != "image/gif", kept)
 
 
 async def replied_to(deps: RunDeps) -> int | None:

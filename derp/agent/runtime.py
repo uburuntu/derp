@@ -48,6 +48,7 @@ from derp.agent.images import ImageJob, make_image
 from derp.agent.lanes import Lanes
 from derp.agent.media import as_content, inspect, note_images, run_media
 from derp.agent.models import AgentRun, Approval
+from derp.agent.outputs import absorb_kept, flush
 from derp.agent.persona import PERSONA, situation
 from derp.agent.prefix import prefixes
 from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
@@ -388,6 +389,7 @@ class Runtime:
             await price_unreported(
                 self.db, new_messages, funding.role, self.prefix[funding] + window.tokens, api=self.api
             )
+            await flush(deps)  # results kept for a next step nobody took: posted before the text answer
             silent = output.strip() in SILENT and bool(
                 deps.delivered or deps.reacted
             )  # a sticker/poll said it all
@@ -453,6 +455,9 @@ class Runtime:
         except (
             BaseException
         ) as exc:  # died outside the model call (network, shutdown): never leave it running
+            if deps is not None:
+                with contextlib.suppress(Exception):
+                    await absorb_kept(deps)
             await self._abandon(run_id, funds, exc)
             answered = spoke or (deps is not None and bool(deps.delivered or deps.reacted))
             if isinstance(exc, Exception) and not answered:  # not on shutdown or cancellation

@@ -8,7 +8,8 @@ Image memes, mirrored pictures and reversed voice are free on paid and
 sponsored runs. Heavy effects (anything that encodes video, and background
 removal) cost a small flat fee on paid runs and are counted per person per day
 on sponsored ones. The fee is a ``run_fees`` row added to the run's charge,
-written only after Telegram accepted the result, so a failed send costs nothing.
+written only after Telegram accepted the result (or one made from it, see
+``derp.agent.outputs`` for chains), so a failed send costs nothing.
 """
 
 from datetime import UTC, datetime, time
@@ -19,7 +20,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
-from derp.agent.outputs import Sendable, check_budget, deliver, output_kind, send_media
+from derp.agent.outputs import Made, Pending, Sendable, check_budget, emit, pending_cost
 from derp.agent.tools.images import spent_credits
 from derp.agent.tools.sources import (
     SOUND,
@@ -28,6 +29,7 @@ from derp.agent.tools.sources import (
     Source,
     avatar_source,
     chat_photo_source,
+    kept_source,
     message_media,
 )
 from derp.agent.toolsets import Family
@@ -50,8 +52,11 @@ async def _visual(
     profile_photo: bool,
     chat_photo: bool,
     person: str | None,
+    from_result: str | None,
     types: tuple[str, ...] = VISUAL,
 ) -> Source:
+    if from_result:
+        return kept_source(deps, from_result, types)
     if chat_photo:
         return await chat_photo_source(deps)
     if profile_photo or person:
@@ -75,38 +80,11 @@ async def _heavy_allowed(ctx: RunContext[RunDeps]) -> None:
                 RunFee.created_at >= datetime.combine(datetime.now(UTC).date(), time(), tzinfo=UTC),
             )
         )
-    if (used or 0) >= deps.settings.sponsored_effects_per_day:
+    if (used or 0) + pending_cost(deps)[1] >= deps.settings.sponsored_effects_per_day:
         raise Refused(
             "Today's free video effects and cutouts are used up for them; image memes still work, "
             "and Derpcoins (/buy) lift the limit."
         )
-
-
-async def _send(
-    deps: RunDeps, kind: Sendable, data: bytes, filename: str, what: str, *, effect: str | None = None
-) -> int:
-    """Send the result; heavy effects (``effect`` set) are ledgered only once Telegram accepted it."""
-    [sent] = await deliver(
-        deps, output_kind(kind), what, lambda: send_media(deps.bot, deps.target, kind, data, filename)
-    )
-    if effect is not None:
-        async with deps.db.transaction() as session:
-            paid = deps.funding is Funding.PAID
-            session.add(
-                RunFee(
-                    run_id=deps.run_id,
-                    chat_id=deps.chat.id,
-                    user_id=deps.user_id,
-                    item=effect,
-                    funding=deps.funding.value,
-                    credits=deps.settings.effect_credits if paid else 0,
-                )
-            )
-    return sent.message_id
-
-
-def _sent(message_id: int) -> str:
-    return f'Sent it as #{message_id}. Add at most a short line, or end with just ".".'
 
 
 @toolset.tool(sequential=True)
@@ -118,6 +96,8 @@ async def make_meme(
     profile_photo: bool = False,
     chat_photo: bool = False,
     person: str | None = None,
+    from_result: str | None = None,
+    final: bool = True,
 ) -> str:
     """Caption a picture, GIF, sticker or video as a meme and send it.
 
@@ -131,23 +111,23 @@ async def make_meme(
         profile_photo: Use the profile photo of message_id's sender (or of the person replied to, or the asker).
         chat_photo: Use this chat's photo.
         person: Use this member's profile photo (name or @username).
+        from_result: Use a result kept earlier in this answer (e.g. r1).
+        final: False keeps the result for a next step instead of posting it (only a chain's end is posted).
     """
     deps = ctx.deps
     try:
-        check_budget(deps)
-        source = await _visual(deps, message_id, profile_photo, chat_photo, person)
+        check_budget(deps, using=from_result)
+        source = await _visual(deps, message_id, profile_photo, chat_photo, person, from_result)
         if source.image:
-            return _sent(
-                await _send(
-                    deps, "photo", await effects.meme_image(source.data, text, style), "meme.jpg", "meme"
-                )
+            made = Made("photo", await effects.meme_image(source.data, text, style), "meme.jpg", "meme")
+        else:
+            await _heavy_allowed(ctx)
+            clip = await effects.meme_video(
+                source.data, text, _style(style), sound=source.type in ("video", "video_note")
             )
-        await _heavy_allowed(ctx)
-        clip = await effects.meme_video(
-            source.data, text, _style(style), sound=source.type in ("video", "video_note")
-        )
-        kind: Sendable = "video" if source.type in ("video", "video_note") else "animation"
-        return _sent(await _send(deps, kind, clip, "meme.mp4", "meme", effect="meme"))
+            kind: Sendable = "video" if source.type in ("video", "video_note") else "animation"
+            made = Made(kind, clip, "meme.mp4", "meme", Pending(fees=["meme"]))
+        return await emit(deps, made, final=final, source=source.kept)
     except Refused as refused:
         return str(refused)
     except EffectError as error:
@@ -165,6 +145,8 @@ async def reverse_media(
     profile_photo: bool = False,
     chat_photo: bool = False,
     person: str | None = None,
+    from_result: str | None = None,
+    final: bool = True,
 ) -> str:
     """Play a video, GIF, video message, voice or audio backwards (pictures get mirrored) and send it.
 
@@ -173,33 +155,31 @@ async def reverse_media(
         profile_photo: Mirror the profile photo of message_id's sender (or of the person replied to, or the asker).
         chat_photo: Mirror this chat's photo.
         person: Use this member's profile photo (name or @username).
+        from_result: Use a result kept earlier in this answer (e.g. r1).
+        final: False keeps the result for a next step instead of posting it (only a chain's end is posted).
     """
     deps = ctx.deps
     try:
-        check_budget(deps)
+        check_budget(deps, using=from_result)
         source = await _visual(
-            deps, message_id, profile_photo, chat_photo, person, (*VISUAL, "voice", "audio")
+            deps, message_id, profile_photo, chat_photo, person, from_result, (*VISUAL, "voice", "audio")
         )
         if source.image:
-            return _sent(
-                await _send(deps, "photo", await effects.mirror(source.data), "mirrored.jpg", "result")
+            made = Made("photo", await effects.mirror(source.data), "mirrored.jpg", "result")
+        elif source.type in ("voice", "audio"):
+            made = Made("voice", await effects.reverse(source.data, voice=True), "reversed.ogg", "result")
+        else:
+            await _heavy_allowed(ctx)
+            clip = await effects.reverse(source.data)
+            kind: Sendable = (
+                "video_note"
+                if source.type == "video_note"
+                else "video"
+                if source.type == "video"
+                else "animation"
             )
-        if source.type in ("voice", "audio"):
-            return _sent(
-                await _send(
-                    deps, "voice", await effects.reverse(source.data, voice=True), "reversed.ogg", "result"
-                )
-            )
-        await _heavy_allowed(ctx)
-        clip = await effects.reverse(source.data)
-        kind: Sendable = (
-            "video_note"
-            if source.type == "video_note"
-            else "video"
-            if source.type == "video"
-            else "animation"
-        )
-        return _sent(await _send(deps, kind, clip, "reversed.mp4", "result", effect="reverse"))
+            made = Made(kind, clip, "reversed.mp4", "result", Pending(fees=["reverse"]))
+        return await emit(deps, made, final=final, source=source.kept)
     except Refused as refused:
         return str(refused)
     except EffectError as error:
@@ -213,6 +193,8 @@ async def make_sticker(
     profile_photo: bool = False,
     chat_photo: bool = False,
     person: str | None = None,
+    from_result: str | None = None,
+    final: bool = True,
 ) -> str:
     """Turn a picture (a cutout keeps its transparency; clips give a frame) into a sticker and send it.
 
@@ -221,13 +203,16 @@ async def make_sticker(
         profile_photo: Use the profile photo of message_id's sender (or of the person replied to, or the asker).
         chat_photo: Use this chat's photo.
         person: Use this member's profile photo (name or @username).
+        from_result: Use a result kept earlier in this answer (e.g. r1).
+        final: False keeps the result for a next step instead of posting it (only a chain's end is posted).
     """
     deps = ctx.deps
     try:
-        check_budget(deps)
-        source = await _visual(deps, message_id, profile_photo, chat_photo, person)
+        check_budget(deps, using=from_result)
+        source = await _visual(deps, message_id, profile_photo, chat_photo, person, from_result)
         picture = source.data if source.image else await effects.still(source.data)
-        return _sent(await _send(deps, "sticker", await effects.sticker(picture), "sticker.webp", "sticker"))
+        made = Made("sticker", await effects.sticker(picture), "sticker.webp", "sticker")
+        return await emit(deps, made, final=final, source=source.kept)
     except Refused as refused:
         return str(refused)
     except EffectError as error:
@@ -280,6 +265,8 @@ async def remove_background(
     profile_photo: bool = False,
     chat_photo: bool = False,
     person: str | None = None,
+    from_result: str | None = None,
+    final: bool = True,
 ) -> str:
     """Cut the subject out of a picture (transparent background) and send it as a PNG file.
 
@@ -288,16 +275,19 @@ async def remove_background(
         profile_photo: Use the profile photo of message_id's sender (or of the person replied to, or the asker).
         chat_photo: Use this chat's photo.
         person: Use this member's profile photo (name or @username).
+        from_result: Use a result kept earlier in this answer (e.g. r1).
+        final: False keeps the result for a next step instead of posting it (only a chain's end is posted).
     """
     deps = ctx.deps
     try:
-        check_budget(deps)
-        source = await _visual(deps, message_id, profile_photo, chat_photo, person)
+        check_budget(deps, using=from_result)
+        source = await _visual(deps, message_id, profile_photo, chat_photo, person, from_result)
         if not source.image:
             raise Refused("That isn't a still picture.")
         await _heavy_allowed(ctx)
         cutout = await effects.remove_background(source.data, deps.settings.background_model)
-        return _sent(await _send(deps, "document", cutout, "cutout.png", "file", effect="cutout"))
+        made = Made("document", cutout, "cutout.png", "file", Pending(fees=["cutout"]))
+        return await emit(deps, made, final=final, source=source.kept)
     except Refused as refused:
         return str(refused)
     except EffectError as error:
