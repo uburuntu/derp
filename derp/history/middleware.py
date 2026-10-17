@@ -27,7 +27,7 @@ class CaptureMiddleware(BaseMiddleware):
     The message an invocation replies to is part of the invocation: stored too if Derp hadn't kept
     it (privacy mode, ambient off), so its text and media are available to the run. Stored voice
     messages and video notes are transcribed before handlers run (ambient ones only under the daily
-    creator cap).
+    creator cap), audio files only when they are part of an invocation.
 
     Adds ``trigger`` (or None) and ``chat_row`` to handler data. Guest-mode
     messages pass through untouched: they are never stored.
@@ -74,11 +74,17 @@ class CaptureMiddleware(BaseMiddleware):
                 await index_sticker(session, event, me.id)
         transcriber: Transcriber | None = data.get("transcriber")
         if transcriber is not None and not self.edits:
-            # A replied-to voice is transcribed on demand (no-op if it already has a transcript).
+            # A replied-to voice is transcribed on demand (no-op if it already has a transcript);
+            # audio files only as part of an invocation.
             ambient = trigger is None and chat.type != "private"
+            thread = event.message_thread_id if event.is_topic_message else None
             for message, capped in ((event if stored else None, ambient), (replied, False)):
-                if message is not None and (message.voice or message.video_note):
-                    await transcriber.transcribe_message(event.chat.id, message.message_id, ambient=capped)
+                if message is not None and (
+                    message.voice or message.video_note or (message.audio and not capped)
+                ):
+                    await transcriber.transcribe_message(
+                        event.chat.id, message.message_id, thread_id=thread, ambient=capped
+                    )
         data["trigger"] = trigger
         data["chat_row"] = chat
         return await handler(event, data)

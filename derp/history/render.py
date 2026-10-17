@@ -1,7 +1,8 @@
 """Render stored messages as compact transcript lines for models and history tools.
 
 One line per message: ``[10:42] #123 Ann ↩#120: text [photo: a cat] {🔥3}``.
-Media show their stored description or transcript when one exists; payloads
+Media show their stored description or transcript when one exists (or why a
+recording has none: too long, or transcription failed); payloads
 (dice, polls, locations, service events…) become short bracketed notes.
 Contacts render without phone numbers: the window never needs them.
 
@@ -22,7 +23,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from derp.history.models import Chat, Message, MessageMedia, Reaction, ReactionCount, User
+from derp.history.models import (
+    TOO_LONG,
+    UNHEARD,
+    Chat,
+    Message,
+    MessageMedia,
+    Reaction,
+    ReactionCount,
+    User,
+)
 
 _WRAPPER_TAG = re.compile(
     r"<(?=\s*/?\s*(?:chat_history|current_message|notes|chat_profile|situation)\b)", re.IGNORECASE
@@ -68,6 +78,9 @@ def _duration(seconds: int | None) -> str:
     return f" {minutes}:{secs:02d}"
 
 
+UNTRANSCRIBED = {TOO_LONG: "too long to transcribe", UNHEARD: "couldn't transcribe"}
+
+
 def render_media(media: MessageMedia) -> str:
     detail = media.transcript or media.description
     match media.type:
@@ -75,6 +88,8 @@ def render_media(media: MessageMedia) -> str:
             label = f"sticker {media.sticker_emoji or ''}".rstrip()
         case "voice" | "video_note" | "video" | "audio":
             label = media.type.replace("_", " ") + _duration(media.duration)
+            if media.transcript is None and (why := UNTRANSCRIBED.get(media.transcript_model or "")):
+                label += f" — {why}"  # stored, so the line stays the same run after run
         case "document":
             label = f"file {media.file_name}" if media.file_name else "file"
         case "animation":

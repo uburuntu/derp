@@ -1,3 +1,4 @@
+import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select, update
@@ -6,6 +7,7 @@ from derp.history.models import Chat
 from derp.memory.models import Note
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
+from tests.e2e.test_effects import results_of
 
 GINA = Person(901, "Gina")
 HANK = Person(902, "Hank")
@@ -206,3 +208,42 @@ async def test_a_decided_proposal_loses_its_buttons_and_the_rest_keep_theirs(
     assert "reply_markup" not in conversation.api.message(CLUB.id, menu_id)
     async with conversation.db.session() as session:
         assert [n.state for n in await session.scalars(select(Note))] == ["active"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "asker", "about", "state", "says"),
+    [
+        ("auto", HANK, "chat", "active", "on your own"),
+        ("members", HANK, "chat", "active", "only when someone explicitly asks"),
+        ("admins", HANK, "chat", "proposed", "goes to the admins"),
+        ("admins", GINA, "chat", "active", "goes to the admins"),
+        ("off", HANK, "chat", None, "don't save any"),
+        ("off", HANK, "me", "active", "don't save any"),  # personal notes work in every mode
+    ],
+)
+async def test_remember_follows_the_chat_notes_mode(
+    conversation: Conversation,
+    model: ScriptedModel,
+    mode: str,
+    asker: Person,
+    about: str,
+    state: str | None,
+    says: str,
+) -> None:
+    conversation.meet(GINA, CLUB, status="administrator")
+    conversation.meet(HANK, CLUB)
+    first = await conversation.send(HANK, CLUB, "hello")
+    await conversation.settle(first)
+    async with conversation.db.transaction() as session:
+        await session.execute(update(Chat).where(Chat.id == CLUB.id).values(notes_mode=mode))
+
+    model.reply(tool_call("remember", text="meetups are on Fridays", about=about), "ok")
+    asked = await conversation.send(asker, CLUB, "derp, remember: meetups are on Fridays")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    assert says in str(model.requests[0][-1])  # the policy line is in the situation
+    async with conversation.db.session() as session:
+        note = await session.scalar(select(Note))
+    assert (note.state if note else None) == state
+    if state is None:
+        assert "turned off" in results_of(model, "remember")[0]

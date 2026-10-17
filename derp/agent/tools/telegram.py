@@ -19,6 +19,7 @@ from aiogram.types import Message as TgMessage
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.deps import RunDeps
 from derp.agent.toolsets import ALL_TIERS, Family
@@ -185,11 +186,88 @@ async def send_dice(
     return f"Dice #{sent.message_id} landed on {value}."
 
 
+# Telegram tags each sticker with one emoji, so one mood has several spellings (en and ru chats alike).
+# Kept without variation selectors; an emoji belongs to one mood at most.
+MOODS: tuple[tuple[str, ...], ...] = (
+    ("😂", "🤣", "😆", "😹", "😁", "😄", "😃", "😀", "😅"),  # laughing
+    ("❤", "😍", "🥰", "😘", "😻", "💕", "💖", "💘", "💗", "💞", "💓", "♥", "🫶", "❤‍🔥"),  # love
+    ("😢", "😭", "😿", "😞", "😔", "🥺", "☹", "🙁", "😥", "💔"),  # sad, crying
+    ("😡", "🤬", "😠", "👿", "😤", "💢"),  # angry
+    ("😱", "😮", "😲", "🤯", "😳", "😨", "🙀", "😯", "😦", "😧"),  # shocked
+    ("👍", "👌", "✅", "🆗", "🤙", "💯"),  # thumbs up, ok
+    ("🤔", "🧐", "🤨", "💭"),  # thinking
+    ("🤦", "🤦‍♂", "🤦‍♀", "😬", "🙄", "😒", "😑", "😐", "🫠", "😩"),  # facepalm, cringe
+    ("🎉", "🥳", "🎊", "🍾", "🥂", "🎈"),  # party
+    ("😎", "🆒", "🕶", "🔥"),  # cool
+    ("😴", "🥱", "💤", "😪"),  # sleepy
+    ("💀", "☠", "😵", "⚰"),  # dead
+    ("🤷", "🤷‍♂", "🤷‍♀"),  # shrug
+    ("🙏", "🤝", "🫡"),  # thanks
+    ("🤮", "🤢"),  # disgusted
+    ("😈", "😏", "😼"),  # smug
+    ("👋", "🙋", "🖐"),  # hi
+    ("👏", "🙌"),  # applause
+)  # fmt: skip
+VS16 = "\ufe0f"  # emoji presentation selector: Telegram tags have it, models often don't
+SKIN_TONES = str.maketrans("", "", "".join(map(chr, range(0x1F3FB, 0x1F400))))
+MOOD_OF = {emoji: mood for mood in MOODS for emoji in mood}
+EMOJIS_SHOWN = 10  # emojis listed when nothing matches, so the model can pick one that works
+
+
+async def pick_sticker(session: AsyncSession, chat_id: int, bot_id: int, emoji: str) -> str | None:
+    """The emoji's sticker, else its mood's: each time the chat's most used first, then the global index."""
+    exact = emoji.strip().replace(VS16, "")
+    mood = [e for e in MOOD_OF.get(exact.translate(SKIN_TONES), ()) if e != exact]
+    tag = func.replace(Sticker.emoji, VS16, "")
+    for wanted in ([exact], mood):
+        if not wanted:
+            continue
+        favorite = await session.scalar(
+            select(Sticker.file_id)
+            .join(MessageMedia, MessageMedia.file_unique_id == Sticker.file_unique_id)
+            .where(MessageMedia.chat_id == chat_id, tag.in_(wanted), Sticker.bot_id == bot_id)
+            .group_by(Sticker.file_id)
+            .order_by(func.count().desc())
+            .limit(1)
+        )
+        found = favorite or await session.scalar(
+            select(Sticker.file_id)
+            .where(tag.in_(wanted), Sticker.bot_id == bot_id)
+            .order_by(Sticker.curated.desc(), Sticker.uses.desc())
+            .limit(1)
+        )
+        if found:
+            return found
+    return None
+
+
+async def sticker_emojis(session: AsyncSession, chat_id: int, bot_id: int) -> list[str]:
+    """Emojis there are stickers for: this chat's most used first, topped up from the global index."""
+    used = func.count()
+    chat = await session.scalars(
+        select(Sticker.emoji)
+        .join(MessageMedia, MessageMedia.file_unique_id == Sticker.file_unique_id)
+        .where(MessageMedia.chat_id == chat_id, Sticker.bot_id == bot_id, Sticker.emoji.is_not(None))
+        .group_by(Sticker.emoji)
+        .order_by(used.desc(), Sticker.emoji)
+        .limit(EMOJIS_SHOWN)
+    )
+    index = await session.scalars(
+        select(Sticker.emoji)
+        .where(Sticker.bot_id == bot_id, Sticker.emoji.is_not(None))
+        .group_by(Sticker.emoji)
+        .order_by(func.bool_or(Sticker.curated).desc(), func.sum(Sticker.uses).desc(), Sticker.emoji)
+        .limit(EMOJIS_SHOWN)
+    )
+    shown = dict.fromkeys(e for e in (*chat, *index) if e)  # ordered, unique
+    return list(shown)[:EMOJIS_SHOWN]
+
+
 @toolset.tool(sequential=True)
 async def send_sticker(
     ctx: RunContext[RunDeps], emoji: str, reply_to: int | None = None, reply_to_person: str | None = None
 ) -> str:
-    """Send a sticker matching an emoji, preferring stickers this chat already uses.
+    """Send a sticker matching an emoji or its mood (😂 also finds 🤣 stickers), preferring this chat's own.
 
     Args:
         emoji: The mood as one emoji, e.g. 😂, 👍, 😢, 🔥.
@@ -203,24 +281,14 @@ async def send_sticker(
     except OutputRefused as refused:
         return f"Not sent: {refused}."
     async with deps.db.session() as session:
-        favorite = await session.scalar(
-            select(Sticker.file_id)
-            .join(MessageMedia, MessageMedia.file_unique_id == Sticker.file_unique_id)
-            .where(
-                MessageMedia.chat_id == deps.chat.id, Sticker.emoji == emoji, Sticker.bot_id == deps.bot.id
-            )
-            .group_by(Sticker.file_id)
-            .order_by(func.count().desc())
-            .limit(1)
-        )
-        file_id = favorite or await session.scalar(
-            select(Sticker.file_id)
-            .where(Sticker.emoji == emoji, Sticker.bot_id == deps.bot.id)
-            .order_by(Sticker.curated.desc(), Sticker.uses.desc())
-            .limit(1)
+        file_id = await pick_sticker(session, deps.chat.id, deps.bot.id, emoji)
+        known = [] if file_id else await sticker_emojis(session, deps.chat.id, deps.bot.id)
+    if file_id is None and known:
+        return (
+            f"No sticker for {emoji}. Stickers I have: {' '.join(known)}; use one of these or answer in text."
         )
     if file_id is None:
-        return f"I don't know a sticker for {emoji} yet; try another emoji or answer in text."
+        return f"I don't know a sticker for {emoji} yet; answer in text."
     try:
         sent = await deps.bot.send_sticker(
             chat_id=deps.chat.id,

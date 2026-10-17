@@ -26,7 +26,8 @@ async def remember(ctx: RunContext[RunDeps], text: str, about: Literal["chat", "
     """Save a short fact for future conversations in this chat.
 
     Use "me" for facts about the person talking to you (their preferences, plans), "chat" for things
-    the whole chat should know. Save when asked, or when something is clearly worth keeping.
+    the whole chat should know. Chat notes follow the chat notes policy in the situation; personal
+    notes are saved when asked, or when something about the person is clearly worth keeping.
 
     Args:
         text: The fact, one short sentence (max 300 characters).

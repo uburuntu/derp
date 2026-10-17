@@ -15,7 +15,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   links. Asked about a video, GIF or video note, it looks at a still frame of it. Media tools also take videos,
   GIFs and audio (memes, reversing, song recognition). Group voice messages nobody asked about are transcribed
   in the background up to a daily limit; past it, a voice message is transcribed when someone calls Derp in
-  reply to it.
+  reply to it. Short audio files (forwarded memos, recordings) are transcribed when someone calls Derp with one
+  or in reply to one. Recordings over the length limit aren't transcribed, and Derp says so instead of guessing.
 - Profile pictures and the chat photo work as sources: "add me a hat on my profile picture", "draw Vasya as a
   knight", "meme @vasya's avatar" or "meme our chat photo". People are found by name or @username among those
   seen in this chat. Derp sends the result; bots can't change anyone's profile photo, so people set it themselves.
@@ -63,7 +64,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   presses its button. Free models get read-only and Telegram tools only.
 - An action that costs more than the approval threshold (or a large share of the payer's balance) shows a
   Run / Cancel button first; only the asker decides. An unanswered prompt expires and loses its buttons; asking
-  again is free.
+  again is free. Once the picture arrives the prompt disappears; if it fails, the prompt says so and nothing is
+  charged.
 - Balances are private: /credits in a group answers ephemerally or by DM, never in the group.
 - Derpcoins aren't money: no cash-out, no transfers between people. Payment problems: /paysupport. A refund
   returns the Stars and removes what is left of that purchase's Derpcoins; refunding a Derp+ payment also ends
@@ -73,8 +75,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 
 - Notes: "remember that…" saves a short note. Chat notes are shared in that chat; personal notes belong to one
   person in one chat and only they can remove them. Nothing crosses chats.
-- Admins choose the chat notes mode in /settings: auto, members, admins (others' notes become proposals
-  approved in /memory) or off.
+- Admins choose the chat notes mode in /settings: auto (Derp also saves lasting chat lore on its own,
+  sparingly), members (saved only when someone asks), admins (only when asked; others' notes become proposals
+  approved in /memory) or off. Personal notes work in every mode.
 - Rules: standing instructions an admin sets for how Derp behaves in the chat. Rules quoted word for word apply at
   once; anything Derp would reword is shown with Apply / Cancel for that admin.
 - /memory lists the rules and notes. Notes and rules need bought or free daily Derpcoins (not free models).

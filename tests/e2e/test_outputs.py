@@ -114,7 +114,9 @@ async def test_sticker_from_the_chat_replying_to_a_person(
     await conversation.settle(asked)
     (call,) = conversation.api.calls_of("sendSticker", after=asked.after)
     assert call["sticker"] == "stk-1" and int(call["reply_parameters"]["message_id"]) == posted.message_id
-    assert "don't know a sticker for 🦖" in tool_results(model.requests[-1])[-1]
+    assert (
+        "No sticker for 🦖. Stickers I have: 😂;" in tool_results(model.requests[-1])[-1]
+    )  # a miss lists what works
     texts = [
         str(c["rich_message"]["markdown"])
         for c in conversation.api.calls_of("sendRichMessage", after=asked.after)

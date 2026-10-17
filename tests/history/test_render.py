@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from derp.history.models import Message, MessageMedia
+from derp.history.models import TOO_LONG, UNHEARD, Message, MessageMedia
 from derp.history.render import MessageView, estimate_tokens, render_line, render_payload, render_transcript
 
 
@@ -66,3 +66,20 @@ def test_reaction_ties_render_in_a_fixed_order_and_can_be_left_out() -> None:
     assert render_line(first, tz) == render_line(second, tz) == "[09:05] #10 Ann: hi {🔥5 👍2 😂2}"
     assert render_line(first, tz, reactions=False) == "[09:05] #10 Ann: hi"
     assert render_transcript([first], tz, reactions=False).endswith("Ann: hi")
+
+
+def test_recordings_without_a_transcript_say_why() -> None:
+    long = MessageMedia(type="voice", duration=724, transcript_model=TOO_LONG)
+    failed = MessageMedia(type="video_note", duration=18, transcript_model=UNHEARD)
+    pending = MessageMedia(type="audio", duration=30)  # not tried (yet): no reason to give
+    heard = MessageMedia(type="voice", duration=5, transcript="hi", transcript_model="m/stt")
+    lines = [
+        render_line(MessageView(row(kind="voice"), "Ann", [m]), ZoneInfo("UTC"))
+        for m in (long, failed, pending, heard)
+    ]
+    assert [line.split(": ", 1)[1] for line in lines] == [
+        "[voice 12:04 — too long to transcribe]",
+        "[video note 0:18 — couldn't transcribe]",
+        "[audio 0:30]",
+        "[voice 0:05: hi]",
+    ]

@@ -105,6 +105,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         gateway=services.media,
         api=services.api,
         lookups=services.lookups,
+        transcriber=services.transcriber,
     )
     dispatcher = Dispatcher(
         services=services,

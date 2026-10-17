@@ -4,9 +4,16 @@ Runs inline during capture, before handlers, so an invocation by voice is
 answered from its transcript. Creator-funded and ledgered as ``kind='stt'``;
 nothing is posted. Video notes go through ffmpeg (audio only) first. Long
 recordings, failed downloads and provider errors leave the message without a
-transcript — they never fail capture. Ambient voice (not part of an invocation)
+transcript, marked with the reason (``transcript_model``) so the transcript line
+can say it — they never fail capture. Ambient voice (not part of an invocation)
 stops being transcribed once the day's creator-paid STT reaches
 ``ambient_stt_daily_usd``; owners get one ping per UTC day when that happens.
+Audio files (forwarded memos, recordings) are transcribed only as part of an
+invocation, never ambient; anything but OGG goes through ffmpeg first.
+
+Updates are handled concurrently, so a run may start while a voice note sent
+just before it is still being transcribed: ``settle`` lets it wait for those,
+briefly, before it reads the chat.
 """
 
 import asyncio
@@ -22,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.history.models import Message, MessageMedia
+from derp.history.models import TOO_LONG, UNHEARD, Message, MessageMedia
 from derp.inference.api import OpenRouterAPI, OpenRouterError, Transcript
 from derp.inference.ledger import record_usage, simple_usage
 from derp.inference.models import ProviderCall
@@ -31,8 +38,10 @@ from derp.inference.roles import ModelRole
 from derp.telegram.media import MediaGateway
 
 log = logging.getLogger("derp.transcription")
-SPOKEN = ("voice", "video_note")
+SPOKEN = ("voice", "video_note")  # transcribed whenever stored
+AUDIBLE = (*SPOKEN, "audio")  # audio files: only as part of an invocation
 FFMPEG_SECONDS = 60
+SETTLE_SECONDS = 5.0  # how long a run waits for transcriptions still running before its message
 Notify = Callable[[str], Awaitable[None]]
 
 
@@ -48,11 +57,14 @@ async def stt_spent_today(session: AsyncSession, now: datetime) -> Decimal:
     return Decimal(spent or 0)
 
 
-async def extract_audio(video: bytes) -> bytes:
-    """Audio track of a video note as OGG/Opus (MP4 needs a seekable input, hence the temp file)."""
+async def extract_audio(media: bytes) -> bytes:
+    """Audio track of a video note or audio file as OGG/Opus (MP4 needs a seekable input, hence the temp file).
+
+    ffmpeg recognizes the container from its content, so the file needs no (user-supplied) extension.
+    """
     with tempfile.TemporaryDirectory() as folder:
-        source = Path(folder) / "note.mp4"
-        source.write_bytes(video)
+        source = Path(folder) / "input"
+        source.write_bytes(media)
         process = await asyncio.create_subprocess_exec(
             "ffmpeg", "-loglevel", "error", "-i", str(source), "-vn", "-c:a", "libopus", "-b:a", "32k", "-f", "ogg",
             "pipe:1",
@@ -89,6 +101,8 @@ class Transcriber:
         self.ambient_cap = Decimal(str(settings.ambient_stt_daily_usd))
         self.notify = notify
         self._cap_reported: date | None = None
+        # (chat, message) → (forum topic, done): transcriptions running now, for ``settle``.
+        self._running: dict[tuple[int, int], tuple[int | None, asyncio.Future[None]]] = {}
 
     async def _over_ambient_cap(self) -> bool:
         now = datetime.now(UTC)
@@ -100,21 +114,57 @@ class Transcriber:
             await self.notify(f"Ambient voice transcription hit today's ${self.ambient_cap:g} cap.")
         return True
 
-    async def transcribe_message(self, chat_id: int, message_id: int, *, ambient: bool = False) -> str | None:
-        """Transcribe a stored voice message or video note; ``ambient`` ones only while under the daily cap."""
+    async def settle(
+        self, chat_id: int, thread_id: int | None, before: int, *, limit: float = SETTLE_SECONDS
+    ) -> None:
+        """Wait, at most ``limit`` seconds, for transcriptions of this chat topic's messages before ``before``."""
+        waiting = [
+            done
+            for (chat, message), (thread, done) in self._running.items()
+            if chat == chat_id and thread == thread_id and message < before
+        ]
+        if not waiting:
+            return
+        _, pending = await asyncio.wait(waiting, timeout=limit)
+        log.info("waited for %d transcription(s), %d still running", len(waiting), len(pending))
+
+    async def transcribe_message(
+        self, chat_id: int, message_id: int, *, thread_id: int | None = None, ambient: bool = False
+    ) -> str | None:
+        """Transcribe a stored voice message, video note or (not ambient) audio file.
+
+        ``ambient`` voice only while under the daily cap. Runs in this chat topic may ``settle`` on it meanwhile.
+        """
+        key = (chat_id, message_id)
+        if (running := self._running.get(key)) is not None:  # already under way: wait for it, never pay twice
+            await asyncio.shield(running[1])
+            return await self.transcribe_message(chat_id, message_id, thread_id=thread_id, ambient=ambient)
+        entry = (thread_id, asyncio.get_running_loop().create_future())
+        self._running[key] = entry
+        try:
+            return await self._transcribe(chat_id, message_id, ambient=ambient)
+        finally:
+            if self._running.get(key) is entry:
+                del self._running[key]
+            entry[1].set_result(None)
+
+    async def _transcribe(self, chat_id: int, message_id: int, *, ambient: bool) -> str | None:
         async with self.db.session() as session:
             media = await session.scalar(
                 select(MessageMedia).where(
                     MessageMedia.chat_id == chat_id,
                     MessageMedia.message_id == message_id,
-                    MessageMedia.type.in_(SPOKEN),
+                    MessageMedia.type.in_(SPOKEN if ambient else AUDIBLE),
                     MessageMedia.transcript.is_(None),
                 )
             )
             user_id = await session.scalar(
                 select(Message.user_id).where(Message.chat_id == chat_id, Message.message_id == message_id)
             )
-        if media is None or (media.duration or 0) > self.max_seconds:
+        if media is None:
+            return None
+        if (media.duration or 0) > self.max_seconds:
+            await self._mark(media, TOO_LONG)
             return None
         if ambient and await self._over_ambient_cap():
             return None
@@ -122,10 +172,12 @@ class Transcriber:
             data = await self.gateway.fetch(
                 media.file_id, bot_id=media.bot_id, key=media.file_unique_id, size_hint=media.file_size
             )
-            audio = await extract_audio(data) if media.type == "video_note" else data
-            transcript = await self._transcribe(audio, media.duration or 0)
+            ogg = media.type == "voice" or (media.type == "audio" and media.mime_type == "audio/ogg")
+            audio = data if ogg else await extract_audio(data)
+            transcript = await self._speech_to_text(audio, media.duration or 0)
         except Exception as error:  # noqa: BLE001 - capture never fails over a transcript (ffmpeg, network…)
             log.info("no transcript for a %s: %s", media.type, type(error).__name__)
+            await self._mark(media, UNHEARD)
             return None
         async with self.db.transaction() as session:
             record_usage(
@@ -147,7 +199,16 @@ class Transcriber:
             message.extra_text = " ".join(filter(None, (message.extra_text, transcript.text))) or None
         return transcript.text
 
-    async def _transcribe(self, audio: bytes, seconds: int) -> Transcript:
+    async def _mark(self, media: MessageMedia, reason: str) -> None:
+        """Say why a recording has no transcript, so the transcript line can tell the model."""
+        if media.transcript_model == reason:
+            return
+        async with self.db.transaction() as session:
+            row = await session.get(MessageMedia, (media.chat_id, media.message_id, media.idx))
+            if row is not None and row.transcript is None:
+                row.transcript_model = reason
+
+    async def _speech_to_text(self, audio: bytes, seconds: int) -> Transcript:
         pin = await self.pins.get(ModelRole.STT)
         error: OpenRouterError = OpenRouterError(503, "no speech-to-text model pinned")
         for model in pin.models:  # the next model is a different provider: worth a try on any error
