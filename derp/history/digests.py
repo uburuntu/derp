@@ -1,9 +1,12 @@
 """Day digests: which messages a chat day holds, the cached summaries, and staleness.
 
-Days are calendar days in the chat's time zone. A digest is keyed by chat,
-scope (0 = the whole chat, otherwise a forum topic) and day; building one is
-the agent's job (it needs a model). Any edit or deletion of a message inside a
-digest's id range marks it stale, whatever its scope.
+Days are calendar days in the chat's time zone (``Scope.tz``). A digest is
+keyed by chat, scope (0 = the whole chat, otherwise a forum topic) and day;
+building one is the agent's job (it needs a model). An edit of a message inside
+a digest's id range, or Derp deleting its own message there, marks it stale
+(never shown, rebuilt on the next ask), whatever its scope. Forgetting deletes
+covering digests instead (``retention.py``): nothing summarizing what someone
+took back may stay stored.
 """
 
 from dataclasses import dataclass
@@ -32,8 +35,8 @@ class DayStats:
     count: int
 
 
-async def day_stats(session: AsyncSession, scope: Scope, day: date, tz: tzinfo) -> DayStats | None:
-    start, end = day_bounds(day, tz)
+async def day_stats(session: AsyncSession, scope: Scope, day: date) -> DayStats | None:
+    start, end = day_bounds(day, scope.tz)
     first, last, count = (
         await session.execute(
             select(func.min(Message.message_id), func.max(Message.message_id), func.count()).where(
@@ -44,8 +47,8 @@ async def day_stats(session: AsyncSession, scope: Scope, day: date, tz: tzinfo) 
     return DayStats(first, last, count) if count else None
 
 
-async def day_messages(session: AsyncSession, scope: Scope, day: date, tz: tzinfo) -> list[Message]:
-    start, end = day_bounds(day, tz)
+async def day_messages(session: AsyncSession, scope: Scope, day: date) -> list[Message]:
+    start, end = day_bounds(day, scope.tz)
     rows = await session.scalars(
         select(Message)
         .where(scope.messages(), Message.date >= start, Message.date < end)

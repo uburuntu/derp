@@ -235,7 +235,7 @@ async def digest(
     sections: list[str] = []
     for day in days:
         async with deps.db.session() as session:
-            stats = await day_stats(session, scope, day, deps.tz)
+            stats = await day_stats(session, scope, day)
             cached = await session.get(Digest, (deps.chat.id, key, day)) if stats else None
         if stats is None:
             if len(days) == 1:
@@ -246,12 +246,12 @@ async def digest(
             builds -= 1
             try:
                 found = await build(
-                    deps.db, deps.digest_model, deps.digest_pin, scope, key, day, deps.tz,
+                    deps.db, deps.digest_model, deps.digest_pin, scope, key, day,
                     funding=deps.funding.value, role=deps.digest_role, run_id=deps.run_id, user_id=deps.user_id,
                 )  # fmt: skip
             except Exception as error:  # noqa: BLE001 - fall back to the cached digest or a pointer
                 log.info("digest build failed: %s", type(error).__name__)
-        if found is not None and found.stale:  # it may quote edited or forgotten messages
+        if found is not None and found.stale:  # it may quote what was edited or deleted since
             found = None
         elif found is not None and not is_current(found, stats):
             note = " — newer messages not included yet"

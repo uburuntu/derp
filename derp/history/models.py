@@ -342,8 +342,8 @@ class Digest(Base):
 
     ``thread_id`` 0 is the whole chat; otherwise one forum topic. ``last_message_id``
     is the newest message the day had when it was built, so today's digest is
-    rebuilt once newer messages exist. Edits and deletions inside the day mark it
-    ``stale``.
+    rebuilt once newer messages exist. Edits inside the day mark it ``stale``;
+    forgetting a message it covers deletes it.
     """
 
     __tablename__ = "digests"

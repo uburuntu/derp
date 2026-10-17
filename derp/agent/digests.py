@@ -6,7 +6,7 @@ any other part of the answer. A day too long for one call is summarized in
 parts and the parts merged; extremely busy days are sampled.
 """
 
-from datetime import date, tzinfo
+from datetime import date
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse
@@ -96,7 +96,6 @@ async def build(
     scope: Scope,
     key: int,
     day: date,
-    tz: tzinfo,
     *,
     funding: str,
     role: str,
@@ -105,10 +104,10 @@ async def build(
 ) -> Digest | None:
     """Summarize the day and cache it; None when the day has no stored messages."""
     async with db.session() as session:
-        rows = await day_messages(session, scope, day, tz)
+        rows = await day_messages(session, scope, day)
         if not rows:
             return None
-        transcript = render_transcript(await load_views(session, rows), tz)
+        transcript = render_transcript(await load_views(session, rows), scope.tz)
     stats = DayStats(rows[0].message_id, rows[-1].message_id, len(rows))
     text, paid = await summarize(model, pin, transcript)
     await price_unreported(db, paid, ModelRole(role), estimate_tokens(transcript))
