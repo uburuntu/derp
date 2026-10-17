@@ -44,12 +44,17 @@ def clip(kind: str) -> bytes:
 
 
 def results_of(model: ScriptedModel, tool: str) -> list[str]:
-    return [
-        str(p.content)
-        for m in model.requests[-1]
-        for p in m.parts
-        if isinstance(p, ToolReturnPart | RetryPromptPart) and p.tool_name == tool
-    ]
+    """The tool's results in the latest request that has any (an image note may follow the run)."""
+    for request in reversed(model.requests):
+        found = [
+            str(p.content)
+            for m in request
+            for p in m.parts
+            if isinstance(p, ToolReturnPart | RetryPromptPart) and p.tool_name == tool
+        ]
+        if found:
+            return found
+    return []
 
 
 async def ambient(conversation: Conversation, file_id: str, data: bytes, **content: Any) -> int:

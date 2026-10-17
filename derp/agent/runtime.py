@@ -45,13 +45,13 @@ from derp.agent.deps import RunDeps
 from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
 from derp.agent.images import ImageJob, make_image
 from derp.agent.lanes import Lanes
-from derp.agent.media import as_content, inspect, note_images, referenced_media
+from derp.agent.media import as_content, inspect, note_images, run_media
 from derp.agent.models import AgentRun, Approval
 from derp.agent.persona import PERSONA, situation
 from derp.agent.prefix import prefixes
 from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
 from derp.agent.runs import finish_run, price_unreported, record_output, start_run, totals
-from derp.agent.tools import CAPABILITIES, FAMILIES
+from derp.agent.tools import CAPABILITIES, DETACHED, FAMILIES
 from derp.agent.toolsets import toolsets_for
 from derp.config import Settings
 from derp.db.engine import Database
@@ -62,6 +62,7 @@ from derp.history.render import (
     chat_time,
     describe_time,
     estimate_tokens,
+    external_reply,
     load_views,
     neutralize,
     one_line,
@@ -110,7 +111,9 @@ class Detached:
 
 WINDOW_STARTS_KEPT = 10_000  # topics remembered; forgetting one only costs a cache miss
 DETACHED_BRIEF = (
-    "You were summoned {where}: you can't see that chat, its history or its members, and you have {tools}. "
+    "You were summoned {where}: you can't see that chat, its history or its members, and your only output is "
+    "this one text answer. Tools here: {web}the Python sandbox, lookups (weather, exchange rates, time zones, "
+    "Wikipedia and the like) and about_derp; nothing that reads or posts to a chat, no images. "
     "Answer the request on its own, briefly. The asker is “{asker}”. Now: {now}."
 )
 
@@ -248,7 +251,7 @@ class Runtime:
                     self.window_starts[topic_key] = window.oldest_message_id
                 prompt = await current_prompt(session, message, window, tz)
                 reply_to = message.reply_to_message.message_id if message.reply_to_message else None
-                images = await referenced_media(session, chat.id, message.message_id, reply_to)
+                images = await run_media(session, chat.id, message.message_id, reply_to)
                 topic = (
                     await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
                 )
@@ -263,7 +266,7 @@ class Runtime:
                     days=EARLIER_DAYS
                 ):
                     earlier = None
-            inspected = await inspect(self.gateway, images)
+            inspected = await inspect(self.gateway, images.rows)
             model = self.model_factory(pin)
             deps = RunDeps(
                 db=self.db,
@@ -412,7 +415,7 @@ class Runtime:
                 self.db,
                 model,
                 pin,
-                inspected,
+                [item for item in inspected if item.row.message_id not in images.unnoted],
                 run_id=run.id,
                 funding=funding.value,
                 role=funding.role,
@@ -487,15 +490,23 @@ class Runtime:
                 gateway=self.gateway, pin=pin, model=model, digest_pin=pin, digest_model=model,
                 digest_role=funds.funding.role.value, api=self.api, pins=self.pins, lookups=self.lookups,
             )  # fmt: skip
-            tools = "no tools" if funds.funding is Funding.FREE else "no tools except the web"
             brief = DETACHED_BRIEF.format(
                 where=where,
-                tools=tools,
+                web="" if funds.funding is Funding.FREE else "web search and page fetch, ",
                 asker=one_line(asker.full_name),
                 now=describe_time(datetime.now(UTC), tz),
             )
             request = f"<situation>\n{brief}\n</situation>\n\n{neutralize(prompt)}"
             caps = self.settings.run_caps
+            guard = Guard(
+                run_id=run.id,
+                pin=pin,
+                model_factory=self.model_factory,
+                tool_calls=caps.tool_calls,
+                requests=caps.tool_calls + 1,
+                deadline=asyncio.get_running_loop().time() + caps.timeout_seconds * WRAP_UP_AT,
+                near_budget=lambda messages: _near_hold(self.settings, funds, messages),
+            )
             text, status, error_type = "", "completed", None
             with capture_run_messages() as captured:
                 try:
@@ -503,20 +514,28 @@ class Runtime:
                         result = await self.agent.run(
                             request,
                             deps=deps,
-                            model=model,
+                            model=guard.model(model),
                             model_settings=chat_settings(
                                 pin,
                                 max_tokens=caps.output_tokens,
                                 session=conversation_id(f"user:{asker.id}"),
                             ),
-                            usage_limits=UsageLimits(request_limit=3, tool_calls_limit=caps.tool_calls),
-                            toolsets=[],
+                            usage_limits=UsageLimits(  # backstops: the guard wraps up before these
+                                request_limit=caps.tool_calls + 1 + BACKSTOP,
+                                tool_calls_limit=caps.tool_calls + BACKSTOP,
+                            ),
+                            toolsets=toolsets_for(deps, DETACHED),
+                            capabilities=[guard],
                         )
                     text, messages = result.output, result.new_messages()
                 except Exception as exc:  # noqa: BLE001 - the caller says so; nothing is charged
                     status, error_type, messages = "failed", type(exc).__name__, list(captured)
             await price_unreported(
-                self.db, messages, funds.funding.role, estimate_tokens(request), api=self.api
+                self.db,
+                messages,
+                funds.funding.role,
+                self.prefix[funds.funding] + estimate_tokens(request),
+                api=self.api,
             )
             async with self.db.transaction() as session:
                 stored = await session.merge(run)
@@ -644,6 +663,15 @@ class Runtime:
             log.info("notice not delivered")
 
 
+def _near_hold(settings: Settings, funds: Funds, run: list[ModelMessage]) -> bool:
+    """One more request costing what the latest one did would reach the run's hold."""
+    latest = next((m for m in reversed(run) if isinstance(m, ModelResponse)), None)
+    if funds.reservation_id is None or latest is None:
+        return False
+    spent = totals(run).cost_usd + totals([latest]).cost_usd
+    return settings.credits_for_usd(float(spent)) >= funds.credits
+
+
 class _Stream:
     """Feeds streamed events to progress, remembers the latest answer text and enforces the money cap.
 
@@ -705,7 +733,14 @@ async def current_prompt(session: AsyncSession, message: TgMessage, window: Wind
     if row is not None:
         line = render_line((await load_views(session, [row]))[0], tz)
     else:
-        line = neutralize(f"{one_line(asker)}: {message.text or message.caption or ''}")
+        external = message.external_reply
+        origin = (
+            external_reply(external.model_dump(mode="json", exclude_none=True), message.chat.id)
+            if external
+            else ""
+        )
+        quote = f" «{message.quote.text[:200]}»" if message.quote else ""
+        line = neutralize(f"{one_line(asker)}{origin}{quote}: {message.text or message.caption or ''}")
     parts: list[str] = []
     reply = message.reply_to_message
     if reply is not None and (reply.message_id not in window.ids):

@@ -10,9 +10,12 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Private chat: Derp answers every message. Groups: only when called (see groups).
 - Inline mode: type @username and a question in any chat; the answer is edited into the sent message.
 - Guest mode: a mention in a chat Derp isn't a member of gets one reply. Inline and guest answers see no chat
-  history and nothing from them is stored except accounting.
+  history and nothing from them is stored except accounting. They can still look things up (weather, exchange
+  rates, time zones, Wikipedia and the like), calculate, answer about Derp itself and, beyond free models, search
+  the web; they can't draw, post polls or stickers, or set reminders.
 - It looks at photos, stickers and albums, listens to voice messages and video notes (transcribed), and opens
-  links. Asked about a video, GIF or video note, it looks at a still frame of it. Media tools also take videos,
+  links. A photo someone sent just before calling Derp comes along with the question, and a reply to Derp's
+  answer about a photo still sees that photo. Asked about a video, GIF or video note, it looks at a still frame of it. Media tools also take videos,
   GIFs and audio (memes, reversing, song recognition). Group voice messages nobody asked about are transcribed
   in the background up to a daily limit; past it, a voice message is transcribed when someone calls Derp in
   reply to it.
