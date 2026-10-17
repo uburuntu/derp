@@ -58,11 +58,17 @@ def provider_config(pin: RolePin) -> OpenRouterProviderConfig:
     return config
 
 
-class DerpOpenRouterModel(OpenRouterModel):
-    """OpenRouter plus its ``openrouter:web_fetch`` server tool, which Pydantic AI doesn't map yet.
+# Pinned per request: "auto" falls back to Exa ($0.007) for models without native search, which most
+# chat pins are; Parallel "fast" is $0.001 and handles Russian as well as English.
+SEARCH_ENGINE = {"engine": "parallel", "mode": "fast"}
 
-    Fetches use the plain ``openrouter`` engine (direct HTTP fetch + extraction,
-    no third-party backend); nothing is fetched from Derp's own host.
+
+class DerpOpenRouterModel(OpenRouterModel):
+    """OpenRouter with a pinned web-search engine, plus the ``openrouter:web_fetch`` server tool.
+
+    Pydantic AI maps ``WebSearchTool`` but can't choose its engine, and doesn't map web fetch yet.
+    Fetches use the plain ``openrouter`` engine (direct HTTP fetch + extraction, no third-party
+    backend); nothing is fetched from Derp's own host.
     """
 
     @classmethod
@@ -75,6 +81,9 @@ class DerpOpenRouterModel(OpenRouterModel):
         self, model_settings: OpenAIChatModelSettings, model_request_parameters: ModelRequestParameters
     ) -> tuple[list[chat.ChatCompletionToolParam], ChatCompletionToolChoiceOptionParam | None]:
         tools, choice = super()._get_tool_choice(model_settings, model_request_parameters)
+        for tool in tools:
+            if tool.get("type") == "openrouter:web_search":
+                cast(dict[str, Any], tool)["parameters"] |= SEARCH_ENGINE
         fetch = next((t for t in model_request_parameters.native_tools if isinstance(t, WebFetchTool)), None)
         if fetch is not None:
             parameters: dict[str, Any] = {"engine": "openrouter"}

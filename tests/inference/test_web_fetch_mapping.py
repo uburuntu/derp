@@ -18,7 +18,12 @@ def test_web_fetch_and_search_become_openrouter_server_tools() -> None:
     )
     tools, _choice = model._get_tool_choice(OpenAIChatModelSettings(), parameters)
     by_type = {cast(dict[str, Any], tool)["type"]: cast(dict[str, Any], tool) for tool in tools}
-    assert by_type["openrouter:web_search"]["parameters"] == {"search_context_size": "low", "max_uses": 2}
+    assert by_type["openrouter:web_search"]["parameters"] == {
+        "search_context_size": "low",
+        "max_uses": 2,
+        "engine": "parallel",
+        "mode": "fast",
+    }
     assert by_type["openrouter:web_fetch"]["parameters"] == {
         "engine": "openrouter",
         "max_uses": 3,

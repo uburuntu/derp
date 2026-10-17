@@ -1,3 +1,5 @@
+import pytest
+
 """Runs end in an answer: caps wrap up instead of failing, empty replies and busy providers get a retry."""
 
 from decimal import Decimal
@@ -180,9 +182,10 @@ def searches_allowed(info: AgentInfo) -> int | None:
 
 
 async def test_web_search_is_left_out_when_the_hold_cant_cover_it(
-    conversation: Conversation, model: ScriptedModel
+    conversation: Conversation, model: ScriptedModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Sponsored: the day's free Derpcoins hold less than one search's fee (plus markup).
+    # Sponsored: the day's free Derpcoins hold less than one (pricier) search's fee plus markup.
+    monkeypatch.setattr(conversation.settings, "web_search_price_usd", 0.01)
     sent = await conversation.send(DORA, text="derp what's new in the news")
     await conversation.expect_reply(sent)
     await conversation.settle(sent)
@@ -192,8 +195,9 @@ async def test_web_search_is_left_out_when_the_hold_cant_cover_it(
 
 
 async def test_web_searches_are_limited_to_what_the_hold_covers(
-    conversation: Conversation, model: ScriptedModel
+    conversation: Conversation, model: ScriptedModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(conversation.settings, "web_search_price_usd", 0.01)  # 12 credits a search
     async with conversation.db.transaction() as session:
         wallet_id = (await wallet(session, "user", DORA.id)).id
         await credit(session, wallet_id, "stars:dora", 20, "purchase")

@@ -146,9 +146,9 @@ class Settings(BaseSettings):
     approval_minutes: int = 15
     image_price_usd: float = 0.045  # upper estimate of one standard image on the image pin
     stt_price_usd_per_minute: float = 0.007  # upper estimate on the STT pin, used when no cost is reported
-    # Upper estimate of one web search's fee (OpenRouter's default engine, Exa, is $0.007 per search):
+    # One web search's fee (Parallel "fast", pinned in inference.openrouter: $1 per 1,000 searches):
     # a search starts only while the run's hold still covers it.
-    web_search_price_usd: float = 0.01
+    web_search_price_usd: float = 0.001
     effect_credits: int = (
         2  # flat fee on paid runs for heavy local effects (video memes, reversed clips, cutouts)
     )

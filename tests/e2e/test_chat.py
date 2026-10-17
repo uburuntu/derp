@@ -46,7 +46,7 @@ async def test_private_chat_answers_and_remembers(conversation: Conversation, mo
         model.pins[-1] == DEFAULT_PINS[ModelRole.CHAT_SPONSORED]
     )  # no credits bought: sponsored, no fast routing
     kinds = {tool.kind for tool in model.infos[-1].model_request_parameters.native_tools}
-    assert kinds == {"web_fetch"}  # a search's fee doesn't fit in the free daily hold
+    assert kinds == {"web_fetch", "web_search"}  # a search's fee fits in the free daily hold
 
     async with conversation.db.session() as session:
         runs = list(await session.scalars(select(AgentRun).order_by(AgentRun.id)))

@@ -112,7 +112,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   free models. On free models, toolbox tools are found on demand; they work the same.
 - Every answer can also search the web and open links (paid and sponsored) and run exact maths in a Python sandbox
   with no network or files (every tier). A web search has its own fee, so it runs only while the answer's budget
-  still covers it; the free daily allowance usually doesn't.
+  still covers it.
 
 ## source
 
