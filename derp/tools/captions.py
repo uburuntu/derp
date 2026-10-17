@@ -17,7 +17,7 @@ from typing import Literal
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from derp.tools.workers import EffectError, check_dimensions
+from derp.tools.workers import DEFAULTS, EffectError, check_dimensions
 
 Style = Literal["demotivator", "lobster", "panel"]
 FONTS = Path(__file__).with_name("fonts")
@@ -152,8 +152,7 @@ def fit_caption(
 
 
 def media_size(width: int, height: int) -> tuple[int, int]:
-    """Display size for captioned media: at most MAX_SIDE, small inputs scaled up, even sides."""
-    check_dimensions(width, height)
+    """Display size for checked media: at most MAX_SIDE, small inputs scaled up, even sides."""
     scale = min(MAX_SIDE / max(width, height), 1.0)
     if max(width, height) * scale < MIN_WIDTH:
         scale = MIN_WIDTH / max(width, height)
@@ -218,11 +217,11 @@ def caption_frame(size: tuple[int, int], text: str, style: Style) -> Frame:
     return Frame(overlay, (left, top))
 
 
-def open_image(data: bytes) -> Image.Image:
+def open_image(data: bytes, max_pixels: int = DEFAULTS.max_pixels) -> Image.Image:
     """Decode an image within the pixel budget, upright and in RGBA."""
     try:
         source = Image.open(io.BytesIO(data))
-        check_dimensions(*source.size)
+        check_dimensions(*source.size, max_pixels)
         image = ImageOps.exif_transpose(source).convert("RGBA")
     except (OSError, ValueError, Image.DecompressionBombError) as error:
         if isinstance(error, EffectError):
@@ -231,9 +230,9 @@ def open_image(data: bytes) -> Image.Image:
     return image
 
 
-def caption_image(data: bytes, text: str, style: Style) -> bytes:
+def caption_image(data: bytes, text: str, style: Style, max_pixels: int = DEFAULTS.max_pixels) -> bytes:
     """The captioned picture as JPEG."""
-    image = open_image(data)
+    image = open_image(data, max_pixels)
     image = image.resize(media_size(*image.size), Image.Resampling.LANCZOS)
     frame = caption_frame(image.size, text, style)
     result = Image.new("RGBA", frame.overlay.size, "black")
@@ -248,8 +247,8 @@ def encode_jpeg(image: Image.Image) -> bytes:
     return buffer.getvalue()
 
 
-def mirror(data: bytes) -> bytes:
-    image = open_image(data)
+def mirror(data: bytes, max_pixels: int = DEFAULTS.max_pixels) -> bytes:
+    image = open_image(data, max_pixels)
     return encode_jpeg(ImageOps.mirror(image.resize(media_size(*image.size), Image.Resampling.LANCZOS)))
 
 
@@ -257,9 +256,9 @@ STICKER_SIDE = 512
 STICKER_BYTES = 512 * 1024
 
 
-def sticker(data: bytes) -> bytes:
+def sticker(data: bytes, max_pixels: int = DEFAULTS.max_pixels) -> bytes:
     """A static sticker: WebP with transparency kept, the longer side exactly 512 px, under 512 KB."""
-    image = open_image(data)
+    image = open_image(data, max_pixels)
     scale = STICKER_SIDE / max(image.size)
     size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
     image = image.resize(size, Image.Resampling.LANCZOS)

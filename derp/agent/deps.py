@@ -21,6 +21,7 @@ from derp.money.funding import Funding, Funds
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import Target
 from derp.tools.lookups import Lookups
+from derp.tools.workers import WorkerPool
 
 if TYPE_CHECKING:
     from derp.agent.outputs import Kept
@@ -50,6 +51,7 @@ class RunDeps:
     api: OpenRouterAPI
     pins: PinStore
     lookups: Lookups
+    workers: WorkerPool  # local media effects
     history_start: int = 0  # index of the run's first message in the agent's history
     delivered: list[tuple[int, str]] = field(
         default_factory=list[tuple[int, str]]

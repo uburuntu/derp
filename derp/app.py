@@ -41,6 +41,7 @@ from derp.telegram.media import MediaGateway
 from derp.telegram.middleware import UpdateSpanMiddleware
 from derp.telegram.updates import ALLOWED_UPDATES
 from derp.tools.lookups import Lookups
+from derp.tools.workers import WorkerPool
 
 log = logging.getLogger("derp.app")
 ERROR_DIGEST_SECONDS = 600
@@ -57,6 +58,7 @@ class Services:
     media: MediaGateway
     transcriber: Transcriber
     lookups: Lookups
+    workers: WorkerPool
     model_factory: ModelFactory = field(init=False)
 
     def __post_init__(self) -> None:
@@ -87,6 +89,7 @@ class Services:
                 notify=lambda text: notify_owners(bot, settings, text),
             ),
             lookups=Lookups(settings),
+            workers=WorkerPool(settings.media),
         )
 
     async def close(self) -> None:
@@ -106,6 +109,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         gateway=services.media,
         api=services.api,
         lookups=services.lookups,
+        workers=services.workers,
         transcriber=services.transcriber,
     )
     dispatcher = Dispatcher(

@@ -1,7 +1,7 @@
 """Media effects on bytes: captioned memes (images and video), reversing, background removal, samples.
 
-Each public function takes a worker slot, works in a throwaway directory and
-returns the result's bytes. ffmpeg only ever reads local files of whitelisted
+Each public function takes a slot of the given worker pool (whose limits it
+follows), works in a throwaway directory and returns the result's bytes. ffmpeg only ever reads local files of whitelisted
 container formats (no playlists or network protocols) and never sees user
 text: captions are drawn by Pillow and overlaid as a picture.
 """
@@ -19,14 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from derp.tools import captions
-from derp.tools.workers import (
-    MAX_INPUT_BYTES,
-    MAX_OUTPUT_BYTES,
-    POOL,
-    EffectError,
-    check_dimensions,
-    run,
-)
+from derp.tools.workers import EffectError, WorkerPool, check_dimensions, run
 
 # Containers chat media arrives in; playlists, concat lists and session descriptions are excluded.
 FORMATS = "mov,mp4,matroska,webm,avi,mpegts,ogg,gif,image2,png_pipe,jpeg_pipe,webp_pipe,wav,mp3,aac,flac"
@@ -67,7 +60,7 @@ def _rotation(stream: dict[str, Any]) -> int:
     return 0
 
 
-async def probe(source: Path) -> Probe:
+async def probe(pool: WorkerPool, source: Path) -> Probe:
     raw = await run(
         [
             "ffprobe", "-v", "error", *INPUT,
@@ -87,7 +80,7 @@ async def probe(source: Path) -> Probe:
     fps = 0.0
     if video is not None:
         width, height = int(video.get("width") or 0), int(video.get("height") or 0)
-        check_dimensions(width, height)
+        check_dimensions(width, height, pool.limits.max_pixels)
         if _rotation(video) in (90, 270):
             width, height = height, width
         fps = _number(video.get("avg_frame_rate"))
@@ -101,27 +94,31 @@ def _ffmpeg(*args: str) -> list[str]:
 
 
 @contextlib.asynccontextmanager
-async def _workspace(data: bytes) -> AsyncIterator[Path]:
+async def _workspace(pool: WorkerPool, data: bytes) -> AsyncIterator[Path]:
     """A worker slot and a throwaway directory holding the input as ``source``."""
-    if len(data) > MAX_INPUT_BYTES:
-        raise EffectError("the file is too large (20 MB at most)")
-    async with POOL.slot():
+    pool.check_input(data)
+    async with pool.slot():
         with tempfile.TemporaryDirectory(prefix="derp-fx-") as directory:
             source = Path(directory, "source")
             await asyncio.to_thread(source.write_bytes, data)
             yield source
 
 
-async def _render(source: Path, name: str, args: list[str], *, what: str, read: float | None = None) -> bytes:
+async def _render(
+    pool: WorkerPool, source: Path, name: str, args: list[str], *, what: str, read: float | None = None
+) -> bytes:
     """``read`` caps how many seconds of input are decoded, whatever the container claims."""
     output = source.with_name(name)
     limit = ["-t", str(read)] if read else []
+    cap = pool.limits.max_output_bytes
     await run(
-        _ffmpeg(*INPUT, *limit, "-i", str(source), *args, "-fs", str(MAX_OUTPUT_BYTES), str(output)),
+        _ffmpeg(*INPUT, *limit, "-i", str(source), *args, "-fs", str(cap), str(output)),
+        seconds=pool.limits.timeout_seconds,
+        max_output=cap,
         what=what,
     )
     data = await asyncio.to_thread(output.read_bytes)
-    if not data or len(data) >= MAX_OUTPUT_BYTES:
+    if not data or len(data) >= cap:
         raise EffectError(f"{what} output too large")
     return data
 
@@ -132,18 +129,19 @@ VIDEO_OUT = [
 ]  # fmt: skip
 
 
-async def meme_image(data: bytes, text: str, style: captions.Style) -> bytes:
+async def meme_image(pool: WorkerPool, data: bytes, text: str, style: captions.Style) -> bytes:
     """The captioned picture as JPEG."""
-    if len(data) > MAX_INPUT_BYTES:
-        raise EffectError("the file is too large (20 MB at most)")
-    async with POOL.slot():
-        return await asyncio.to_thread(captions.caption_image, data, text, style)
+    pool.check_input(data)
+    async with pool.slot():
+        return await asyncio.to_thread(captions.caption_image, data, text, style, pool.limits.max_pixels)
 
 
-async def meme_video(data: bytes, text: str, style: captions.Style, *, sound: bool = True) -> bytes:
+async def meme_video(
+    pool: WorkerPool, data: bytes, text: str, style: captions.Style, *, sound: bool = True
+) -> bytes:
     """The captioned clip as MP4 (H.264/AAC), timeline and sound kept."""
-    async with _workspace(data) as source:
-        info = await probe(source)
+    async with _workspace(pool, data) as source:
+        info = await probe(pool, source)
         if not info.video:
             raise EffectError("no video in that file")
         if info.seconds > MAX_VIDEO_SECONDS:
@@ -167,13 +165,13 @@ async def meme_video(data: bytes, text: str, style: captions.Style, *, sound: bo
             "-map", "[out]", *(["-map", "0:a:0?"] if sound and info.audio else ["-an"]),
             "-t", str(MAX_VIDEO_SECONDS), *VIDEO_OUT,
         ]  # fmt: skip
-        return await _render(source, "meme.mp4", args, what="video meme")
+        return await _render(pool, source, "meme.mp4", args, what="video meme")
 
 
-async def reverse(data: bytes, *, voice: bool = False) -> bytes:
+async def reverse(pool: WorkerPool, data: bytes, *, voice: bool = False) -> bytes:
     """Play it backwards: MP4 for clips, Ogg/Opus for voice and audio."""
-    async with _workspace(data) as source:
-        info = await probe(source)
+    async with _workspace(pool, data) as source:
+        info = await probe(pool, source)
         if info.seconds <= 0:
             raise EffectError("can't tell how long that is")
         if info.seconds > MAX_REVERSE_SECONDS:
@@ -182,7 +180,7 @@ async def reverse(data: bytes, *, voice: bool = False) -> bytes:
             if not info.audio:
                 raise EffectError("no sound in that file")
             args = ["-vn", "-af", "areverse", "-c:a", "libopus", "-b:a", "64k", "-f", "ogg"]
-            return await _render(source, "reversed.ogg", args, what="reverse", read=MAX_REVERSE_SECONDS)
+            return await _render(pool, source, "reversed.ogg", args, what="reverse", read=MAX_REVERSE_SECONDS)
         width, height = captions.media_size(info.width, info.height)
         if width * height * 4 * info.seconds * (info.fps or 30) > MAX_REVERSE_BUFFER:
             raise EffectError("too big to reverse; try a shorter or smaller clip")
@@ -190,50 +188,49 @@ async def reverse(data: bytes, *, voice: bool = False) -> bytes:
             "-vf", f"scale={width}:{height}:flags=lanczos,reverse",
             *(["-af", "areverse"] if info.audio else ["-an"]), *VIDEO_OUT,
         ]  # fmt: skip
-        return await _render(source, "reversed.mp4", args, what="reverse", read=MAX_REVERSE_SECONDS)
+        return await _render(pool, source, "reversed.mp4", args, what="reverse", read=MAX_REVERSE_SECONDS)
 
 
-async def mirror(data: bytes) -> bytes:
+async def mirror(pool: WorkerPool, data: bytes) -> bytes:
     """A picture flipped left to right, as JPEG."""
-    if len(data) > MAX_INPUT_BYTES:
-        raise EffectError("the file is too large (20 MB at most)")
-    async with POOL.slot():
-        return await asyncio.to_thread(captions.mirror, data)
+    pool.check_input(data)
+    async with pool.slot():
+        return await asyncio.to_thread(captions.mirror, data, pool.limits.max_pixels)
 
 
-async def sticker(data: bytes) -> bytes:
+async def sticker(pool: WorkerPool, data: bytes) -> bytes:
     """A picture as a static WebP sticker (512 px on the longer side, transparency kept)."""
-    if len(data) > MAX_INPUT_BYTES:
-        raise EffectError("the file is too large (20 MB at most)")
-    async with POOL.slot():
-        return await asyncio.to_thread(captions.sticker, data)
+    pool.check_input(data)
+    async with pool.slot():
+        return await asyncio.to_thread(captions.sticker, data, pool.limits.max_pixels)
 
 
-async def still(data: bytes) -> bytes:
+async def still(pool: WorkerPool, data: bytes) -> bytes:
     """One JPEG frame from a clip (a second in, or the first frame of a short one)."""
-    async with _workspace(data) as source:
-        info = await probe(source)
+    async with _workspace(pool, data) as source:
+        info = await probe(pool, source)
         if not info.video:
             raise EffectError("no picture in that file")
         seek = ["-ss", "1"] if info.seconds > 2 else []
         args = [*seek, "-frames:v", "1", "-vf", "scale='min(1280,iw)':-2", "-c:v", "mjpeg", "-f", "image2"]
-        return await _render(source, "still.jpg", args, what="frame")
+        return await _render(pool, source, "still.jpg", args, what="frame")
 
 
-async def audio_sample(data: bytes) -> bytes:
+async def audio_sample(pool: WorkerPool, data: bytes) -> bytes:
     """The first seconds of the sound as small mono WAV, for song recognition."""
-    async with _workspace(data) as source:
-        if not (await probe(source)).audio:
+    async with _workspace(pool, data) as source:
+        if not (await probe(pool, source)).audio:
             raise EffectError("no sound in that file")
         args = ["-vn", "-t", str(SAMPLE_SECONDS), "-ac", "1", "-ar", "16000", "-f", "wav"]
-        return await _render(source, "sample.wav", args, what="sample")
+        return await _render(pool, source, "sample.wav", args, what="sample")
 
 
-async def remove_background(data: bytes, model: Path) -> bytes:
+async def remove_background(pool: WorkerPool, data: bytes, model: Path) -> bytes:
     """A transparent-background PNG from the local U²-NetP model, in its own killable process."""
-    async with _workspace(data) as source:
+    async with _workspace(pool, data) as source:
         return await run(
             [sys.executable, "-m", "derp.tools.background", str(source), str(model)],
             seconds=BACKGROUND_TIMEOUT,
+            max_output=pool.limits.max_output_bytes,
             what="background removal",
         )

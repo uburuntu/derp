@@ -119,11 +119,13 @@ async def make_meme(
         check_budget(deps, using=from_result)
         source = await _visual(deps, message_id, profile_photo, chat_photo, person, from_result)
         if source.image:
-            made = Made("photo", await effects.meme_image(source.data, text, style), "meme.jpg", "meme")
+            made = Made(
+                "photo", await effects.meme_image(deps.workers, source.data, text, style), "meme.jpg", "meme"
+            )
         else:
             await _heavy_allowed(ctx)
             clip = await effects.meme_video(
-                source.data, text, _style(style), sound=source.type in ("video", "video_note")
+                deps.workers, source.data, text, _style(style), sound=source.type in ("video", "video_note")
             )
             kind: Sendable = "video" if source.type in ("video", "video_note") else "animation"
             made = Made(kind, clip, "meme.mp4", "meme", Pending(fees=["meme"]))
@@ -165,12 +167,17 @@ async def reverse_media(
             deps, message_id, profile_photo, chat_photo, person, from_result, (*VISUAL, "voice", "audio")
         )
         if source.image:
-            made = Made("photo", await effects.mirror(source.data), "mirrored.jpg", "result")
+            made = Made("photo", await effects.mirror(deps.workers, source.data), "mirrored.jpg", "result")
         elif source.type in ("voice", "audio"):
-            made = Made("voice", await effects.reverse(source.data, voice=True), "reversed.ogg", "result")
+            made = Made(
+                "voice",
+                await effects.reverse(deps.workers, source.data, voice=True),
+                "reversed.ogg",
+                "result",
+            )
         else:
             await _heavy_allowed(ctx)
-            clip = await effects.reverse(source.data)
+            clip = await effects.reverse(deps.workers, source.data)
             kind: Sendable = (
                 "video_note"
                 if source.type == "video_note"
@@ -210,8 +217,8 @@ async def make_sticker(
     try:
         check_budget(deps, using=from_result)
         source = await _visual(deps, message_id, profile_photo, chat_photo, person, from_result)
-        picture = source.data if source.image else await effects.still(source.data)
-        made = Made("sticker", await effects.sticker(picture), "sticker.webp", "sticker")
+        picture = source.data if source.image else await effects.still(deps.workers, source.data)
+        made = Made("sticker", await effects.sticker(deps.workers, picture), "sticker.webp", "sticker")
         return await emit(deps, made, final=final, source=source.kept)
     except Refused as refused:
         return str(refused)
@@ -229,7 +236,7 @@ async def identify_anime(ctx: RunContext[RunDeps], message_id: int | None = None
     deps = ctx.deps
     try:
         source = await message_media(deps, message_id, VISUAL)
-        frame = source.data if source.image else await effects.still(source.data)
+        frame = source.data if source.image else await effects.still(deps.workers, source.data)
         return await deps.lookups.identify_anime(frame)
     except Refused as refused:
         return str(refused)
@@ -249,7 +256,7 @@ async def identify_song(ctx: RunContext[RunDeps], message_id: int | None = None)
     deps = ctx.deps
     try:
         source = await message_media(deps, message_id, SOUND)
-        return await deps.lookups.identify_song(await effects.audio_sample(source.data))
+        return await deps.lookups.identify_song(await effects.audio_sample(deps.workers, source.data))
     except Refused as refused:
         return str(refused)
     except EffectError as error:
@@ -285,7 +292,7 @@ async def remove_background(
         if not source.image:
             raise Refused("That isn't a still picture.")
         await _heavy_allowed(ctx)
-        cutout = await effects.remove_background(source.data, deps.settings.background_model)
+        cutout = await effects.remove_background(deps.workers, source.data, deps.settings.background_model)
         made = Made("document", cutout, "cutout.png", "file", Pending(fees=["cutout"]))
         return await emit(deps, made, final=final, source=source.kept)
     except Refused as refused:

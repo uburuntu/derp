@@ -167,7 +167,7 @@ async def inspect_media(ctx: RunContext[RunDeps], message_id: int) -> list[str |
         rows = await referenced_media(session, deps.chat.id, message_id, None, (*IMAGE_LIKE, *CLIPS))
     if not rows:
         return "That message has no picture or video I can open."
-    inspected = await inspect(deps.gateway, rows, frames=True)
+    inspected = await inspect(deps.gateway, rows, frames=deps.workers)
     if not inspected:
         return "That media can't be opened (too big, expired, or no picture in it)."
     await note_images(

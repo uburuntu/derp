@@ -88,6 +88,7 @@ from derp.telegram.media import MediaGateway
 from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import PartialDeliveryError, Target, send_markdown
 from derp.tools.lookups import Lookups
+from derp.tools.workers import WorkerPool
 
 log = logging.getLogger("derp.agent")
 
@@ -135,6 +136,7 @@ class Runtime:
         gateway: MediaGateway,
         api: OpenRouterAPI,
         lookups: Lookups,
+        workers: WorkerPool,
         transcriber: Transcriber | None = None,
     ) -> None:
         self.db = db
@@ -149,6 +151,7 @@ class Runtime:
         self.gateway = gateway
         self.api = api
         self.lookups = lookups
+        self.workers = workers
         self.transcriber = transcriber
         self.lanes = Lanes(settings.run_concurrency)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
@@ -298,6 +301,7 @@ class Runtime:
                 api=self.api,
                 pins=self.pins,
                 lookups=self.lookups,
+                workers=self.workers,
             )
             brief = situation(
                 chat=chat,
@@ -503,6 +507,7 @@ class Runtime:
                 trigger_message_id=0, run_id=run.id, funds=funds, target=Target(asker.id), tz=tz,
                 gateway=self.gateway, pin=pin, model=model, digest_pin=pin, digest_model=model,
                 digest_role=funds.funding.role.value, api=self.api, pins=self.pins, lookups=self.lookups,
+                workers=self.workers,
             )  # fmt: skip
             brief = DETACHED_BRIEF.format(
                 where=where,

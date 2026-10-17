@@ -12,10 +12,12 @@ import httpx
 import pytest
 from PIL import Image
 
-from derp.config import Settings
+from derp.config import MediaLimits, Settings
 from derp.tools import background, captions, effects, workers
 from derp.tools.lookups import Lookups
 from derp.tools.workers import EffectError, WorkerPool
+
+POOL = WorkerPool()
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -99,16 +101,16 @@ def test_stickers_are_512_px_webp_within_the_size_cap() -> None:
 
 async def test_workers_are_killed_at_their_deadline_and_output_cap() -> None:
     with pytest.raises(EffectError, match="took too long"):
-        await workers.run([sys.executable, "-c", "import time; time.sleep(5)"], seconds=0.3)
+        await workers.run([sys.executable, "-c", "import time; time.sleep(5)"], seconds=0.3, max_output=1000)
     with pytest.raises(EffectError, match="output too large"):
-        await workers.run([sys.executable, "-c", "print('x' * 100000)"], max_output=1000)
+        await workers.run([sys.executable, "-c", "print('x' * 100000)"], seconds=10, max_output=1000)
     with pytest.raises(EffectError, match="failed"):
-        await workers.run([sys.executable, "-c", "raise SystemExit(3)"])
-    assert await workers.run([sys.executable, "-c", "print('ok')"]) == b"ok\n"
+        await workers.run([sys.executable, "-c", "raise SystemExit(3)"], seconds=10, max_output=1000)
+    assert await workers.run([sys.executable, "-c", "print('ok')"], seconds=10, max_output=1000) == b"ok\n"
 
 
 async def test_a_full_pool_turns_callers_away() -> None:
-    pool = WorkerPool(slots=1, queue=1)
+    pool = WorkerPool(MediaLimits(workers=1, queue=1))
     release = asyncio.Event()
 
     async def hold() -> None:
@@ -129,31 +131,33 @@ async def test_a_full_pool_turns_callers_away() -> None:
 @needs_ffmpeg
 async def test_video_memes_keep_time_and_sound(tmp_path: Path) -> None:
     meme = tmp_path / "meme.mp4"
-    await asyncio.to_thread(meme.write_bytes, await effects.meme_video(clip(), "caption", "demotivator"))
-    info = await effects.probe(meme)
+    await asyncio.to_thread(
+        meme.write_bytes, await effects.meme_video(POOL, clip(), "caption", "demotivator")
+    )
+    info = await effects.probe(POOL, meme)
     assert info.audio and abs(info.seconds - 2) < 0.5
     assert info.width > 320 and info.height > 240 and info.width % 2 == info.height % 2 == 0
 
 
 @needs_ffmpeg
 async def test_reversing_and_its_limits() -> None:
-    assert (await effects.reverse(clip()))[4:8] == b"ftyp"
+    assert (await effects.reverse(POOL, clip()))[4:8] == b"ftyp"
     voice = ffmpeg("-f", "lavfi", "-i", "sine=duration=1", "-c:a", "libopus", "-f", "ogg")
-    assert (await effects.reverse(voice, voice=True))[:4] == b"OggS"
+    assert (await effects.reverse(POOL, voice, voice=True))[:4] == b"OggS"
     with pytest.raises(EffectError, match="too long"):
-        await effects.reverse(clip(effects.MAX_REVERSE_SECONDS + 2, sound=False))
+        await effects.reverse(POOL, clip(effects.MAX_REVERSE_SECONDS + 2, sound=False))
     with pytest.raises(EffectError):
-        await effects.reverse(picture())
+        await effects.reverse(POOL, picture())
     with pytest.raises(EffectError, match="20 MB"):
-        await effects.reverse(b"\x00" * (workers.MAX_INPUT_BYTES + 1))
+        await effects.reverse(POOL, b"\x00" * (POOL.limits.max_input_bytes + 1))
 
 
 @needs_ffmpeg
 async def test_frames_and_samples_for_recognition() -> None:
-    assert Image.open(io.BytesIO(await effects.still(clip()))).format == "JPEG"
-    assert (await effects.audio_sample(clip()))[:4] == b"RIFF"
+    assert Image.open(io.BytesIO(await effects.still(POOL, clip()))).format == "JPEG"
+    assert (await effects.audio_sample(POOL, clip()))[:4] == b"RIFF"
     with pytest.raises(EffectError, match="no sound"):
-        await effects.audio_sample(clip(sound=False))
+        await effects.audio_sample(POOL, clip(sound=False))
 
 
 def test_background_model_availability(tmp_path: Path) -> None:
@@ -174,7 +178,7 @@ async def test_background_removal_makes_a_transparent_png() -> None:
     buffer = io.BytesIO()
     source.save(buffer, format="PNG")
     cutout = Image.open(
-        io.BytesIO(await effects.remove_background(buffer.getvalue(), Settings().background_model))
+        io.BytesIO(await effects.remove_background(POOL, buffer.getvalue(), Settings().background_model))
     )
     assert cutout.mode == "RGBA" and cutout.size == (320, 240)
 
@@ -240,3 +244,11 @@ async def test_anime_search_reports_the_best_matches(settings: Settings) -> None
         client=httpx.AsyncClient(transport=httpx.MockTransport(lambda _r: httpx.Response(200, json=weak))),
     )
     assert "No convincing match" in await guessing.identify_anime(b"JPEG")
+
+
+async def test_the_pool_follows_the_configured_media_limits() -> None:
+    with pytest.raises(EffectError, match="too large"):
+        await effects.mirror(WorkerPool(MediaLimits(max_input_bytes=100)), picture())
+    with pytest.raises(EffectError, match=r"0\.01 MP"):
+        await effects.mirror(WorkerPool(MediaLimits(max_pixels=10_000)), picture())
+    assert len(await effects.mirror(POOL, picture())) > 0

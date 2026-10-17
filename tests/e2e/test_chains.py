@@ -12,7 +12,7 @@ from derp.inference.models import ProviderCall
 from derp.money.models import RunFee
 from derp.money.wallets import balance
 from derp.tools import background, effects
-from derp.tools.workers import EffectError
+from derp.tools.workers import EffectError, WorkerPool
 from tests.e2e.harness import Conversation
 from tests.e2e.model import ScriptedModel, tool_call
 from tests.e2e.test_effects import results_of
@@ -32,7 +32,7 @@ def cutouts(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
     """Background removal without the model weights: every picture comes back as a transparent PNG."""
     seen: list[bytes] = []
 
-    async def remove(data: bytes, _model: Path) -> bytes:
+    async def remove(_pool: WorkerPool, data: bytes, _model: Path) -> bytes:
         seen.append(data)
         return cutout_png()
 
@@ -98,7 +98,7 @@ async def test_a_kept_result_nobody_used_is_posted_before_the_answer(
 async def test_a_step_that_fails_mid_chain_still_posts_what_was_made(
     conversation: Conversation, model: ScriptedModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def broken(_data: bytes, _model: Path) -> bytes:
+    async def broken(_pool: WorkerPool, _data: bytes, _model: Path) -> bytes:
         raise EffectError("background removal took too long")
 
     monkeypatch.setattr(background, "available", lambda _model: True)

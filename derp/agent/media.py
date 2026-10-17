@@ -36,7 +36,7 @@ from derp.inference.openrouter import chat_settings, response_usage
 from derp.inference.roles import ModelRole, RolePin
 from derp.telegram.media import Media, MediaGateway, MediaUnavailableError, sniff_image
 from derp.tools.effects import still
-from derp.tools.workers import EffectError
+from derp.tools.workers import EffectError, WorkerPool
 
 log = logging.getLogger("derp.media")
 IMAGE_LIKE = ("photo", "sticker", "document", "animation")
@@ -171,9 +171,12 @@ async def run_media(session: AsyncSession, chat_id: int, message_id: int, reply_
 
 
 async def inspect(
-    gateway: MediaGateway, rows: Sequence[MessageMedia], *, frames: bool = False
+    gateway: MediaGateway, rows: Sequence[MessageMedia], *, frames: WorkerPool | None = None
 ) -> list[Inspected]:
-    """Download what can be downloaded; oversized files are skipped, and clips too unless ``frames``."""
+    """Download what can be downloaded; oversized files are skipped, and clips too unless ``frames``.
+
+    ``frames`` is the worker pool that takes a clip's still frame.
+    """
     inspected: list[Inspected] = []
     for row in rows:
         try:
@@ -182,8 +185,8 @@ async def inspect(
             )
             if media_type := sniff_image(data):
                 inspected.append(Inspected(row, Media(data, media_type)))
-            elif frames:
-                inspected.append(Inspected(row, Media(await still(data), "image/jpeg"), frame=True))
+            elif frames is not None:
+                inspected.append(Inspected(row, Media(await still(frames, data), "image/jpeg"), frame=True))
             else:
                 log.info("media #%s skipped: not an image", row.message_id)
         except MediaUnavailableError as unavailable:

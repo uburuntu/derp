@@ -1,7 +1,9 @@
 """The local CPU worker pool: a few slots, a short queue, killable processes.
 
 Every media effect takes a slot first; when all slots are busy and the queue
-is full the caller is told to try later instead of piling up. Native work
+is full the caller is told to try later instead of piling up. The pool and its
+limits (input and output size, pixels, deadline) come from ``settings.media``;
+``derp.app`` builds the one pool, nothing is created at import. Native work
 (ffmpeg, the background model) runs as a subprocess with its own deadline and
 an output cap and is killed when either runs out. Diagnostics from native
 tools can echo file contents or paths, so they are discarded.
@@ -12,13 +14,10 @@ import contextlib
 import resource
 from collections.abc import AsyncIterator, Sequence
 
-SLOTS = 2
-QUEUE = 4
-MAX_INPUT_BYTES = 20 * 1024 * 1024  # what the Bot API lets a bot download
-MAX_OUTPUT_BYTES = 50 * 1024 * 1024  # what the Bot API lets a bot upload
-MAX_PIXELS = 16_000_000
+from derp.config import MediaLimits
+
+DEFAULTS = MediaLimits()  # for tests and callers outside the app (the app passes settings.media)
 MAX_SIDE = 8192
-TIMEOUT = 60
 
 MAX_WORKER_MEMORY = 2048 * 1024 * 1024  # address space per native worker
 
@@ -36,16 +35,21 @@ class BusyError(EffectError):
         super().__init__("all media workers are busy")
 
 
-def check_dimensions(width: int, height: int) -> None:
-    if width <= 0 or height <= 0 or max(width, height) > MAX_SIDE or width * height > MAX_PIXELS:
-        raise EffectError("too large (16 MP and 8192 px per side at most)")
+def check_dimensions(width: int, height: int, max_pixels: int = DEFAULTS.max_pixels) -> None:
+    if width <= 0 or height <= 0 or max(width, height) > MAX_SIDE or width * height > max_pixels:
+        raise EffectError(f"too large ({max_pixels / 1e6:g} MP and {MAX_SIDE} px per side at most)")
 
 
 class WorkerPool:
-    def __init__(self, slots: int = SLOTS, queue: int = QUEUE) -> None:
-        self._slots = asyncio.Semaphore(slots)
-        self._limit = slots + queue
+    def __init__(self, limits: MediaLimits = DEFAULTS) -> None:
+        self.limits = limits
+        self._slots = asyncio.Semaphore(limits.workers)
+        self._limit = limits.workers + limits.queue
         self._waiting = 0
+
+    def check_input(self, data: bytes) -> None:
+        if len(data) > self.limits.max_input_bytes:
+            raise EffectError(f"the file is too large ({self.limits.max_input_bytes // 2**20} MB at most)")
 
     @contextlib.asynccontextmanager
     async def slot(self) -> AsyncIterator[None]:
@@ -65,9 +69,7 @@ def _cap_memory() -> None:
         resource.setrlimit(resource.RLIMIT_AS, (MAX_WORKER_MEMORY, MAX_WORKER_MEMORY))
 
 
-async def run(
-    args: Sequence[str], *, seconds: float = TIMEOUT, max_output: int = MAX_OUTPUT_BYTES, what: str = "effect"
-) -> bytes:
+async def run(args: Sequence[str], *, seconds: float, max_output: int, what: str = "effect") -> bytes:
     """Run a native worker and return its stdout; kills it past ``seconds`` or ``max_output``."""
     process = await asyncio.create_subprocess_exec(
         *args,
@@ -101,6 +103,3 @@ async def run(
     if process.returncode != 0:
         raise EffectError(f"{what} failed")
     return b"".join(chunks)
-
-
-POOL = WorkerPool()
