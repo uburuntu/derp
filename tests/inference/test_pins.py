@@ -69,7 +69,9 @@ async def test_chat_roles_route_under_twice_their_price_snapshot(
 
     chat = await store.get(ModelRole.CHAT)
     assert (chat.max_price_prompt, chat.max_price_completion) == (0.4, 1.6)
-    assert chat.rotated().max_price_prompt == 0.4  # the retry keeps the ceiling
+    retry = chat.rotated()  # led by a fallback the primary's price says nothing about: no ceiling
+    assert (retry.max_price_prompt, retry.max_price_completion) == (None, None)
+    assert "max_price" not in (await sent_body(retry))["provider"]
     sponsored = await store.get(ModelRole.CHAT_SPONSORED)
     assert (sponsored.max_price_prompt, sponsored.max_price_completion) == (0.2, None)
     assert (await store.get(ModelRole.CHAT_FREE)).max_price_prompt is None
@@ -93,13 +95,14 @@ async def test_no_snapshot_no_ceiling_and_a_pin_of_its_own_wins(
     await store.refresh()
     assert "max_price" not in (await sent_body(await store.get(ModelRole.CHAT)))["provider"]
 
-    own = RolePin(model="a/b", max_price_prompt=5.0)
+    own = RolePin(model="a/b", fallbacks=("c/d",), max_price_prompt=5.0)
     async with database.transaction() as session:
         await apply_pin(session, ModelRole.CHAT, own, source="owner")
     await snapshot(database, ModelRole.CHAT, "0.2", "0.8")
     await store.refresh()
     chat = await store.get(ModelRole.CHAT)
     assert (chat.max_price_prompt, chat.max_price_completion) == (5.0, None)
+    assert chat.rotated().max_price_prompt == 5.0  # a ceiling someone chose covers the retry too
 
 
 async def test_a_new_model_drops_the_old_models_snapshot(database: Database, settings: Settings) -> None:
