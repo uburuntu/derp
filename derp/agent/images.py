@@ -87,6 +87,30 @@ async def _generate(
     raise error or OpenRouterError(502, "no image model")
 
 
+async def draw(
+    *,
+    db: Database,
+    api: OpenRouterAPI,
+    bot: Bot,
+    gateway: MediaGateway,
+    pin: RolePin,
+    chat_id: int,
+    job: ImageJob,
+) -> GeneratedImage:
+    """Generate one image (not yet ledgered: the caller ledgers it once it knows whether it was delivered)."""
+    references = await _references(db, gateway, chat_id, job.references)
+    photos = [
+        *([await profile_photo_bytes(bot, gateway, job.avatar_of)] if job.avatar_of is not None else []),
+        *([await chat_photo_bytes(bot, gateway, chat_id)] if job.chat_photo else []),
+    ]
+    references += [(data, sniff_image(data) or "image/jpeg") for data in photos]
+    return await _generate(api, pin, job, references)
+
+
+def filename(image: GeneratedImage) -> str:
+    return "derp.jpg" if "jpeg" in image.media_type else "derp.png"
+
+
 async def make_image(
     *,
     db: Database,
@@ -100,45 +124,28 @@ async def make_image(
     funding: str,
     user_id: int,
 ) -> Message:
-    """Generate, send and ledger one image; raises when nothing reached the chat."""
-    references = await _references(db, gateway, target.chat_id, job.references)
-    photos = [
-        *([await profile_photo_bytes(bot, gateway, job.avatar_of)] if job.avatar_of is not None else []),
-        *([await chat_photo_bytes(bot, gateway, target.chat_id)] if job.chat_photo else []),
-    ]
-    references += [(data, sniff_image(data) or "image/jpeg") for data in photos]
-    image = await _generate(api, pin, job, references)
+    """Generate, send and ledger one image (approved actions); raises when nothing reached the chat."""
+    image = await draw(db=db, api=api, bot=bot, gateway=gateway, pin=pin, chat_id=target.chat_id, job=job)
     try:
         sent = await bot.send_photo(
             chat_id=target.chat_id,
             message_thread_id=target.thread_id,
-            photo=BufferedInputFile(
-                image.data, filename="derp.jpg" if "jpeg" in image.media_type else "derp.png"
-            ),
+            photo=BufferedInputFile(image.data, filename=filename(image)),
             reply_parameters=target.reply_parameters,
         )
     except BaseException:
-        await _ledger(
-            db, image, target.chat_id, user_id, funding="creator", run_id=None, bot_id=bot.id
-        )  # absorbed
+        await ledger_image(db, image, target.chat_id, user_id, funding="creator", run_id=None)  # absorbed
         raise
-    await _ledger(
-        db, image, target.chat_id, user_id, funding=funding, run_id=run_id, sent=sent, bot_id=bot.id
-    )
+    await ledger_image(db, image, target.chat_id, user_id, funding=funding, run_id=run_id)
+    async with db.transaction() as session:
+        await record_outgoing(session, [sent], bot.id)
     return sent
 
 
-async def _ledger(
-    db: Database,
-    image: GeneratedImage,
-    chat_id: int,
-    user_id: int,
-    *,
-    funding: str,
-    run_id: int | None,
-    bot_id: int,
-    sent: Message | None = None,
+async def ledger_image(
+    db: Database, image: GeneratedImage, chat_id: int, user_id: int, *, funding: str, run_id: int | None
 ) -> None:
+    """Ledger the provider call: against the run once delivered, else as ``creator`` without a run."""
     async with db.transaction() as session:
         record_usage(
             session,
@@ -151,5 +158,3 @@ async def _ledger(
             user_id=user_id,
             units=1,
         )
-        if sent is not None:
-            await record_outgoing(session, [sent], bot_id)

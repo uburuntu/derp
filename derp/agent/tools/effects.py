@@ -14,14 +14,12 @@ written only after Telegram accepted the result, so a failed send costs nothing.
 from datetime import UTC, datetime, time
 from typing import Literal
 
-from aiogram.exceptions import TelegramAPIError
-from aiogram.types import BufferedInputFile
-from aiogram.types import Message as TgMessage
 from pydantic_ai import BinaryContent, RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
+from derp.agent.outputs import Sendable, check_budget, deliver, output_kind, send_media
 from derp.agent.tools.images import spent_credits
 from derp.agent.tools.sources import (
     SOUND,
@@ -32,13 +30,10 @@ from derp.agent.tools.sources import (
     chat_photo_source,
     message_media,
 )
-from derp.agent.tools.telegram import unconfirmed
 from derp.agent.toolsets import Family
-from derp.history.capture import record_outgoing
 from derp.money.funding import Funding
 from derp.money.models import RunFee
 from derp.telegram.media import sniff_image
-from derp.telegram.policy import AMBIGUOUS
 from derp.tools import background, effects, lookups
 from derp.tools.captions import Style
 from derp.tools.workers import EffectError
@@ -47,7 +42,6 @@ toolset = FunctionToolset[RunDeps]()
 background_tools = FunctionToolset[RunDeps]()
 song_tools = FunctionToolset[RunDeps]()
 profile_tools = FunctionToolset[RunDeps]()
-Sendable = Literal["photo", "video", "animation", "video_note", "voice", "document", "sticker"]
 
 
 async def _visual(
@@ -63,11 +57,6 @@ async def _visual(
     if profile_photo or person:
         return await avatar_source(deps, message_id, person)
     return await message_media(deps, message_id, types)
-
-
-def _check_outputs(deps: RunDeps) -> None:
-    if deps.tool_outputs_left <= 0:
-        raise Refused("No more outputs fit in this answer.")
 
 
 async def _heavy_allowed(ctx: RunContext[RunDeps]) -> None:
@@ -94,33 +83,14 @@ async def _heavy_allowed(ctx: RunContext[RunDeps]) -> None:
 
 
 async def _send(
-    deps: RunDeps, kind: Sendable, data: bytes, filename: str, *, effect: str | None = None
+    deps: RunDeps, kind: Sendable, data: bytes, filename: str, what: str, *, effect: str | None = None
 ) -> int:
     """Send the result; heavy effects (``effect`` set) are ledgered only once Telegram accepted it."""
-    bot, target, media = deps.bot, deps.target, BufferedInputFile(data, filename=filename)
-    chat, thread, reply = target.chat_id, target.thread_id, target.reply_parameters
-    sent: TgMessage
-    match kind:
-        case "photo":
-            sent = await bot.send_photo(chat, media, message_thread_id=thread, reply_parameters=reply)
-        case "video":
-            sent = await bot.send_video(
-                chat, media, message_thread_id=thread, reply_parameters=reply, supports_streaming=True
-            )
-        case "animation":
-            sent = await bot.send_animation(chat, media, message_thread_id=thread, reply_parameters=reply)
-        case "video_note":
-            sent = await bot.send_video_note(chat, media, message_thread_id=thread, reply_parameters=reply)
-        case "voice":
-            sent = await bot.send_voice(chat, media, message_thread_id=thread, reply_parameters=reply)
-        case "document":
-            sent = await bot.send_document(chat, media, message_thread_id=thread, reply_parameters=reply)
-        case "sticker":
-            sent = await bot.send_sticker(chat, media, message_thread_id=thread, reply_parameters=reply)
-    output = "image" if kind in ("photo", "document") else "sticker" if kind == "sticker" else "other"
-    deps.delivered.append((sent.message_id, output))
-    async with deps.db.transaction() as session:
-        if effect is not None:
+    [sent] = await deliver(
+        deps, output_kind(kind), what, lambda: send_media(deps.bot, deps.target, kind, data, filename)
+    )
+    if effect is not None:
+        async with deps.db.transaction() as session:
             paid = deps.funding is Funding.PAID
             session.add(
                 RunFee(
@@ -132,7 +102,6 @@ async def _send(
                     credits=deps.settings.effect_credits if paid else 0,
                 )
             )
-        await record_outgoing(session, [sent], deps.bot.id)
     return sent.message_id
 
 
@@ -165,26 +134,24 @@ async def make_meme(
     """
     deps = ctx.deps
     try:
-        _check_outputs(deps)
+        check_budget(deps)
         source = await _visual(deps, message_id, profile_photo, chat_photo, person)
         if source.image:
             return _sent(
-                await _send(deps, "photo", await effects.meme_image(source.data, text, style), "meme.jpg")
+                await _send(
+                    deps, "photo", await effects.meme_image(source.data, text, style), "meme.jpg", "meme"
+                )
             )
         await _heavy_allowed(ctx)
         clip = await effects.meme_video(
             source.data, text, _style(style), sound=source.type in ("video", "video_note")
         )
         kind: Sendable = "video" if source.type in ("video", "video_note") else "animation"
-        return _sent(await _send(deps, kind, clip, "meme.mp4", effect="meme"))
+        return _sent(await _send(deps, kind, clip, "meme.mp4", "meme", effect="meme"))
     except Refused as refused:
         return str(refused)
     except EffectError as error:
         return f"The meme failed ({error.reason}); nothing was charged."
-    except AMBIGUOUS:
-        return unconfirmed("meme")
-    except TelegramAPIError:
-        return "Telegram refused the meme; nothing was charged."
 
 
 def _style(style: str) -> Style:
@@ -209,15 +176,19 @@ async def reverse_media(
     """
     deps = ctx.deps
     try:
-        _check_outputs(deps)
+        check_budget(deps)
         source = await _visual(
             deps, message_id, profile_photo, chat_photo, person, (*VISUAL, "voice", "audio")
         )
         if source.image:
-            return _sent(await _send(deps, "photo", await effects.mirror(source.data), "mirrored.jpg"))
+            return _sent(
+                await _send(deps, "photo", await effects.mirror(source.data), "mirrored.jpg", "result")
+            )
         if source.type in ("voice", "audio"):
             return _sent(
-                await _send(deps, "voice", await effects.reverse(source.data, voice=True), "reversed.ogg")
+                await _send(
+                    deps, "voice", await effects.reverse(source.data, voice=True), "reversed.ogg", "result"
+                )
             )
         await _heavy_allowed(ctx)
         clip = await effects.reverse(source.data)
@@ -228,15 +199,11 @@ async def reverse_media(
             if source.type == "video"
             else "animation"
         )
-        return _sent(await _send(deps, kind, clip, "reversed.mp4", effect="reverse"))
+        return _sent(await _send(deps, kind, clip, "reversed.mp4", "result", effect="reverse"))
     except Refused as refused:
         return str(refused)
     except EffectError as error:
         return f"Reversing failed ({error.reason}); nothing was charged."
-    except AMBIGUOUS:
-        return unconfirmed("result")
-    except TelegramAPIError:
-        return "Telegram refused the result; nothing was charged."
 
 
 @toolset.tool(sequential=True)
@@ -257,18 +224,14 @@ async def make_sticker(
     """
     deps = ctx.deps
     try:
-        _check_outputs(deps)
+        check_budget(deps)
         source = await _visual(deps, message_id, profile_photo, chat_photo, person)
         picture = source.data if source.image else await effects.still(source.data)
-        return _sent(await _send(deps, "sticker", await effects.sticker(picture), "sticker.webp"))
+        return _sent(await _send(deps, "sticker", await effects.sticker(picture), "sticker.webp", "sticker"))
     except Refused as refused:
         return str(refused)
     except EffectError as error:
         return f"The sticker failed ({error.reason})."
-    except AMBIGUOUS:
-        return unconfirmed("sticker")
-    except TelegramAPIError:
-        return "Telegram refused the sticker."
 
 
 @toolset.tool
@@ -328,21 +291,17 @@ async def remove_background(
     """
     deps = ctx.deps
     try:
-        _check_outputs(deps)
+        check_budget(deps)
         source = await _visual(deps, message_id, profile_photo, chat_photo, person)
         if not source.image:
             raise Refused("That isn't a still picture.")
         await _heavy_allowed(ctx)
         cutout = await effects.remove_background(source.data, deps.settings.background_model)
-        return _sent(await _send(deps, "document", cutout, "cutout.png", effect="cutout"))
+        return _sent(await _send(deps, "document", cutout, "cutout.png", "file", effect="cutout"))
     except Refused as refused:
         return str(refused)
     except EffectError as error:
         return f"Background removal failed ({error.reason}); nothing was charged."
-    except AMBIGUOUS:
-        return unconfirmed("file")
-    except TelegramAPIError:
-        return "Telegram refused the file; nothing was charged."
 
 
 @profile_tools.tool

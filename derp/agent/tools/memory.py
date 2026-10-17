@@ -10,6 +10,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.deps import RunDeps
+from derp.agent.outputs import Refused, check_budget, deliver
 from derp.agent.toolsets import Family
 from derp.history.models import Chat, Message
 from derp.memory.command import rules_keyboard, rules_prompt
@@ -109,21 +110,31 @@ async def set_chat_rules(ctx: RunContext[RunDeps], rules: str) -> str:
             chat.rules, chat.rules_draft, chat.rules_draft_by = text, None, None
         deps.chat.rules = text
         return "Rules updated; they apply from the next message."
-    if deps.tool_outputs_left <= 0:
+    try:
+        check_budget(deps)
+    except Refused:
         return "Output limit for this turn reached; ask the admin to send the exact rules text instead."
     async with deps.db.transaction() as session:
         chat = await session.get(Chat, deps.chat.id)
         if chat is None:
             return "This chat isn't known yet."
         chat.rules_draft, chat.rules_draft_by = text, deps.user_id
-    sent = await send_markdown(
-        deps.bot,
-        deps.target,
-        rules_prompt(deps.locale, text),
-        trusted=False,
-        reply_markup=rules_keyboard(deps.locale, text),
-    )
-    deps.delivered.extend((m.message_id, "other") for m in sent)
+    try:
+        await deliver(
+            deps,
+            "other",
+            "rules card",
+            lambda: send_markdown(
+                deps.bot,
+                deps.target,
+                rules_prompt(deps.locale, text),
+                trusted=False,
+                reply_markup=rules_keyboard(deps.locale, text),
+            ),
+            history=False,
+        )
+    except Refused as refused:
+        return str(refused)
     return "Shown to the admin with Apply/Cancel buttons; nothing changes until they press Apply."
 
 

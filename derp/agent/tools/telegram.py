@@ -2,12 +2,10 @@
 
 Every output may reply to any stored message of this chat (validated here) or
 to someone's latest message by name; the default is the trigger. Tools may send
-up to ``visible_outputs - 1`` items so the final text answer always has a slot.
-Each delivered item is recorded as a run output and in history. A send Telegram
-didn't confirm (network or server error) may still have arrived, so the model is
-told not to repeat it (``unconfirmed``); like every unconfirmed send it counts as
-neither an output nor a delivery. Output tools run sequentially: the budget check and the send must not interleave, and outputs
-keep the order the model chose.
+up to ``visible_outputs - 1`` items so the final text answer always has a slot;
+budget, send and record go through ``derp.agent.outputs.deliver``. Output
+tools run sequentially: the budget check and the send must not interleave, and
+outputs keep the order the model chose.
 """
 
 from datetime import UTC, datetime
@@ -15,15 +13,14 @@ from typing import Literal
 
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InputPollOption, ReactionTypeEmoji, ReplyParameters
-from aiogram.types import Message as TgMessage
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.deps import RunDeps
+from derp.agent.outputs import Refused, check_budget, deliver, unconfirmed
 from derp.agent.toolsets import ALL_TIERS, Family
-from derp.history.capture import record_outgoing
 from derp.history.digests import mark_stale
 from derp.history.models import Message, MessageMedia, Sticker
 from derp.history.queries import resolve_members
@@ -42,10 +39,6 @@ REACTIONS = (
 )  # fmt: skip
 
 
-class OutputRefused(Exception):  # noqa: N818 - a message for the model, not an error
-    pass
-
-
 async def reply_target(deps: RunDeps, reply_to: int | None, reply_to_person: str | None) -> int | None:
     """The message an output replies to: a stored message of this chat, someone's latest one, or the trigger."""
     if reply_to is None and not reply_to_person:
@@ -60,7 +53,7 @@ async def reply_target(deps: RunDeps, reply_to: int | None, reply_to_person: str
                 )
             )
             if found is None:
-                raise OutputRefused(f"message #{reply_to} isn't in this chat's history")
+                raise Refused(f"Message #{reply_to} isn't in this chat's history.")
             return found
         users = await resolve_members(session, deps.chat.id, [reply_to_person or ""])
         latest = (
@@ -73,24 +66,8 @@ async def reply_target(deps: RunDeps, reply_to: int | None, reply_to_person: str
             else None
         )
         if latest is None:
-            raise OutputRefused(f"I have no stored message from {reply_to_person!r} to reply to")
+            raise Refused(f"I have no stored message from {reply_to_person!r} to reply to.")
         return latest
-
-
-def check_budget(deps: RunDeps) -> None:
-    if deps.tool_outputs_left <= 0:
-        raise OutputRefused("output limit for this turn reached; answer in text instead")
-
-
-async def delivered(deps: RunDeps, sent: TgMessage, kind: str) -> None:
-    deps.delivered.append((sent.message_id, kind))
-    async with deps.db.transaction() as session:
-        await record_outgoing(session, [sent], deps.bot.id)
-
-
-def unconfirmed(what: str) -> str:
-    """The tool result for an ambiguous send: it may have arrived, so it must never be repeated."""
-    return f"Telegram didn't confirm the {what}; it may have arrived. Don't send it again."
 
 
 def reply_parameters(message_id: int | None) -> ReplyParameters | None:
@@ -120,33 +97,32 @@ async def send_poll(
         reply_to_person: Reply to this person's latest message instead (name or @username).
     """
     deps = ctx.deps
+    quiz = correct_option is not None
     try:
         check_budget(deps)
         if not 2 <= len(options) <= 10:
-            raise OutputRefused("a poll needs 2–10 options")
+            raise Refused("Not sent: a poll needs 2–10 options.")
         if correct_option is not None and not 0 <= correct_option < len(options):
-            raise OutputRefused("correct_option must point at one of the options")
+            raise Refused("Not sent: correct_option must point at one of the options.")
         target = await reply_target(deps, reply_to, reply_to_person)
-    except OutputRefused as refused:
-        return f"Not sent: {refused}."
-    quiz = correct_option is not None
-    try:
-        sent = await deps.bot.send_poll(
-            chat_id=deps.chat.id,
-            message_thread_id=deps.thread_id,
-            question=question[:300],
-            options=[InputPollOption(text=option[:100]) for option in options],
-            type="quiz" if quiz else "regular",
-            is_anonymous=anonymous and deps.chat.type != "private",
-            allows_multiple_answers=multiple_answers and not quiz,
-            correct_option_ids=[correct_option] if correct_option is not None else None,
-            reply_parameters=reply_parameters(target),
+        [sent] = await deliver(
+            deps,
+            "poll",
+            "poll",
+            lambda: deps.bot.send_poll(
+                chat_id=deps.chat.id,
+                message_thread_id=deps.target.thread_id,
+                question=question[:300],
+                options=[InputPollOption(text=option[:100]) for option in options],
+                type="quiz" if quiz else "regular",
+                is_anonymous=anonymous and deps.chat.type != "private",
+                allows_multiple_answers=multiple_answers and not quiz,
+                correct_option_ids=[correct_option] if correct_option is not None else None,
+                reply_parameters=reply_parameters(target),
+            ),
         )
-    except AMBIGUOUS:
-        return unconfirmed("poll")
-    except TelegramAPIError as error:
-        return f"Telegram refused the poll ({type(error).__name__})."
-    await delivered(deps, sent, "poll")
+    except Refused as refused:
+        return str(refused)
     return f"Poll posted as #{sent.message_id}."
 
 
@@ -166,22 +142,20 @@ async def send_dice(
     """
     deps = ctx.deps
     try:
-        check_budget(deps)
         target = await reply_target(deps, reply_to, reply_to_person)
-    except OutputRefused as refused:
-        return f"Not sent: {refused}."
-    try:
-        sent = await deps.bot.send_dice(
-            chat_id=deps.chat.id,
-            message_thread_id=deps.thread_id,
-            emoji=emoji,
-            reply_parameters=reply_parameters(target),
+        [sent] = await deliver(
+            deps,
+            "dice",
+            "dice",
+            lambda: deps.bot.send_dice(
+                chat_id=deps.chat.id,
+                message_thread_id=deps.target.thread_id,
+                emoji=emoji,
+                reply_parameters=reply_parameters(target),
+            ),
         )
-    except AMBIGUOUS:
-        return unconfirmed("dice")
-    except TelegramAPIError as error:
-        return f"Telegram refused the dice ({type(error).__name__})."
-    await delivered(deps, sent, "dice")
+    except Refused as refused:
+        return str(refused)
     value = sent.dice.value if sent.dice else "?"
     return f"Dice #{sent.message_id} landed on {value}."
 
@@ -278,8 +252,8 @@ async def send_sticker(
     try:
         check_budget(deps)
         target = await reply_target(deps, reply_to, reply_to_person)
-    except OutputRefused as refused:
-        return f"Not sent: {refused}."
+    except Refused as refused:
+        return str(refused)
     async with deps.db.session() as session:
         file_id = await pick_sticker(session, deps.chat.id, deps.bot.id, emoji)
         known = [] if file_id else await sticker_emojis(session, deps.chat.id, deps.bot.id)
@@ -290,17 +264,19 @@ async def send_sticker(
     if file_id is None:
         return f"I don't know a sticker for {emoji} yet; answer in text."
     try:
-        sent = await deps.bot.send_sticker(
-            chat_id=deps.chat.id,
-            message_thread_id=deps.thread_id,
-            sticker=file_id,
-            reply_parameters=reply_parameters(target),
+        [sent] = await deliver(
+            deps,
+            "sticker",
+            "sticker",
+            lambda: deps.bot.send_sticker(
+                chat_id=deps.chat.id,
+                message_thread_id=deps.target.thread_id,
+                sticker=file_id,
+                reply_parameters=reply_parameters(target),
+            ),
         )
-    except AMBIGUOUS:
-        return unconfirmed("sticker")
-    except TelegramAPIError as error:
-        return f"Telegram refused the sticker ({type(error).__name__})."
-    await delivered(deps, sent, "sticker")
+    except Refused as refused:
+        return str(refused)
     return f"Sticker sent as #{sent.message_id}."
 
 
@@ -318,8 +294,8 @@ async def react(ctx: RunContext[RunDeps], emoji: str, message_id: int | None = N
         return "Not a reaction Telegram allows; pick a standard one like 👍 🔥 😁 🤔 🎉."
     try:
         target = await reply_target(deps, message_id, None)
-    except OutputRefused as refused:
-        return f"Not reacted: {refused}."
+    except Refused as refused:
+        return str(refused)
     if target is None:
         return "Nothing to react to."
     try:
@@ -400,8 +376,8 @@ async def pin_message(ctx: RunContext[RunDeps], message_id: int) -> str:
         return "Only chat admins can ask me to pin."
     try:
         target = await reply_target(deps, message_id, None)
-    except OutputRefused as refused:
-        return f"Not pinned: {refused}."
+    except Refused as refused:
+        return str(refused)
     if target is None:
         return "Nothing to pin."
     try:

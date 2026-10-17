@@ -12,16 +12,13 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from derp.agent.deps import RunDeps
+from derp.agent.outputs import Refused
 from derp.history.models import Message, MessageMedia, User
 from derp.history.queries import resolve_members
 from derp.telegram.media import MediaUnavailableError, chat_photo_bytes, profile_photo_bytes, sniff_image
 
 VISUAL = ("photo", "sticker", "document", "animation", "video", "video_note")
 SOUND = ("voice", "audio", "video", "video_note")
-
-
-class Refused(Exception):  # noqa: N818 - a message for the model, not an error
-    pass
 
 
 @dataclass(frozen=True, slots=True)

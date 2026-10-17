@@ -7,24 +7,22 @@ the approval line, in which case the requester gets a Run / Cancel prompt.
 
 from typing import Literal
 
-from aiogram.exceptions import TelegramAPIError
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import select
 
 from derp.agent.approvals import ask, needs_approval
 from derp.agent.deps import RunDeps
-from derp.agent.images import ImageJob, make_image
+from derp.agent.images import ImageJob, draw, filename, ledger_image
+from derp.agent.outputs import Refused, check_budget, deliver, send_media
 from derp.agent.runs import totals
-from derp.agent.tools.sources import Refused, avatar_source, chat_photo_source, photo_owner
-from derp.agent.tools.telegram import unconfirmed
+from derp.agent.tools.sources import avatar_source, chat_photo_source, photo_owner
 from derp.agent.toolsets import Family
 from derp.history.models import Message
 from derp.inference.api import OpenRouterError
 from derp.inference.roles import ModelRole
 from derp.money.funding import PAID_SOURCES, Funding, run_cost, run_fees
 from derp.money.wallets import balance
-from derp.telegram.policy import AMBIGUOUS
 
 toolset = FunctionToolset[RunDeps]()
 
@@ -74,8 +72,10 @@ async def generate_image(
         aspect_ratio: Shape of the picture.
     """
     deps = ctx.deps
-    if deps.tool_outputs_left <= 0:
-        return "No more outputs fit in this answer."
+    try:
+        check_budget(deps)
+    except Refused as refused:
+        return str(refused)
     price = deps.settings.credits_for_usd(deps.settings.image_price_usd)
     if deps.funding is not Funding.PAID or deps.funds.wallet_id is None:
         return "Images need Derpcoins (the free daily ones don't cover one). Tell them /buy gets some."
@@ -96,28 +96,41 @@ async def generate_image(
     async with deps.db.session() as session:
         rest = await balance(session, deps.funds.wallet_id, sources=PAID_SOURCES)
     if needs_approval(deps.settings, price, deps.funds.credits + rest):
-        prompt_message = await ask(
+        prompt_card = lambda: ask(
             deps.db, deps.bot, deps.settings, deps.target,
             kind="image", args=job.as_args(), price=price, user_id=deps.user_id, run_id=deps.run_id,
             locale=deps.locale,
         )  # fmt: skip
-        deps.delivered.append((prompt_message.message_id, "other"))
+        try:
+            await deliver(deps, "other", "price prompt", prompt_card, history=False)
+        except Refused as refused:
+            return str(refused)
         return 'They were asked to confirm the price with a button; the image comes after they press it. End your turn with just ".".'
     if price > deps.funds.credits - await spent_credits(ctx):
         return f"Not enough Derpcoins left in this answer for an image (needs about {price}). Tell them /buy gets more."
     try:
-        sent = await make_image(
+        image = await draw(
             db=deps.db, api=deps.api, bot=deps.bot, gateway=deps.gateway,
-            pin=await deps.pins.get(ModelRole.IMAGE), target=deps.target, job=job,
-            run_id=deps.run_id, funding=deps.funding.value, user_id=deps.user_id,
+            pin=await deps.pins.get(ModelRole.IMAGE), chat_id=deps.chat.id, job=job,
         )  # fmt: skip
     except OpenRouterError as error:
         return f"The image failed ({error.status}); nothing was charged for it."
-    except AMBIGUOUS:
-        return unconfirmed("image")
-    except TelegramAPIError:
-        return "Telegram refused the image; nothing was charged for it."
-    deps.delivered.append((sent.message_id, "image"))
+    delivered = False
+    try:
+        [sent] = await deliver(
+            deps,
+            "image",
+            "image",
+            lambda: send_media(deps.bot, deps.target, "photo", image.data, filename(image)),
+        )
+        delivered = True
+    except Refused as refused:
+        return f"{refused} Nothing was charged for it."
+    finally:  # charged with the run only once Telegram accepted it, else absorbed
+        await ledger_image(
+            deps.db, image, deps.chat.id, deps.user_id,
+            funding=deps.funding.value if delivered else "creator", run_id=deps.run_id if delivered else None,
+        )  # fmt: skip
     return f'Sent the image as #{sent.message_id}. Add at most a short line, or end with just ".".'
 
 

@@ -3,7 +3,8 @@ from typing import Any
 from pydantic_ai.messages import ToolReturnPart
 from sqlalchemy import select
 
-from derp.history.models import Chat, User
+from derp.agent.models import AgentRun, RunOutput
+from derp.history.models import Chat, Message, User
 from derp.money.free import POLICY_VERSION, FreeModels
 from derp.money.wallets import credit, wallet
 from derp.ops.feedback import FeedbackAction
@@ -256,3 +257,28 @@ async def test_owners_thank_feedback_authors_once(conversation: Conversation) ->
     async with conversation.db.session() as session:
         assert set(await session.scalars(select(Feedback.state))) == {"done"}
     assert "No open feedback" in str(conversation.api.message(OWNER.id, page_id)["rich_message"])
+
+
+async def test_a_confirmation_card_is_the_answer_so_a_dot_finish_adds_nothing(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(ANA, DEN, status="administrator")
+    after = await ask(conversation, model, ANA, tool_call("change_setting", setting="context", value="off"))
+    *_, card = conversation.api.calls_of("sendRichMessage", after=after)  # (after the join notice)
+    assert "ambient:purge" in str(card["reply_markup"])  # the card is the last thing posted: no stray "…"
+    async with conversation.db.session() as session:
+        run = await session.scalar(select(AgentRun))
+        assert run is not None and run.status == "completed"
+        outputs = list(await session.scalars(select(RunOutput.kind)))
+        stored = await session.scalar(select(Message).where(Message.chat_id == DEN.id, Message.is_derp))
+    assert outputs == ["other"] and stored is None  # an output, but UI copy rather than history
+
+
+async def test_the_free_models_notice_is_the_answer_too(conversation: Conversation, model: ScriptedModel) -> None:
+    model.reply(tool_call("change_setting", setting="free_models", value="on"), ".")
+    asked = await conversation.send(REX, text="turn on free models")
+    await conversation.settle(asked)
+    [notice] = conversation.api.calls_of("sendRichMessage", after=asked.after)
+    assert "may store" in notice["rich_message"]["markdown"]
+    async with conversation.db.session() as session:
+        assert list(await session.scalars(select(RunOutput.kind))) == ["other"]

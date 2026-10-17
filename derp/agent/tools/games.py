@@ -9,25 +9,18 @@ many polls it has. Titles of the day are drawn and kept by ``derp.history.titles
 
 from datetime import UTC, datetime
 
-from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InputPollOption
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.deps import RunDeps
-from derp.agent.tools.telegram import (
-    OutputRefused,
-    check_budget,
-    delivered,
-    reply_parameters,
-    unconfirmed,
-)
+from derp.agent.outputs import Refused, Unconfirmed, check_budget, deliver, unconfirmed
+from derp.agent.tools.telegram import reply_parameters
 from derp.agent.toolsets import Family
 from derp.history.models import User
 from derp.history.queries import ChatQuery, Scope, run_query
 from derp.history.titles import crown, leaderboard, normalize
-from derp.telegram.policy import AMBIGUOUS
 
 toolset = FunctionToolset[RunDeps]()
 MAX_POLLS = 5
@@ -64,41 +57,46 @@ async def post_polls(
     try:
         check_budget(deps)
         if not 1 <= len(polls) <= MAX_POLLS:
-            raise OutputRefused(f"a series has 1–{MAX_POLLS} polls")
+            raise Refused(f"Not posted: a series has 1–{MAX_POLLS} polls.")
         for number, item in enumerate(polls, 1):
             if item.correct is not None and item.correct >= len(item.options):
-                raise OutputRefused(f"poll {number}: correct must point at one of its options")
-    except OutputRefused as refused:
-        return f"Not posted: {refused}."
+                raise Refused(f"Not posted: poll {number}: correct must point at one of its options.")
+    except Refused as refused:
+        return str(refused)
     period = max(5, min(seconds_per_poll, 600)) if seconds_per_poll else None
     posted: list[int] = []
     unsure = False
     for item in polls:
         quiz = item.correct is not None
-        try:
-            sent = await deps.bot.send_poll(
-                chat_id=deps.chat.id,
-                message_thread_id=deps.thread_id,
-                question=item.question[:300],
-                options=[InputPollOption(text=option[:100]) for option in item.options],
-                type="quiz" if quiz else "regular",
-                is_anonymous=False,
-                allows_multiple_answers=item.multiple_answers and not quiz,
-                correct_option_ids=[item.correct] if item.correct is not None else None,
-                explanation=item.explanation[:200] if item.explanation and quiz else None,
-                open_period=period,
-                reply_parameters=reply_parameters(deps.target.reply_to) if not posted else None,
+        try:  # the whole series takes one slot: only the first poll is checked against the budget
+            [sent] = await deliver(
+                deps,
+                "poll",
+                "poll",
+                lambda item=item, quiz=quiz: deps.bot.send_poll(
+                    chat_id=deps.chat.id,
+                    message_thread_id=deps.target.thread_id,
+                    question=item.question[:300],
+                    options=[InputPollOption(text=option[:100]) for option in item.options],
+                    type="quiz" if quiz else "regular",
+                    is_anonymous=False,
+                    allows_multiple_answers=item.multiple_answers and not quiz,
+                    correct_option_ids=[item.correct] if item.correct is not None else None,
+                    explanation=item.explanation[:200] if item.explanation and quiz else None,
+                    open_period=period,
+                    reply_parameters=reply_parameters(deps.target.reply_to) if not posted else None,
+                ),
+                budget=False,
             )
-        except AMBIGUOUS:
+        except Unconfirmed as refused:
             if not posted:
-                return unconfirmed("poll") + " Don't post the rest of the series either."
+                return f"{refused} Don't post the rest of the series either."
             unsure = True
             break
-        except TelegramAPIError as error:
+        except Refused as refused:
             if not posted:
-                return f"Telegram refused the poll ({type(error).__name__})."
+                return str(refused)
             break
-        await delivered(deps, sent, "poll")
         posted.append(sent.message_id)
     ids = ", ".join(f"#{message_id}" for message_id in posted)
     note = (
@@ -123,8 +121,8 @@ async def most_likely_poll(ctx: RunContext[RunDeps], question: str) -> str:
         return "That needs a group."
     try:
         check_budget(deps)
-    except OutputRefused as refused:
-        return f"Not sent: {refused}."
+    except Refused as refused:
+        return str(refused)
     query = ChatQuery(preset="member_activity", days=ACTIVE_DAYS, whole_chat=True, limit=10)
     async with deps.db.session() as session:
         result = await run_query(session, Scope(deps.chat.id, tz=deps.tz), query)
@@ -132,19 +130,21 @@ async def most_likely_poll(ctx: RunContext[RunDeps], question: str) -> str:
     if len(names) < 2:
         return "Not enough active members in the stored history for that poll."
     try:
-        sent = await deps.bot.send_poll(
-            chat_id=deps.chat.id,
-            message_thread_id=deps.thread_id,
-            question=question[:300],
-            options=[InputPollOption(text=name) for name in names],
-            is_anonymous=False,
-            reply_parameters=reply_parameters(deps.target.reply_to),
+        [sent] = await deliver(
+            deps,
+            "poll",
+            "poll",
+            lambda: deps.bot.send_poll(
+                chat_id=deps.chat.id,
+                message_thread_id=deps.target.thread_id,
+                question=question[:300],
+                options=[InputPollOption(text=name) for name in names],
+                is_anonymous=False,
+                reply_parameters=reply_parameters(deps.target.reply_to),
+            ),
         )
-    except AMBIGUOUS:
-        return unconfirmed("poll")
-    except TelegramAPIError as error:
-        return f"Telegram refused the poll ({type(error).__name__})."
-    await delivered(deps, sent, "poll")
+    except Refused as refused:
+        return str(refused)
     return f"Poll posted as #{sent.message_id} with {len(names)} members."
 
 

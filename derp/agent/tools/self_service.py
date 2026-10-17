@@ -15,11 +15,13 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
+from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import Message as TgMessage
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.deps import RunDeps
-from derp.agent.tools.telegram import delivered, unconfirmed
+from derp.agent.outputs import Refused, deliver, unconfirmed
 from derp.agent.toolsets import Family
 from derp.billing.menu import link_menu, personal_menu, send_pack_invoice
 from derp.billing.patrons import lately_line, set_named
@@ -82,20 +84,35 @@ async def purchase_button(ctx: RunContext[RunDeps], for_chat: bool = False, star
         pack = next((p for p in settings.packs if p.stars == stars), None)
         if pack is None:
             return f"No pack costs {stars}⭐. Packs: {packs}."
-        chat_id, thread = (deps.user_id, None) if personal_in_group else (deps.chat.id, deps.thread_id)
-        try:
-            sent = await send_pack_invoice(
-                deps.bot, chat_id, thread, deps.locale, pack, kind=kind, owner_id=owner
-            )
-        except AMBIGUOUS:
-            return unconfirmed("invoice")
-        except TelegramAPIError as error:
-            if personal_in_group and isinstance(error, TelegramForbiddenError | TelegramBadRequest):
+        if personal_in_group:  # by DM: not an output of this chat
+            try:
+                await send_pack_invoice(
+                    deps.bot, deps.user_id, None, deps.locale, pack, kind=kind, owner_id=owner
+                )
+            except AMBIGUOUS:
+                return unconfirmed("invoice")
+            except TelegramForbiddenError, TelegramBadRequest:
                 return "They haven't opened a private chat with Derp; ask them to DM Derp /buy."
-            return f"Telegram refused the invoice ({type(error).__name__})."
-        if personal_in_group:
+            except TelegramAPIError as error:
+                return f"Telegram refused the invoice ({type(error).__name__})."
             return f"Sent them the invoice for {pack.credits:,} Derpcoins in their private chat with Derp."
-        await delivered(deps, sent, "other")
+        try:
+            await deliver(
+                deps,
+                "invoice",
+                "invoice",
+                lambda: send_pack_invoice(
+                    deps.bot,
+                    deps.chat.id,
+                    deps.target.thread_id,
+                    deps.locale,
+                    pack,
+                    kind=kind,
+                    owner_id=owner,
+                ),
+            )
+        except Refused as refused:
+            return str(refused)
         who = "this chat's wallet (anyone here can pay)" if kind == "chat" else "the asker"
         return f"Posted the invoice for {pack.credits:,} Derpcoins for {who}."
     if personal_in_group:
@@ -103,7 +120,8 @@ async def purchase_button(ctx: RunContext[RunDeps], for_chat: bool = False, star
         if await send_privately(deps.bot, deps.user_id, text, reply_markup=markup):
             return "Sent the pack menu to them privately."
         return "They haven't opened a private chat with Derp; ask them to DM Derp /buy."
-    try:
+
+    async def post_menu() -> list[TgMessage]:
         if group:  # invoice links: paying needs no public invoice per pack
             text, markup = await link_menu(
                 deps.db,
@@ -112,21 +130,20 @@ async def purchase_button(ctx: RunContext[RunDeps], for_chat: bool = False, star
                 deps.locale,
                 kind="chat",
                 owner_id=owner,
-                thread_id=deps.thread_id,
+                thread_id=deps.target.thread_id,
             )
         else:
             text, markup = await personal_menu(deps.db, settings, deps.user_id, deps.locale)
-        sent_menu = await send_markdown(deps.bot, deps.target, text, reply_markup=markup)
-    except AMBIGUOUS:
-        return unconfirmed("menu")
-    except TelegramAPIError as error:
-        return f"Telegram refused the menu ({type(error).__name__})."
-    for message in sent_menu:
-        await delivered(deps, message, "other")
+        return await send_markdown(deps.bot, deps.target, text, reply_markup=markup)
+
+    try:
+        await deliver(deps, "other", "menu", post_menu)
+    except Refused as refused:
+        return str(refused)
     return f"Posted the pack menu ({packs})."
 
 
-@toolset.tool
+@toolset.tool(sequential=True)  # may post a button card: an output
 async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str) -> str:
     """Change a setting: context, retention, time zone, notes, free models; the asker's coins and patron name.
 
@@ -156,7 +173,8 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
         case "context" if value == "off":
             async with deps.db.session() as session:
                 text, markup = await render(session, deps.settings, chat, None, deps.locale, "ambient_off")
-            await send_markdown(deps.bot, deps.target, text, reply_markup=markup)
+            if refused := await _card(deps, deps.target, text, markup):
+                return refused
             return "Posted a confirmation button: turning context off deletes stored history, so an admin must press it."
         case "context":
             action, arg = "ambient", "on"
@@ -169,7 +187,8 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
                     text, markup = await render(
                         session, deps.settings, chat, None, deps.locale, f"shorten:{arg}"
                     )
-                await send_markdown(deps.bot, deps.target, text, reply_markup=markup)
+                if refused := await _card(deps, deps.target, text, markup):
+                    return refused
                 return (
                     "Posted a confirmation button: a shorter retention deletes older messages, so "
                     f"{'an admin' if group else 'they'} must press it."
@@ -189,7 +208,8 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
             if chat.free_models if group else consented(await _user(deps)):
                 return "Free models are already on."
             text, markup = offer(deps.locale, group=group, asked=True)
-            await send_markdown(deps.bot, Target(deps.chat.id, deps.thread_id), text, reply_markup=markup)
+            if refused := await _card(deps, Target(deps.chat.id, deps.target.thread_id), text, markup):
+                return refused
             who = "an admin presses it" if group else "they press it themselves"
             return f"Posted the free-models notice (their providers may store prompts) with its button; on only once {who}."
         case "free_models":
@@ -205,6 +225,21 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
         deps.chat.timezone, deps.tz = arg, ZoneInfo(arg)  # later tools in this run use it
         return f"Done: this chat's time zone is now {arg} (local time {describe_time(datetime.now(UTC), deps.tz)})."
     return f"Done: {setting} is now {value}. /settings shows everything."
+
+
+async def _card(deps: RunDeps, target: Target, text: str, markup: InlineKeyboardMarkup | None) -> str | None:
+    """Post a button card as one of the run's outputs (UI copy, so not history); the refusal text if it failed."""
+    try:
+        await deliver(
+            deps,
+            "other",
+            "button",
+            lambda: send_markdown(deps.bot, target, text, reply_markup=markup),
+            history=False,
+        )
+    except Refused as refused:
+        return str(refused)
+    return None
 
 
 async def _user(deps: RunDeps) -> User | None:
