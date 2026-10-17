@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from derp.agent.models import AgentRun
 from derp.agent.runs import (
     finish_run,
+    ledger_side_call,
     load_messages,
     price_unreported,
     record_output,
@@ -136,3 +137,21 @@ async def test_an_unreported_cost_is_looked_up_before_it_is_estimated(database: 
     response = answer("done", 1000, 100, provider_response_id="gen-7")
     await price_unreported(database, [response], ModelRole.CHAT, 0, api=OpenRouterAPI(settings, client))
     assert response_usage(response).cost_usd == Decimal("0.0042")
+
+
+@pytest.mark.db
+async def test_side_calls_ledger_every_response_priced(database: Database) -> None:
+    await priced(database, "2", "8")
+    request = ModelRequest(parts=[UserPromptPart("describe")])
+    messages = [request, answer("done", 1000, 100), answer("again", 10, 1, provider_details={"cost": 0.5})]
+    paid = await ledger_side_call(
+        database, messages, kind="media", funding="paid", role=ModelRole.CHAT,
+        context_tokens=0, chat_id=-1, user_id=1,
+    )  # fmt: skip
+    assert len(paid) == 2
+    async with database.session() as session:
+        calls = list(await session.scalars(select(ProviderCall).order_by(ProviderCall.id)))
+    assert [(c.kind, c.role, c.funding, c.cost_usd) for c in calls] == [
+        ("media", "chat", "paid", Decimal("0.0028")),  # estimated, never free
+        ("media", "chat", "paid", Decimal("0.5")),
+    ]

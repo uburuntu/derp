@@ -14,7 +14,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from derp.agent.approvals import close_expired, drop_old
-from derp.agent.runtime import ModelFactory, Runtime
+from derp.agent.runtime import Runtime
 from derp.billing.patrons import expire_hide_buttons
 from derp.billing.purchases import recover_payments
 from derp.billing.refunds import reconcile_refunds
@@ -24,7 +24,7 @@ from derp.history.members import refresh_stale_profiles
 from derp.history.middleware import CaptureMiddleware
 from derp.history.transcription import Transcriber
 from derp.inference.api import OpenRouterAPI, OpenRouterError
-from derp.inference.openrouter import build_provider, chat_model
+from derp.inference.openrouter import ModelFactory, build_provider, chat_model
 from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
 from derp.inference.scout import run_scout

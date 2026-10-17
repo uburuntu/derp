@@ -25,7 +25,7 @@ from derp.history.retention import expired
 from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.ledger import cancelled_cost, estimate_cost, record_usage
 from derp.inference.models import ModelPin
-from derp.inference.openrouter import response_usage
+from derp.inference.openrouter import response_usage, responses
 from derp.inference.roles import ModelRole
 
 
@@ -113,6 +113,44 @@ async def price_unreported(
                 "cost": float(cost),
                 "estimated": True,
             }
+
+
+async def ledger_side_call(
+    db: Database,
+    messages: Sequence[ModelMessage],
+    *,
+    kind: str,
+    funding: str,
+    role: ModelRole,
+    context_tokens: int,
+    run_id: int | None = None,
+    chat_id: int | None = None,
+    user_id: int | None = None,
+    requested_model: str | None = None,
+) -> list[ModelResponse]:
+    """Ledger a model call outside a run's own turns (media notes, digests, scout probes).
+
+    Every response is ledgered, failed and empty ones included, after ``price_unreported``
+    gave each paid one a cost. Returns the responses.
+    """
+    paid = responses(messages)
+    if not paid:
+        return paid
+    await price_unreported(db, paid, role, context_tokens)
+    async with db.transaction() as session:
+        for response in paid:
+            record_usage(
+                session,
+                response_usage(response),
+                kind=kind,
+                funding=funding,
+                role=role.value,
+                run_id=run_id,
+                chat_id=chat_id,
+                user_id=user_id,
+                requested_model=requested_model,
+            )
+    return paid
 
 
 async def start_run(

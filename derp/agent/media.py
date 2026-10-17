@@ -22,17 +22,16 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from pydantic_ai import Agent, BinaryContent, capture_run_messages
-from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 from sqlalchemy import false, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.models import AgentRun, RunOutput
-from derp.agent.runs import price_unreported
+from derp.agent.runs import ledger_side_call
 from derp.db.engine import Database
 from derp.history.models import Message, MessageMedia
-from derp.inference.ledger import record_usage
-from derp.inference.openrouter import chat_settings, response_usage
+from derp.inference.openrouter import chat_settings
 from derp.inference.roles import ModelRole, RolePin
 from derp.telegram.media import Media, MediaGateway, MediaUnavailableError, sniff_image
 from derp.tools.effects import still
@@ -205,8 +204,8 @@ def as_content(items: Sequence[Inspected]) -> list[str | BinaryContent]:
     return content
 
 
-async def describe(model: Model, pin: RolePin, image: Media) -> tuple[str, list[ModelResponse]]:
-    """A one-line note ("" when the model gave none) and every response it was paid for, failures included."""
+async def describe(model: Model, pin: RolePin, image: Media) -> tuple[str, list[ModelMessage]]:
+    """A one-line note ("" when the model gave none) and the call's messages, failures included."""
     agent = Agent(model, model_settings=chat_settings(pin, max_tokens=NOTE_TOKENS))
     text = ""
     with capture_run_messages() as captured:
@@ -218,15 +217,17 @@ async def describe(model: Model, pin: RolePin, image: Media) -> tuple[str, list[
             text = " ".join(result.output.split())[:300]
         except Exception as error:  # noqa: BLE001 - a missing note never fails the run
             log.info("media note failed: %s", type(error).__name__)
-    return text, [m for m in captured if isinstance(m, ModelResponse)]
+    return text, list(captured)
 
 
-async def store_description(session: AsyncSession, media: MessageMedia, description: str) -> None:
+async def store_description(
+    session: AsyncSession, media: MessageMedia, description: str, run_id: int
+) -> None:
     row = await session.get(MessageMedia, (media.chat_id, media.message_id, media.idx))
     message = await session.get(Message, (media.chat_id, media.message_id))
     if row is None or message is None:
         return
-    row.description = description
+    row.description, row.description_run_id = description, run_id
     notes = [
         m.transcript or m.description or ""
         for m in await session.scalars(
@@ -259,20 +260,13 @@ async def note_images(
         return
     pending = [item for item in items if item.row.description is None]
     notes = await asyncio.gather(*(describe(model, pin, item.image) for item in pending))
-    for item, (text, paid) in zip(pending, notes, strict=True):
+    for item, (text, messages) in zip(pending, notes, strict=True):
+        paid = await ledger_side_call(
+            db, messages, kind="media", funding=funding, role=role, context_tokens=NOTE_INPUT_TOKENS,
+            run_id=run_id, chat_id=chat_id, user_id=user_id,
+        )  # fmt: skip
         if not text and not paid:  # nothing came back, nothing was paid: a later run may try again
             continue
-        await price_unreported(db, paid, role, NOTE_INPUT_TOKENS)
         async with db.transaction() as session:
-            for response in paid:
-                record_usage(
-                    session,
-                    response_usage(response),
-                    kind="media",
-                    funding=funding,
-                    run_id=run_id,
-                    chat_id=chat_id,
-                    user_id=user_id,
-                )
-            await store_description(session, item.row, text)
+            await store_description(session, item.row, text, run_id)
         item.row.description = text

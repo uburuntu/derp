@@ -15,6 +15,7 @@ from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat
 from derp.inference.api import OpenRouterAPI
+from derp.inference.openrouter import ModelFactory
 from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
 from derp.money.funding import Funding, Funds
@@ -34,9 +35,7 @@ class RunDeps:
     settings: Settings
     chat: Chat
     user_id: int
-    asker: str
     locale: str
-    thread_id: int | None
     trigger_message_id: int
     run_id: int
     funds: Funds  # who pays and how much is held: the run's money cap
@@ -45,9 +44,7 @@ class RunDeps:
     gateway: MediaGateway
     pin: RolePin
     model: Model
-    digest_pin: RolePin  # a cheap pin for day digests
-    digest_model: Model
-    digest_role: str
+    model_factory: ModelFactory  # models for other pins (day digests)
     api: OpenRouterAPI
     pins: PinStore
     lookups: Lookups

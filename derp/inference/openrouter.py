@@ -8,7 +8,7 @@ which already includes server-tool fees such as web search. Never use
 import hashlib
 import hmac
 import secrets
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, cast, override
@@ -16,7 +16,7 @@ from typing import Any, cast, override
 from openai.types import chat
 from openai.types.chat import ChatCompletionToolChoiceOptionParam
 from pydantic_ai.messages import ModelMessage, ModelResponse
-from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings, OpenRouterProviderConfig
 from pydantic_ai.native_tools import AbstractNativeTool, WebFetchTool
@@ -106,6 +106,9 @@ _SESSION_KEY = secrets.token_bytes(16)
 def conversation_id(scope: str) -> str:
     """OpenRouter ``session_id`` for a chat topic or a person: keeps them on one provider, whose cache is warm."""
     return hmac.new(_SESSION_KEY, scope.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+type ModelFactory = Callable[[RolePin], Model]  # ``chat_model`` bound to the provider (tests script it)
 
 
 def chat_model(pin: RolePin, provider: OpenRouterProvider) -> OpenRouterModel:

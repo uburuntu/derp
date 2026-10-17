@@ -85,7 +85,7 @@ async def schedule(
             return f"Too many scheduled jobs here (limit {CHAT_LIMIT} per chat, {PERSON_LIMIT} per person). Cancel some first."
         job = Job(
             chat_id=deps.chat.id,
-            thread_id=deps.thread_id,
+            thread_id=deps.target.thread_id,
             creator_id=deps.user_id,
             kind="prompt" if answer_it else "message",
             text=text.strip()[:1000] or "⏰",

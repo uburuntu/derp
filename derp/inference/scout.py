@@ -20,12 +20,12 @@ from pydantic_ai.models import Model
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from derp.agent.runs import ledger_side_call
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.inference.api import OpenRouterAPI
-from derp.inference.ledger import record_usage
 from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
-from derp.inference.openrouter import chat_settings, response_usage, responses
+from derp.inference.openrouter import ModelFactory, chat_settings, responses
 from derp.inference.pins import PinStore, apply_pin
 from derp.inference.roles import ModelRole, RolePin
 
@@ -219,7 +219,7 @@ def _challenger(
     return Change(role, proposed, reason, safe=False)
 
 
-ModelFactory = Callable[[RolePin], Model]
+SMOKE_TOKENS = 100  # prompt tokens of one smoke check, to price a probe that came back without a cost
 
 
 async def passes_smoke(model: Model, pin: RolePin) -> tuple[bool, list[ModelResponse]]:
@@ -301,12 +301,14 @@ async def run_scout(
             )
         }
     passed: list[Change] = []
-    probes: list[tuple[Change, list[ModelResponse]]] = []
     for change in changes:
         if change.safe or change.pin.model in pending:
             continue
         ok, paid = await passes_smoke(model_factory(change.pin), change.pin)
-        probes.append((change, paid))
+        await ledger_side_call(
+            db, paid, kind="scout", funding="creator", role=change.role, context_tokens=SMOKE_TOKENS,
+            requested_model=change.pin.model,
+        )  # fmt: skip
         if ok:
             passed.append(change)
 
@@ -321,16 +323,6 @@ async def run_scout(
                 row.price_prompt, row.price_completion = change.price
             if change.reason != "price snapshot":
                 notes.append(f"{change.role}: {change.reason}")
-        for change, paid in probes:
-            for response in paid:
-                record_usage(
-                    session,
-                    response_usage(response),
-                    kind="scout",
-                    funding="creator",
-                    role=change.role.value,
-                    requested_model=change.pin.model,
-                )
         for change in passed:
             row = await session.get(ModelPin, change.role.value)
             current = row.pin if row is not None else (await store.get(change.role)).model_dump(mode="json")

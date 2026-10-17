@@ -29,7 +29,8 @@ toolset = FunctionToolset[RunDeps]()
 
 def _scope(ctx: RunContext[RunDeps], whole_chat: bool) -> Scope:
     deps = ctx.deps
-    return Scope(deps.chat.id, deps.thread_id, whole_chat=whole_chat or deps.thread_id is None, tz=deps.tz)
+    thread_id = deps.target.thread_id
+    return Scope(deps.chat.id, thread_id, whole_chat=whole_chat or thread_id is None, tz=deps.tz)
 
 
 async def _render(ctx: RunContext[RunDeps], rows: list[Message]) -> str:
@@ -245,10 +246,7 @@ async def digest(
         if not is_current(cached, stats) and builds > 0 and await _affordable(deps):
             builds -= 1
             try:
-                found = await build(
-                    deps.db, deps.digest_model, deps.digest_pin, scope, key, day, deps.tz,
-                    funding=deps.funding.value, role=deps.digest_role, run_id=deps.run_id, user_id=deps.user_id,
-                )  # fmt: skip
+                found = await build(deps, scope, key, day)
             except Exception as error:  # noqa: BLE001 - fall back to the cached digest or a pointer
                 log.info("digest build failed: %s", type(error).__name__)
         if found is not None and found.stale:  # it may quote edited or forgotten messages

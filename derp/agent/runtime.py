@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 
@@ -35,7 +35,6 @@ from pydantic_ai.messages import (
     TextPartDelta,
     repair_messages,
 )
-from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,9 +72,9 @@ from derp.history.render import (
 )
 from derp.history.transcription import Transcriber
 from derp.inference.api import OpenRouterAPI, OpenRouterError
-from derp.inference.openrouter import chat_settings, conversation_id
+from derp.inference.openrouter import ModelFactory, chat_settings, conversation_id
 from derp.inference.pins import PinStore
-from derp.inference.roles import ModelRole, RolePin
+from derp.inference.roles import ModelRole
 from derp.locales import resolve, t
 from derp.memory.notes import load_memory, notes_block
 from derp.money.free import consented, empty_wallet_notice, offer, offer_due
@@ -92,7 +91,6 @@ from derp.tools.workers import WorkerPool
 
 log = logging.getLogger("derp.agent")
 
-ModelFactory = Callable[[RolePin], Model]
 SILENT = {"", ".", "…"}  # final answers that mean "nothing more to say"
 EARLIER_DAYS = 3  # the latest digest before the context window joins the situation if this recent
 ALBUM_SETTLE = 1.0  # seconds: album siblings arrive as separate updates; let them be stored first
@@ -229,8 +227,6 @@ class Runtime:
         self.in_flight.add(funds.operation_id)
         try:
             pin = await self.pins.get(funding.role)
-            digest_role = ModelRole.CHAT_FREE if funding is Funding.FREE else ModelRole.CHAT_SPONSORED
-            digest_pin = await self.pins.get(digest_role)
             async with self.db.transaction() as session:
                 run = await start_run(
                     session,
@@ -284,9 +280,7 @@ class Runtime:
                 settings=self.settings,
                 chat=chat,
                 user_id=asker.id,
-                asker=asker.full_name,
                 locale=locale,
-                thread_id=target.thread_id,
                 trigger_message_id=message.message_id,
                 run_id=run.id,
                 funds=funds,
@@ -295,9 +289,7 @@ class Runtime:
                 gateway=self.gateway,
                 pin=pin,
                 model=model,
-                digest_pin=digest_pin,
-                digest_model=model if digest_pin == pin else self.model_factory(digest_pin),
-                digest_role=digest_role.value,
+                model_factory=self.model_factory,
                 api=self.api,
                 pins=self.pins,
                 lookups=self.lookups,
@@ -503,10 +495,9 @@ class Runtime:
             model = self.model_factory(pin)
             deps = RunDeps(
                 db=self.db, bot=self.bot, settings=self.settings, chat=Chat(id=asker.id, type="private"),
-                user_id=asker.id, asker=asker.full_name, locale=resolve(asker.language_code), thread_id=None,
+                user_id=asker.id, locale=resolve(asker.language_code),
                 trigger_message_id=0, run_id=run.id, funds=funds, target=Target(asker.id), tz=tz,
-                gateway=self.gateway, pin=pin, model=model, digest_pin=pin, digest_model=model,
-                digest_role=funds.funding.role.value, api=self.api, pins=self.pins, lookups=self.lookups,
+                gateway=self.gateway, pin=pin, model=model, model_factory=self.model_factory, api=self.api, pins=self.pins, lookups=self.lookups,
                 workers=self.workers,
             )  # fmt: skip
             brief = DETACHED_BRIEF.format(

@@ -1,26 +1,26 @@
 """Building day digests: a short summary of one chat day, cached for later runs.
 
-Builds use a cheap model (the sponsored pin; the free pin on free runs) and are
-ledgered against the run that asked, so the asker's funding pays for them like
+Builds use a cheap model (the sponsored pin; the free pin on free runs), resolved
+when a digest is actually built, and are ledgered against the run that asked, so the asker's funding pays for them like
 any other part of the answer. A day too long for one call is summarized in
 parts and the parts merged; extremely busy days are sampled.
 """
 
-from datetime import date, tzinfo
+from datetime import date
 
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 
-from derp.agent.runs import price_unreported
-from derp.db.engine import Database
+from derp.agent.deps import RunDeps
+from derp.agent.runs import ledger_side_call
 from derp.history.digests import DayStats, day_messages, save
 from derp.history.models import Digest
 from derp.history.queries import Scope
 from derp.history.render import estimate_tokens, load_views, render_transcript
-from derp.inference.ledger import record_usage
-from derp.inference.openrouter import chat_settings, response_usage
+from derp.inference.openrouter import chat_settings
 from derp.inference.roles import ModelRole, RolePin
+from derp.money.funding import Funding
 
 CHUNK_CHARS = 40_000  # transcript characters per summarizing call
 MAX_CHUNKS = 6
@@ -62,17 +62,17 @@ def sample(parts: list[str]) -> list[str]:
     return [parts[round(i * step)] for i in range(MAX_CHUNKS)]
 
 
-async def _ask(model: Model, pin: RolePin, prompt: str, text: str) -> tuple[str, list[ModelResponse]]:
+async def _ask(model: Model, pin: RolePin, prompt: str, text: str) -> tuple[str, list[ModelMessage]]:
     agent = Agent(model, instructions=prompt, model_settings=chat_settings(pin, max_tokens=SUMMARY_TOKENS))
     result = await agent.run(text)
-    return result.output.strip(), [m for m in result.new_messages() if isinstance(m, ModelResponse)]
+    return result.output.strip(), result.new_messages()
 
 
-async def summarize(model: Model, pin: RolePin, transcript: str) -> tuple[str, list[ModelResponse]]:
+async def summarize(model: Model, pin: RolePin, transcript: str) -> tuple[str, list[ModelMessage]]:
     every = chunks(transcript)
     parts = sample(every)
     summaries: list[str] = []
-    paid: list[ModelResponse] = []
+    paid: list[ModelMessage] = []
     for index, part in enumerate(parts, 1):
         label = f"Part {index} of {len(parts)}.\n" if len(parts) > 1 else ""
         summary, responses = await _ask(
@@ -89,40 +89,23 @@ async def summarize(model: Model, pin: RolePin, transcript: str) -> tuple[str, l
     return text, paid
 
 
-async def build(
-    db: Database,
-    model: Model,
-    pin: RolePin,
-    scope: Scope,
-    key: int,
-    day: date,
-    tz: tzinfo,
-    *,
-    funding: str,
-    role: str,
-    run_id: int,
-    user_id: int,
-) -> Digest | None:
+async def build(deps: RunDeps, scope: Scope, key: int, day: date) -> Digest | None:
     """Summarize the day and cache it; None when the day has no stored messages."""
-    async with db.session() as session:
-        rows = await day_messages(session, scope, day, tz)
+    async with deps.db.session() as session:
+        rows = await day_messages(session, scope, day, deps.tz)
         if not rows:
             return None
-        transcript = render_transcript(await load_views(session, rows), tz)
+        transcript = render_transcript(await load_views(session, rows), deps.tz)
     stats = DayStats(rows[0].message_id, rows[-1].message_id, len(rows))
-    text, paid = await summarize(model, pin, transcript)
-    await price_unreported(db, paid, ModelRole(role), estimate_tokens(transcript))
+    role = ModelRole.CHAT_FREE if deps.funding is Funding.FREE else ModelRole.CHAT_SPONSORED
+    pin = await deps.pins.get(role)
+    text, messages = await summarize(
+        deps.model if pin == deps.pin else deps.model_factory(pin), pin, transcript
+    )
+    paid = await ledger_side_call(
+        deps.db, messages, kind="digest", funding=deps.funding.value, role=role,
+        context_tokens=estimate_tokens(transcript), run_id=deps.run_id, chat_id=scope.chat_id, user_id=deps.user_id,
+    )  # fmt: skip
     served = next((r.model_name for r in reversed(paid) if r.model_name), None) or pin.model
-    async with db.transaction() as session:
-        for response in paid:
-            record_usage(
-                session,
-                response_usage(response),
-                kind="digest",
-                funding=funding,
-                role=role,
-                run_id=run_id,
-                chat_id=scope.chat_id,
-                user_id=user_id,
-            )
+    async with deps.db.transaction() as session:
         return await save(session, scope.chat_id, key, day, stats, text, served[:120])
