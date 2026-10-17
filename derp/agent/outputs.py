@@ -12,14 +12,14 @@ arrived: it raises ``Unconfirmed`` — never resend, neither recorded nor
 charged. Any other refusal raises ``Refused``. Both carry text for the model.
 
 Chains ("draw a cat, cut it out, make it a sticker") post only the end
-result. Media tools take ``final`` (default true: post as always); with
+result. Media tools take ``final`` (default true: post it); with
 ``final=False`` the result is *kept* on the run as ``r1``, ``r2``… and the next
-tool takes it as ``from_result``. Opting in keeps every single-step answer
-exactly as before (posted at once, its message id and any refusal reported
-back), and a model that forgets the flag only gets the old clutter. Whatever
-was kept and never used is posted when the run ends (``flush``, before the
-text answer), so nothing asked for is lost; a used result is never posted. A
-kept result holds an output slot until a tool uses it, then hands it on.
+tool takes it as ``from_result``. Keeping is opt-in so a single step stays
+immediate (posted at once, its message id or refusal reported back) and a
+model that skips the flag still answers, every step posted. Whatever was kept
+and never used is posted when the run ends (``flush``, before the text
+answer), so nothing asked for is lost; a used result is never posted. A kept
+result holds an output slot until a tool uses it, then hands it on.
 
 Money travels with the result (``Pending``): the image's provider call and
 heavy-effect fees are ledgered against the run only when a result carrying
