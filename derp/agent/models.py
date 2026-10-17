@@ -9,6 +9,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from derp.db.base import Base
 
+# Runs end completed, failed or cancelled. "awaiting_approval", "denied" and "expired" are never written
+# (approvals keep their own state) but stay allowed: the CHECK constraint is built from this list.
 RUN_STATUSES = ("running", "awaiting_approval", "completed", "failed", "cancelled", "denied", "expired")
 
 

@@ -57,7 +57,7 @@ class User(Base):
     username: Mapped[str | None]
     language_code: Mapped[str | None] = mapped_column(String(16))
     is_premium: Mapped[bool] = mapped_column(default=False, server_default=sql("false"))
-    timezone: Mapped[str | None] = mapped_column(String(64))
+    timezone: Mapped[str | None] = mapped_column(String(64))  # unused; kept for expand-only schema
     # Free-model consent (free providers may store prompts): when and under which policy text version.
     free_models_consent_at: Mapped[datetime | None]
     free_models_consent_version: Mapped[str | None] = mapped_column(String(16))
@@ -165,7 +165,7 @@ class MessageMedia(Base):
     transcript: Mapped[str | None]
     transcript_model: Mapped[str | None]  # the model; while there's no transcript, why: TOO_LONG / UNHEARD
     description: Mapped[str | None]
-    description_run_id: Mapped[int | None]
+    description_run_id: Mapped[int | None]  # the run whose note it is; cleared with the note
 
 
 class ChatMember(Base):
