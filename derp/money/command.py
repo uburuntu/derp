@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.models import AgentRun
 from derp.agent.runs import run_for_output
+from derp.billing.patrons import lately_line
 from derp.billing.purchases import current_plan
 from derp.config import Settings
 from derp.db.engine import Database
@@ -92,6 +93,8 @@ async def credits_card(
     )
     if chat_wallet is not None and chat_left is not None:
         lines.append(t(locale, "credits.chat", left=f"{chat_left:,}"))
+        if patrons := await lately_line(db, chat_row.id, locale):
+            lines.append(patrons)
         if await is_admin(bot, chat_row, user_id):
             lines.extend(await _chat_usage(db, chat_wallet.id, locale, now))
     lines.append(t(locale, "credits.hint"))

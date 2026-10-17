@@ -7,6 +7,10 @@ current offer. The receipt is written before the credits, in the same
 transaction, keyed by Telegram's charge ID, so a redelivered payment credits
 nothing twice.
 
+Chat pack payloads may carry a sixth part, the forum topic the thank-you post
+goes to: invoice links are paid in the payer's private chat, so the payload is
+the only place that knows where the purchase was made (128 bytes at most).
+
 Derp+ payloads also carry a nonce: the payload identifies the subscription on
 every renewal and state update. Each paid cycle (first payment or renewal)
 credits one ``plan`` lot expiring with the cycle — no rollover.
@@ -38,6 +42,7 @@ class Order:
     target: str  # user | chat: whose wallet is credited
     target_id: int
     nonce: str = ""  # set for Derp+: makes every subscription's payload unique
+    thread_id: int = 0  # chat packs: the forum topic the thank-you post goes to (0: none)
 
     @property
     def kind(self) -> str:
@@ -47,7 +52,8 @@ class Order:
     def payload(self) -> str:
         if self.nonce:
             return f"{PLAN_PAYLOAD}:{self.product}:{self.credits}:{self.target_id}:{self.nonce}"
-        return f"{PACK_PAYLOAD}:{self.product}:{self.credits}:{self.target}:{self.target_id}"
+        pack = f"{PACK_PAYLOAD}:{self.product}:{self.credits}:{self.target}:{self.target_id}"
+        return f"{pack}:{self.thread_id}" if self.thread_id else pack
 
 
 def plan_order(settings: Settings, user_id: int) -> Order:
@@ -58,8 +64,9 @@ def plan_order(settings: Settings, user_id: int) -> Order:
 def parse_payload(payload: str) -> Order | None:
     parts = payload.split(":")
     try:
-        if len(parts) == 5 and parts[0] == PACK_PAYLOAD and parts[3] in TARGETS:
-            return Order(parts[1], int(parts[2]), parts[3], int(parts[4]))
+        if len(parts) in (5, 6) and parts[0] == PACK_PAYLOAD and parts[3] in TARGETS:
+            thread = int(parts[5]) if len(parts) == 6 and parts[3] == "chat" else 0
+            return Order(parts[1], int(parts[2]), parts[3], int(parts[4]), thread_id=thread)
         if len(parts) == 5 and parts[0] == PLAN_PAYLOAD and parts[4]:
             return Order(parts[1], int(parts[2]), "user", int(parts[3]), nonce=parts[4])
     except ValueError:
@@ -121,6 +128,7 @@ async def record_payment(
     await session.flush()
     source = "plan" if order.kind == "plan" else "purchase"
     await credit(session, target.id, f"stars:{charge}", order.credits, source, expires_at=expires)
+    target.empty_noticed_at = None  # a chat wallet topped up may be announced as empty again
     return purchase, True
 
 

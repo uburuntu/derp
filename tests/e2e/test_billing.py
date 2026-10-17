@@ -7,13 +7,15 @@ from derp.billing.models import Purchase, Subscription
 from derp.billing.purchases import recover_payments
 from derp.billing.refunds import reconcile_refunds
 from derp.money.models import CreditLot
-from derp.money.wallets import balance, capture, reserve, wallet
+from derp.money.wallets import balance, capture, credit, reserve, wallet
+from tests.e2e.fake_api import Call
 from tests.e2e.harness import Conversation, Person, Room
 
 CARL = Person(1101, "Carl")
 DANA = Person(1102, "Dana", language_code="ru")
 OWNER = Person(1000, "Owner")
 PUB = Room(-1011, title="Pub")
+FORUM = Room(-1014, title="Forum", is_forum=True)
 
 
 async def press(conversation: Conversation, person: Person, chat_id: int, message_id: int, data: str) -> None:
@@ -79,47 +81,115 @@ async def test_private_purchase_credits_once_and_pings_the_owner(conversation: C
     assert len(pings) == 1 and "pack_s_v1" in str(pings[0]["text"])
 
 
-async def test_group_purchase_for_the_chat_can_be_paid_by_anyone(conversation: Conversation) -> None:
+def ephemeral_menu(conversation: Conversation, after: int) -> Call:
+    """The ephemeral message Derp sent in answer to a press since ``after``."""
+    [menu] = [
+        c
+        for c in conversation.api.calls_of("sendRichMessage", after=after)
+        if (c.fields.get("ephemeral_message_parameters") or {}).get("callback_query_id")
+    ]
+    return menu
+
+
+def link_payloads(conversation: Conversation, menu: Call) -> list[str]:
+    urls = [row[0]["url"] for row in menu["reply_markup"]["inline_keyboard"]]
+    return [str(conversation.api.invoice_links[url]["payload"]) for url in urls]
+
+
+async def test_group_buy_opens_a_private_pack_menu_and_a_link_payment_thanks_the_topic(
+    conversation: Conversation,
+) -> None:
     conversation.meet(OWNER)
-    conversation.meet(CARL, PUB)
-    conversation.meet(DANA, PUB)
-    asked = await conversation.send(CARL, PUB, "/buy")
+    conversation.meet(CARL, FORUM)
+    conversation.meet(DANA, FORUM)
+    conversation.meet(DANA)  # pays from her private chat with Derp
+    asked = await conversation.send(CARL, FORUM, "/buy", thread_id=5)
     chooser = await conversation.expect_reply(asked)
-    for_chat = chooser["reply_markup"]["inline_keyboard"][0][1]["callback_data"]
-    menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == PUB.id)
-    await press(conversation, CARL, PUB.id, menu_id, for_chat)
-    edited = conversation.api.calls_of("editMessageText")[-1]
-    assert (
-        "Chat balance" in edited["rich_message"]["markdown"]
-        and "/terms" in edited["rich_message"]["markdown"]
+    assert "This chat's wallet: **0** dc" in chooser["rich_message"]["markdown"]
+    for_chat, for_me = chooser["reply_markup"]["inline_keyboard"][0]
+    assert (for_chat["text"], for_chat.get("style"), for_me["text"]) == (
+        "👥 For this chat",
+        "primary",
+        "👤 Just me",
     )
-    pack = edited["reply_markup"]["inline_keyboard"][1][0]["callback_data"]
+    chooser_id = max(mid for (cid, mid) in conversation.api.messages if cid == FORUM.id)
     after = conversation.seq
-    await press(conversation, CARL, PUB.id, menu_id, pack)
-    payload = str(conversation.api.calls_of("sendInvoice", after=after)[-1]["payload"])
-    assert payload == f"p1:pack_m_v1:3250:chat:{PUB.id}"
+    await press(conversation, CARL, FORUM.id, chooser_id, for_chat["callback_data"])
+    menu = ephemeral_menu(conversation, after)
+    assert int(menu["ephemeral_message_parameters"]["receiver_user_id"]) == CARL.id
+    assert int(menu["message_thread_id"]) == 5 and "Chat balance" in menu["rich_message"]["markdown"]
+    payloads = link_payloads(conversation, menu)
+    assert payloads[1] == f"p1:pack_m_v1:3250:chat:{FORUM.id}:5"
+    assert all(len(payload.encode()) <= 128 for payload in payloads)
+    assert not conversation.api.calls_of("sendInvoice", after=after)  # nothing public piles up
+    assert not conversation.api.calls_of("editMessageText", after=after)
 
-    assert (await checkout(conversation, DANA, payload, 250))["ok"] in (True, "true")
-    sent = await conversation.send(DANA, PUB, successful_payment=paid(payload, 250, "ch-2"))
+    assert (await checkout(conversation, DANA, payloads[1], 250))["ok"] in (True, "true")
+    sent = await conversation.send(DANA, successful_payment=paid(payloads[1], 250, "ch-2"))
     await conversation.settle(sent)
-    assert await wallet_balance(conversation, "chat", PUB.id) == 3250
+    assert await wallet_balance(conversation, "chat", FORUM.id) == 3250
     assert await wallet_balance(conversation, "user", DANA.id) == 0
+    [post] = [
+        c
+        for c in conversation.api.calls_of("sendRichMessage", after=sent.after)
+        if int(c["chat_id"]) == FORUM.id
+    ]
+    text = post["rich_message"]["markdown"]
+    assert int(post["message_thread_id"]) == 5 and post["disable_notification"] in (True, "true")
+    assert "**Dana**" in text and "**3,250**" in text and "3,250** dc" in text
+    receipt = await conversation.expect_reply(sent)
+    assert int(receipt["chat_id"]) == DANA.id
+    assert (
+        "**Forum**" in receipt["rich_message"]["markdown"]
+        and "**3,250** dc" in receipt["rich_message"]["markdown"]
+    )
 
 
-async def test_buying_for_yourself_in_a_group_continues_in_private(conversation: Conversation) -> None:
+async def test_buying_for_yourself_in_a_group_stays_between_you_and_derp(conversation: Conversation) -> None:
     conversation.meet(CARL)
     conversation.meet(CARL, PUB)
     asked = await conversation.send(CARL, PUB, "/buy")
     chooser = await conversation.expect_reply(asked)
-    for_me = chooser["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
-    menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == PUB.id)
+    for_me = chooser["reply_markup"]["inline_keyboard"][0][1]["callback_data"]
+    chooser_id = max(mid for (cid, mid) in conversation.api.messages if cid == PUB.id)
     after = conversation.seq
-    await press(conversation, CARL, PUB.id, menu_id, for_me)
-    assert conversation.api.calls_of("editMessageText", after=after) == []  # the group sees no balance
-    menu = conversation.api.calls_of("sendRichMessage", after=after)[-1]
-    assert int(menu["chat_id"]) == CARL.id and "Your balance" in menu["rich_message"]["markdown"]
+    await press(conversation, CARL, PUB.id, chooser_id, for_me)
+    menu = ephemeral_menu(conversation, after)
+    assert int(menu["ephemeral_message_parameters"]["receiver_user_id"]) == CARL.id
+    assert "Your balance" in menu["rich_message"]["markdown"]
+    payloads = link_payloads(conversation, menu)
+    assert payloads[0].startswith(f"s1:derp_plus_v1:7150:{CARL.id}:")  # Derp+ first
+    assert payloads[1] == f"p1:pack_s_v1:650:user:{CARL.id}"
+    assert not conversation.api.calls_of("editMessageText", after=after)
+
+    # Telegram refuses the ephemeral menu: the personal one goes to the private chat instead.
+    for method in ("sendRichMessage", "sendMessage"):
+        conversation.api.fail_next(method, error_code=400, description="Bad Request: query is too old")
+    after = conversation.seq
+    await press(conversation, CARL, PUB.id, chooser_id, for_me)
+    dm = conversation.api.calls_of("sendRichMessage", after=after)[-1]
+    assert int(dm["chat_id"]) == CARL.id and "Your balance" in dm["rich_message"]["markdown"]
     answer = conversation.api.calls_of("answerCallbackQuery", after=after)[-1]
     assert "private chat" in str(answer["text"])
+
+
+async def test_a_personal_purchase_paid_in_a_group_keeps_the_balance_private(
+    conversation: Conversation,
+) -> None:
+    conversation.meet(OWNER)
+    conversation.meet(CARL)
+    conversation.meet(CARL, PUB)
+    async with conversation.db.transaction() as session:
+        await credit(session, (await wallet(session, "user", CARL.id)).id, "grant:carl", 100, "grant")
+    payload = f"p1:pack_s_v1:650:user:{CARL.id}"
+    await checkout(conversation, CARL, payload, 50)
+    sent = await conversation.send(CARL, PUB, successful_payment=paid(payload, 50, "ch-leak"))
+    await conversation.settle(sent)
+    calls = conversation.api.calls_of("sendRichMessage", after=sent.after)
+    public = [c["rich_message"]["markdown"] for c in calls if int(c["chat_id"]) == PUB.id]
+    private = [c["rich_message"]["markdown"] for c in calls if int(c["chat_id"]) == CARL.id]
+    assert public == ["Thanks! **+650** Derpcoins are in your wallet."]
+    assert private == ["Thanks! **+650** Derpcoins. Your balance: **750** dc."]
 
 
 async def test_checkout_refuses_someone_elses_or_stale_invoices(conversation: Conversation) -> None:
@@ -418,3 +488,63 @@ async def test_the_sweep_recovers_payments_that_were_never_recorded(conversation
     assert await recover_payments(conversation.db, bot) == []
     assert await wallet_balance(conversation, "chat", PUB.id) == 650
     assert await wallet_balance(conversation, "user", DANA.id) == 650
+
+
+async def test_a_failed_renewal_is_told_once_with_a_way_back(conversation: Conversation) -> None:
+    conversation.meet(OWNER)
+    await subscribe(conversation, CARL, "sub-x1")
+    payload = f"s1:derp_plus_v1:7150:{CARL.id}:sub-x1"
+    failed = {"user": CARL.payload(), "invoice_payload": payload, "state": "failed"}
+    after = conversation.seq
+    await conversation.settle(await conversation.push("subscription", failed))
+    await conversation.settle(await conversation.push("subscription", failed))  # the same failure again
+    notes = [
+        c for c in conversation.api.calls_of("sendRichMessage", after=after) if int(c["chat_id"]) == CARL.id
+    ]
+    assert len(notes) == 1 and "renewal didn't go through" in notes[0]["rich_message"]["markdown"]
+    again = notes[0]["reply_markup"]["inline_keyboard"][0][0]
+    assert again["text"] == "Subscribe again"
+    note_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
+    after = conversation.seq
+    await press(conversation, CARL, CARL.id, note_id, again["callback_data"])
+    link = conversation.api.calls_of("createInvoiceLink", after=after)[-1]
+    assert str(link["payload"]).startswith(f"s1:derp_plus_v1:7150:{CARL.id}:")
+    offer = conversation.api.calls_of("sendRichMessage", after=after)[-1]
+    assert offer["reply_markup"]["inline_keyboard"][0][0]["url"].startswith("https://t.me/$invoice")
+
+
+async def test_a_refused_ephemeral_chat_menu_turns_the_chooser_into_the_menu(
+    conversation: Conversation,
+) -> None:
+    conversation.meet(CARL, PUB)
+    asked = await conversation.send(CARL, PUB, "/buy")
+    chooser = await conversation.expect_reply(asked)
+    for_chat = chooser["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    chooser_id = max(mid for (cid, mid) in conversation.api.messages if cid == PUB.id)
+    for method in ("sendRichMessage", "sendMessage"):
+        conversation.api.fail_next(method, error_code=400, description="Bad Request: query is too old")
+    after = conversation.seq
+    await press(conversation, CARL, PUB.id, chooser_id, for_chat)
+    [edit] = conversation.api.calls_of("editMessageText", after=after)
+    assert int(edit["message_id"]) == chooser_id and "Chat balance" in edit["rich_message"]["markdown"]
+    url = edit["reply_markup"]["inline_keyboard"][0][0]["url"]
+    assert conversation.api.invoice_links[url]["payload"] == f"p1:pack_s_v1:650:chat:{PUB.id}"
+
+
+async def test_the_sweep_recovers_a_link_payment_for_a_chat_topic(conversation: Conversation) -> None:
+    payload = f"p1:pack_m_v1:3250:chat:{FORUM.id}:5"
+    conversation.api.star_transactions = [
+        {
+            "id": "ch-link",
+            "amount": 250,
+            "date": 0,
+            "source": {
+                "type": "user", "transaction_type": "invoice_payment", "user": DANA.payload(),
+                "invoice_payload": payload,
+            },
+        },
+    ]  # fmt: skip
+    assert conversation.services is not None
+    [purchase] = await recover_payments(conversation.db, conversation.services.bot)
+    assert (purchase.payload, purchase.credits, purchase.user_id) == (payload, 3250, DANA.id)
+    assert await wallet_balance(conversation, "chat", FORUM.id) == 3250

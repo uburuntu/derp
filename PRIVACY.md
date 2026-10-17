@@ -16,7 +16,7 @@ Reply /forget to remove a message from my memory, or send /forget alone to remov
 
 ### Payments
 
-Telegram handles payments; I only see the amount and a charge id.
+Telegram handles payments; I only see the amount and a charge id. Buying Derpcoins for a group posts a thank-you there with your name and the amount, unless you hide your name (the button on that post, or ask me) — then you're “a mysterious patron”, there and in your later group purchases.
 
 ## Дерп — приватность
 
@@ -34,4 +34,4 @@ Telegram handles payments; I only see the amount and a charge id.
 
 ### Платежи
 
-Платежами занимается Telegram; я вижу только сумму и номер платежа.
+Платежами занимается Telegram; я вижу только сумму и номер платежа. После покупки дерпкоинов для группы там появляется благодарность с именем и суммой — имя можно скрыть (кнопкой на этом сообщении или попросив меня), и тогда там и в следующих покупках для групп будет «таинственный меценат».

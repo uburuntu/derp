@@ -14,21 +14,20 @@ from datetime import UTC, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.deps import RunDeps
 from derp.agent.tools.telegram import delivered, unconfirmed
 from derp.agent.toolsets import Family
-from derp.billing.command import packs_keyboard, send_pack_invoice
+from derp.billing.menu import link_menu, personal_menu, send_pack_invoice
+from derp.billing.patrons import lately_line, set_named
 from derp.history.models import Chat, User
 from derp.history.render import describe_time
-from derp.locales import t
 from derp.memory.notes import is_admin
 from derp.money.command import credits_card
 from derp.money.free import consented, offer
-from derp.money.wallets import balance, wallet
 from derp.ops import feedback
 from derp.settings.panel import NOTES_MODES, apply_setting, chosen_days, render, shortens
 from derp.telegram.policy import AMBIGUOUS
@@ -36,7 +35,16 @@ from derp.telegram.sender import Target, send_markdown, send_privately
 from derp.tools.timezones import TimeZoneError, iana
 
 toolset = FunctionToolset[RunDeps]()
-Setting = Literal["context", "retention_days", "time_zone", "notes", "free_models", "my_coins_in_groups"]
+Setting = Literal[
+    "context",
+    "retention_days",
+    "time_zone",
+    "notes",
+    "free_models",
+    "my_coins_in_groups",
+    "name_me_when_i_chip_in",
+]
+PERSONAL: tuple[Setting, ...] = ("my_coins_in_groups", "name_me_when_i_chip_in")
 
 
 @toolset.tool
@@ -46,14 +54,19 @@ async def wallet_status(ctx: RunContext[RunDeps]) -> str:
     text = await credits_card(deps.db, deps.settings, deps.bot, deps.chat, deps.user_id, deps.locale)
     if deps.chat.type == "private":
         return text + "\n\n(Shown only to them in this private chat; summarize it.)"
+    patrons = await lately_line(deps.db, deps.chat.id, "en")
+    aside = f" (Bring up only if asked — {patrons})" if patrons else ""
     if await send_privately(deps.bot, deps.user_id, text):
-        return "Sent their balances to them privately. Say so; never guess or repeat amounts here."
-    return "They haven't opened a private chat with Derp, so balances can't be sent; ask them to DM Derp /credits."
+        return "Sent their balances to them privately. Say so; never guess or repeat amounts here." + aside
+    return (
+        "They haven't opened a private chat with Derp, so balances can't be sent; ask them to DM Derp /credits."
+        + aside
+    )
 
 
 @toolset.tool(sequential=True)
 async def purchase_button(ctx: RunContext[RunDeps], for_chat: bool = False, stars: int | None = None) -> str:
-    """Buy Derpcoins: post a Telegram Stars invoice (payment button) for a pack, or the pack menu.
+    """Buy Derpcoins: a Telegram Stars invoice (payment button) for a pack, or the pack menu.
 
     Args:
         for_chat: Buy for this group's shared wallet instead of the asker.
@@ -63,45 +76,59 @@ async def purchase_button(ctx: RunContext[RunDeps], for_chat: bool = False, star
     settings = deps.settings
     group = deps.chat.type != "private"
     kind, owner = ("chat", deps.chat.id) if for_chat and group else ("user", deps.user_id)
+    personal_in_group = kind == "user" and group  # a personal balance or invoice never shows in the group
     packs = ", ".join(f"{p.stars}⭐ → {p.credits:,}" for p in settings.packs)
     if stars is not None:
         pack = next((p for p in settings.packs if p.stars == stars), None)
         if pack is None:
             return f"No pack costs {stars}⭐. Packs: {packs}."
+        chat_id, thread = (deps.user_id, None) if personal_in_group else (deps.chat.id, deps.thread_id)
         try:
             sent = await send_pack_invoice(
-                deps.bot, deps.chat.id, deps.thread_id, deps.locale, pack, kind=kind, owner_id=owner
+                deps.bot, chat_id, thread, deps.locale, pack, kind=kind, owner_id=owner
             )
         except AMBIGUOUS:
             return unconfirmed("invoice")
         except TelegramAPIError as error:
+            if personal_in_group and isinstance(error, TelegramForbiddenError | TelegramBadRequest):
+                return "They haven't opened a private chat with Derp; ask them to DM Derp /buy."
             return f"Telegram refused the invoice ({type(error).__name__})."
+        if personal_in_group:
+            return f"Sent them the invoice for {pack.credits:,} Derpcoins in their private chat with Derp."
         await delivered(deps, sent, "other")
-        who = "this chat's wallet" if kind == "chat" else "the asker (only they can pay it)"
+        who = "this chat's wallet (anyone here can pay)" if kind == "chat" else "the asker"
         return f"Posted the invoice for {pack.credits:,} Derpcoins for {who}."
-    async with deps.db.transaction() as session:
-        left = await balance(session, (await wallet(session, kind, owner)).id)
-    menu_key = "billing.menu_chat" if kind == "chat" else "billing.menu"
-    text = t(deps.locale, menu_key, balance=f"{left:,}")
-    markup = packs_keyboard(settings, kind, deps.locale, plan=not group)
-    if kind == "user" and group:  # a personal balance never shows in the group
+    if personal_in_group:
+        text, markup = await personal_menu(deps.db, settings, deps.user_id, deps.locale)
         if await send_privately(deps.bot, deps.user_id, text, reply_markup=markup):
             return "Sent the pack menu to them privately."
         return "They haven't opened a private chat with Derp; ask them to DM Derp /buy."
     try:
-        sent = await send_markdown(deps.bot, deps.target, text, reply_markup=markup)
+        if group:  # invoice links: paying needs no public invoice per pack
+            text, markup = await link_menu(
+                deps.db,
+                deps.bot,
+                settings,
+                deps.locale,
+                kind="chat",
+                owner_id=owner,
+                thread_id=deps.thread_id,
+            )
+        else:
+            text, markup = await personal_menu(deps.db, settings, deps.user_id, deps.locale)
+        sent_menu = await send_markdown(deps.bot, deps.target, text, reply_markup=markup)
     except AMBIGUOUS:
         return unconfirmed("menu")
     except TelegramAPIError as error:
         return f"Telegram refused the menu ({type(error).__name__})."
-    for message in sent:
+    for message in sent_menu:
         await delivered(deps, message, "other")
     return f"Posted the pack menu ({packs})."
 
 
 @toolset.tool
 async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str) -> str:
-    """Change a setting (/settings): context, history retention, time zone, notes, free models, the asker's coins.
+    """Change a setting: context, retention, time zone, notes, free models; the asker's coins and patron name.
 
     Set time_zone when someone says where they are or asks for their local time ("I'm in Moscow",
     "use Berlin time"): map the place to its IANA zone yourself.
@@ -109,7 +136,8 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
     Args:
         setting: context (on/off), retention_days (days as offered in /settings, or default), time_zone
             (an IANA name like Europe/Moscow), notes (auto, members, admins, off), free_models (on/off),
-            my_coins_in_groups (on/off).
+            my_coins_in_groups (on/off), name_me_when_i_chip_in (on/off: named in the chat's thank-you post
+            when they buy Derpcoins for a group, else "a mysterious patron").
         value: The new value.
     """
     deps = ctx.deps
@@ -118,9 +146,7 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
     async with deps.db.session() as session:
         chat = await session.get(Chat, deps.chat.id) or deps.chat
     # In groups chat settings need an admin; a time zone nobody set yet is anyone's to set.
-    chat_wide = (
-        group and setting != "my_coins_in_groups" and not (setting == "time_zone" and not chat.timezone)
-    )
+    chat_wide = group and setting not in PERSONAL and not (setting == "time_zone" and not chat.timezone)
     if chat_wide and not await is_admin(deps.bot, deps.chat, deps.user_id):
         return "Only this chat's admins can change that."
     options = deps.settings.retention.options
@@ -170,6 +196,10 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
             action, arg = "free", "off"
         case "my_coins_in_groups":
             action, arg = "spend", "on" if value in ("on", "true", "yes") else "off"
+        case "name_me_when_i_chip_in":
+            named = value in ("on", "true", "yes")
+            await set_named(deps.db, deps.user_id, named=named)
+            return f"Done: they're {'named' if named else 'anonymous'} when they buy Derpcoins for a chat."
     await apply_setting(deps.db, deps.settings, deps.chat.id, deps.user_id, action, arg)
     if setting == "time_zone":
         deps.chat.timezone, deps.tz = arg, ZoneInfo(arg)  # later tools in this run use it

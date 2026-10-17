@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import Message as TgMessage
+from aiogram.types import ReactionTypeEmoji
 from aiogram.types import User as TgUser
 from pydantic_ai import Agent, CancellationToken, RunCancelled, RunContext, capture_run_messages
 from pydantic_ai.exceptions import ModelHTTPError
@@ -72,7 +73,7 @@ from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
 from derp.memory.notes import load_memory, notes_block
-from derp.money.free import consented, offer
+from derp.money.free import consented, empty_wallet_notice, offer, offer_due
 from derp.money.funding import Funder, Funding, Funds
 from derp.money.wallets import release
 from derp.ops.observability import record_run_failure
@@ -202,10 +203,8 @@ class Runtime:
         )
         if funds is None and trigger == "job":  # the scheduler posts its own note
             return Outcome(None, "unfunded", ())
-        if funds is None:  # free models not allowed yet: offer them (consent / admin opt-in)
-            text, markup = offer(locale, group=not private)
-            with contextlib.suppress(TelegramAPIError):
-                await send_markdown(self.bot, target, text, reply_markup=markup)
+        if funds is None:  # nobody can pay: offer Derpcoins or free models (consent / admin opt-in)
+            await self._offer(message, chat, target, locale)
             return Outcome(None, "unfunded", ())
         funding = funds.funding
         run_id: int | None = None
@@ -424,6 +423,8 @@ class Runtime:
                 await session.execute(
                     update(AgentRun).where(AgentRun.id == run.id).values(charged_credits=charged)
                 )
+            if charged and funds.wallet_id is not None and not private:
+                await self._check_wallet(chat, funds.wallet_id, target.thread_id, locale)
             # A reaction alone settles as delivered: the notice must not claim nothing was charged.
             suffix = "_partial" if charged else ""
             if stream.capped and not deps.delivered:
@@ -599,6 +600,31 @@ class Runtime:
             self.in_flight.discard(funds.operation_id)
         if sent is None:
             await self._say(target, t(locale, "approvals.failed"))
+        elif charged and funds.wallet_id is not None and chat.type != "private":
+            await self._check_wallet(chat, funds.wallet_id, approval.thread_id, locale)
+
+    async def _offer(self, message: TgMessage, chat: Chat, target: Target, locale: str) -> None:
+        """The out-of-Derpcoins offer; in groups once per person per UTC day, later just a 🙈 on the ask."""
+        private = chat.type == "private"
+        if private or await offer_due(self.db, chat.id, message.from_user.id if message.from_user else 0):
+            text, markup = offer(locale, group=not private)
+            with contextlib.suppress(TelegramAPIError):
+                await send_markdown(self.bot, target, text, reply_markup=markup)
+        elif message.message_id:
+            with contextlib.suppress(TelegramAPIError):
+                await self.bot.set_message_reaction(
+                    chat_id=chat.id, message_id=message.message_id, reaction=[ReactionTypeEmoji(emoji="🙈")]
+                )
+
+    async def _check_wallet(self, chat: Chat, wallet_id: int, thread_id: int | None, locale: str) -> None:
+        """One silent line when the chat wallet that paid can no longer pay a turn, once per depletion."""
+        try:
+            if not await self.funder.ran_dry(wallet_id):
+                return
+            text, markup = empty_wallet_notice(chat.locale or locale)
+            await send_markdown(self.bot, Target(chat.id, thread_id), text, reply_markup=markup, silent=True)
+        except Exception:  # noqa: BLE001 - a notice never fails the run that already answered
+            log.info("empty wallet notice not delivered")
 
     async def _abandon(self, run_id: int | None, funds: Funds, error: BaseException) -> None:
         """Mark a run that escaped its normal close as failed and return its hold (no-op once settled)."""

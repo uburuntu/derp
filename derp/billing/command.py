@@ -1,117 +1,48 @@
-"""/buy, invoices, pre-checkout and successful payments.
+"""/buy, pre-checkout, successful payments and subscription updates.
 
-Private chats buy for the user and also offer Derp+ (a personal 30-day
-subscription, one at a time); groups ask first whether the Derpcoins are for
-the buyer or for the chat. Pressing a pack posts a Stars invoice; anyone may
-pay a chat invoice, but a personal one only by the person it was made for.
+Private chats buy for the person (Derp+ and packs; a pack button posts a Stars invoice there). Group
+/buy asks whose wallet first — the chat's, with its balance, or the presser's own — and each press
+opens that pack menu with invoice links for the presser only (see ``menu``). Anyone may pay a chat
+invoice, a personal one only the person it was made for. A purchase never shows a person's balance in
+a group: the receipt goes to their private chat. A chat purchase gets the patron post instead.
 """
 
+import logging
+
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandObject
-from aiogram.filters.callback_data import CallbackData
-from aiogram.types import (
-    BotSubscriptionUpdated,
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    LabeledPrice,
-    Message,
-    PreCheckoutQuery,
-)
+from aiogram.types import BotSubscriptionUpdated, InlineKeyboardButton, Message, PreCheckoutQuery
 from sqlalchemy import select
 
-from derp.billing.models import Subscription
-from derp.billing.purchases import (
-    Order,
-    current_plan,
-    find_pack,
-    parse_payload,
-    plan_order,
-    record_payment,
-    refusal,
+from derp.billing import patrons
+from derp.billing.menu import (
+    BuyAction,
+    group_chooser,
+    open_menu,
+    packs_keyboard,
+    personal_menu,
+    plan_link,
+    send_pack_invoice,
+    wallet_balance,
 )
+from derp.billing.models import Subscription
+from derp.billing.purchases import Order, current_plan, find_pack, parse_payload, record_payment, refusal
 from derp.billing.refunds import apply_refund, refund, stop_renewal
-from derp.config import Pack, Settings
+from derp.config import Settings
 from derp.db.engine import Database
+from derp.history.models import Chat
+from derp.history.render import one_line
 from derp.locales import resolve, t
-from derp.money.wallets import balance, wallet
+from derp.money.funding import Funder
+from derp.money.wallets import balance
 from derp.ops.owner import notify_owners
-from derp.telegram.sender import Target, rich, send_markdown, send_privately
+from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.sender import Target, send_markdown, send_privately
+from derp.telegram.text import literal
 
-
-class BuyAction(CallbackData, prefix="buy"):
-    target: str  # user | chat
-    product: str = ""  # pack or plan id; empty: show the packs for this target
-
-
-def packs_keyboard(
-    settings: Settings, target: str, locale: str, *, plan: bool = False
-) -> InlineKeyboardMarkup:
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=f"{pack.stars}⭐ → {pack.credits:,} dc",
-                callback_data=BuyAction(target=target, product=pack.id).pack(),
-            )
-        ]
-        for pack in settings.packs
-    ]
-    if plan:
-        offer = settings.plan
-        button = InlineKeyboardButton(
-            text=t(locale, "billing.plan_button", credits=f"{offer.credits:,}", stars=offer.stars),
-            callback_data=BuyAction(target="user", product=offer.id).pack(),
-            style="primary",
-        )
-        rows.insert(0, [button])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def group_chooser(locale: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "billing.for_me"), callback_data=BuyAction(target="user").pack()
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "billing.for_chat"), callback_data=BuyAction(target="chat").pack()
-                ),
-            ]
-        ]
-    )
-
-
-async def send_pack_invoice(
-    bot: Bot, chat_id: int, thread_id: int | None, locale: str, pack: Pack, *, kind: str, owner_id: int
-) -> Message:
-    """Post the Stars invoice for one pack (never ephemeral: an invoice must persist to be paid)."""
-    order = Order(pack.id, pack.credits, kind, owner_id)
-    whom = t(locale, "billing.invoice_for_me") if kind == "user" else t(locale, "billing.invoice_for_chat")
-    title = t(locale, "billing.invoice_title", credits=f"{pack.credits:,}")
-    return await bot.send_invoice(
-        chat_id=chat_id,
-        message_thread_id=thread_id,
-        title=title,
-        description=t(locale, "billing.invoice_description", whom=whom),
-        payload=order.payload,
-        currency="XTR",
-        prices=[LabeledPrice(label=title, amount=pack.stars)],
-    )
-
-
-async def _balance(db: Database, kind: str, owner_id: int) -> int:
-    async with db.transaction() as session:
-        return await balance(session, (await wallet(session, kind, owner_id)).id)
-
-
-async def personal_menu(
-    db: Database, settings: Settings, user_id: int, locale: str
-) -> tuple[str, InlineKeyboardMarkup]:
-    """The private buy menu: the person's balance, Derp+ and the packs."""
-    mine = await _balance(db, "user", user_id)
-    return t(locale, "billing.menu", balance=f"{mine:,}"), packs_keyboard(settings, "user", locale, plan=True)
+__all__ = ["BuyAction", "build_router", "personal_menu"]
+log = logging.getLogger("derp.billing")
 
 
 async def show_buy(message: Message, db: Database, settings: Settings, bot: Bot) -> None:
@@ -120,90 +51,56 @@ async def show_buy(message: Message, db: Database, settings: Settings, bot: Bot)
     locale = resolve(message.from_user.language_code)
     target = Target.reply_to_message(message)
     if message.chat.type == "private":
-        text, markup = await personal_menu(db, settings, message.from_user.id, locale)
-        await send_markdown(bot, target, text, reply_markup=markup)
-        return
-    await send_markdown(bot, target, t(locale, "billing.who"), reply_markup=group_chooser(locale))
+        text, keyboard = await personal_menu(db, settings, message.from_user.id, locale)
+    else:
+        text, keyboard = group_chooser(locale, await wallet_balance(db, "chat", message.chat.id))
+    await send_markdown(bot, target, text, reply_markup=keyboard)
 
 
-async def on_buy(
-    query: CallbackQuery, callback_data: BuyAction, db: Database, settings: Settings, bot: Bot
-) -> None:
-    locale = resolve(query.from_user.language_code)
-    message = query.message
-    if not isinstance(message, Message):  # too old to edit or reply to
-        await query.answer(t(locale, "billing.stale"), show_alert=True)
-        return
-    chat = message.chat
-    owner_id = query.from_user.id if callback_data.target == "user" or chat.type == "private" else chat.id
-    kind = "user" if owner_id == query.from_user.id else "chat"
-    if not callback_data.product:
-        left = await _balance(db, kind, owner_id)
-        if kind == "user" and chat.type != "private":  # a personal balance never shows in the group
-            text = t(locale, "billing.menu", balance=f"{left:,}")
-            markup = packs_keyboard(settings, "user", locale, plan=True)
-            delivered = await send_privately(bot, owner_id, text, reply_markup=markup)
-            await query.answer(
-                t(locale, "money.sent_privately" if delivered else "money.dm_first"), show_alert=True
-            )
-            return
-        key = "billing.menu" if kind == "user" else "billing.menu_chat"
-        await bot.edit_message_text(
-            chat_id=chat.id,
-            message_id=message.message_id,
-            rich_message=rich(t(locale, key, balance=f"{left:,}")),
-            reply_markup=packs_keyboard(settings, kind, locale, plan=chat.type == "private"),
+async def on_buy(press: Press, data: BuyAction, db: Database, settings: Settings) -> None:
+    message, private = press.message, press.message.chat.type == "private"
+    kind = "user" if data.target == "user" or private else "chat"
+    owner_id = press.user_id if kind == "user" else press.chat_id
+    if not data.product:
+        if not private:
+            return await open_menu(press, db, settings, kind=kind)
+        left = await wallet_balance(db, "user", owner_id)
+        return await press.edit(
+            t(press.locale, "billing.menu", balance=f"{left:,}"),
+            packs_keyboard(settings, "user", press.locale, plan=True),
         )
-        await query.answer()
-        return
-    if callback_data.product == settings.plan.id:
-        await _offer_plan(query, message, db, settings, bot, locale)
-        return
-    pack = find_pack(settings, callback_data.product)
+    if data.product == settings.plan.id:
+        return await _offer_plan(press, db, settings)
+    pack = find_pack(settings, data.product)
     if pack is None:
-        await query.answer(t(locale, "billing.stale"), show_alert=True)
-        return
+        return await press.deny("billing.stale")
+    # A personal invoice is posted privately: an older group menu must not put one in the group.
+    personal_in_group = kind == "user" and not private
+    chat_id = press.user_id if personal_in_group else press.chat_id
+    thread = message.message_thread_id if message.is_topic_message and not personal_in_group else None
     try:
-        thread = message.message_thread_id if message.is_topic_message else None
-        await send_pack_invoice(bot, chat.id, thread, locale, pack, kind=kind, owner_id=owner_id)
-    except TelegramAPIError:
-        await query.answer(t(locale, "billing.unavailable"), show_alert=True)
-        return
-    await query.answer()
+        await send_pack_invoice(press.bot, chat_id, thread, press.locale, pack, kind=kind, owner_id=owner_id)
+    except TelegramAPIError as error:
+        refused_dm = personal_in_group and isinstance(error, TelegramForbiddenError | TelegramBadRequest)
+        return await press.deny("money.dm_first" if refused_dm else "billing.unavailable")
+    return None
 
 
-async def _offer_plan(
-    query: CallbackQuery, message: Message, db: Database, settings: Settings, bot: Bot, locale: str
-) -> None:
+async def _offer_plan(press: Press, db: Database, settings: Settings) -> None:
     async with db.session() as session:
-        running = await current_plan(session, query.from_user.id)
+        running = await current_plan(session, press.user_id)
     if running is not None:
-        await query.answer(
-            t(locale, "billing.already_subscribed", date=f"{running.period_end:%Y-%m-%d}"), show_alert=True
-        )
-        return
+        return await press.deny("billing.already_subscribed", date=f"{running.period_end:%Y-%m-%d}")
     offer = settings.plan
-    order = plan_order(settings, query.from_user.id)
     try:
-        link = await bot.create_invoice_link(
-            title=t(locale, "billing.plan_title"),
-            description=t(locale, "billing.plan_description", credits=f"{offer.credits:,}"),
-            payload=order.payload,
-            currency="XTR",
-            prices=[LabeledPrice(label=t(locale, "billing.plan_title"), amount=offer.stars)],
-            subscription_period=offer.period_seconds,
-        )
+        link = await plan_link(press.bot, settings, press.locale, press.user_id)
     except TelegramAPIError:
-        await query.answer(t(locale, "billing.unavailable"), show_alert=True)
-        return
-    pay = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=t(locale, "billing.plan_pay", stars=offer.stars), url=link)]
-        ]
-    )
-    text = t(locale, "billing.plan_offer", credits=f"{offer.credits:,}", stars=offer.stars)
-    await send_markdown(bot, Target(message.chat.id), text, reply_markup=pay)
-    await query.answer()
+        return await press.deny("billing.unavailable")
+    pay = markup(InlineKeyboardButton(text=t(press.locale, "billing.plan_pay", stars=offer.stars), url=link))
+    text = t(press.locale, "billing.plan_offer", credits=f"{offer.credits:,}", stars=offer.stars)
+    if not await send_privately(press.bot, press.user_id, text, reply_markup=pay):
+        return await press.deny("money.dm_first")
+    return None
 
 
 async def on_pre_checkout(query: PreCheckoutQuery, db: Database, settings: Settings) -> None:
@@ -223,7 +120,11 @@ async def on_pre_checkout(query: PreCheckoutQuery, db: Database, settings: Setti
         await query.answer(ok=False, error_message=t(locale, reason))
 
 
-async def on_payment(message: Message, db: Database, settings: Settings, bot: Bot) -> None:
+async def on_payment(message: Message, db: Database, settings: Settings, bot: Bot, funder: Funder) -> None:
+    """Record a Stars payment once, then thank the payer where only they see their balance.
+
+    Invoice links are paid in the payer's private chat; invoices posted in a group report there.
+    """
     payment = message.successful_payment
     if payment is None or message.from_user is None:
         return
@@ -248,18 +149,18 @@ async def on_payment(message: Message, db: Database, settings: Settings, bot: Bo
         raise
     if not new:
         return
-    if order.kind == "plan":
-        key = (
-            "billing.plan_renewed"
-            if payment.is_recurring and not payment.is_first_recurring
-            else "billing.plan_thanks"
-        )
-        until = f"{purchase.expires_at:%Y-%m-%d}" if purchase.expires_at else ""
-        text = t(locale, key, credits=f"{order.credits:,}", balance=f"{left:,}", date=until)
+    added, amount = f"{order.credits:,}", f"{left:,}"
+    if order.target == "chat":
+        await _thank_patron(message, db, bot, funder, order, locale, amount)
     else:
-        key = "billing.thanks" if order.target == "user" else "billing.thanks_chat"
-        text = t(locale, key, credits=f"{order.credits:,}", balance=f"{left:,}")
-    await send_markdown(bot, Target.reply_to_message(message), text)
+        if order.kind == "plan":
+            renewed = payment.is_recurring and not payment.is_first_recurring
+            until = f"{purchase.expires_at:%Y-%m-%d}" if purchase.expires_at else ""
+            key = "billing.plan_renewed" if renewed else "billing.plan_thanks"
+            text = t(locale, key, credits=added, balance=amount, date=until)
+        else:
+            text = t(locale, "billing.thanks", credits=added, balance=amount)
+        await _receipt(bot, message, locale, text, added)
     await notify_owners(
         bot,
         settings,
@@ -267,8 +168,48 @@ async def on_payment(message: Message, db: Database, settings: Settings, bot: Bo
     )
 
 
+async def _receipt(bot: Bot, message: Message, locale: str, text: str, added: str) -> None:
+    """The payer's receipt with their balance: in their private chat, never in a group."""
+    if message.chat.type == "private":
+        await send_markdown(bot, Target.reply_to_message(message), text)
+        return
+    await send_markdown(
+        bot, Target.reply_to_message(message), t(locale, "billing.thanks_group", credits=added)
+    )
+    if message.from_user is not None:
+        await send_privately(bot, message.from_user.id, text)
+
+
+async def _thank_patron(
+    message: Message, db: Database, bot: Bot, funder: Funder, order: Order, locale: str, amount: str
+) -> None:
+    """The chat's patron post, in the topic the purchase was made in; a link payer also gets a receipt."""
+    paid_here = message.chat.id == order.target_id
+    thread = order.thread_id or None
+    if thread is None and paid_here and message.is_topic_message:
+        thread = message.message_thread_id
+    if message.from_user is not None:
+        try:
+            await patrons.thank(
+                db, bot, funder, chat_id=order.target_id, thread_id=thread, buyer_id=message.from_user.id,
+                amount=order.credits, locale=locale,
+            )  # fmt: skip
+        except Exception as error:  # noqa: BLE001 - the purchase is recorded; the post is a courtesy
+            log.warning("patron post failed: %s", type(error).__name__)
+    if paid_here:
+        return
+    async with db.session() as session:
+        chat = await session.get(Chat, order.target_id)
+    title = literal(one_line(chat.title)) if chat and chat.title else t(locale, "settings.this_chat")
+    text = t(locale, "billing.thanks_chat", credits=f"{order.credits:,}", balance=amount, title=title)
+    await send_markdown(bot, Target.reply_to_message(message), text)
+
+
 async def on_subscription(update: BotSubscriptionUpdated, db: Database, settings: Settings, bot: Bot) -> None:
-    """The user canceled, re-enabled, or failed to pay for Derp+ (a canceled one runs to its period end)."""
+    """The user canceled, re-enabled, or failed to pay for Derp+ (a canceled one runs to its period end).
+
+    A failed renewal is told to the subscriber once (until the state changes again), with a way back.
+    """
     if update.state not in {"active", "canceled", "failed"}:
         return
     async with db.transaction() as session:
@@ -277,8 +218,16 @@ async def on_subscription(update: BotSubscriptionUpdated, db: Database, settings
         )
         if found is None or found.user_id != update.user.id:
             return
+        newly_failed = update.state == "failed" and found.state != "failed"
         found.state = update.state
-        plan = found.plan
+        plan, period_end = found.plan, found.period_end
+    if newly_failed:
+        locale = resolve(update.user.language_code)
+        again = button(
+            t(locale, "billing.subscribe_again"), BuyAction(target="user", product=settings.plan.id)
+        )
+        text = t(locale, "billing.renewal_failed", date=f"{period_end:%Y-%m-%d}")
+        await send_privately(bot, update.user.id, text, reply_markup=markup(again))
     await notify_owners(bot, settings, f"Derp+ {update.state}: {plan}")
 
 
@@ -322,7 +271,8 @@ def build_router() -> Router:
     router.message.register(on_payment, F.successful_payment)
     router.message.register(on_refunded, F.refunded_payment)
     router.message.register(on_refund_command, Command("refund"))
-    router.callback_query.register(on_buy, BuyAction.filter())
+    on_press(router, BuyAction)(on_buy)
     router.pre_checkout_query.register(on_pre_checkout)
     router.subscription.register(on_subscription)
+    router.include_router(patrons.build_router())
     return router

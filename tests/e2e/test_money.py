@@ -14,7 +14,7 @@ from derp.inference.models import ModelPin, ProviderCall
 from derp.inference.roles import DEFAULT_PINS, ModelRole
 from derp.money.free import POLICY_VERSION
 from derp.money.models import Reservation
-from derp.money.wallets import balance, credit, wallet
+from derp.money.wallets import balance, capture, credit, reserve, wallet
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
@@ -189,8 +189,10 @@ async def exhaust_sponsorship(conversation: Conversation, settings: Settings) ->
         session.add(ProviderCall(kind="chat", model="m", funding="sponsored", cost_usd=cap))
 
 
-async def press_button(conversation: Conversation, person: Person, chat_id: int, call: Any) -> None:
-    data = call["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+async def press_button(
+    conversation: Conversation, person: Person, chat_id: int, call: Any, row: int = 0, column: int = 0
+) -> None:
+    data = call["reply_markup"]["inline_keyboard"][row][column]["callback_data"]
     message_id = max(mid for (cid, mid) in conversation.api.messages if cid == chat_id)
     await conversation.press(person, chat_id, message_id, data)
 
@@ -201,21 +203,19 @@ async def test_consenting_to_free_models_answers_the_waiting_question(
     await exhaust_sponsorship(conversation, settings)
     asked = await conversation.send(CARL, text="what's 2+2?")
     offer = await conversation.expect_reply(asked)
-    assert "may store" in offer["rich_message"]["markdown"]
-    assert len(offer["reply_markup"]["inline_keyboard"]) == 2
+    text = offer["rich_message"]["markdown"]
+    assert "may store" in text and "](tg://time?unix=" in text  # the refill time, in each reader's zone
+    [[buy, consent]] = offer["reply_markup"]["inline_keyboard"]
+    assert (buy["text"], consent["text"]) == ("⭐ Buy Derpcoins", "🆓 Use free models")
     offer_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
-    buy_data = offer["reply_markup"]["inline_keyboard"][1][0]["callback_data"]
     after_buy = conversation.seq
-    await conversation.press(CARL, CARL.id, offer_id, buy_data)
-    assert any(
-        "Pick an option:" in c["rich_message"]["markdown"]
-        for c in conversation.api.calls_of("sendRichMessage", after=after_buy)
-    )
+    await conversation.press(CARL, CARL.id, offer_id, buy["callback_data"])
+    [menu] = conversation.api.calls_of("editMessageText", after=after_buy)  # in place, no new message
+    assert "Pick an option:" in menu["rich_message"]["markdown"]
+    assert consent["callback_data"] in str(menu["reply_markup"])
     model.reply("4, on the house")
     after = conversation.seq
-    await conversation.press(
-        CARL, CARL.id, offer_id, offer["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
-    )
+    await conversation.press(CARL, CARL.id, offer_id, consent["callback_data"])
     answers = [
         c
         for c in conversation.api.calls_of("sendRichMessage", after=after)
@@ -241,13 +241,14 @@ async def test_only_an_admin_turns_free_models_on_for_a_group(
     conversation.meet(boss, den, status="administrator")
     asked = await conversation.send(CARL, den, "derp hi")
     offer = await conversation.expect_reply(asked)
-    await press_button(conversation, CARL, den.id, offer)  # not an admin
+    assert offer["reply_markup"]["inline_keyboard"][0][0]["text"] == "⭐ Top up this chat"
+    await press_button(conversation, CARL, den.id, offer, row=1)  # not an admin
     async with conversation.db.session() as session:
         chat = await session.get(Chat, den.id)
         assert chat is not None and not chat.free_models
     model.reply("free hello")
     after = conversation.seq
-    await press_button(conversation, boss, den.id, offer)
+    await press_button(conversation, boss, den.id, offer, row=1)
     texts = [c["rich_message"]["markdown"] for c in conversation.api.calls_of("sendRichMessage", after=after)]
     assert any("allowed free models" in text for text in texts) and "free hello" in texts
     async with conversation.db.session() as session:
@@ -300,3 +301,83 @@ async def test_free_model_runs_keep_the_long_tail_in_the_toolbox(
     await conversation.expect_reply(asked)
     names = {tool.name for tool in model.infos[-1].function_tools}
     assert "search_tools" in names and "search_history" in names and "inspect_media" not in names
+
+
+async def test_a_group_offer_comes_once_a_day_per_person_then_a_quiet_reaction(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    await exhaust_sponsorship(conversation, settings)
+    den = Room(-1015, title="Den")
+    dana = Person(603, "Dana")
+    conversation.meet(CARL, den)
+    conversation.meet(dana, den)
+    first = await conversation.send(CARL, den, "derp hi")
+    offer = await conversation.expect_reply(first)
+    assert "](tg://time?unix=" in offer["rich_message"]["markdown"]
+    top_up = offer["reply_markup"]["inline_keyboard"][0][0]
+    assert top_up["text"] == "⭐ Top up this chat"
+
+    again = await conversation.send(CARL, den, "derp hello??")
+    await conversation.settle(again)
+    assert not conversation.api.calls_of("sendRichMessage", after=again.after)
+    [reaction] = conversation.api.calls_of("setMessageReaction", after=again.after)
+    assert int(reaction["message_id"]) == again.message_id
+    assert reaction["reaction"] == [{"type": "emoji", "emoji": "🙈"}]
+    other = await conversation.send(dana, den, "derp yo")  # each person gets their own offer
+    assert (
+        "free Derpcoins are used up" in (await conversation.expect_reply(other))["rich_message"]["markdown"]
+    )
+
+    offer_id = max(
+        mid for (cid, mid), m in conversation.api.messages.items() if cid == den.id and m.get("reply_markup")
+    )
+    after = conversation.seq
+    await conversation.press(CARL, den.id, offer_id, top_up["callback_data"])
+    [menu] = conversation.api.calls_of("sendRichMessage", after=after)
+    assert int(menu["ephemeral_message_parameters"]["receiver_user_id"]) == CARL.id
+    assert "Chat balance" in menu["rich_message"]["markdown"]
+    assert not conversation.api.calls_of("editMessageText", after=after)  # the offer stays for others
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(func.count()).select_from(AgentRun)) == 0
+
+
+async def test_an_emptied_chat_wallet_says_so_once_per_depletion(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    loft = Room(-1016, title="Loft")
+    conversation.meet(OWNER)
+    conversation.meet(CARL, loft)
+    async with conversation.db.transaction() as session:
+        chat_wallet = (await wallet(session, "chat", loft.id)).id
+        await credit(session, chat_wallet, "grant:loft", 24, "grant")
+    model.cost = 0.01  # 12 credits an answer
+
+    async def ask(text: str) -> list[Any]:
+        model.reply("ok")
+        sent = await conversation.send(CARL, loft, text)
+        await conversation.settle(sent)
+        return [
+            c
+            for c in conversation.api.calls_of("sendRichMessage", after=sent.after)
+            if "Chat wallet's empty" in c["rich_message"]["markdown"]
+        ]
+
+    assert await ask("derp one") == []  # 12 left: still pays a turn
+    [line] = await ask("derp two")
+    assert line["disable_notification"] in (True, "true") and not line.fields.get("reply_parameters")
+    assert line["reply_markup"]["inline_keyboard"][0][0]["text"] == "⭐ Top up this chat"
+    assert await ask("derp three") == []  # the free daily allowance pays now; no repeat
+
+    # A top-up re-arms it: the next time the wallet runs dry, it's said again.
+    payload = f"p1:pack_s_v1:650:chat:{loft.id}"
+    payment = {
+        "currency": "XTR", "total_amount": 50, "invoice_payload": payload,
+        "telegram_payment_charge_id": "ch-loft", "provider_payment_charge_id": "",
+    }  # fmt: skip
+    await conversation.settle(await conversation.send(CARL, loft, successful_payment=payment))
+    async with conversation.db.transaction() as session:
+        await reserve(session, chat_wallet, "turn:elsewhere", 638)
+        await capture(session, "turn:elsewhere", 638)
+    assert len(await ask("derp four")) == 1
+    async with conversation.db.session() as session:
+        assert await balance(session, chat_wallet) == 0
