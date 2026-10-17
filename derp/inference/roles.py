@@ -38,12 +38,13 @@ class RolePin(BaseModel, frozen=True):
 
 
 DEFAULT_PINS: dict[ModelRole, RolePin] = {
+    # A dated snapshot, so behaviour doesn't shift under us; its cache reads cost a tenth of GLM's.
     # GLM's reasoning can't be disabled, but at "low" it emits next to none.
     ModelRole.CHAT: RolePin(
-        model="z-ai/glm-5.3-flash", fallbacks=("deepseek/deepseek-v4.1-flash",), fast=True
+        model="deepseek/deepseek-v4.1-flash-1017", fallbacks=("z-ai/glm-5.3-flash",), fast=True
     ),
     ModelRole.CHAT_SPONSORED: RolePin(
-        model="z-ai/glm-5.3-flash", fallbacks=("deepseek/deepseek-v4.1-flash",)
+        model="deepseek/deepseek-v4.1-flash-1017", fallbacks=("z-ai/glm-5.3-flash",)
     ),
     ModelRole.CHAT_FREE: RolePin(
         model="thinkingmachines/inkling:free",
