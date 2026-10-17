@@ -1,9 +1,13 @@
+import asyncio
+import shutil
 from decimal import Decimal
-from typing import Any
+from pathlib import Path
+from typing import Any, ClassVar
 
+import pytest
 from sqlalchemy import select
 
-from derp.history.models import Message, MessageMedia
+from derp.history.models import TOO_LONG, UNHEARD, Message, MessageMedia
 from derp.history.transcription import Transcriber
 from derp.inference.api import OpenRouterError, Transcript
 from derp.inference.models import ProviderCall
@@ -139,3 +143,108 @@ async def test_ambient_voice_stops_at_the_daily_cap_but_invocations_still_hear_i
     await conversation.expect_reply(asked)
     assert len(stt.calls) == 1  # the invocation needs it: transcribed on demand
     assert "купи хлеба" in str(model.requests[-1])
+
+
+def audio(file_id: str, duration: int = 20, mime_type: str = "audio/ogg") -> dict[str, object]:
+    return {
+        "file_id": file_id,
+        "file_unique_id": f"u-{file_id}",
+        "duration": duration,
+        "mime_type": mime_type,
+    }
+
+
+async def test_an_audio_file_sent_to_derp_is_transcribed(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    stt = FakeSTT()
+    await use_stt(conversation, stt)
+    conversation.api.register_file("a1", OGG)
+    model.reply("куплю")
+    sent = await conversation.send(EVA, audio=audio("a1"))
+    await conversation.expect_reply(sent)
+    assert stt.calls[-1][1:] == (OGG, "ogg")  # OGG goes as is
+    assert "[audio 0:20: купи хлеба]" in str(model.requests[-1][-1])
+
+
+async def test_ambient_audio_files_wait_until_someone_asks(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    stt = FakeSTT()
+    await use_stt(conversation, stt)
+    group = Room(-1011, title="Memos")
+    conversation.meet(EVA, group)
+    conversation.api.register_file("a2", OGG)
+    conversation.api.register_file("a3", OGG)
+    memo = await conversation.send(EVA, group, audio=audio("a2"))
+    long = await conversation.send(EVA, group, audio=audio("a3", duration=3600))
+    await conversation.settle(long)
+    assert stt.calls == []  # audio nobody asked about is never transcribed
+
+    model.reply("хлеб")
+    asked = await conversation.send(EVA, group, "дерп, что там?", reply_to=memo.message_id)
+    await conversation.expect_reply(asked)
+    assert len(stt.calls) == 1 and "купи хлеба" in str(model.requests[-1])
+    model.reply("не осилю")
+    asked = await conversation.send(EVA, group, "дерп, а тут?", reply_to=long.message_id)
+    await conversation.expect_reply(asked)
+    assert len(stt.calls) == 1 and "[audio 60:00 — too long to transcribe]" in str(model.requests[-1])
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+async def test_audio_in_other_formats_is_converted_first(
+    conversation: Conversation, model: ScriptedModel, tmp_path: Path
+) -> None:
+    stt = FakeSTT()
+    await use_stt(conversation, stt)
+    target = tmp_path / "memo.mp3"
+    process = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(target),
+    )  # fmt: skip
+    assert await process.wait() == 0
+    conversation.api.register_file("a4", target.read_bytes())
+    model.reply("ok")
+    sent = await conversation.send(EVA, audio=audio("a4", duration=1, mime_type="audio/mpeg"))
+    await conversation.expect_reply(sent)
+    assert stt.calls[-1][1].startswith(b"OggS") and stt.calls[-1][2] == "ogg"
+
+
+async def test_derp_is_told_why_a_voice_note_has_no_transcript(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    await use_stt(conversation, BrokenSTT())
+    conversation.api.register_file("v6", OGG)
+    conversation.api.register_file("v7", OGG)
+    model.reply("не расслышал")
+    broken = await conversation.send(EVA, voice=voice("v6"))
+    await conversation.expect_reply(broken)
+    assert "[voice 0:05 — couldn't transcribe]" in str(model.requests[-1][-1])
+    model.reply("длинно")
+    long = await conversation.send(EVA, voice=voice("v7", duration=724))
+    await conversation.expect_reply(long)
+    assert "[voice 12:04 — too long to transcribe]" in str(model.requests[-1][-1])
+    async with conversation.db.session() as session:
+        reasons = set(await session.scalars(select(MessageMedia.transcript_model)))
+    assert reasons == {UNHEARD, TOO_LONG}
+
+
+class WatchedTranscriber(Transcriber):
+    settled: ClassVar[list[tuple[int, int | None, int]]] = []
+
+    async def settle(self, chat_id: int, thread_id: int | None, before: int, *, limit: float = 5.0) -> None:
+        self.settled.append((chat_id, thread_id, before))
+        await super().settle(chat_id, thread_id, before, limit=limit)
+
+
+async def test_runs_settle_pending_transcriptions_before_reading_the_chat(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    stt = FakeSTT()
+    conversation.overrides["transcriber"] = Derived(
+        lambda s: WatchedTranscriber(db=s.db, api=stt, gateway=s.media, pins=s.pins, settings=s.settings)  # type: ignore[arg-type]
+    )
+    await conversation.restart()
+    model.reply("hi")
+    sent = await conversation.send(EVA, text="answer the voice note")
+    await conversation.expect_reply(sent)
+    assert WatchedTranscriber.settled[-1] == (EVA.id, None, sent.message_id)

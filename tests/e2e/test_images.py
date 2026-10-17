@@ -12,7 +12,7 @@ from sqlalchemy import select, update
 
 from derp.agent.approvals import close_expired
 from derp.agent.models import AgentRun, Approval, RunOutput
-from derp.inference.api import GeneratedImage
+from derp.inference.api import GeneratedImage, OpenRouterError
 from derp.inference.models import ProviderCall
 from derp.money.wallets import balance, claw_back, credit, wallet
 from tests.e2e.harness import Conversation, Person, Room
@@ -109,6 +109,39 @@ async def test_an_image_over_a_quarter_of_the_balance_asks_first(
 
     closed = conversation.api.calls_of("editMessageText", after=after)[-1]
     assert closed["rich_message"]["markdown"] == "On it — drawing…" and "reply_markup" not in closed.fields
+    [deleted] = conversation.api.calls_of("deleteMessage", after=after)  # the image arrived: the prompt goes
+    assert int(deleted["message_id"]) == prompt_id and (JO.id, prompt_id) not in conversation.api.messages
+
+
+class BrokenImages(FakeImages):
+    async def generate_image(self, model: str, prompt: str, **_: object) -> GeneratedImage:
+        self.prompts.append(prompt)
+        raise OpenRouterError(502, "upstream down")
+
+
+async def test_an_approved_image_that_fails_turns_its_prompt_into_the_failure_note(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    images = BrokenImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    wallet_id = await fund(conversation, 150)
+    prompt_id, run = await ask_for_a_dragon(conversation, model)
+    async with conversation.db.session() as session:
+        before = await balance(session, wallet_id)
+    after = conversation.seq
+    await conversation.press(JO, JO.id, prompt_id, run)
+    assert set(images.prompts) == {"a dragon"}  # every pinned model was tried
+    assert conversation.api.calls_of("deleteMessage", after=after) == []
+    assert conversation.api.calls_of("sendRichMessage", after=after) == []  # no second message
+    note = conversation.api.calls_of("editMessageText", after=after)[-1]
+    assert int(note["message_id"]) == prompt_id
+    assert note["rich_message"]["markdown"] == "The image didn't come out — nothing was charged."
+    assert "reply_markup" not in conversation.api.message(JO.id, prompt_id)
+    async with conversation.db.session() as session:
+        approved = await session.scalar(select(AgentRun).where(AgentRun.trigger == "callback"))
+        assert approved is not None and approved.status == "failed" and approved.charged_credits == 0
+        assert await balance(session, wallet_id) == before
 
 
 async def test_an_approved_image_falls_through_to_the_payer_who_can_cover_it(

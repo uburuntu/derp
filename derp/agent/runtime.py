@@ -40,6 +40,7 @@ from pydantic_ai.usage import UsageLimits
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from derp.agent.approvals import close_prompt
 from derp.agent.context import Window, build_window
 from derp.agent.deps import RunDeps
 from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
@@ -52,6 +53,7 @@ from derp.agent.prefix import prefixes
 from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
 from derp.agent.runs import finish_run, price_unreported, record_output, start_run, totals
 from derp.agent.tools import CAPABILITIES, DETACHED, FAMILIES
+from derp.agent.tools.memory import family as memory_family
 from derp.agent.toolsets import toolsets_for
 from derp.config import Settings
 from derp.db.engine import Database
@@ -68,6 +70,7 @@ from derp.history.render import (
     one_line,
     render_line,
 )
+from derp.history.transcription import Transcriber
 from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.openrouter import chat_settings, conversation_id
 from derp.inference.pins import PinStore
@@ -81,6 +84,7 @@ from derp.ops.observability import record_run_failure
 from derp.ops.owner import is_blocked, notify_owners
 from derp.telegram.buttons import link, markup
 from derp.telegram.media import MediaGateway
+from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import PartialDeliveryError, Target, send_markdown
 from derp.tools.lookups import Lookups
 
@@ -130,6 +134,7 @@ class Runtime:
         gateway: MediaGateway,
         api: OpenRouterAPI,
         lookups: Lookups,
+        transcriber: Transcriber | None = None,
     ) -> None:
         self.db = db
         self.bot = bot
@@ -143,6 +148,7 @@ class Runtime:
         self.gateway = gateway
         self.api = api
         self.lookups = lookups
+        self.transcriber = transcriber
         self.lanes = Lanes(settings.run_concurrency)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.in_flight: set[str] = set()  # operation ids of holds a live run still owns
@@ -192,6 +198,8 @@ class Runtime:
             await asyncio.sleep(ALBUM_SETTLE)
         tz = chat_time(chat)
         target = Target.reply_to_message(message)
+        if self.transcriber is not None:  # a voice note sent just before may still be transcribing
+            await self.transcriber.settle(chat.id, target.thread_id, message.message_id or 2**62)
         operation_id = (
             f"turn:{chat.id}:{message.message_id}" if message.message_id else f"turn:{uuid.uuid4().hex}"
         )
@@ -300,6 +308,7 @@ class Runtime:
                 notes=notes_block(memory, asker.full_name),
                 earlier=earlier,
                 blind=bool(inspected) and not pin.vision,
+                notes_policy=funding in memory_family.tiers,
             )
             request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
             caps = self.settings.run_caps
@@ -589,6 +598,7 @@ class Runtime:
                 if username
                 else None
             )
+            await close_prompt(self.bot, approval)  # no "drawing…" left behind
             await self._say(target, t(locale, "approvals.no_coins"), markup(top_up))
             return
         async with self.db.transaction() as session:
@@ -612,7 +622,7 @@ class Runtime:
                 pin=await self.pins.get(ModelRole.IMAGE), target=target, job=ImageJob.from_args(approval.args),
                 run_id=run.id, funding=funds.funding.value, user_id=approval.user_id,
             )  # fmt: skip
-        except (OpenRouterError, TelegramAPIError) as failed:
+        except Exception as failed:  # noqa: BLE001 - released below; the prompt says so
             error = failed
         finally:
             async with self.db.transaction() as session:
@@ -624,10 +634,17 @@ class Runtime:
                 charged = await self.funder.settle(session, funds, run.id, delivered=sent is not None)
                 stored.charged_credits = charged
             self.in_flight.discard(funds.operation_id)
-        if sent is None:
-            await self._say(target, t(locale, "approvals.failed"))
-        elif charged and funds.wallet_id is not None and chat.type != "private":
-            await self._check_wallet(chat, funds.wallet_id, approval.thread_id, locale)
+        if sent is not None:  # the image says it all: the "drawing…" prompt goes
+            await close_prompt(self.bot, approval)
+            if charged and funds.wallet_id is not None and chat.type != "private":
+                await self._check_wallet(chat, funds.wallet_id, approval.thread_id, locale)
+            return
+        unsure = isinstance(error, TelegramAPIError) and isinstance(error, AMBIGUOUS)  # it may have arrived
+        note = t(locale, "approvals.unconfirmed" if unsure else "approvals.failed")
+        if not await close_prompt(self.bot, approval, note):
+            await self._say(target, note)
+        if error is not None and not isinstance(error, OpenRouterError | TelegramAPIError):
+            raise error
 
     async def _offer(self, message: TgMessage, chat: Chat, target: Target, locale: str) -> None:
         """The out-of-Derpcoins offer; in groups once per person per UTC day, later just a 🙈 on the ask."""

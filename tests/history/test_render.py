@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from derp.history.models import Message, MessageMedia
+from derp.history.models import TOO_LONG, UNHEARD, Message, MessageMedia
 from derp.history.render import MessageView, estimate_tokens, render_line, render_payload, render_transcript
 
 
@@ -101,3 +101,20 @@ def test_reply_to_another_chat_names_its_origin_and_quote() -> None:
     }
     same_chat = MessageView(row(text="this", payload={"external_reply": topic}), "Ann")
     assert render_line(same_chat, tz) == "[09:05] #10 Ann ↩ (#3 in another topic): this"
+
+
+def test_recordings_without_a_transcript_say_why() -> None:
+    long = MessageMedia(type="voice", duration=724, transcript_model=TOO_LONG)
+    failed = MessageMedia(type="video_note", duration=18, transcript_model=UNHEARD)
+    pending = MessageMedia(type="audio", duration=30)  # not tried (yet): no reason to give
+    heard = MessageMedia(type="voice", duration=5, transcript="hi", transcript_model="m/stt")
+    lines = [
+        render_line(MessageView(row(kind="voice"), "Ann", [m]), ZoneInfo("UTC"))
+        for m in (long, failed, pending, heard)
+    ]
+    assert [line.split(": ", 1)[1] for line in lines] == [
+        "[voice 12:04 — too long to transcribe]",
+        "[video note 0:18 — couldn't transcribe]",
+        "[audio 0:30]",
+        "[voice 0:05: hi]",
+    ]

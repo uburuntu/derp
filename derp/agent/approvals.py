@@ -6,7 +6,8 @@ price (never a balance, since groups see it). Only the requester can decide; a
 decision is final, an undecided prompt expires after ``approval_minutes``: a
 press then, or the periodic sweep, turns the prompt into the expired notice
 without buttons. Running funds the action afresh (the asking run is long
-settled); denial and expiry cost nothing.
+settled); denial and expiry cost nothing. Once the action ran, its prompt is
+deleted if the result arrived, else it becomes the failure note.
 """
 
 import contextlib
@@ -112,6 +113,30 @@ async def on_decision(press: Press, data: ApprovalAction, db: Database, runtime:
     await press.edit(t(press.locale, "approvals.making" if data.run else "approvals.cancelled"))
     if data.run and approval is not None and chat is not None:
         await runtime.run_approved(approval, chat, press.locale)
+
+
+async def close_prompt(
+    bot: Bot, approval: Approval, text: str | None = None, keyboard: InlineKeyboardMarkup | None = None
+) -> bool:
+    """Tidy the prompt once its action is over: deleted when ``text`` is None, else replaced by ``text``.
+
+    False when the prompt couldn't be changed (never stored, deleted, too old), so the caller can post instead.
+    """
+    if approval.prompt_message_id is None:
+        return False
+    try:
+        if text is None:
+            await bot.delete_message(chat_id=approval.chat_id, message_id=approval.prompt_message_id)
+        else:
+            await bot.edit_message_text(
+                chat_id=approval.chat_id,
+                message_id=approval.prompt_message_id,
+                rich_message=rich(text),
+                reply_markup=keyboard,
+            )
+    except TelegramAPIError:
+        return False
+    return True
 
 
 async def close_expired(db: Database, bot: Bot, now: datetime) -> int:
