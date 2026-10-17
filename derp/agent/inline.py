@@ -28,6 +28,7 @@ from derp.agent.runtime import Runtime
 from derp.db.engine import Database
 from derp.locales import resolve, t
 from derp.ops.owner import is_blocked
+from derp.telegram.bot import bot_username
 from derp.telegram.sender import rich, sanitize_untrusted
 
 log = logging.getLogger("derp.inline")
@@ -80,9 +81,8 @@ async def on_chosen(result: ChosenInlineResult, bot: Bot, runtime: Runtime) -> N
     )
     question = f"❓ {sanitize_untrusted(result.query[:QUERY_LIMIT])}\n\n"
     if detached is None or not detached.text:
-        username = (await bot.me()).username or "DerpRobot"
         text = question + (
-            t(locale, "inline.unfunded", username=username)
+            t(locale, "inline.unfunded", username=await bot_username(bot))
             if detached is None
             else t(locale, "inline.failed")
         )
@@ -111,9 +111,8 @@ async def on_guest(message: Message, bot: Bot, runtime: Runtime, db: Database) -
         where="as a guest into a chat Derp isn't a member of",
     )
     if detached is None or not detached.text:
-        username = (await bot.me()).username or "DerpRobot"
         text = (
-            t(locale, "inline.unfunded", username=username)
+            t(locale, "inline.unfunded", username=await bot_username(bot))
             if detached is None
             else t(locale, "inline.failed")
         )

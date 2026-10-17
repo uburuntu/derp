@@ -35,6 +35,7 @@ from derp.locales import DEFAULT, LOCALES, resolve, t
 from derp.money.command import bought_total, free_left_today
 from derp.money.wallets import balances, wallet
 from derp.settings.onboarding import context_line
+from derp.telegram.bot import bot_username
 from derp.telegram.buttons import answer_stale, link, markup
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
@@ -79,12 +80,8 @@ OWNER_COMMANDS = {
 }
 
 
-async def _username(bot: Bot) -> str:
-    return (await bot.me()).username or "DerpRobot"
-
-
 async def showcase(bot: Bot, settings: Settings, locale: str) -> tuple[str, InlineKeyboardMarkup | None]:
-    username = await _username(bot)
+    username = await bot_username(bot)
     text = t(locale, "start.private", daily=settings.sponsored_daily_credits, username=username)
     add = link(t(locale, "start.add_to_group"), f"https://t.me/{username}?startgroup=derp")
     return text, markup([add, buy_button(locale, group=False)])
@@ -152,7 +149,7 @@ async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user
         return "\n\n".join(lines)
     async with db.transaction() as session:
         left = sum((await balances(session, (await wallet(session, "chat", chat.id)).id, now=now)).values())
-    username = await _username(bot)
+    username = await bot_username(bot)
     context, _ = await context_line(bot, settings, chat, locale)
     lines = [
         t(locale, "help.title_group", title=literal(one_line(chat.title or t(locale, "settings.this_chat")))),

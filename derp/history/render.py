@@ -14,7 +14,7 @@ them out to keep old lines, and the provider's prompt cache, stable.
 
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from typing import Any, cast
@@ -82,21 +82,24 @@ def _duration(seconds: int | None) -> str:
 UNTRANSCRIBED = {TOO_LONG: "too long to transcribe", UNHEARD: "couldn't transcribe"}
 
 
+def kind_label(kind: str) -> str:
+    """How lines name a kind of media or message: "gif", "video note", "paid media"…"""
+    return {"animation": "gif", "live_photo": "photo"}.get(kind, kind.replace("_", " "))
+
+
 def render_media(media: MessageMedia) -> str:
     detail = media.transcript or media.description
     match media.type:
         case "sticker":
             label = f"sticker {media.sticker_emoji or ''}".rstrip()
         case "voice" | "video_note" | "video" | "audio":
-            label = media.type.replace("_", " ") + _duration(media.duration)
-            if media.transcript is None and (why := UNTRANSCRIBED.get(media.transcript_model or "")):
+            label = kind_label(media.type) + _duration(media.duration)
+            if media.transcript == "" and (why := UNTRANSCRIBED.get(media.transcript_model or "")):
                 label += f" — {why}"  # stored, so the line stays the same run after run
         case "document":
             label = f"file {media.file_name}" if media.file_name else "file"
-        case "animation":
-            label = "gif"
         case _:
-            label = media.type
+            label = kind_label(media.type)
     return f"[{label}: {_clip(detail, 600)}]" if detail else f"[{label}]"
 
 
@@ -148,7 +151,7 @@ def render_payload(kind: str, payload: dict[str, Any]) -> str:
         ):
             return ""
         case _:
-            return f"[{kind.replace('_', ' ')}]"
+            return f"[{kind_label(kind)}]"
 
 
 def _field(data: dict[str, Any], outer: str, inner: str) -> str | None:
@@ -159,45 +162,28 @@ def _field(data: dict[str, Any], outer: str, inner: str) -> str | None:
     return str(value) if value else None
 
 
-def _forward(origin: dict[str, Any] | None) -> str:
-    if not origin:
-        return ""
-    source = (
-        _field(origin, "sender_user", "first_name")
-        or origin.get("sender_user_name")
-        or _field(origin, "chat", "title")
-        or _field(origin, "sender_chat", "title")
-        or "someone"
+def _origin_source(origin: Any) -> str | None:
+    """Who a ``MessageOrigin`` names: a user by first name, a hidden user's name, else the chat or channel."""
+    if not isinstance(origin, dict):
+        return None
+    data = cast(dict[str, Any], origin)
+    hidden = data.get("sender_user_name")
+    return (
+        _field(data, "sender_user", "first_name")
+        or (str(hidden) if hidden else None)
+        or _field(data, "chat", "title")
+        or _field(data, "sender_chat", "title")
     )
-    return f" (fwd from {source})"
+
+
+def _forward(origin: dict[str, Any] | None) -> str:
+    return f" (fwd from {_origin_source(origin) or 'someone'})" if origin else ""
 
 
 EXTERNAL_KINDS = (
     "photo", "video", "animation", "audio", "document", "sticker", "voice", "video_note", "story", "poll",
     "checklist", "location", "venue", "contact", "dice", "game", "giveaway", "invoice", "paid_media", "live_photo",
 )  # fmt: skip
-EXTERNAL_LABELS = {
-    "animation": "gif",
-    "video_note": "video note",
-    "paid_media": "paid media",
-    "live_photo": "photo",
-}
-
-
-def _origin_name(origin: Any) -> str | None:
-    if not isinstance(origin, dict):
-        return None
-    data = cast(dict[str, Any], origin)
-    user: Any = data.get("sender_user")
-    if isinstance(user, dict):
-        named = cast(dict[str, Any], user)
-        return " ".join(str(n) for n in (named.get("first_name"), named.get("last_name")) if n) or None
-    hidden = data.get("sender_user_name")
-    return (
-        (str(hidden) if hidden else None)
-        or _field(data, "sender_chat", "title")
-        or _field(data, "chat", "title")
-    )
 
 
 def external_reply(info: Any, chat_id: int) -> str:
@@ -211,13 +197,13 @@ def external_reply(info: Any, chat_id: int) -> str:
     what = next((kind for kind in EXTERNAL_KINDS if kind in data), "")
     if what == "poll":
         what = f"poll {_field(data, 'poll', 'question') or ''}".rstrip()
-    what = EXTERNAL_LABELS.get(what, what)
+    what = kind_label(what)
     suffix = f": {one_line(what, 120)}" if what else ""
     chat: Any = data.get("chat")
     if isinstance(chat, dict) and cast(dict[str, Any], chat).get("id") == chat_id:
         message_id = data.get("message_id")
         return f" ↩ (#{message_id} in another topic{suffix})" if message_id else f" ↩ (another topic{suffix})"
-    author = _origin_name(data.get("origin"))
+    author = _origin_source(data.get("origin"))
     place = _field(data, "chat", "title")
     if author and place and author != place:
         source = f"{one_line(author)} in {one_line(place)}"
@@ -247,6 +233,7 @@ def render_reactions(counts: dict[str, int]) -> str:
 
 
 def render_line(view: MessageView, tz: tzinfo, *, reactions: bool = True) -> str:
+    """One transcript line; a message never stored (an ephemeral command, id 0) has no ``#id`` to cite."""
     row = view.row
     reply = (
         f" ↩#{row.reply_to_message_id}"
@@ -257,7 +244,8 @@ def render_line(view: MessageView, tz: tzinfo, *, reactions: bool = True) -> str
     edited = " (edited)" if row.edit_date else ""
     totals = render_reactions(view.reactions) if reactions else ""
     when = row.date.astimezone(tz).strftime("%H:%M")
-    header = f"[{when}] #{row.message_id} {one_line(view.sender)}{_forward(row.forward_origin)}{reply}{quote}{edited}"
+    cite = f" #{row.message_id}" if row.message_id else ""
+    header = f"[{when}]{cite} {one_line(view.sender)}{_forward(row.forward_origin)}{reply}{quote}{edited}"
     return neutralize(f"{header}: {render_body(view)}{totals}")
 
 
@@ -322,22 +310,28 @@ async def load_views(session: AsyncSession, rows: Sequence[Message]) -> list[Mes
         if message_id not in totals:
             key = _custom_or(reaction)
             reactions[message_id][key] = reactions[message_id].get(key, 0) + count
-    views: list[MessageView] = []
-    for row in rows:
-        if row.is_derp:
-            sender = DERP_NAME
-        elif row.user_id is not None and row.sender_chat_id is None:
-            sender = names.get(row.user_id, f"user {row.user_id}")
-        elif row.sender_chat_id == row.chat_id:
-            sender = "Anonymous admin"
-        elif row.sender_chat_id is not None:
-            sender = chat_titles.get(row.sender_chat_id, "a channel")
-        else:
-            sender = "someone"
-        views.append(
-            MessageView(row, sender, media.get(row.message_id, []), reactions.get(row.message_id, {}))
+    return [
+        MessageView(
+            row,
+            sender_label(row, names, chat_titles),
+            media.get(row.message_id, []),
+            reactions.get(row.message_id, {}),
         )
-    return views
+        for row in rows
+    ]
+
+
+def sender_label(row: Message, names: Mapping[int, str], chat_titles: Mapping[int, str]) -> str:
+    """Who a line says sent the message: Derp, the person (``User.label``), an anonymous admin or a channel."""
+    if row.is_derp:
+        return DERP_NAME
+    if row.user_id is not None and row.sender_chat_id is None:
+        return names.get(row.user_id, f"user {row.user_id}")
+    if row.sender_chat_id == row.chat_id:
+        return "Anonymous admin"
+    if row.sender_chat_id is not None:
+        return chat_titles.get(row.sender_chat_id, "a channel")
+    return "someone"
 
 
 def chat_time(chat: Chat | None) -> tzinfo:

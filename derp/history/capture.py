@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from derp.history.digests import mark_stale
 from derp.history.models import Chat, ForumTopic, Message, MessageMedia, Sticker, User
 from derp.history.polls import upsert_poll
+from derp.history.render import MessageView, sender_label
+from derp.telegram.text import plain_emoji
 
 TYPED_KINDS = {
     "text", "photo", "video", "voice", "video_note", "audio", "document", "sticker", "animation",
@@ -187,18 +189,11 @@ def _people(message: TgMessage) -> Iterable[TgUser]:
         yield message.left_chat_member
 
 
-async def store_message(session: AsyncSession, message: TgMessage, *, capture: str, bot_id: int) -> bool:
-    """Insert or update (on edit) one message and its media, as received by ``bot_id``.
-
-    False when not storable, or when the message was forgotten (tombstoned rows are never rewritten).
-    """
-    if message.message_id <= 0 or message.guest_query_id:
-        return False
-    for person in _people(message):
-        await upsert_user(session, person)
+def message_values(message: TgMessage, *, capture: str) -> dict[str, Any]:
+    """The ``messages`` row for a Telegram message (``capture``: invocation / ambient / derp)."""
     kind = classify(message)
     reply = message.reply_to_message
-    values: dict[str, Any] = {
+    return {
         "chat_id": message.chat.id,
         "message_id": message.message_id,
         "thread_id": message.message_thread_id if message.is_topic_message else None,
@@ -223,6 +218,31 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
         if kind == "other"
         else None,
     }
+
+
+def unstored_view(message: TgMessage, bot_id: int) -> MessageView:
+    """A message that isn't stored (an ephemeral command, a reply Telegram embedded) as the view it would be."""
+    row = Message(**message_values(message, capture="invocation"))
+    media = [MessageMedia(**values) for values in media_rows(message, bot_id)]
+    names: dict[int, str] = {}
+    if (person := message.from_user) is not None:
+        names[person.id] = User(
+            first_name=person.first_name, last_name=person.last_name, username=person.username
+        ).label
+    titles = {message.sender_chat.id: message.sender_chat.title or "a channel"} if message.sender_chat else {}
+    return MessageView(row, sender_label(row, names, titles), media)
+
+
+async def store_message(session: AsyncSession, message: TgMessage, *, capture: str, bot_id: int) -> bool:
+    """Insert or update (on edit) one message and its media, as received by ``bot_id``.
+
+    False when not storable, or when the message was forgotten (tombstoned rows are never rewritten).
+    """
+    if message.message_id <= 0 or message.guest_query_id:
+        return False
+    for person in _people(message):
+        await upsert_user(session, person)
+    values = message_values(message, capture=capture)
     statement = insert(Message).values(values)
     updatable = ("edit_date", "text", "entities", "payload", "raw", "kind")
     written = await session.scalar(
@@ -321,7 +341,7 @@ async def index_sticker(session: AsyncSession, message: TgMessage, bot_id: int) 
         file_unique_id=sticker.file_unique_id,
         file_id=sticker.file_id,
         bot_id=bot_id,
-        emoji=sticker.emoji,
+        emoji=plain_emoji(sticker.emoji) if sticker.emoji else None,  # compared plain, so stored plain
         set_name=sticker.set_name,
         kind=sticker.type,
     )

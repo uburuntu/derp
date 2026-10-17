@@ -7,7 +7,7 @@ from derp.agent.persona import PERSONA
 from derp.history.models import Message
 from derp.inference.roles import DEFAULT_PINS, ModelRole
 from tests.e2e.harness import Conversation, Person, Room
-from tests.e2e.model import ScriptedModel
+from tests.e2e.model import ScriptedModel, tool_call
 
 ANNA = Person(501, "Anna", language_code="ru")
 BOB = Person(502, "Bob")
@@ -223,3 +223,22 @@ async def test_group_answers_link_cited_messages_and_see_usernames(
         reply["rich_message"]["markdown"]
         == f"[#{chatter.message_id}]({link}) wants pizza, #999 is not a message"
     )
+    await conversation.settle(asked)
+    async with conversation.db.session() as session:  # history keeps the answer as written: no URLs
+        answer = await session.scalar(select(Message).where(Message.is_derp))
+    assert answer is not None and answer.text == f"#{chatter.message_id} wants pizza, #999 is not a message"
+
+    # Edits link the same way; notes and jobs have their own numbers and never become links.
+    fixed = f"#{chatter.message_id} wants pizza (note {chatter.message_id}, job {chatter.message_id})"
+    model.reply(tool_call("edit_own_message", message_id=answer.message_id, new_text=fixed), "done")
+    again = await conversation.send(
+        kim, lounge, "@DerpRobot fix it", entities=[{"type": "mention", "offset": 0, "length": 10}]
+    )
+    await conversation.settle(again)
+    (edit,) = conversation.api.calls_of("editMessageText", after=again.after)
+    assert edit["rich_message"]["markdown"] == (
+        f"[#{chatter.message_id}]({link}) wants pizza (note {chatter.message_id}, job {chatter.message_id})"
+    )
+    async with conversation.db.session() as session:
+        edited = await session.get(Message, (lounge.id, answer.message_id))
+    assert edited is not None and edited.text == fixed

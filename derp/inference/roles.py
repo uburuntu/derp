@@ -29,6 +29,8 @@ class RolePin(BaseModel, frozen=True):
     fast: bool = False
     max_price_prompt: float | None = None  # USD per 1M tokens
     max_price_completion: float | None = None
+    # The max_price came from the primary's price snapshot (``pins.with_ceiling``): routing only, never stored.
+    derived_ceiling: bool = Field(default=False, exclude=True)
     # Provider allowlist per model for APIs without a ``zdr`` routing flag (Images API).
     only: dict[str, tuple[str, ...]] = Field(default_factory=dict[str, tuple[str, ...]])
 
@@ -37,12 +39,19 @@ class RolePin(BaseModel, frozen=True):
         return (self.model, *self.fallbacks)
 
     def rotated(self) -> RolePin:
-        """The same pin led by its first fallback (the primary goes last): a second try that starts elsewhere."""
+        """The same pin led by its first fallback (the primary goes last): a second try that starts elsewhere.
+
+        A ceiling derived from the primary's price goes: it would skip the very fallbacks the retry is for.
+        """
         if not self.fallbacks:
             return self
-        return self.model_copy(
-            update={"model": self.fallbacks[0], "fallbacks": (*self.fallbacks[1:], self.model)}
-        )
+        update: dict[str, object] = {
+            "model": self.fallbacks[0],
+            "fallbacks": (*self.fallbacks[1:], self.model),
+        }
+        if self.derived_ceiling:
+            update |= {"max_price_prompt": None, "max_price_completion": None, "derived_ceiling": False}
+        return self.model_copy(update=update)
 
 
 DEFAULT_PINS: dict[ModelRole, RolePin] = {

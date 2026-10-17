@@ -74,17 +74,12 @@ class CaptureMiddleware(BaseMiddleware):
                 await index_sticker(session, event, me.id)
         transcriber: Transcriber | None = data.get("transcriber")
         if transcriber is not None and not self.edits:
-            # A replied-to voice is transcribed on demand (no-op if it already has a transcript);
-            # audio files only as part of an invocation.
+            # A replied-to recording is transcribed on demand (no-op if it already has a transcript).
             ambient = trigger is None and chat.type != "private"
             thread = event.message_thread_id if event.is_topic_message else None
             for message, capped in ((event if stored else None, ambient), (replied, False)):
-                if message is not None and (
-                    message.voice or message.video_note or (message.audio and not capped)
-                ):
-                    await transcriber.transcribe_message(
-                        event.chat.id, message.message_id, thread_id=thread, ambient=capped
-                    )
+                if message is not None:
+                    await transcriber.transcribe(message, thread_id=thread, ambient=capped)
         data["trigger"] = trigger
         data["chat_row"] = chat
         return await handler(event, data)

@@ -33,8 +33,8 @@ class SlowTranscriber(Transcriber):
 
     async def _transcribe(self, chat_id: int, message_id: int, *, ambient: bool) -> str | None:
         self.calls += 1
-        if (chat_id, message_id) in self.heard:  # already has a transcript: a no-op, like the real query
-            return None
+        if (chat_id, message_id) in self.heard:  # already has a transcript: reported, never paid twice
+            return "hi"
         await asyncio.sleep(self.seconds)
         self.heard.append((chat_id, message_id))
         return "hi"
@@ -76,10 +76,11 @@ async def test_waiting_is_bounded(settings: Settings) -> None:
 
 async def test_the_same_message_is_transcribed_once(settings: Settings) -> None:
     transcriber = SlowTranscriber(settings, 0.1)
-    await asyncio.gather(  # its own capture and an invocation replying to it, at the same time
+    results = await asyncio.gather(  # its own capture and an invocation replying to it, at the same time
         transcriber.transcribe_message(-1, 10, ambient=True), transcriber.transcribe_message(-1, 10)
     )
-    assert transcriber.heard == [(-1, 10)] and transcriber.calls == 2  # the second found it done
+    assert transcriber.heard == [(-1, 10)] and transcriber.calls == 2  # the second found it done…
+    assert results == ["hi", "hi"]  # …and reports the transcript it waited for
     assert transcriber._running == {}  # nothing left behind
 
 

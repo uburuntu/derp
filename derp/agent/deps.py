@@ -50,12 +50,13 @@ class RunDeps:
     lookups: Lookups
     workers: WorkerPool  # local media effects
     history_start: int = 0  # index of the run's first message in the agent's history
+    # Messages whose images the run looks at (``media.run_media``): what edits and effects start from.
+    seen: tuple[int, ...] = ()
     delivered: list[tuple[int, str]] = field(
         default_factory=list[tuple[int, str]]
     )  # (message id, kind) so far
     kept: dict[str, Kept] = field(default_factory=dict[str, "Kept"])  # results kept for the next tool, by ref
     reacted: set[int] = field(default_factory=set[int])  # messages Derp reacted to with the react tool
-    search_withheld: bool = False  # the hold can't cover a web search in the coming request
 
     @property
     def funding(self) -> Funding:

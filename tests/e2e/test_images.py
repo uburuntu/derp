@@ -229,6 +229,28 @@ async def test_a_profile_photo_gets_an_ai_edit_in_one_call(
     assert conversation.api.calls_of("setChatPhoto") == []  # the person sets it themselves
 
 
+async def test_a_photo_then_make_it_a_cat_edits_that_photo(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 650)
+    club = Room(-1505, title="Club")
+    conversation.meet(JO, club)
+    dog = jpeg("brown")
+    conversation.api.register_file("dog", dog)
+    posted = await conversation.send(JO, club, photo=[{"file_id": "dog", "file_unique_id": "u-dog",
+                                                       "width": 64, "height": 64}])  # fmt: skip
+    await conversation.settle(posted)
+    # The edit starts from the photo the run is about (sent just before), not a blank canvas.
+    model.reply(tool_call("generate_image", prompt="make the dog a cat", edit=True), ".", "a brown dog")
+    asked = await conversation.send(JO, club, "derp make it a cat")
+    await conversation.expect_reply(asked, method="sendPhoto")
+    await conversation.settle(asked)
+    assert [data for data, _ in images.references[0]] == [dog]
+
+
 async def test_a_member_is_drawn_by_name(conversation: Conversation, model: ScriptedModel) -> None:
     images = FakeImages()
     conversation.overrides["api"] = images

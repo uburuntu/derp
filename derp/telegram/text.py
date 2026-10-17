@@ -4,7 +4,9 @@ Plain messages are limited in UTF-16 code units (4096); rich messages allow
 32768 characters. Splits prefer paragraph, then line, then word boundaries.
 Rich Markdown follows GitHub Flavored Markdown, where a single newline inside a
 paragraph is a soft break rendered as a space, and Telegram reads "#" at the start
-of a block as a heading; ``as_written`` keeps both as written.
+of a block as a heading; ``as_written`` keeps both as written. Emoji are
+compared plain (``plain_emoji``): Telegram's reaction list has no presentation
+selectors, sticker tags often do, and models write either.
 """
 
 import re
@@ -21,6 +23,13 @@ _FENCE_LINE = re.compile(r" {0,3}(```|~~~)")
 _HASH_START = re.compile(r"^((?:\s*(?:[-*+]|\d{1,9}[.)])\s+|\s*>\s*)*\s*)#(?=[^#\s])")
 
 _PUNCTUATION = re.compile(r"([!-/:-@\[-`{-~])")
+# The emoji presentation selector (U+FE0F) and the skin-tone modifiers: spellings of the same emoji.
+_EMOJI_VARIANTS = str.maketrans("", "", "\ufe0f" + "".join(map(chr, range(0x1F3FB, 0x1F400))))
+
+
+def plain_emoji(emoji: str) -> str:
+    """One spelling per emoji, as Telegram's reaction list writes them: "❤️" and "👍🏽" become "❤" and "👍"."""
+    return emoji.strip().translate(_EMOJI_VARIANTS)
 
 
 def literal(text: str) -> str:

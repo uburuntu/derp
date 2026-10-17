@@ -28,7 +28,6 @@ from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
     ModelMessage,
-    ModelResponse,
     PartDeltaEvent,
     PartStartEvent,
     TextPart,
@@ -47,26 +46,26 @@ from derp.agent.images import ImageJob, make_image
 from derp.agent.lanes import Lanes
 from derp.agent.media import as_content, inspect, note_images, run_media
 from derp.agent.models import AgentRun, Approval
-from derp.agent.outputs import absorb_kept, flush
+from derp.agent.outputs import absorb_kept, flush, hold_left
 from derp.agent.persona import PERSONA, situation
 from derp.agent.prefix import prefixes
 from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
-from derp.agent.runs import finish_run, price_unreported, record_output, start_run, totals
-from derp.agent.tools import CAPABILITIES, DETACHED, FAMILIES
+from derp.agent.runs import finish_run, price_unreported, record_output, start_run
+from derp.agent.tools import CAPABILITIES, FAMILIES
+from derp.agent.tools import web as web_tools
 from derp.agent.tools.memory import family as memory_family
-from derp.agent.toolsets import toolsets_for
+from derp.agent.toolsets import offered, toolsets_for
 from derp.billing.menu import buy_button
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.history.capture import record_outgoing
+from derp.history.capture import record_outgoing, unstored_view
 from derp.history.digests import latest_before
-from derp.history.links import link_messages
+from derp.history.links import message_links
 from derp.history.models import Chat, ForumTopic, Message, User
 from derp.history.render import (
     chat_time,
     describe_time,
     estimate_tokens,
-    external_reply,
     load_views,
     neutralize,
     one_line,
@@ -118,8 +117,7 @@ class Detached:
 WINDOW_STARTS_KEPT = 10_000  # topics remembered; forgetting one only costs a cache miss
 DETACHED_BRIEF = (
     "You were summoned {where}: you can't see that chat, its history or its members, and your only output is "
-    "this one text answer. Tools here: {web}the Python sandbox, lookups (weather, exchange rates, time zones, "
-    "Wikipedia and the like) and about_derp; nothing that reads or posts to a chat, no images. "
+    "this one text answer. Tools here: {tools}; nothing that reads or posts to a chat, no images. "
     "Answer the request on its own, briefly. The asker is “{asker}”. Now: {now}."
 )
 
@@ -257,7 +255,7 @@ class Runtime:
                     self.window_starts.clear()
                 if window.oldest_message_id is not None:
                     self.window_starts[topic_key] = window.oldest_message_id
-                prompt = await current_prompt(session, message, window, tz)
+                prompt = await current_prompt(session, message, window, tz, self.bot.id)
                 reply_to = message.reply_to_message.message_id if message.reply_to_message else None
                 images = await run_media(session, chat.id, message.message_id, reply_to)
                 topic = (
@@ -296,6 +294,7 @@ class Runtime:
                 pins=self.pins,
                 lookups=self.lookups,
                 workers=self.workers,
+                seen=tuple(dict.fromkeys(row.message_id for row in images.rows)),
             )
             brief = situation(
                 chat=chat,
@@ -304,10 +303,11 @@ class Runtime:
                 tz=tz,
                 topic=topic.name if topic else None,
                 rules=chat.rules,
-                notes=notes_block(memory, asker.full_name),
+                notes=notes_block(
+                    memory, asker.full_name, chat.notes_mode if funding in memory_family.tiers else None
+                ),
                 earlier=earlier,
                 blind=bool(inspected) and not pin.vision,
-                notes_policy=funding in memory_family.tiers,
             )
             request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
             caps = self.settings.run_caps
@@ -325,7 +325,7 @@ class Runtime:
             history = repair_messages(window.messages)
             deps.history_start = len(history)
             new_messages: list[ModelMessage] = []
-            stream = _Stream(progress, token, self.settings, funds, start=len(history))
+            stream = _Stream(progress, token)
             guard = Guard(
                 run_id=run.id,
                 pin=pin,
@@ -333,7 +333,6 @@ class Runtime:
                 tool_calls=caps.tool_calls,
                 requests=caps.tool_calls + 1,
                 deadline=asyncio.get_running_loop().time() + caps.timeout_seconds * WRAP_UP_AT,
-                near_budget=stream.near_budget,
             )
             await progress.start()
             # Kept locally: the draft id is cleared if drafts fail mid-run.
@@ -358,7 +357,7 @@ class Runtime:
                                     request_limit=caps.tool_calls + 1 + BACKSTOP,
                                     tool_calls_limit=caps.tool_calls + BACKSTOP,
                                 ),
-                                toolsets=toolsets_for(deps, FAMILIES),
+                                toolsets=toolsets_for(deps, offered(deps, FAMILIES)),
                                 capabilities=[guard],
                                 event_stream_handler=stream.handle,
                                 cancellation_token=token,
@@ -395,8 +394,8 @@ class Runtime:
                 spoke = True
                 try:
                     async with self.db.session() as session:  # "#id" references open the message
-                        linked = await link_messages(session, chat, output)
-                    sent = await send_markdown(self.bot, target, linked, trusted=False)
+                        links = await message_links(session, chat, output)
+                    sent = await send_markdown(self.bot, target, output, trusted=False, links=links)
                 except PartialDeliveryError as exc:  # what Telegram accepted still counts
                     error, sent = exc, exc.sent
                 except TelegramAPIError as exc:
@@ -503,9 +502,15 @@ class Runtime:
                 gateway=self.gateway, pin=pin, model=model, model_factory=self.model_factory, api=self.api, pins=self.pins, lookups=self.lookups,
                 workers=self.workers,
             )  # fmt: skip
+            families = offered(deps, FAMILIES, detached=True)
+            tools = [  # the web and the sandbox are run-wide capabilities; the rest are the families offered
+                *(["web search and page fetch"] if funds.funding in web_tools.TIERS else []),
+                "the Python sandbox",
+                *(family.detached for family in families if family.detached),
+            ]
             brief = DETACHED_BRIEF.format(
                 where=where,
-                web="" if funds.funding is Funding.FREE else "web search and page fetch, ",
+                tools=", ".join(tools[:-1]) + " and " + tools[-1],
                 asker=one_line(asker.full_name),
                 now=describe_time(datetime.now(UTC), tz),
             )
@@ -518,7 +523,6 @@ class Runtime:
                 tool_calls=caps.tool_calls,
                 requests=caps.tool_calls + 1,
                 deadline=asyncio.get_running_loop().time() + caps.timeout_seconds * WRAP_UP_AT,
-                near_budget=lambda messages: _near_hold(self.settings, funds, messages),
             )
             text, status, error_type = "", "completed", None
             with capture_run_messages() as captured:
@@ -537,7 +541,7 @@ class Runtime:
                                 request_limit=caps.tool_calls + 1 + BACKSTOP,
                                 tool_calls_limit=caps.tool_calls + BACKSTOP,
                             ),
-                            toolsets=toolsets_for(deps, DETACHED),
+                            toolsets=toolsets_for(deps, families),
                             capabilities=[guard],
                         )
                     text, messages = result.output, result.new_messages()
@@ -681,49 +685,18 @@ class Runtime:
             log.info("notice not delivered")
 
 
-def _near_hold(settings: Settings, funds: Funds, run: list[ModelMessage]) -> bool:
-    """One more request costing what the latest one did would reach the run's hold."""
-    latest = next((m for m in reversed(run) if isinstance(m, ModelResponse)), None)
-    if funds.reservation_id is None or latest is None:
-        return False
-    spent = totals(run).cost_usd + totals([latest]).cost_usd
-    return settings.credits_for_usd(float(spent)) >= funds.credits
-
-
 class _Stream:
     """Feeds streamed events to progress, remembers the latest answer text and enforces the money cap.
 
-    Before each tool call the run's responses so far are priced; once they reach the credits held
-    for the run, the run is stopped like a user stop (whatever was written is posted).
+    Before each tool call the run's spending is checked against its hold (``outputs.hold_left``); once it
+    is used up, the run is stopped like a user stop (whatever was written is posted).
     """
 
-    def __init__(
-        self, progress: Progress, token: CancellationToken, settings: Settings, funds: Funds, *, start: int
-    ) -> None:
+    def __init__(self, progress: Progress, token: CancellationToken) -> None:
         self.progress = progress
         self.token = token
-        self.settings = settings
-        self.funds = funds
-        self.start = start  # index of the run's first message in the context's history
         self.partial = ""
         self.capped = False
-
-    def over_budget(self, messages: list[ModelMessage]) -> bool:
-        if self.funds.reservation_id is None:
-            return False
-        spent = totals(messages[self.start :]).cost_usd
-        return self.settings.credits_for_usd(float(spent)) >= self.funds.credits
-
-    def near_budget(self, messages: list[ModelMessage]) -> bool:
-        """One more request costing what the latest one did would reach the hold."""
-        if self.funds.reservation_id is None:
-            return False
-        run = messages[self.start :]
-        latest = next((m for m in reversed(run) if isinstance(m, ModelResponse)), None)
-        if latest is None:
-            return False
-        spent = totals(run).cost_usd + totals([latest]).cost_usd
-        return self.settings.credits_for_usd(float(spent)) >= self.funds.credits
 
     async def handle(self, ctx: RunContext[RunDeps], events: AsyncIterable[AgentStreamEvent]) -> None:
         async for event in events:
@@ -737,36 +710,30 @@ class _Stream:
                 self.partial += event.delta.content_delta
                 await self.progress.text(self.partial)
             elif isinstance(event, FunctionToolCallEvent):
-                if self.over_budget(ctx.messages):
+                if (left := await hold_left(ctx)) is not None and left <= 0:
                     log.info("run %s stopped at its money cap", ctx.deps.run_id)
                     self.capped = True
                     self.token.cancel()
                 await self.progress.stage(stage_for_tool(event.part.tool_name))
 
 
-async def current_prompt(session: AsyncSession, message: TgMessage, window: Window, tz: tzinfo) -> str:
-    """The current message, plus the message it replies to when that isn't already in the window."""
+async def current_prompt(
+    session: AsyncSession, message: TgMessage, window: Window, tz: tzinfo, bot_id: int
+) -> str:
+    """The current message, plus the message it replies to when that isn't already in the window.
+
+    Both render like any transcript line: from their stored rows, else (an ephemeral command, a reply
+    Derp never stored) from the Telegram message itself. A forgotten message stays out.
+    """
     row = await session.get(Message, (message.chat.id, message.message_id)) if message.message_id else None
-    asker = message.from_user.full_name if message.from_user else "someone"
-    if row is not None:
-        line = render_line((await load_views(session, [row]))[0], tz)
-    else:
-        external = message.external_reply
-        origin = (
-            external_reply(external.model_dump(mode="json", exclude_none=True), message.chat.id)
-            if external
-            else ""
-        )
-        quote = f" «{message.quote.text[:200]}»" if message.quote else ""
-        line = neutralize(f"{one_line(asker)}{origin}{quote}: {message.text or message.caption or ''}")
+    view = (await load_views(session, [row]))[0] if row is not None else unstored_view(message, bot_id)
     parts: list[str] = []
     reply = message.reply_to_message
     if reply is not None and (reply.message_id not in window.ids):
         replied = await session.get(Message, (message.chat.id, reply.message_id))
-        if replied is not None and replied.deleted_at is None:
+        if replied is None:
+            parts.append("Replying to: " + render_line(unstored_view(reply, bot_id), tz))
+        elif replied.deleted_at is None:
             parts.append("Replying to: " + render_line((await load_views(session, [replied]))[0], tz))
-        elif reply.text or reply.caption:
-            author = reply.from_user.full_name if reply.from_user else "someone"
-            parts.append(neutralize(f"Replying to {one_line(author)}: {reply.text or reply.caption}"))
-    parts.append(f"<current_message>\n{line}\n</current_message>")
+    parts.append(f"<current_message>\n{render_line(view, tz)}\n</current_message>")
     return "\n".join(parts)

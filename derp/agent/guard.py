@@ -2,17 +2,20 @@
 
 Wrap-up: once a run reaches its soft caps — the tool calls it may make, its
 model requests, three quarters of its wall time, or a money hold that one more
-request like the last would reach — every following request sets
-``tool_choice='none'`` with a short note to answer now. Tool schemas stay in
-the request, so the cached prompt prefix still matches; a tool called anyway
-is not run (the model is told to answer). The hard limits stay as a backstop.
+request like the last would reach (``outputs.hold_left``) — every following
+request sets ``tool_choice='none'`` with a short note to answer now. Tool
+schemas stay in the request, so the cached prompt prefix still matches; a tool
+called anyway is not run (the model is told to answer). A request the hold
+leaves no web search for (``tools.web.search_budget``) is told so. The hard
+limits stay as a backstop.
 
 Recovery, once per run: a reply with nothing to act on (empty, only thinking,
 or cut off by the token limit before any text or complete tool call) or a
 request the provider refused to start (rate limit, server error, lost
 connection) is retried on the pin's fallback order led by its first fallback,
-which then serves the rest of the run; after a token-limit cut the retry gets
-twice the output tokens. Retrying continues the run: tools that already ran are
+which then serves the rest of the run (routed as that pin: a price ceiling
+derived from the primary's price doesn't follow); after a token-limit cut the
+retry gets twice the output tokens. Retrying continues the run: tools that already ran are
 in its history and are not repeated. Failures after streaming began are not
 retried (part of the answer may already be on screen).
 """
@@ -41,6 +44,9 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
 from derp.agent.deps import RunDeps
+from derp.agent.outputs import hold_left
+from derp.agent.tools.web import search_budget
+from derp.inference.openrouter import provider_config
 from derp.inference.roles import RolePin
 
 log = logging.getLogger("derp.agent")
@@ -87,7 +93,6 @@ class Guard(AbstractCapability[RunDeps]):
     tool_calls: int  # soft cap on tool calls
     requests: int  # soft cap on model requests
     deadline: float  # event-loop time after which the run wraps up
-    near_budget: Callable[[list[ModelMessage]], bool]  # one more request would reach the money hold
     wrapping: bool = False
     recovered: bool = False
     longer: bool = False  # the recovery follows a token-limit cut
@@ -96,12 +101,12 @@ class Guard(AbstractCapability[RunDeps]):
     def model(self, primary: Model) -> Model:
         return _Recovering(primary, self)
 
-    def check(self, ctx: RunContext[RunDeps]) -> bool:
+    async def check(self, ctx: RunContext[RunDeps]) -> bool:
         if not self.wrapping and (
             ctx.usage.tool_calls >= self.tool_calls
             or ctx.usage.requests >= self.requests
             or asyncio.get_running_loop().time() >= self.deadline
-            or self.near_budget(ctx.messages)
+            or ((left := await hold_left(ctx, next_turn=True)) is not None and left <= 0)
         ):
             self.wrapping = True
             log.info("run %s wraps up", self.run_id)
@@ -123,7 +128,9 @@ class Guard(AbstractCapability[RunDeps]):
             return settings
         updated: dict[str, Any] = dict(settings or {})
         if self.fallback is not None:
-            updated["openrouter_models"] = list(self.pin.rotated().fallbacks)
+            rotated = self.pin.rotated()
+            updated["openrouter_models"] = list(rotated.fallbacks)
+            updated["openrouter_provider"] = provider_config(rotated)
         if self.longer and isinstance(tokens := updated.get("max_tokens"), int):
             updated["max_tokens"] = tokens * 2
         return cast(ModelSettings, updated)
@@ -131,7 +138,7 @@ class Guard(AbstractCapability[RunDeps]):
     async def prepare_tools(
         self, ctx: RunContext[RunDeps], tool_defs: list[ToolDefinition]
     ) -> list[ToolDefinition]:
-        self.check(ctx)  # decided before the request is built, so the whole step agrees
+        await self.check(ctx)  # decided before the request is built, so the whole step agrees
         return tool_defs
 
     async def before_model_request(
@@ -139,10 +146,10 @@ class Guard(AbstractCapability[RunDeps]):
     ) -> ModelRequestContext:
         notes: list[str] = []
         settings: dict[str, Any] = dict(request_context.model_settings or {})
-        if self.check(ctx):
+        if await self.check(ctx):
             settings["tool_choice"] = "none"
             notes.append(WRAP_UP_NOTE)
-        elif ctx.deps.search_withheld:  # web search was left out of this request (see tools/web.py)
+        elif await search_budget(ctx) == 0:  # web search is left out of this request (see tools/web.py)
             notes.append(SEARCH_NOTE)
         if not notes:
             return request_context

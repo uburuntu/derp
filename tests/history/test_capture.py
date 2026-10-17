@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from aiogram.types import Message as TgMessage
@@ -12,9 +13,11 @@ from derp.history.capture import (
     payload_for,
     record_outgoing,
     store_message,
+    unstored_view,
     upsert_chat,
 )
 from derp.history.models import Chat, ForumTopic, Message, MessageMedia, User
+from derp.history.render import render_line
 from derp.history.retention import forget_message
 
 BOT_ID = 777000111
@@ -26,6 +29,21 @@ ANN = {"id": 1, "is_bot": False, "first_name": "Ann", "language_code": "ru"}
 def tg(**fields: Any) -> TgMessage:
     data: dict[str, Any] = {"message_id": 10, "date": 1_700_000_000, "chat": GROUP, "from": ANN} | fields
     return TgMessage.model_validate(data)
+
+
+def test_a_message_never_stored_renders_like_a_stored_one() -> None:
+    bob = {"id": 2, "is_bot": False, "first_name": "Bob", "last_name": "Lee", "username": "bob"}
+    ephemeral = tg(
+        message_id=0,
+        **{"from": bob},
+        caption="what is this",
+        photo=[{"file_id": "p", "file_unique_id": "u-p", "width": 9, "height": 9}],
+        forward_origin={"type": "hidden_user", "sender_user_name": "Ghost", "date": 1_700_000_000},
+        quote={"text": "x" * 300, "position": 0},
+    )
+    line = render_line(unstored_view(ephemeral, BOT_ID), ZoneInfo("UTC"))
+    # Same header as any line (no #id: there is nothing to cite), the quote clipped, the media shown.
+    assert line == f"[22:13] Bob Lee @bob (fwd from Ghost) «{'x' * 199}…»: what is this [photo]"
 
 
 def test_classify_and_payloads() -> None:

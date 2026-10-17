@@ -9,48 +9,21 @@ from typing import Literal
 
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
-from sqlalchemy import select
 
 from derp.agent.approvals import ask, needs_approval
 from derp.agent.deps import RunDeps
 from derp.agent.images import ImageJob, draw, filename
-from derp.agent.outputs import Made, Pending, Refused, check_budget, deliver, emit, pending_cost
-from derp.agent.runs import totals
+from derp.agent.outputs import Made, Pending, Refused, check_budget, deliver, emit, hold_left
 from derp.agent.tools.sources import avatar_source, chat_photo_source, kept_source, photo_owner
 from derp.agent.toolsets import Family
-from derp.history.models import Message
 from derp.inference.api import OpenRouterError
 from derp.inference.roles import ModelRole
-from derp.money.funding import PAID_SOURCES, Funding, run_cost, run_fees
+from derp.money.funding import PAID_SOURCES, Funding
 from derp.money.wallets import balance
 from derp.telegram.media import sniff_image
 
 toolset = FunctionToolset[RunDeps]()
 IMAGES = ("photo", "document", "sticker")  # kept results an edit can start from
-
-
-async def spent_credits(ctx: RunContext[RunDeps]) -> int:
-    """Credits the run has used so far: side calls in the ledger, its own model turns and its fees."""
-    deps = ctx.deps
-    async with deps.db.session() as session:
-        side = await run_cost(session, deps.run_id)
-        fees = await run_fees(session, deps.run_id)
-    turns = totals(ctx.messages[deps.history_start :]).cost_usd
-    kept_usd, kept_fees = pending_cost(deps)  # carried by kept results, ledgered once they are posted
-    paid_fees = kept_fees * deps.settings.effect_credits if deps.funding is Funding.PAID else 0
-    return deps.settings.credits_for_usd(float(side + turns + kept_usd)) + fees + paid_fees
-
-
-async def _references(deps: RunDeps, edit_message_id: int | None) -> tuple[int, ...]:
-    if edit_message_id is not None:
-        return (edit_message_id,)
-    async with deps.db.session() as session:
-        replied = await session.scalar(
-            select(Message.reply_to_message_id).where(
-                Message.chat_id == deps.chat.id, Message.message_id == deps.trigger_message_id
-            )
-        )
-    return (deps.trigger_message_id, *([replied] if replied else []))
 
 
 @toolset.tool(sequential=True)  # the budget check and the send must not interleave
@@ -73,7 +46,7 @@ async def generate_image(
 
     Args:
         prompt: What to draw, or what to change, in detail (English works best).
-        edit: Edit the image in the current message or the message it replies to.
+        edit: Edit the image this message is about: sent with it, replied to, or the asker's photo just before.
         edit_message_id: Edit the image of this stored message instead (e.g. one you just sent).
         profile_photo: Edit a profile photo: edit_message_id's sender, else the person replied to, else the asker.
         chat_photo: Edit this chat's photo.
@@ -103,7 +76,7 @@ async def generate_image(
     except Refused as refused:
         return str(refused)
     edits_message = (edit or edit_message_id is not None) and avatar_of is None
-    references = await _references(deps, edit_message_id) if edits_message else ()
+    references = ((edit_message_id,) if edit_message_id is not None else deps.seen) if edits_message else ()
     job = ImageJob(prompt[:2000], aspect_ratio, references, avatar_of=avatar_of, chat_photo=chat_photo)
     async with deps.db.session() as session:
         rest = await balance(session, deps.funds.wallet_id, sources=PAID_SOURCES)
@@ -123,7 +96,7 @@ async def generate_image(
         except Refused as refused:
             return str(refused)
         return 'They were asked to confirm the price with a button; the image comes after they press it. End your turn with just ".".'
-    if price > deps.funds.credits - await spent_credits(ctx):
+    if (left := await hold_left(ctx)) is not None and price > left:
         return f"Not enough Derpcoins left in this answer for an image (needs about {price}). Tell them /buy gets more."
     extra = [(source.data, sniff_image(source.data) or "image/png")] if source is not None else []
     try:

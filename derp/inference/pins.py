@@ -23,11 +23,15 @@ MAX_PRICE_HEADROOM = 2
 def with_ceiling(pin: RolePin, row: ModelPin) -> RolePin:
     """The pin with a ``max_price`` from its price snapshot, unless it sets its own or has no snapshot.
 
-    The ceiling covers the whole request, so OpenRouter skips a fallback priced above it.
+    The ceiling covers the whole request, so OpenRouter skips a fallback priced above it; the retry a
+    fallback leads (``RolePin.rotated``) goes without it.
     """
     if row.price_prompt is None or pin.max_price_prompt is not None or pin.max_price_completion is not None:
         return pin
-    update: dict[str, float] = {"max_price_prompt": float(row.price_prompt) * MAX_PRICE_HEADROOM}
+    update: dict[str, object] = {
+        "max_price_prompt": float(row.price_prompt) * MAX_PRICE_HEADROOM,
+        "derived_ceiling": True,
+    }
     if row.price_completion is not None:
         update["max_price_completion"] = float(row.price_completion) * MAX_PRICE_HEADROOM
     return pin.model_copy(update=update)

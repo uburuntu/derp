@@ -41,7 +41,7 @@ async def test_a_local_time_waits_for_the_zone_then_fires_at_local_nine(
     )
     await conversation.settle(await conversation.send(LEE, text="I'm in Moscow"))
     assert "Europe/Moscow" in result_of(model, "change_setting")
-    assert result_of(model, "schedule").startswith("Scheduled #")
+    assert result_of(model, "schedule").startswith("Scheduled job ")  # never "#": that cites a message
     async with conversation.db.session() as session:
         chat = await session.get(Chat, LEE.id)
         job = await session.scalar(select(Job))

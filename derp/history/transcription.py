@@ -3,10 +3,12 @@
 Runs inline during capture, before handlers, so an invocation by voice is
 answered from its transcript. Creator-funded and ledgered as ``kind='stt'``;
 nothing is posted. Video notes go through ffmpeg (audio only) first. Long
-recordings, failed downloads and provider errors leave the message without a
-transcript, marked with the reason (``transcript_model``) so the transcript line
-can say it — they never fail capture. Ambient voice (not part of an invocation)
-stops being transcribed once the day's creator-paid STT reaches
+recordings, failed downloads and provider errors leave the message with an
+empty transcript (like an image whose note came back empty) and the reason in
+``transcript_model``, so the transcript line can say it — they never fail
+capture; a failed one is tried again when an invocation replies to it. Which
+messages get transcribed is decided here (``transcribe``). Ambient voice (not
+part of an invocation) stops being transcribed once the day's creator-paid STT reaches
 ``ambient_stt_daily_usd``; owners get one ping per UTC day when that happens.
 Audio files (forwarded memos, recordings) are transcribed only as part of an
 invocation, never ambient; anything but OGG goes through ffmpeg first.
@@ -24,11 +26,13 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 
+from aiogram.types import Message as TgMessage
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.config import Settings
 from derp.db.engine import Database
+from derp.history.capture import content_type
 from derp.history.models import TOO_LONG, UNHEARD, Message, MessageMedia
 from derp.inference.api import OpenRouterAPI, OpenRouterError, Transcript
 from derp.inference.ledger import record_usage, simple_usage
@@ -128,12 +132,23 @@ class Transcriber:
         _, pending = await asyncio.wait(waiting, timeout=limit)
         log.info("waited for %d transcription(s), %d still running", len(waiting), len(pending))
 
+    async def transcribe(
+        self, message: TgMessage, *, thread_id: int | None = None, ambient: bool = False
+    ) -> str | None:
+        """The transcript of a stored voice message, video note or (not ambient) audio file; others are skipped."""
+        if content_type(message) not in (SPOKEN if ambient else AUDIBLE):
+            return None
+        return await self.transcribe_message(
+            message.chat.id, message.message_id, thread_id=thread_id, ambient=ambient
+        )
+
     async def transcribe_message(
         self, chat_id: int, message_id: int, *, thread_id: int | None = None, ambient: bool = False
     ) -> str | None:
-        """Transcribe a stored voice message, video note or (not ambient) audio file.
+        """The message's transcript, transcribing it first if it has none (None: there is none to have).
 
-        ``ambient`` voice only while under the daily cap. Runs in this chat topic may ``settle`` on it meanwhile.
+        ``ambient`` voice only while under the daily cap. Runs in this chat topic may ``settle`` on it meanwhile;
+        a second request while it runs waits for it and reports its transcript.
         """
         key = (chat_id, message_id)
         if (running := self._running.get(key)) is not None:  # already under way: wait for it, never pay twice
@@ -155,7 +170,6 @@ class Transcriber:
                     MessageMedia.chat_id == chat_id,
                     MessageMedia.message_id == message_id,
                     MessageMedia.type.in_(SPOKEN if ambient else AUDIBLE),
-                    MessageMedia.transcript.is_(None),
                 )
             )
             user_id = await session.scalar(
@@ -163,6 +177,10 @@ class Transcriber:
             )
         if media is None:
             return None
+        if (
+            media.transcript is not None and media.transcript_model != UNHEARD
+        ):  # settled: heard, or never will be
+            return media.transcript or None
         if (media.duration or 0) > self.max_seconds:
             await self._mark(media, TOO_LONG)
             return None
@@ -200,13 +218,13 @@ class Transcriber:
         return transcript.text
 
     async def _mark(self, media: MessageMedia, reason: str) -> None:
-        """Say why a recording has no transcript, so the transcript line can tell the model."""
-        if media.transcript_model == reason:
+        """An empty transcript and why, so the transcript line can tell the model."""
+        if media.transcript == "" and media.transcript_model == reason:
             return
         async with self.db.transaction() as session:
             row = await session.get(MessageMedia, (media.chat_id, media.message_id, media.idx))
-            if row is not None and row.transcript is None:
-                row.transcript_model = reason
+            if row is not None and not row.transcript:
+                row.transcript, row.transcript_model = "", reason
 
     async def _speech_to_text(self, audio: bytes, seconds: int) -> Transcript:
         pin = await self.pins.get(ModelRole.STT)

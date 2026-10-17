@@ -94,7 +94,9 @@ async def schedule(
         job_id = job.id
     again = f", repeating {repeat}" if repeat else ""
     paid = " Each run is paid like a normal answer from their Derpcoins." if answer_it else ""
-    return f"Scheduled #{job_id} for {show_time(when, deps.tz)}{again}.{paid} Show the time exactly as given."
+    return (
+        f"Scheduled job {job_id} for {show_time(when, deps.tz)}{again}.{paid} Show the time exactly as given."
+    )
 
 
 @toolset.tool
@@ -111,7 +113,7 @@ async def list_jobs(ctx: RunContext[RunDeps]) -> str:
         repeat = f", {job.repeat}" if job.repeat else ""
         kind = "prompt" if job.kind == "prompt" else "reminder"
         lines.append(
-            f"#{job.id} {show_time(job.next_at, deps.tz)}{repeat}{state} — {kind} by {one_line(name or 'someone')}: "
+            f"job {job.id} {show_time(job.next_at, deps.tz)}{repeat}{state} — {kind} by {one_line(name or 'someone')}: "
             f"{one_line(job.text, 120)}"
         )
     return "\n".join(lines)
@@ -138,10 +140,10 @@ async def cancel_job(ctx: RunContext[RunDeps], job_id: int) -> str:
     """Cancel a scheduled job of this chat (your own, or any if you're an admin).
 
     Args:
-        job_id: The #id from list_jobs.
+        job_id: The job number from list_jobs.
     """
     outcome = await _act(ctx.deps, job_id, "cancel")
-    return outcome if isinstance(outcome, str) else f"Cancelled #{job_id}."
+    return outcome if isinstance(outcome, str) else f"Cancelled job {job_id}."
 
 
 @toolset.tool
@@ -149,12 +151,12 @@ async def resume_job(ctx: RunContext[RunDeps], job_id: int) -> str:
     """Resume a paused scheduled job of this chat (its creator or an admin).
 
     Args:
-        job_id: The #id from list_jobs.
+        job_id: The job number from list_jobs.
     """
     outcome = await _act(ctx.deps, job_id, "resume")
     if isinstance(outcome, str):
         return outcome
-    return f"Resumed #{job_id}; next run {show_time(outcome.next_at, ctx.deps.tz)}."
+    return f"Resumed job {job_id}; next run {show_time(outcome.next_at, ctx.deps.tz)}."
 
 
 family = Family("scheduler", toolset, deferred=("list_jobs", "cancel_job", "resume_job"))

@@ -14,8 +14,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   rates, time zones, Wikipedia and the like), calculate, answer about Derp itself and, beyond free models, search
   the web; they can't draw, post polls or stickers, or set reminders.
 - It looks at photos, stickers and albums, listens to voice messages and video notes (transcribed), and opens
-  links. A photo someone sent just before calling Derp comes along with the question, and a reply to Derp's
-  answer about a photo still sees that photo. Asked about a video, GIF or video note, it looks at a still frame of it. Media tools also take videos,
+  links. A photo someone sent just before calling Derp comes along with the question ("make it a cat" edits
+  it), and a reply to Derp's answer about a photo still sees that photo. Asked about a video, GIF or video note, it looks at a still frame of it. Media tools also take videos,
   GIFs and audio (memes, reversing, song recognition). Group voice messages nobody asked about are transcribed
   in the background up to a daily limit; past it, a voice message is transcribed when someone calls Derp in
   reply to it. Short audio files (forwarded memos, recordings) are transcribed when someone calls Derp with one

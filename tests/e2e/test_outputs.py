@@ -3,7 +3,7 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from derp.agent.models import RunOutput
-from derp.history.models import Poll
+from derp.history.models import Poll, Sticker
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
@@ -124,6 +124,25 @@ async def test_sticker_from_the_chat_replying_to_a_person(
     assert [
         x for x in texts if not x.startswith("👋")
     ] == []  # the sticker was the answer (only the join notice)
+
+
+async def test_emoji_match_however_they_are_spelled(conversation: Conversation, model: ScriptedModel) -> None:
+    conversation.meet(KATE, PARTY)
+    conversation.meet(LEO, PARTY)
+    sticker = {"file_id": "stk-love", "file_unique_id": "u-stk-love", "type": "regular", "width": 512,
+               "height": 512, "is_animated": False, "is_video": False, "emoji": "❤️", "set_name": "Hearts"}  # fmt: skip
+    posted = await conversation.send(LEO, PARTY, sticker=sticker)
+    await conversation.settle(posted)
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(Sticker.emoji)) == "❤"  # indexed plain, once
+
+    model.reply(tool_call("send_sticker", emoji="❤"), tool_call("react", emoji="❤️"), ".")
+    asked = await conversation.send(KATE, PARTY, "derp show leo some love")
+    await conversation.settle(asked)
+    (call,) = conversation.api.calls_of("sendSticker", after=asked.after)
+    assert call["sticker"] == "stk-love"
+    reactions = [c["reaction"] for c in conversation.api.calls_of("setMessageReaction", after=asked.after)]
+    assert reactions == [[{"type": "emoji", "emoji": "❤"}]]  # Telegram's spelling, not a refusal
 
 
 async def test_group_progress_is_a_chat_action_so_the_react_tool_sets_the_only_reaction(

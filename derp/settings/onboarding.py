@@ -16,6 +16,7 @@ from derp.history.members import on_my_chat_member as record_membership
 from derp.history.models import Chat
 from derp.history.retention import kept_days
 from derp.locales import day_count, resolve, t
+from derp.telegram.bot import FALLBACK_USERNAME
 from derp.telegram.buttons import link, markup
 from derp.telegram.sender import Target, send_markdown
 
@@ -37,7 +38,7 @@ async def notice(
     text = "\n\n".join(
         [
             t(locale, "onboarding.title"),
-            t(locale, "onboarding.summon", username=me.username or "DerpRobot"),
+            t(locale, "onboarding.summon", username=me.username or FALLBACK_USERNAME),
             context,
             t(locale, "onboarding.settings"),
         ]

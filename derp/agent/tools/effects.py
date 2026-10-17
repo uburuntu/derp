@@ -20,8 +20,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
-from derp.agent.outputs import Made, Pending, Sendable, check_budget, emit, pending_cost
-from derp.agent.tools.images import spent_credits
+from derp.agent.outputs import Made, Pending, Sendable, check_budget, emit, hold_left, pending_cost
 from derp.agent.tools.sources import (
     SOUND,
     VISUAL,
@@ -67,7 +66,7 @@ async def _visual(
 async def _heavy_allowed(ctx: RunContext[RunDeps]) -> None:
     deps = ctx.deps
     if deps.funding is Funding.PAID:
-        if deps.settings.effect_credits > deps.funds.credits - await spent_credits(ctx):
+        if (left := await hold_left(ctx)) is not None and deps.settings.effect_credits > left:
             raise Refused(
                 "Not enough Derpcoins left in this answer for that effect. Tell them /buy gets more."
             )
