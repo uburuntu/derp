@@ -289,7 +289,7 @@ async def load_views(session: AsyncSession, rows: Sequence[Message]) -> list[Mes
     names: dict[int, str] = {}
     if user_ids:
         for user in await session.scalars(select(User).where(User.id.in_(user_ids))):
-            names[user.id] = user.full_name
+            names[user.id] = user.label
     chat_titles: dict[int, str] = {}
     if sender_chats:
         sender = aliased(Chat)

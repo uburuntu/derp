@@ -59,6 +59,7 @@ from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.capture import record_outgoing
 from derp.history.digests import latest_before
+from derp.history.links import link_messages
 from derp.history.models import Chat, ForumTopic, Message, User
 from derp.history.render import (
     chat_time,
@@ -392,7 +393,9 @@ class Runtime:
             if error is None and not silent and (output.strip() or not (deps.delivered or stopped)):
                 spoke = True
                 try:
-                    sent = await send_markdown(self.bot, target, output, trusted=False)
+                    async with self.db.session() as session:  # "#id" references open the message
+                        linked = await link_messages(session, chat, output)
+                    sent = await send_markdown(self.bot, target, linked, trusted=False)
                 except PartialDeliveryError as exc:  # what Telegram accepted still counts
                     error, sent = exc, exc.sent
                 except TelegramAPIError as exc:
