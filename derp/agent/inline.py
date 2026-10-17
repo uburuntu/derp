@@ -80,7 +80,12 @@ async def on_chosen(result: ChosenInlineResult, bot: Bot, runtime: Runtime) -> N
     )
     question = f"❓ {sanitize_untrusted(result.query[:QUERY_LIMIT])}\n\n"
     if detached is None or not detached.text:
-        text = question + t(locale, "inline.unfunded" if detached is None else "inline.failed")
+        username = (await bot.me()).username or "DerpRobot"
+        text = question + (
+            t(locale, "inline.unfunded", username=username)
+            if detached is None
+            else t(locale, "inline.failed")
+        )
     else:
         text = question + sanitize_untrusted(detached.text)
     delivered = False
@@ -106,7 +111,12 @@ async def on_guest(message: Message, bot: Bot, runtime: Runtime, db: Database) -
         where="as a guest into a chat Derp isn't a member of",
     )
     if detached is None or not detached.text:
-        text = t(locale, "inline.unfunded" if detached is None else "inline.failed")
+        username = (await bot.me()).username or "DerpRobot"
+        text = (
+            t(locale, "inline.unfunded", username=username)
+            if detached is None
+            else t(locale, "inline.failed")
+        )
     else:
         text = sanitize_untrusted(detached.text)
     reply = InlineQueryResultArticle(

@@ -46,14 +46,14 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Answers cost Derpcoins: what the AI providers actually charged plus a margin, rounded up. If nothing reached
   the chat, nothing is charged. Reply /info to any answer to see its model, tokens, cost and who paid.
 - Free daily Derpcoins: everyone gets an allowance each UTC day on a cheaper model with fewer tools; it doesn't
-  accumulate. Drawing images needs bought Derpcoins.
+  accumulate. Drawing images needs paid Derpcoins (Derp+, bought packs or a group wallet).
 - Packs: bought with Telegram Stars in /buy; bought Derpcoins don't expire.
 - Derp+: a Stars subscription with a monthly allowance that doesn't roll over; nothing else changes. Cancel it in
   Telegram's Stars settings; it runs to the end of the paid period.
 - Group wallet: anyone can buy Derpcoins for a group; they are spent first in that group.
-- Who pays — private chat: the person's bought Derpcoins (Derp+ first, as it expires), then their free daily ones.
-  Group: the group wallet, then the asker's bought Derpcoins (unless they turned off "my Derpcoins in groups" in
-  /settings), then the asker's free daily ones.
+- Who pays — private chat: the person's paid Derpcoins (Derp+ first, as it expires, then bought packs), then
+  their free daily ones. Group: the group wallet, then the asker's paid Derpcoins (unless they turned off "my
+  Derpcoins in groups" in /settings), then the asker's free daily ones.
 - When nobody can pay, Derp offers free models: opt-in (an admin turns them on for a group), and their providers
   may store what they get. Free models get read-only and Telegram tools only.
 - An action that costs more than the approval threshold (or a large share of the payer's balance) shows a

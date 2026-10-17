@@ -304,7 +304,7 @@ class Runtime:
             request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
             caps = self.settings.run_caps
             progress: Progress = (
-                DraftProgress(self.bot, target)
+                DraftProgress(self.bot, target, locale=locale)
                 if chat.type == "private"
                 else ActionProgress(self.bot, target)
             )

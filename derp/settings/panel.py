@@ -121,12 +121,16 @@ async def render(
                 t(locale, "settings.notes_button", mode=t(locale, f"settings.notes_{chat.notes_mode}")),
                 "page",
                 "notes",
-            ),
+            )
+        ]
+    )
+    rows.append(
+        [
             _button(
                 t(locale, "settings.free_button", state=on if free_on else off),
                 "free",
                 "off" if free_on else "on",
-            ),
+            )
         ]
     )
     if chat.rules:

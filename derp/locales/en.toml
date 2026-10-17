@@ -11,12 +11,12 @@ _“what's in this photo?” · “sum up this link” · “translate this, but
 <details><summary>🔎 Search and lookups</summary>
 
 Fresh news from the web, weather, exchange rates, time zones, Wikipedia, slang, papers — and a Python sandbox for exact math.
-_“weather in Tbilisi tomorrow” · “100 USD in euros” · “what does ‘rizz’ mean”_
+_“weather in Tbilisi tomorrow” · “100 USD in euros” · “what does ‘rizz’ mean?”_
 </details>
 
 <details><summary>🎨 Pictures and memes</summary>
 
-Draw or edit pictures, caption memes, reverse a GIF, cut out a background, name that song or anime.
+Draw or edit pictures, caption memes, make stickers, reverse a GIF or video, cut out a background, name that song or anime.
 _“draw a cat in a spacesuit” · “meme this: monday again” · “what song is this?”_
 </details>
 
@@ -49,12 +49,12 @@ private = "Just write: I answer every message here — text, photos, voice, vide
 coins = "Derpcoins: **{free}** of {daily} free left today, **{bought}** bought. More: /buy"
 chat_wallet = "This chat's wallet: **{left}** dc, spent before anyone's own."
 commands = """**Commands**
-/settings — settings
+/settings — chat and personal settings
 /credits — your Derpcoins
 /buy — buy Derpcoins
 /memory — what I remember here
 /info — reply to my answer: model and cost
-/forget — delete what you said here
+/forget — erase what you said from my memory
 /privacy · /terms · /feedback"""
 more_private = "_Everything I can do: /start_"
 more_group = "_Everything I can do: [open me in private](https://t.me/{username}?start=help)_"
@@ -68,17 +68,23 @@ credits = "Your Derpcoins"
 settings = "Settings"
 memory = "What I remember here"
 info = "Reply to my answer: model and cost"
-forget = "Delete what you said"
+forget = "Erase what you said from my memory"
 feedback = "Tell the developer something"
 privacy = "What I store and for how long"
 terms = "Terms"
 paysupport = "Payment problems"
 
 [agent]
-failed = "Something broke on my side. Try again in a moment — you weren't charged."
-timeout = "That took too long and I gave up. Try again, maybe simpler — you weren't charged."
-capped = "That got too expensive for one message, so I stopped. Try a smaller ask — you weren't charged."
+failed = "Something broke on my side — nothing was charged. Try again in a moment."
+timeout = "That took too long, so I stopped — nothing was charged. Try a simpler request."
+capped = "That got too expensive for one message, so I stopped — nothing was charged. Try a smaller request."
 free_busy = "The free models are busy right now. Try again in a bit, or /buy Derpcoins."
+
+[progress]
+thinking = "Thinking…"
+searching = "Looking things up…"
+drawing = "Drawing…"
+working = "Working…"
 
 [money]
 granted = "🎁 Derp's developer sent you **+{credits}** dc."
@@ -94,8 +100,8 @@ dm_first = "I keep balances out of groups. Open a private chat with me, press St
 
 [billing]
 unavailable = "Payments aren't available right now. Try again in a bit."
-menu = "**Derpcoins** pay for my answers once the free daily ones run out.\nYour balance: **{balance}**. Pick a pack:"
-menu_chat = "**Derpcoins for this chat** — everyone here uses them before their own.\nChat balance: **{balance}**. Pick a pack:"
+menu = "**Derpcoins** unlock my best model, image generation and full limits — and never expire.\nYour balance: **{balance}** dc. Pick a pack:"
+menu_chat = "**Derpcoins for this chat** — everyone here uses them before their own.\nChat balance: **{balance}** dc. Pick a pack:"
 who = "Who are the Derpcoins for?"
 for_me = "For me"
 for_chat = "For this chat"
@@ -105,17 +111,17 @@ invoice_for_me = "For your own wallet"
 invoice_for_chat = "For this chat's wallet — anyone here can pay"
 stale = "This offer has changed. Open /buy again."
 not_yours = "This invoice was made for someone else. Open /buy to get your own."
-thanks = "Thanks! **+{credits}** Derpcoins. Your balance: **{balance}**."
-thanks_chat = "Thanks! **+{credits}** Derpcoins for this chat. Chat balance: **{balance}**."
-plan_button = "Derp+ · {credits} every 30 days · {stars}⭐"
+thanks = "Thanks! **+{credits}** Derpcoins. Your balance: **{balance}** dc."
+thanks_chat = "Thanks! **+{credits}** Derpcoins for this chat. Chat balance: **{balance}** dc."
+plan_button = "Derp+ · {credits} dc every 30 days · {stars}⭐"
 plan_offer = "**Derp+** — {credits} Derpcoins every 30 days for {stars}⭐. Unused Derpcoins don't roll over to the next month. Cancel anytime in Telegram's Stars settings."
 plan_pay = "Subscribe for {stars}⭐"
 plan_title = "Derp+"
 plan_description = "{credits} Derpcoins every 30 days. Cancel anytime. By paying you agree to /terms."
 already_subscribed = "You already have Derp+ until {date}."
 already_subscribed_short = "You already have Derp+."
-plan_thanks = "Welcome to Derp+! **+{credits}** Derpcoins until {date}. Your balance: **{balance}**."
-plan_renewed = "Derp+ renewed: **+{credits}** Derpcoins until {date}. Your balance: **{balance}**."
+plan_thanks = "Welcome to Derp+! **+{credits}** Derpcoins until {date}. Your balance: **{balance}** dc."
+plan_renewed = "Derp+ renewed: **+{credits}** Derpcoins until {date}. Your balance: **{balance}** dc."
 
 [credits]
 title = "💰 **Your Derpcoins**"
@@ -125,26 +131,26 @@ free = "Free today: **{left}** of {daily} (refills at {time})"
 chat = "This chat: **{left}**"
 usage = "**Spent from this chat, last {days} days:**"
 usage_none = "_Nobody spent this chat's Derpcoins in the last {days} days._"
-hint = "_Answers spend Derp+ first, then bought Derpcoins, then the free daily ones; in groups the chat's go first. /buy for more._"
+hint = "_Spending order: chat wallet (in groups) → Derp+ → bought Derpcoins → free daily allowance. Top up: /buy._"
 
 [info]
 how = "Reply to one of my messages with /info to see what it cost."
-receipt = "🧾 **About this answer**\nModel: `{model}`\nTokens: {input} in · {output} out · {context} of context · tool calls: {tools}\nCharged: **{charged}** dc — {funding}"
+receipt = "🧾 **About this answer**\nModel: `{model}`\nTokens: {input} in · {output} out · {context} context · tool calls: {tools}\nCharged: **{charged}** dc — {funding}"
 paid_user = "from personal Derpcoins"
 paid_chat = "from this chat's Derpcoins"
 sponsored = "covered by the free daily allowance"
-free = "free model, nothing charged"
+free = "free model"
 
 [memory]
 title = "🧠 **What I remember here**"
-rules = "**Chat rules** (from the admins)"
+rules = "**Chat rules**"
 chat_notes = "**Chat notes** · _{mode}_"
 my_notes = "**Your notes**"
 my_notes_hidden = "_Your own notes stay private: open /memory from the command menu (only you see it)._"
 proposed = "**Waiting for an admin**"
 empty = "_nothing yet_"
 hint = "_Ask me to remember or forget something, e.g. “derp, forget #12”._"
-gone = "That proposal is already handled."
+gone = "Already handled."
 admins_only = "Only chat admins can approve notes."
 approved = "Note #{id} saved."
 rejected = "Note #{id} dropped."
@@ -165,7 +171,7 @@ off = "off"
 [onboarding]
 title = "👋 **Derp is here**"
 summon = "Call me with @{username}, by name (derp, дерп) or by replying to me. I stay quiet otherwise."
-context_on = "I read this chat to keep up with the conversation; messages are kept for {days} days and never leave this chat. Admins can switch me to mentions only."
+context_on = "I read this chat to keep up with the conversation; messages are kept for {days} days and aren't shared with other chats. Admins can switch me to mentions only."
 context_off = "Mentions only: I see just the messages addressed to me, so I won't know what was said before."
 settings = "_Settings: /settings · what I remember: /memory_"
 make_admin = "Make me admin (optional)"
@@ -199,17 +205,17 @@ privacy = """
 
 <details><summary>What I keep</summary>
 
-Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Short daily summaries of a chat, for up to a year. Notes you ask me to remember, until you remove them. Quiz points and titles of the day in groups, until /forget. Payment receipts, for accounting.
+Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Short daily summaries of a chat, for up to a year. Notes and reminders you ask me to keep, until they finish or you remove them. Quiz points and titles of the day in groups, until /forget. Payment receipts, for accounting.
 </details>
 
 <details><summary>Who processes it</summary>
 
-To answer, messages go to AI providers through OpenRouter. Paid answers and the free daily ones use providers that keep nothing. Free models — only if you, or an admin for a group, turned them on — may store what they get. When I search the web or open a link, the query or address goes to a search or fetch service that may log it. Some tools send only what they need to their own service: weather, exchange rates, Wikipedia, Urban Dictionary and arXiv get the search words; WolframAlpha the question; JDoodle code to run; ACRCloud a short audio clip to name a song; trace.moe a frame to find an anime scene. Memes, cutouts and other effects are made on Derp's own server. Feedback you send is read by the people behind Derp.
+To answer, messages go to AI providers through OpenRouter. Paid answers and the free daily ones use providers that keep nothing. Free models — only if you, or an admin for a group, turned them on — may store what they get. When I search the web or open a link, the query or address goes to a search or fetch service that may log it. Some tools send only what they need to their own service: weather, exchange rates, Wikipedia, Urban Dictionary and arXiv get the search words; WolframAlpha the question; JDoodle code to run; ACRCloud a short audio clip to name a song; trace.moe a frame to find an anime scene. Memes, cutouts and other effects are made on Derp's own server. Feedback you send is read by Derp's developer.
 </details>
 
 <details><summary>Your controls</summary>
 
-Reply /forget to remove a message from my memory, or send /forget alone to remove everything you've said in a chat (summaries that mention it are redone without it). Ask me to forget notes anytime; group admins can turn context off in /settings, which deletes the stored context.
+Reply /forget to remove a message from my memory, or send /forget alone to remove everything you've said in a chat (summaries that mention it are redone without it). Ask me to forget notes or cancel reminders anytime; group admins can turn context off in /settings, which deletes the stored context.
 </details>
 
 <details><summary>Payments</summary>
@@ -217,13 +223,13 @@ Reply /forget to remove a message from my memory, or send /forget alone to remov
 Telegram handles payments; I only see the amount and a charge id.
 </details>
 """
-support_how = "Write `/paysupport` followed by what happened — the date and the amount help. It goes straight to the person who runs Derp."
-support_sent = "Sent to the person who runs Derp. Refunds come back to your Stars balance."
+support_how = "Write `/paysupport` followed by what happened — the date and the amount help. It goes straight to Derp's developer."
+support_sent = "Sent to Derp's developer. Refunds come back to your Stars balance."
 
 [privacy]
 forgot_one = "Done — I've forgotten that message."
 only_own = "I can only forget your own messages. Reply /forget to one of yours, or send /forget on its own to forget everything you've said here."
-confirm = "Forget everything you've said in this chat? Stored messages: **{count}**, plus your reactions, poll votes, quiz points, titles of the day and personal notes here. This can't be undone."
+confirm = "Forget everything you've said in this chat? Stored messages: **{count}**, plus your reactions, poll votes, quiz points, titles of the day, personal notes and reminders here. This can't be undone."
 confirm_button = "Forget it all"
 not_yours = "This button is for the person who asked."
 forgot_all = "Done — your messages here ({count}) and everything attached to them are forgotten."
@@ -233,25 +239,25 @@ image = "🖼 This image costs about **{credits}** Derpcoins. Make it?"
 run = "Make it"
 cancel = "Cancel"
 making = "On it — drawing…"
-cancelled = "Cancelled — the image wasn't made, and it costs nothing."
+cancelled = "Cancelled — the image wasn't made, and nothing was charged."
 already_approved = "Already decided: it's being made."
 already_denied = "Already cancelled."
-already_expired = "This offer expired. Ask again if you still want it."
+already_expired = "This request expired. Ask again if you still want it."
 not_yours = "Only the person who asked can decide."
-no_coins = "Not enough Derpcoins for this any more — nothing was charged. /buy tops up."
+no_coins = "Not enough Derpcoins for this anymore — nothing was charged. Top up with /buy."
 failed = "The image didn't come out — nothing was charged."
 
 [scheduler]
 reminder = "⏰ Reminder from {name}: {text}"
 skipped = "⏰ Skipped scheduled job #{id}: not enough Derpcoins to answer it."
-paused = "⏰ Paused scheduled job #{id} after missing several runs for lack of Derpcoins. Ask me to resume it once there are Derpcoins again."
+paused = "⏰ Paused scheduled job #{id} after missing several runs for lack of Derpcoins. Top up with /buy and ask me to resume it."
 
 [inline]
 title = "Ask Derp"
 thinking = "❓ {query}\n\n🤔 thinking…"
 ask_too = "Ask Derp"
 get_coins = "Get Derpcoins"
-unfunded = "Out of Derpcoins for today. Open @DerpRobot and /buy to keep asking."
+unfunded = "Out of Derpcoins for today. Open @{username} and /buy to keep asking."
 failed = "Couldn't answer that one — nothing was charged. Try again?"
 
 [settings]
@@ -264,8 +270,8 @@ context_on = "🧠 Context: **on** — I read the chat to follow along."
 context_off = "🧠 Context: **off** — I only see messages addressed to me."
 retention = "🗓 History kept: **{days} days**"
 notes = "📝 Notes: **{mode}**"
-notes_auto = "I decide"
-notes_members = "anyone asks"
+notes_auto = "auto"
+notes_members = "when asked"
 notes_admins = "admins only"
 notes_off = "off"
 rules = "📜 Rules: {rules}"
@@ -278,19 +284,19 @@ spend_off = "💰 Your Derpcoins in groups: bought ones never used (the free dai
 admins_only = "Only admins change chat settings; your coins setting is yours."
 context_button = "🧠 Context: {state}"
 retention_button = "🗓 {days} days"
-notes_button = "📝 {mode}"
+notes_button = "📝 Notes: {mode}"
 free_button = "🆓 Free models: {state}"
 rules_clear = "🧹 Clear rules"
 spend_button = "💰 My coins in groups: {state}"
 retention_page = "🗓 How long should I keep this chat's history? Shortening it deletes older messages within a day."
 days = "{days} days"
 default_days = "Default ({days} days)"
-notes_page = "📝 Who can make me remember things here?"
+notes_page = "📝 How should I save notes here?"
 context_off_page = "Turn context off? I'll delete the stored messages that weren't addressed to me (**{count}**), and from then on only see mentions and replies. This can't be undone."
 context_off_confirm = "Turn off and delete"
 context_purged = "Context is off; the chat history I'd kept is deleted."
 admins_alert = "Only admins can change this chat's settings."
 
 [feedback]
-how = "Tell the people behind Derp what's broken or what you'd like: `/feedback your words`."
-thanks = "Thanks — passed on to the people behind Derp."
+how = "Tell Derp's developer what's broken or what you'd like: `/feedback your words`."
+thanks = "Thanks — passed on to Derp's developer."

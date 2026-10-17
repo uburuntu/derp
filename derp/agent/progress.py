@@ -18,6 +18,7 @@ from typing import Protocol
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
+from derp.locales import t
 from derp.telegram.sender import Target, rich, sanitize_untrusted
 from derp.telegram.text import RICH_LIMIT
 
@@ -29,6 +30,7 @@ SEARCH_TOOLS = ("search", "read_messages", "chat_query", "chat_info", "inspect_m
 DRAW_TOOLS = ("image", "meme", "sticker", "background", "reverse")
 
 THINKING, SEARCHING, DRAWING, WORKING = "thinking", "searching", "drawing", "working"
+STAGES = frozenset({THINKING, SEARCHING, DRAWING, WORKING})
 
 
 def stage_for_tool(tool_name: str) -> str:
@@ -37,14 +39,6 @@ def stage_for_tool(tool_name: str) -> str:
     if any(key in tool_name for key in SEARCH_TOOLS):
         return SEARCHING
     return WORKING
-
-
-STATUS_TEXT = {
-    THINKING: "Thinking…",
-    SEARCHING: "Looking things up…",
-    DRAWING: "Drawing…",
-    WORKING: "Working…",
-}
 
 
 def action_for(stage: str) -> str:
@@ -102,12 +96,15 @@ class ChatAction:
 class DraftProgress:
     """Private chats: the answer streams into a draft; the final message replaces it."""
 
-    def __init__(self, bot: Bot, target: Target, *, interval: float = DRAFT_INTERVAL) -> None:
+    def __init__(
+        self, bot: Bot, target: Target, *, locale: str = "en", interval: float = DRAFT_INTERVAL
+    ) -> None:
         self.bot = bot
         self.target = target
+        self.locale = locale
         self.interval = interval
         self.draft_id: int | None = secrets.randbelow(2**31 - 1) + 1
-        self._status = STATUS_TEXT[THINKING]
+        self._status = t(locale, f"progress.{THINKING}")
         self._partial = ""
         self._dirty = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -118,7 +115,8 @@ class DraftProgress:
         self._task = asyncio.create_task(self._loop())
 
     async def stage(self, stage: str) -> None:
-        self._status = STATUS_TEXT.get(stage, STATUS_TEXT[WORKING])
+        key = stage if stage in STAGES else WORKING
+        self._status = t(self.locale, f"progress.{key}")
         self._fallback.show(action_for(stage))
         self._dirty.set()
 

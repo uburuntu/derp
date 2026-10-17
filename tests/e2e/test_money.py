@@ -57,7 +57,7 @@ async def test_failed_run_releases_the_hold(conversation: Conversation, model: S
     model.reply(boom)
     sent = await conversation.send(CARL, text="hi derp")
     reply = await conversation.expect_reply(sent)
-    assert "weren't charged" in reply["rich_message"]["markdown"]
+    assert "nothing was charged" in reply["rich_message"]["markdown"]
     await conversation.settle(sent)
     async with conversation.db.session() as session:
         assert await balance(session, wallet_id) == 500
@@ -214,7 +214,7 @@ async def test_a_failure_before_the_model_runs_returns_the_hold(
         await credit(session, (await wallet(session, "user", CARL.id)).id, "stars:c", 650, "purchase")
     monkeypatch.setattr(runtime, "build_window", broken)
     sent = await conversation.send(CARL, text="hi derp")
-    assert "weren't charged" in (await conversation.expect_reply(sent))["rich_message"]["markdown"]
+    assert "nothing was charged" in (await conversation.expect_reply(sent))["rich_message"]["markdown"]
     await conversation.settle(sent)
     async with conversation.db.session() as session:
         assert await session.scalar(select(Reservation.state)) == "released"

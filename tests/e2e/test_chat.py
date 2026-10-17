@@ -102,7 +102,7 @@ async def test_model_failure_apologizes_and_records_failed_run(
     model.reply(boom)
     sent = await conversation.send(BOB, text="hi")
     reply = await conversation.expect_reply(sent)
-    assert "weren't charged" in reply["rich_message"]["markdown"]
+    assert "nothing was charged" in reply["rich_message"]["markdown"]
     await conversation.settle(sent)
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun))
