@@ -16,11 +16,18 @@ from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.deps import RunDeps
-from derp.agent.tools.telegram import OutputRefused, check_budget, delivered, reply_parameters
+from derp.agent.tools.telegram import (
+    OutputRefused,
+    check_budget,
+    delivered,
+    reply_parameters,
+    unconfirmed,
+)
 from derp.agent.toolsets import Family
 from derp.history.models import User
 from derp.history.queries import ChatQuery, Scope, run_query
 from derp.history.titles import crown, leaderboard, normalize
+from derp.telegram.policy import AMBIGUOUS
 
 toolset = FunctionToolset[RunDeps]()
 MAX_POLLS = 5
@@ -65,6 +72,7 @@ async def post_polls(
         return f"Not posted: {refused}."
     period = max(5, min(seconds_per_poll, 600)) if seconds_per_poll else None
     posted: list[int] = []
+    unsure = False
     for item in polls:
         quiz = item.correct is not None
         try:
@@ -81,6 +89,11 @@ async def post_polls(
                 open_period=period,
                 reply_parameters=reply_parameters(deps.target.reply_to) if not posted else None,
             )
+        except AMBIGUOUS:
+            if not posted:
+                return unconfirmed("poll") + " Don't post the rest of the series either."
+            unsure = True
+            break
         except TelegramAPIError as error:
             if not posted:
                 return f"Telegram refused the poll ({type(error).__name__})."
@@ -93,6 +106,8 @@ async def post_polls(
         if any(p.correct is not None for p in polls)
         else ""
     )
+    if unsure:
+        note += f" {unconfirmed('next poll')} Don't post the rest either."
     return f"Posted {len(posted)} of {len(polls)} polls ({ids}).{note}"
 
 
@@ -125,6 +140,8 @@ async def most_likely_poll(ctx: RunContext[RunDeps], question: str) -> str:
             is_anonymous=False,
             reply_parameters=reply_parameters(deps.target.reply_to),
         )
+    except AMBIGUOUS:
+        return unconfirmed("poll")
     except TelegramAPIError as error:
         return f"Telegram refused the poll ({type(error).__name__})."
     await delivered(deps, sent, "poll")

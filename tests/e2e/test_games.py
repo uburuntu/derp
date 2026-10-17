@@ -77,6 +77,29 @@ async def test_a_quiz_scores_first_answers_into_the_leaderboard(
     assert result_of(model, "chat_query") == "Ben: 2\nCy: 1"
 
 
+async def test_an_unconfirmed_poll_stops_the_series_without_a_resend(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    for person in (ADA, BEN):
+        conversation.meet(person, QUIZ_ROOM)
+    api = conversation.api
+
+    def first_then_outage(fields: dict[str, Any]) -> Any:
+        api.fail_next("sendPoll", error_code=502, description="Bad Gateway")  # the next poll's answer is lost
+        return api._m_sendPoll(fields)  # the fake's own poll
+
+    api.handle("sendPoll", first_then_outage)
+    polls = [{"question": f"Q{i}?", "options": ["a", "b"], "correct": 0} for i in range(3)]
+    model.reply(tool_call("post_polls", polls=polls), ".")
+    asked = await conversation.send(ADA, QUIZ_ROOM, "derp quiz us")
+    await conversation.settle(asked)
+    # The second poll is not replayed and the third never goes.
+    assert len(api.calls_of("sendPoll", after=asked.after)) == 2
+    result = result_of(model, "post_polls")
+    assert result.startswith("Posted 1 of 3 polls (#") and "didn't confirm the next poll" in result
+    assert "refused" not in result
+
+
 async def test_quoted_arguments_are_repaired(conversation: Conversation, model: ScriptedModel) -> None:
     """Some models (GLM) quote every argument: arrays as JSON text, numbers as strings, unset ones as ""."""
     for person in (ADA, BEN):

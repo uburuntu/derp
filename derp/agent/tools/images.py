@@ -17,6 +17,7 @@ from derp.agent.deps import RunDeps
 from derp.agent.images import ImageJob, make_image
 from derp.agent.runs import totals
 from derp.agent.tools.sources import Refused, avatar_source, chat_photo_source, photo_owner
+from derp.agent.tools.telegram import unconfirmed
 from derp.agent.toolsets import Family
 from derp.history.models import Message
 from derp.inference.api import OpenRouterError
@@ -113,7 +114,7 @@ async def generate_image(
     except OpenRouterError as error:
         return f"The image failed ({error.status}); nothing was charged for it."
     except AMBIGUOUS:
-        return "Telegram didn't confirm the image; it may have arrived. Don't send it again."
+        return unconfirmed("image")
     except TelegramAPIError:
         return "Telegram refused the image; nothing was charged for it."
     deps.delivered.append((sent.message_id, "image"))

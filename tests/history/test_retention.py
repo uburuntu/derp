@@ -15,7 +15,7 @@ from derp.history.models import (
     MessageMedia,
     Reaction,
 )
-from derp.history.retention import forget_member, purge_ambient, purge_expired
+from derp.history.retention import forget_member, forget_message, purge_ambient, purge_expired
 
 NOW = datetime.now(UTC)
 GROUP, PRIVATE, SHORT = -720, 72, -721
@@ -115,8 +115,23 @@ async def test_forgetting_a_member_scrubs_their_rows_in_that_chat(seeded: Databa
         assert await session.scalar(select(func.count()).select_from(ChatMember)) == 0
         titles = {tuple(r) for r in await session.execute(select(DailyTitle.chat_id, DailyTitle.user_id))}
         assert titles == {(GROUP, 2), (SHORT, 1)}
-        stale = {d.last_message_id: d.stale for d in await session.scalars(select(Digest))}
-    assert stale[3] and stale[1] and stale[2]  # message 2's digest was already stale
+        left = {(d.first_message_id, d.last_message_id) for d in await session.scalars(select(Digest))}
+    assert left == {(100, 110), (2, 2)}  # days that held their messages are gone, to be rebuilt without them
+
+
+@pytest.mark.db
+async def test_forgetting_one_message_deletes_the_digests_covering_it(seeded: Database) -> None:
+    async with seeded.transaction() as session:
+        session.add(digest(GROUP, (NOW - timedelta(days=5)).date(), 1, 3))  # spans every group message
+        session.add(Digest(chat_id=GROUP, thread_id=7, day=(NOW - timedelta(days=5)).date(), first_message_id=2,
+                           last_message_id=2, message_count=1, summary="- s", model="m"))  # fmt: skip
+    async with seeded.transaction() as session:
+        assert await forget_message(session, GROUP, 2, NOW)
+    async with seeded.session() as session:
+        left = {(d.first_message_id, d.last_message_id) for d in await session.scalars(select(Digest))}
+        assert left == {(100, 110), (1, 1), (3, 3)}
+        forgotten = await session.get(Message, (GROUP, 2))
+    assert forgotten is not None and forgotten.text is None
 
 
 @pytest.mark.db

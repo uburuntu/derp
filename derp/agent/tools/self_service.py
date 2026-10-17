@@ -14,7 +14,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.deps import RunDeps
-from derp.agent.tools.telegram import delivered
+from derp.agent.tools.telegram import delivered, unconfirmed
 from derp.agent.toolsets import Family
 from derp.billing.command import packs_keyboard, send_pack_invoice
 from derp.locales import t
@@ -23,6 +23,7 @@ from derp.money.command import credits_card
 from derp.money.wallets import balance, wallet
 from derp.ops import feedback
 from derp.settings.panel import NOTES_MODES, RETENTION_CHOICES, apply_setting, render
+from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import Target, send_markdown, send_privately
 
 toolset = FunctionToolset[RunDeps]()
@@ -62,6 +63,8 @@ async def purchase_button(ctx: RunContext[RunDeps], for_chat: bool = False, star
             sent = await send_pack_invoice(
                 deps.bot, deps.chat.id, deps.thread_id, deps.locale, pack, kind=kind, owner_id=owner
             )
+        except AMBIGUOUS:
+            return unconfirmed("invoice")
         except TelegramAPIError as error:
             return f"Telegram refused the invoice ({type(error).__name__})."
         await delivered(deps, sent, "other")
@@ -78,6 +81,8 @@ async def purchase_button(ctx: RunContext[RunDeps], for_chat: bool = False, star
         return "They haven't opened a private chat with Derp; ask them to DM Derp /buy."
     try:
         sent = await send_markdown(deps.bot, deps.target, text, reply_markup=markup)
+    except AMBIGUOUS:
+        return unconfirmed("menu")
     except TelegramAPIError as error:
         return f"Telegram refused the menu ({type(error).__name__})."
     for message in sent:

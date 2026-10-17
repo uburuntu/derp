@@ -7,8 +7,9 @@
   gone can't be rebuilt and is dropped.
 - ``forget_message`` / ``forget_member``: a person's own message, or all of
   theirs in one chat. Rows are tombstoned and scrubbed (text, files, notes on
-  files, reactions, polls; quiz points and titles of the day go too); digests covering them turn stale and are never
-  shown again until rebuilt without them.
+  files, reactions, polls; quiz points and titles of the day go too), and every
+  digest whose day range covers them is deleted, to be rebuilt on demand
+  without them.
 - ``purge_ambient``: the chat's context was switched off — every ambient row
   goes, and with it every digest of the chat.
 """
@@ -112,7 +113,8 @@ async def _scrub(session: AsyncSession, chat_id: int, where: ColumnElement[bool]
         where,
         Message.message_id.between(Digest.first_message_id, Digest.last_message_id),
     )
-    await session.execute(update(Digest).where(Digest.chat_id == chat_id, exists(covered)).values(stale=True))
+    # Summaries that may quote what goes are deleted, not just marked stale: rebuilt on demand without it.
+    await session.execute(delete(Digest).where(Digest.chat_id == chat_id, exists(covered)))
     scrubbed = await session.execute(
         update(Message)
         .where(Message.chat_id == chat_id, where)

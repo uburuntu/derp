@@ -3,8 +3,10 @@
 Every output may reply to any stored message of this chat (validated here) or
 to someone's latest message by name; the default is the trigger. Tools may send
 up to ``visible_outputs - 1`` items so the final text answer always has a slot.
-Each delivered item is recorded as a run output and in history. Output tools run
-sequentially: the budget check and the send must not interleave, and outputs
+Each delivered item is recorded as a run output and in history. A send Telegram
+didn't confirm (network or server error) may still have arrived, so the model is
+told not to repeat it (``unconfirmed``); like every unconfirmed send it counts as
+neither an output nor a delivery. Output tools run sequentially: the budget check and the send must not interleave, and outputs
 keep the order the model chose.
 """
 
@@ -25,6 +27,7 @@ from derp.history.digests import mark_stale
 from derp.history.models import Message, MessageMedia, Sticker
 from derp.history.queries import resolve_members
 from derp.memory.notes import is_admin
+from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import rich, sanitize_untrusted
 
 toolset = FunctionToolset[RunDeps]()
@@ -84,6 +87,11 @@ async def delivered(deps: RunDeps, sent: TgMessage, kind: str) -> None:
         await record_outgoing(session, [sent], deps.bot.id)
 
 
+def unconfirmed(what: str) -> str:
+    """The tool result for an ambiguous send: it may have arrived, so it must never be repeated."""
+    return f"Telegram didn't confirm the {what}; it may have arrived. Don't send it again."
+
+
 def reply_parameters(message_id: int | None) -> ReplyParameters | None:
     return ReplyParameters(message_id=message_id, allow_sending_without_reply=True) if message_id else None
 
@@ -133,6 +141,8 @@ async def send_poll(
             correct_option_ids=[correct_option] if correct_option is not None else None,
             reply_parameters=reply_parameters(target),
         )
+    except AMBIGUOUS:
+        return unconfirmed("poll")
     except TelegramAPIError as error:
         return f"Telegram refused the poll ({type(error).__name__})."
     await delivered(deps, sent, "poll")
@@ -166,6 +176,8 @@ async def send_dice(
             emoji=emoji,
             reply_parameters=reply_parameters(target),
         )
+    except AMBIGUOUS:
+        return unconfirmed("dice")
     except TelegramAPIError as error:
         return f"Telegram refused the dice ({type(error).__name__})."
     await delivered(deps, sent, "dice")
@@ -216,6 +228,8 @@ async def send_sticker(
             sticker=file_id,
             reply_parameters=reply_parameters(target),
         )
+    except AMBIGUOUS:
+        return unconfirmed("sticker")
     except TelegramAPIError as error:
         return f"Telegram refused the sticker ({type(error).__name__})."
     await delivered(deps, sent, "sticker")
@@ -242,6 +256,8 @@ async def react(ctx: RunContext[RunDeps], emoji: str, message_id: int | None = N
         return "Nothing to react to."
     try:
         await deps.bot.set_message_reaction(deps.chat.id, target, reaction=[ReactionTypeEmoji(emoji=emoji)])
+    except AMBIGUOUS:
+        return unconfirmed("reaction")
     except TelegramAPIError as error:
         return f"Telegram refused the reaction ({type(error).__name__}); reactions may be restricted here."
     deps.reacted.add(target)

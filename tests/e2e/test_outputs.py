@@ -71,6 +71,29 @@ async def test_output_budget_keeps_a_slot_for_the_answer(
     assert len(conversation.api.calls_of("sendDice", after=sent.after)) == 2
 
 
+async def test_unconfirmed_outputs_are_never_called_refused_or_resent(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(KATE, PARTY)
+    conversation.api.fail_next("sendDice", error_code=502, description="Bad Gateway")
+    conversation.api.fail_next("setMessageReaction", error_code=500, description="Internal Server Error")
+
+    def done(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        results = tool_results(messages)
+        assert sum("didn't confirm" in r and "Don't send it again" in r for r in results) == 2, results
+        assert not any("refused" in r for r in results), results
+        return ModelResponse(parts=[TextPart("rolled, probably")])
+
+    model.reply(tool_call("send_dice"), tool_call("react", emoji="🔥"), done)
+    asked = await conversation.send(KATE, PARTY, "derp roll a dice")
+    reply = await conversation.expect_reply(asked)
+    assert reply["rich_message"]["markdown"] == "rolled, probably"
+    await conversation.settle(asked)
+    assert len(conversation.api.calls_of("sendDice", after=asked.after)) == 1  # never replayed
+    async with conversation.db.session() as session:
+        assert list(await session.scalars(select(RunOutput.kind))) == ["message"]
+
+
 async def test_sticker_from_the_chat_replying_to_a_person(
     conversation: Conversation, model: ScriptedModel
 ) -> None:

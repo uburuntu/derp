@@ -29,3 +29,14 @@ async def test_group_messages_are_captured_by_policy(conversation: Conversation)
     stored = await captures(conversation)
     assert quiet.message_id not in stored
     assert stored[invoked.message_id] == "invocation"
+
+    # With context off, an edit updates a message already kept and still skips the rest.
+    for sent, text in ((invoked, "дерп, привет всем"), (quiet, "still not stored")):
+        edited = dict(sent.message) | {"edit_date": int(sent.message["date"]) + 60, "text": text}
+        await conversation.settle(await conversation.push("edited_message", edited))
+    async with conversation.db.session() as session:
+        rows = await session.execute(
+            select(Message.message_id, Message.text).where(Message.chat_id == GROUP.id)
+        )
+        texts = {row[0]: row[1] for row in rows}
+    assert texts[invoked.message_id] == "дерп, привет всем" and quiet.message_id not in texts

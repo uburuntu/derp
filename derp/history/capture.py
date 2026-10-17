@@ -188,7 +188,10 @@ def _people(message: TgMessage) -> Iterable[TgUser]:
 
 
 async def store_message(session: AsyncSession, message: TgMessage, *, capture: str, bot_id: int) -> bool:
-    """Insert or update (on edit) one message and its media, as received by ``bot_id``. False when not storable."""
+    """Insert or update (on edit) one message and its media, as received by ``bot_id``.
+
+    False when not storable, or when the message was forgotten (tombstoned rows are never rewritten).
+    """
     if message.message_id <= 0 or message.guest_query_id:
         return False
     for person in _people(message):
@@ -222,12 +225,15 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
     }
     statement = insert(Message).values(values)
     updatable = ("edit_date", "text", "entities", "payload", "raw", "kind")
-    await session.execute(
+    written = await session.scalar(
         statement.on_conflict_do_update(
             index_elements=[Message.chat_id, Message.message_id],
             set_={key: statement.excluded[key] for key in updatable},
-        )
+            where=Message.deleted_at.is_(None),  # a forgotten message stays scrubbed, edits included
+        ).returning(Message.message_id)
     )
+    if written is None:
+        return False
     media = media_rows(message, bot_id)
     if media:
         existing = {
