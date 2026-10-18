@@ -150,7 +150,7 @@ async def draw(
         *([await chat_photo_bytes(bot, gateway, chat_id)] if job.chat_photo else []),
     ]
     references += [await gateway.normalize(data) for data in pictures]
-    prompt = " ".join(part for part in (job.prompt, job.cast_note(first_avatar)) if part)
+    prompt = "\n\n".join(part for part in (job.prompt, job.cast_note(first_avatar)) if part)
     return await _generate(api, pin, prompt, job.aspect_ratio, references)
 
 
