@@ -1,12 +1,13 @@
 """Small OpenRouter REST client for what Pydantic AI does not cover:
-image generation, speech-to-text, the model catalog and generation lookups.
+image generation, speech-to-text, decisions, the model catalog and generation lookups.
 """
 
 import base64
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -41,6 +42,16 @@ class Transcript:
     language: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class Decided:
+    """Answers to typed questions, keyed like the questions (``{"type": "noul", "noul": 0.93}``, …)."""
+
+    answers: dict[str, Json]
+    model: str
+    cost_usd: Decimal
+    input_tokens: int
+
+
 class OpenRouterAPI:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
         self._client = client or httpx.AsyncClient(
@@ -55,6 +66,7 @@ class OpenRouterAPI:
         # Price estimates for responses without ``usage.cost``: never record a paid call as free.
         self._image_price = Decimal(str(settings.image_price_usd))
         self._stt_minute_price = Decimal(str(settings.stt_price_usd_per_minute))
+        self._decision_token_price = Decimal(str(settings.decisions.price_usd_per_m_input)) / 1_000_000
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -156,6 +168,28 @@ class OpenRouterAPI:
             model=model,
             cost_usd=_reported_cost(result, self._stt_minute_price * max(seconds, 1) / 60),
             language=result.get("language"),
+        )
+
+    # Decisions (System One API: Jev; output tokens are free)
+
+    async def decide(self, model: str, state: Json, questions: Json, *, zdr: bool = True) -> Decided:
+        """Ask typed questions (``noul``/``choice``/``score``) about ``state``; every question gets its answer.
+
+        The ``v1/systemone`` endpoint takes the same body and provider preferences as the alpha Decisions API.
+        """
+        body: Json = {"model": model, "state": state, "questions": questions}
+        if zdr:
+            body["provider"] = {"zdr": True, "data_collection": "deny"}
+        result = await self._request("POST", "systemone", json=body)
+        answers = result.get("answers")
+        if not isinstance(answers, dict) or answers.keys() != questions.keys():
+            raise OpenRouterError(502, "answers do not match the questions")
+        tokens = int((result.get("usage") or {}).get("input_tokens") or len(json.dumps(body).encode()) // 4)
+        return Decided(
+            answers=cast(dict[str, Json], answers),
+            model=str(result.get("model") or model),
+            cost_usd=_reported_cost(result, self._decision_token_price * tokens),
+            input_tokens=tokens,
         )
 
 

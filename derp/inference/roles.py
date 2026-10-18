@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+type Effort = Literal["none", "minimal", "low", "medium", "high"]
+
 
 class ModelRole(StrEnum):
     CHAT = "chat"
@@ -12,6 +14,7 @@ class ModelRole(StrEnum):
     CHAT_FREE = "chat_free"
     IMAGE = "image"
     STT = "stt"
+    DECISION = "decision"
 
 
 class RolePin(BaseModel, frozen=True):
@@ -21,7 +24,7 @@ class RolePin(BaseModel, frozen=True):
     fallbacks: tuple[str, ...] = Field(default=(), max_length=2)
     zdr: bool = True
     # Reasoning effort for chat roles; banter rarely needs deep thought and reasoning tokens are billed.
-    reasoning: Literal["none", "minimal", "low", "medium", "high"] | None = "low"
+    reasoning: Effort | None = "low"
     vision: bool = (
         True  # every model in the pin accepts image input; otherwise images reach it as descriptions
     )
@@ -80,4 +83,7 @@ DEFAULT_PINS: dict[ModelRole, RolePin] = {
         },
     ),
     ModelRole.STT: RolePin(model="openai/whisper-large-v3-turbo", fallbacks=("elevenlabs/scribe-v2",)),
+    # Typed questions answered with probabilities, no text (``agent.decisions``). A versioned id, not
+    # ``-latest``: the thresholds in ``settings.decisions`` were tuned against it; a new model needs re-tuning.
+    ModelRole.DECISION: RolePin(model="typesafe/jev-1.14", reasoning=None, vision=False),
 }
