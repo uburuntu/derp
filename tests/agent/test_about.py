@@ -55,6 +55,13 @@ def test_facts_follow_the_running_configuration() -> None:
     )
 
 
+def test_voice_lines_and_quote_stickers_are_effects_tools() -> None:
+    families = {family.name: family for family in FAMILIES}
+    tools = families["effects"].toolset.tools
+    assert tools["speak"].sequential and tools["make_quote"].sequential
+    assert "voice" not in families and "quotes" not in families
+
+
 def test_commands_and_every_registered_tool_are_listed() -> None:
     commands = render("commands")
     assert all(f"/{name} — " in commands for name in PRIVATE_COMMANDS)

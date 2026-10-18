@@ -1,11 +1,16 @@
 import io
+from typing import Any
 
+import pytest
 from PIL import Image
 from sqlalchemy import select, update
 
 from derp.agent.models import RunOutput
 from derp.history.models import Message
 from derp.money.models import RunFee
+from derp.tools import effects
+from derp.tools.quotes import Quoted
+from derp.tools.workers import WorkerPool
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 from tests.e2e.test_effects import jpeg, photo, results_of
@@ -96,3 +101,40 @@ async def test_messages_of_another_chat_are_never_quoted(
     await conversation.settle(asked)
     assert "None of those messages are stored here" in results_of(model, "make_quote")[0]
     assert conversation.api.calls_of("sendSticker", after=asked.after) == []
+
+
+async def test_derps_own_messages_are_quoted_as_the_chat_saw_them(
+    conversation: Conversation, model: ScriptedModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    drawn: list[list[Quoted]] = []
+    draw = effects.quote
+
+    async def spy(pool: WorkerPool, messages: list[Quoted], *rest: Any) -> bytes:
+        drawn.append(messages)
+        return await draw(pool, messages, *rest)
+
+    monkeypatch.setattr(effects, "quote", spy)
+    conversation.meet(MAX, DECK)
+    model.reply("**Итог:** читай [доку](https://example.com)")
+    asked = await conversation.send(MAX, DECK, "derp sum it up")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    async with conversation.db.session() as session:
+        derps = await session.scalar(select(Message.message_id).where(Message.is_derp))
+    assert derps is not None
+    answer = await conversation.send(MAX, DECK, "ok boss", reply_to=derps)
+    await conversation.settle(answer)
+    model.reply(
+        tool_call("make_quote", message_ids=[derps]),
+        tool_call("make_quote", message_ids=[answer.message_id]),
+        ".",
+    )
+    again = await conversation.send(MAX, DECK, "derp quote both")
+    await conversation.settle(again)
+    [[bubble], [reply]] = drawn
+    assert (bubble.text, bubble.entities) == (
+        "Итог: читай доку",
+        [{"type": "bold", "offset": 0, "length": 5}, {"type": "text_link", "offset": 12, "length": 4,
+                                                       "url": "https://example.com"}],
+    )  # fmt: skip
+    assert reply.reply is not None and reply.reply.text == "Итог: читай доку"
