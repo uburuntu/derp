@@ -2,13 +2,15 @@
 
 Private chats get the personal menu: Derp+ and pack buttons that post a Stars invoice there. In
 groups a press opens the pack menu as an ephemeral message only the presser sees, with invoice links
-(URL buttons), so no invoices pile up in the chat. A chat pack's payload names the chat and topic:
+(URL buttons), so no invoices pile up in the chat; the chat's menu says roughly how long each pack
+lasts at the chat's recent pace (``runway``), when it has one. A chat pack's payload names the chat and topic:
 link payments arrive in the payer's private chat. Telegram accepts the ephemeral message only within
 15 seconds of the press and may refuse it; then the press falls back to a visible menu (chat packs)
 or the private chat (personal ones).
 """
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 from aiogram import Bot
@@ -17,6 +19,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message
 
 from derp.billing.purchases import Order, current_plan, pack_order, plan_order
+from derp.billing.runway import daily_pace, lasts
 from derp.config import Pack, Settings
 from derp.db.engine import Database
 from derp.locales import t
@@ -154,17 +157,29 @@ async def link_menu(
     owner_id: int,
     thread_id: int | None = None,
 ) -> tuple[str, InlineKeyboardMarkup | None]:
-    """The pack menu with invoice links: a chat's (anyone may pay) or a person's (Derp+ unless running)."""
-    left = await wallet_balance(db, kind, owner_id)
-    plan = False
-    if kind == "user":
-        async with db.session() as session:
+    """The pack menu with invoice links: a chat's (anyone may pay; with how long each pack lasts at its
+    recent pace, when it has one) or a person's (Derp+ unless running)."""
+    plan, pace = False, None
+    async with db.transaction() as session:
+        account = await wallet(session, kind, owner_id)
+        left = await balance(session, account.id)
+        if kind == "user":
             plan = await current_plan(session, owner_id) is None
+        else:
+            pace = await daily_pace(session, account.id, datetime.now(UTC))
     keyboard = await links_keyboard(
         bot, settings, locale, kind=kind, owner_id=owner_id, thread_id=thread_id, plan=plan
     )
-    key = "billing.menu_chat" if kind == "chat" else "billing.menu"
-    return t(locale, key, balance=f"{left:,}"), keyboard
+    if kind == "user":
+        return t(locale, "billing.menu", balance=f"{left:,}"), keyboard
+    text = t(locale, "billing.menu_chat", balance=f"{left:,}")
+    if pace is not None:
+        packs = "\n".join(
+            t(locale, "billing.pace_pack", credits=f"{p.credits:,}", lasts=lasts(locale, p.credits, pace))
+            for p in settings.packs
+        )
+        text += "\n\n" + t(locale, "billing.pace", packs=packs)
+    return text, keyboard
 
 
 def _thread(message: Message) -> int | None:

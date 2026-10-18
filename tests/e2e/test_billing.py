@@ -1,8 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
 
+from derp.agent.models import AgentRun
 from derp.billing.models import Purchase, Subscription
 from derp.billing.purchases import recover_payments
 from derp.billing.refunds import reconcile_refunds
@@ -118,6 +119,7 @@ async def test_group_buy_opens_a_private_pack_menu_and_a_link_payment_thanks_the
     menu = ephemeral_menu(conversation, after)
     assert int(menu["ephemeral_message_parameters"]["receiver_user_id"]) == CARL.id
     assert int(menu["message_thread_id"]) == 5 and "Chat balance" in menu["rich_message"]["markdown"]
+    assert "How long a pack lasts" not in menu["rich_message"]["markdown"]  # no spending yet: no estimate
     payloads = link_payloads(conversation, menu)
     assert payloads[1] == f"p1:pack_m_v1:3250:chat:{FORUM.id}:5"
     assert all(len(payload.encode()) <= 128 for payload in payloads)
@@ -143,6 +145,38 @@ async def test_group_buy_opens_a_private_pack_menu_and_a_link_payment_thanks_the
         "**Forum**" in receipt["rich_message"]["markdown"]
         and "**3,250** dc" in receipt["rich_message"]["markdown"]
     )
+
+
+async def test_the_group_pack_menu_estimates_how_long_each_pack_lasts(conversation: Conversation) -> None:
+    conversation.meet(CARL, PUB)
+    now = datetime.now(UTC)
+    async with conversation.db.transaction() as session:
+        chat_wallet = (await wallet(session, "chat", PUB.id)).id
+        for ago in (0, 1, 2):  # three active days, 130 dc a day
+            session.add(
+                AgentRun(
+                    chat_id=PUB.id, user_id=CARL.id, trigger="message", role="chat", funding="paid",
+                    wallet_id=chat_wallet, charged_credits=130, status="completed",
+                    created_at=now - timedelta(days=ago, minutes=5),
+                )
+            )  # fmt: skip
+    asked = await conversation.send(CARL, PUB, "/buy")
+    chooser = await conversation.expect_reply(asked)
+    for_chat = chooser["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    chooser_id = max(mid for (cid, mid) in conversation.api.messages if cid == PUB.id)
+    after = conversation.seq
+    await press(conversation, CARL, PUB.id, chooser_id, for_chat)
+    text = ephemeral_menu(conversation, after)["rich_message"]["markdown"]
+    assert "How long a pack lasts at this chat's recent pace (an estimate):" in text
+    assert "- **650** dc — about **5 days**" in text
+    assert "- **3,250** dc — about **25 days**" in text
+    assert "- **9,750** dc — over a month" in text
+
+    # Just me: a personal menu has no chat pace.
+    for_me = chooser["reply_markup"]["inline_keyboard"][0][1]["callback_data"]
+    after = conversation.seq
+    await press(conversation, CARL, PUB.id, chooser_id, for_me)
+    assert "How long" not in ephemeral_menu(conversation, after)["rich_message"]["markdown"]
 
 
 async def test_buying_for_yourself_in_a_group_stays_between_you_and_derp(conversation: Conversation) -> None:
