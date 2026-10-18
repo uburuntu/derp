@@ -3,6 +3,7 @@ from typing import cast
 
 import pytest
 from aiogram import Bot
+from aiogram.types import File
 from PIL import Image
 
 from derp.telegram.media import (
@@ -102,3 +103,34 @@ async def test_a_file_whose_mime_type_is_not_a_picture_is_never_downloaded() -> 
     with pytest.raises(MediaUnavailableError, match="not an image"):
         await gateway.image("file", bot_id=bot.id, key="unique", mime_type="application/pdf")
     await bot.session.close()
+
+
+class Stored:
+    """A bot whose files are named the way Telegram stores them; records what was downloaded."""
+
+    id = 123456
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.downloaded: list[str] = []
+
+    async def get_file(self, file_id: str) -> File:
+        return File(file_id=file_id, file_unique_id=f"u-{file_id}", file_size=4096, file_path=self.path)
+
+    async def download_file(self, path: str, destination: io.BytesIO) -> None:
+        self.downloaded.append(path)
+        destination.write(encoded(Image.new("RGB", (8, 8), "red"), "WEBP"))
+
+
+async def test_an_animated_sticker_is_never_downloaded_even_when_its_row_does_not_say_so() -> None:
+    bot = Stored("stickers/file_7.tgs")
+    with pytest.raises(MediaUnavailableError, match="animated sticker"):
+        await MediaGateway(cast(Bot, bot)).image("old-sticker", bot_id=bot.id)  # an older row: no MIME
+    assert bot.downloaded == []
+
+
+async def test_a_generic_byte_stream_is_downloaded_and_sniffed() -> None:
+    bot = Stored("documents/file_8")
+    gateway = MediaGateway(cast(Bot, bot))
+    media = await gateway.image("scan", bot_id=bot.id, mime_type="application/octet-stream")
+    assert media.media_type == "image/jpeg" and bot.downloaded == ["documents/file_8"]

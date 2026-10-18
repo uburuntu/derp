@@ -20,6 +20,7 @@ from derp.history.digests import mark_stale
 from derp.history.models import Chat, ForumTopic, Message, MessageMedia, Sticker, User
 from derp.history.polls import upsert_poll
 from derp.history.render import MessageView, sender_label
+from derp.telegram.media import TGS
 from derp.telegram.text import plain_emoji
 
 TYPED_KINDS = {
@@ -130,13 +131,7 @@ def _attachment(source: Any) -> tuple[str, Any] | None:
 
 def _sticker_mime(sticker: Any) -> str:
     """A sticker file's type as Telegram gives it for documents: TGS (Lottie), WebM or WebP."""
-    return (
-        "application/x-tgsticker"
-        if sticker.is_animated
-        else "video/webm"
-        if sticker.is_video
-        else "image/webp"
-    )
+    return TGS if sticker.is_animated else "video/webm" if sticker.is_video else "image/webp"
 
 
 def _file(kind: str, item: Any) -> dict[str, Any]:

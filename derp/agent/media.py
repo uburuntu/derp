@@ -38,7 +38,7 @@ from derp.history.models import Message, MessageMedia
 from derp.history.render import kind_label
 from derp.inference.openrouter import chat_settings
 from derp.inference.roles import ModelRole, RolePin
-from derp.telegram.media import Media, MediaGateway, MediaUnavailableError
+from derp.telegram.media import Media, MediaGateway, MediaUnavailableError, known_type
 from derp.tools.effects import still
 from derp.tools.workers import EffectError, WorkerPool
 
@@ -196,11 +196,14 @@ async def inspect(
 
 async def _picture(gateway: MediaGateway, row: MessageMedia, frames: WorkerPool | None) -> Inspected:
     file = row.file_id, row.bot_id, row.file_unique_id, row.file_size
-    try:
-        return Inspected(row, await gateway.image(*file, mime_type=row.mime_type))
-    except MediaUnavailableError as unavailable:
-        failure = unavailable
-    if frames is not None:
+    known = known_type(row.mime_type)
+    failure = MediaUnavailableError("not an image")
+    if row.type not in CLIPS:  # a clip is never a picture itself: not downloaded just to find out
+        try:
+            return Inspected(row, await gateway.image(*file, mime_type=row.mime_type))
+        except MediaUnavailableError as unavailable:
+            failure = unavailable
+    if frames is not None and (known is None or known.startswith("video/")):  # never TGS, PDF & co
         try:
             frame = await still(frames, await gateway.fetch(*file))
             return Inspected(row, await gateway.normalize(frame), still="frame")

@@ -10,7 +10,11 @@ Pictures a model sees go through one step, ``normalize``: decoded once (JPEG,
 PNG, GIF, WebP, TIFF, BMP, HEIC/HEIF, AVIF; within the media workers' pixel
 and side caps, ``check_dimensions``), turned upright by EXIF, scaled down to ``VISION_SIDE``,
 transparency put on white, encoded as JPEG. ``MediaGateway.image`` fetches and
-normalizes; a file whose MIME type says it isn't a picture is never downloaded.
+normalizes; a file whose MIME type says it isn't a picture is never downloaded
+(``application/octet-stream`` or none says nothing: the bytes are sniffed).
+An animated sticker (TGS, gzipped Lottie JSON) is useless to Pillow and
+ffmpeg alike, so it is never downloaded, whatever its row says: ``fetch``
+refuses a file Telegram stores as ``.tgs``.
 """
 
 import asyncio
@@ -44,6 +48,8 @@ HEIF_BRANDS = {b"heic": "image/heic", b"heix": "image/heic", b"mif1": "image/hei
 DECODABLE = ("JPEG", "PNG", "GIF", "WEBP", "TIFF", "BMP", "HEIF", "AVIF")  # never EPS, PSD & co
 VISION_SIDE = 1568  # the longer side of a picture sent to a model: past this, providers scale down anyway
 VISION_QUALITY = 88
+UNKNOWN_TYPES = {"application/octet-stream"}  # what clients send when they don't know: sniff instead
+TGS = "application/x-tgsticker"
 
 pillow_heif.register_heif_opener()  # a format registry entry, so Pillow (and the effects) open iPhone photos
 
@@ -60,6 +66,11 @@ class MediaUnavailableError(Exception):
 class Media:
     data: bytes
     media_type: str
+
+
+def known_type(mime_type: str | None) -> str | None:
+    """A MIME type that says something about the file, else None (missing, or a generic byte stream)."""
+    return mime_type if mime_type and mime_type not in UNKNOWN_TYPES else None
 
 
 def sniff_image(data: bytes) -> str | None:
@@ -149,6 +160,8 @@ class MediaGateway:
                     raise MediaUnavailableError("too large")
                 if not file.file_path:
                     raise MediaUnavailableError("not downloadable")
+                if file.file_path.endswith(".tgs"):  # Telegram names files by type; rows may not know it
+                    raise MediaUnavailableError("an animated sticker")
                 buffer = io.BytesIO()
                 await self.bot.download_file(file.file_path, buffer)
         except TimeoutError:
@@ -173,7 +186,7 @@ class MediaGateway:
         mime_type: str | None = None,
     ) -> Media:
         """A file as a picture for a model (``normalize``); one whose ``mime_type`` isn't an image is never fetched."""
-        if mime_type and not mime_type.startswith("image/"):
+        if (known := known_type(mime_type)) and not known.startswith("image/"):
             raise MediaUnavailableError("not an image")
         return await self.normalize(await self.fetch(file_id, bot_id=bot_id, key=key, size_hint=size_hint))
 

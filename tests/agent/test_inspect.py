@@ -70,7 +70,21 @@ async def test_what_is_neither_a_picture_nor_has_a_preview_is_skipped_unfetched(
     tgs = row("sticker", "lottie", mime_type="application/x-tgsticker")
     pdf = row("document", "paper", mime_type="application/pdf")
     assert await inspect(gateway, [tgs, pdf]) == []
+    assert await inspect(gateway, [tgs, pdf], frames=WorkerPool()) == []  # no frame of a Lottie or a PDF
     assert gateway.fetched == []
+
+
+async def test_a_video_message_is_never_downloaded_as_a_picture(bot: Bot) -> None:
+    gateway = Files(bot, {"thumb": png()})
+    note = row("video_note", "circle", thumb_file_id="thumb")  # no MIME type, still a clip
+    (item,) = await inspect(gateway, [note])
+    assert item.still == "preview" and gateway.fetched == ["thumb"]
+
+
+async def test_a_file_of_unknown_type_is_downloaded_and_sniffed(bot: Bot) -> None:
+    gateway = Files(bot, {"scan": png()})
+    (item,) = await inspect(gateway, [row("document", "scan", mime_type="application/octet-stream")])
+    assert item.still == "" and gateway.fetched == ["scan"]
 
 
 async def test_an_image_file_is_seen_itself_normalized(bot: Bot) -> None:
