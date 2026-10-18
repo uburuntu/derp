@@ -35,7 +35,7 @@ from derp.ops.owner import ErrorTally, notify_owners, owner_groups, send_error_d
 from derp.ops.periodic import every
 from derp.scheduler.worker import Firings
 from derp.settings.privacy import enforce_retention
-from derp.settings.start import publish_commands
+from derp.settings.start import publish_profile
 from derp.telegram.bot import create_bot
 from derp.telegram.media import MediaGateway
 from derp.telegram.middleware import UpdateSpanMiddleware
@@ -233,7 +233,7 @@ async def run(settings: Settings) -> None:
         log.info("polling as bot %s", me.id)
         async with db.session() as session:
             groups = await owner_groups(session, settings.owner_ids)
-        await publish_commands(services.bot, settings.owner_ids, groups)
+        await publish_profile(services.bot, settings.owner_ids, groups)
         tasks = background_tasks(services, dispatcher["runtime"])
         await dispatcher.start_polling(
             services.bot, allowed_updates=list(ALLOWED_UPDATES), handle_signals=True

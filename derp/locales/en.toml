@@ -63,6 +63,13 @@ unknown = "There's no /{command}. Just say what you want in words — the real c
 [buttons]
 stale = "These buttons are out of date."
 
+[profile]  # what Telegram shows of Derp: its name, the profile bio, and "What can this bot do?" in a new chat
+name = "Derp"
+short = "The sharp friend in your group chat: answers, roasts, pictures, polls and reminders. Just call me."
+description = """I'm Derp, the friend who's already in the chat. Mention me, reply to me or just say my name: I answer, look things up, read pictures and voice messages, draw, roast, run quizzes and keep reminders.
+
+Add me to a group or talk to me right here. Free to try; Derpcoins for the heavy stuff."""
+
 [commands]
 start = "What I can do"
 help = "How I work here"

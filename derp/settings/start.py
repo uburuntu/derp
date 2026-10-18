@@ -22,6 +22,7 @@ from aiogram.types import (
     BotCommandScopeChat,
     BotCommandScopeChatMember,
     InlineKeyboardMarkup,
+    MenuButtonCommands,
     Message,
 )
 
@@ -30,6 +31,7 @@ from derp.billing.menu import buy_button, personal_menu
 from derp.billing.patrons import lately_line
 from derp.config import Settings
 from derp.db.engine import Database
+from derp.history.members import ADMIN_RIGHTS
 from derp.history.models import Chat
 from derp.history.render import one_line
 from derp.locales import DEFAULT, LOCALES, resolve, t
@@ -192,13 +194,32 @@ async def is_command(message: Message, trigger: Trigger | None = None) -> bool:
     return trigger is not None and trigger.kind is TriggerKind.COMMAND
 
 
-async def publish_commands(
+async def publish_profile(
     bot: Bot, owner_ids: Sequence[int] = (), owner_groups: Sequence[tuple[int, int]] = ()
 ) -> None:
-    """Set the command menus for private chats and groups in every locale, plus the owners' own; best effort.
+    """Set what Telegram shows of Derp, in every locale; best effort.
 
-    ``owner_groups`` (group, owner): there the owner's menu adds an ephemeral /context, so the page is theirs alone.
+    Name and descriptions (only when changed: Telegram rate-limits them tightly), the command menus for
+    private chats and groups plus the owners' own, the menu button (the command list), and the admin
+    rights Telegram pre-ticks when someone promotes Derp (``history.members.ADMIN_RIGHTS``).
+    ``owner_groups`` (group, owner): there the owner's menu adds an ephemeral /context, so the page is
+    theirs alone.
     """
+    try:
+        for locale in LOCALES:
+            language = None if locale == DEFAULT else locale
+            if (await bot.get_my_name(language_code=language)).name != (name := t(locale, "profile.name")):
+                await bot.set_my_name(name=name, language_code=language)
+            about = t(locale, "profile.description")
+            if (await bot.get_my_description(language_code=language)).description != about:
+                await bot.set_my_description(description=about, language_code=language)
+            short = t(locale, "profile.short")
+            if (await bot.get_my_short_description(language_code=language)).short_description != short:
+                await bot.set_my_short_description(short_description=short, language_code=language)
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        await bot.set_my_default_administrator_rights(rights=ADMIN_RIGHTS)
+    except TelegramAPIError as error:
+        log.warning("bot profile not published: %s", type(error).__name__)
     scopes = (
         (BotCommandScopeAllPrivateChats(), PRIVATE_COMMANDS, set[str]()),
         (BotCommandScopeAllGroupChats(), GROUP_COMMANDS, EPHEMERAL_IN_GROUPS),

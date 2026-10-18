@@ -12,7 +12,7 @@ from typing import Any, Literal, NamedTuple
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import ChatMemberUpdated
+from aiogram.types import ChatAdministratorRights, ChatMemberUpdated
 from aiogram.types import Message as TgMessage
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -230,14 +230,31 @@ def build_router() -> Router:
     return router
 
 
-ADMIN_LINK_RIGHTS = (
-    "invite_users"  # any admin role unlocks reading the chat and member updates; ask the mildest
+# Any admin role unlocks reading the chat and member updates: the mildest right, plus pinning (pin_message).
+# What the make-me-admin link asks for and what Telegram pre-ticks when someone promotes Derp by hand.
+ADMIN_RIGHTS = ChatAdministratorRights(
+    is_anonymous=False,
+    can_manage_chat=False,
+    can_delete_messages=False,
+    can_manage_video_chats=False,
+    can_restrict_members=False,
+    can_promote_members=False,
+    can_change_info=False,
+    can_invite_users=True,
+    can_post_stories=False,
+    can_edit_stories=False,
+    can_delete_stories=False,
+    can_send_welcome_messages=False,
+    can_pin_messages=True,
 )
 
 
 def admin_link(username: str) -> str:
     """The deep link that lets a group admin add Derp as an admin (Telegram preselects the rights)."""
-    return f"https://t.me/{username}?startgroup=derp&admin={ADMIN_LINK_RIGHTS}"
+    granted = "+".join(
+        n.removeprefix("can_") for n, on in ADMIN_RIGHTS if n.startswith("can_") and on is True
+    )
+    return f"https://t.me/{username}?startgroup=derp&admin={granted}"
 
 
 class Context(NamedTuple):

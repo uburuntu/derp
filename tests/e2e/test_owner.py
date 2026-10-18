@@ -14,7 +14,7 @@ from derp.ops.console import ConsoleAction, proposal_buttons
 from derp.ops.owner import notify_owners, owner_groups
 from derp.scheduler.models import Job
 from derp.scheduler.worker import run_due
-from derp.settings.start import publish_commands
+from derp.settings.start import publish_profile
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
@@ -255,7 +255,7 @@ async def test_owners_get_an_ephemeral_context_command_in_their_groups(conversat
     assert groups == [(YARD.id, OWNER.id)]
     after = conversation.seq
     assert conversation.services is not None
-    await publish_commands(conversation.services.bot, [OWNER.id], groups)
+    await publish_profile(conversation.services.bot, [OWNER.id], groups)
     (menu,) = [
         c
         for c in conversation.api.calls_of("setMyCommands", after=after)

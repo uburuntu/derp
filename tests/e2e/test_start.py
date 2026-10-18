@@ -2,7 +2,7 @@ from sqlalchemy import func, select
 
 from derp.billing.menu import BuyAction
 from derp.history.models import Message
-from derp.settings.start import publish_commands
+from derp.settings.start import publish_profile
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel
 
@@ -83,7 +83,7 @@ async def test_unknown_commands_point_to_help_without_a_model(
 
 async def test_command_menus_per_scope_and_language(conversation: Conversation) -> None:
     assert conversation.services is not None
-    await publish_commands(conversation.services.bot)
+    await publish_profile(conversation.services.bot)
     calls = conversation.api.calls_of("setMyCommands")
     assert len(calls) == 4
     groups_ru = next(
@@ -118,3 +118,23 @@ async def test_bare_group_commands_and_edited_commands_are_left_alone(
     async with conversation.db.session() as session:
         stored = list(await session.scalars(select(Message.text).where(Message.chat_id == BEN.id)))
     assert "/help me" not in stored and "/help" not in stored
+
+
+async def test_the_profile_is_published_once_and_kept(conversation: Conversation) -> None:
+    assert conversation.services is not None
+    await publish_profile(conversation.services.bot)
+    api = conversation.api
+    assert api.profile[("name", "")] == "Derp" and api.profile[("name", "ru")] == "Дерп"
+    assert api.profile[("short_description", "ru")].startswith("Острый на язык")
+    (button,) = api.calls_of("setChatMenuButton")
+    assert button["menu_button"]["type"] == "commands"  # not a stale web app
+    (rights,) = api.calls_of("setMyDefaultAdministratorRights")
+    granted = {k for k, v in rights["rights"].items() if v is True}
+    assert granted == {"can_invite_users", "can_pin_messages"}  # what the make-me-admin link asks for
+
+    after = conversation.seq
+    await publish_profile(conversation.services.bot)
+    changed = [
+        m for m in ("setMyName", "setMyDescription", "setMyShortDescription") if api.calls_of(m, after=after)
+    ]
+    assert changed == []  # unchanged copy is never re-sent: Telegram rate-limits these tightly

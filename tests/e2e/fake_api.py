@@ -123,6 +123,9 @@ class FakeBotAPI:
         self.invoice_links: dict[str, JsonObject] = {}  # createInvoiceLink URL → its fields
         self.inline_messages: dict[str, JsonObject] = {}  # inline_message_id → last edit
         self.pinned: dict[int, int] = {}
+        self.profile: dict[
+            tuple[str, str], str
+        ] = {}  # (name | description | short_description, language) → text
         self.handlers: dict[str, Callable[[JsonObject], Any]] = {}
         self._runner: web.AppRunner | None = None
         self.base_url = ""
@@ -336,6 +339,31 @@ class FakeBotAPI:
 
     def _m_getMe(self, _: JsonObject) -> JsonObject:  # noqa: N802
         return self.bot_user
+
+    def _profile(self, field: str, fields: JsonObject, value: str | None = None) -> JsonObject | bool:
+        key = (field, str(fields.get("language_code") or ""))
+        if value is None:
+            return {field: self.profile.get(key, "")}
+        self.profile[key] = value
+        return True
+
+    def _m_getMyName(self, fields: JsonObject) -> JsonObject | bool:  # noqa: N802
+        return self._profile("name", fields)
+
+    def _m_setMyName(self, fields: JsonObject) -> JsonObject | bool:  # noqa: N802
+        return self._profile("name", fields, str(fields.get("name") or ""))
+
+    def _m_getMyDescription(self, fields: JsonObject) -> JsonObject | bool:  # noqa: N802
+        return self._profile("description", fields)
+
+    def _m_setMyDescription(self, fields: JsonObject) -> JsonObject | bool:  # noqa: N802
+        return self._profile("description", fields, str(fields.get("description") or ""))
+
+    def _m_getMyShortDescription(self, fields: JsonObject) -> JsonObject | bool:  # noqa: N802
+        return self._profile("short_description", fields)
+
+    def _m_setMyShortDescription(self, fields: JsonObject) -> JsonObject | bool:  # noqa: N802
+        return self._profile("short_description", fields, str(fields.get("short_description") or ""))
 
     async def _m_getUpdates(self, fields: JsonObject) -> list[JsonObject]:  # noqa: N802
         offset = int(fields.get("offset", 0))
