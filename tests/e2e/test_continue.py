@@ -61,7 +61,7 @@ async def test_buying_offers_to_continue_the_ask_and_a_double_tap_runs_it_once(
 ) -> None:
     ask_id = await blocked(conversation, settings)
     _after, [offer] = await buy(conversation, CARL, f"{PACK}:user:{CARL.id}", "ch-carl")
-    assert int(offer["reply_parameters"]["message_id"]) == ask_id and "Derpcoins are in" in str(
+    assert int(offer["reply_parameters"]["message_id"]) == ask_id and "ran out of Derpcoins" in str(
         offer["rich_message"]
     )
     offer_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
@@ -184,3 +184,28 @@ async def test_a_patron_top_up_never_replays_someone_elses_ask(
 async def balance_of(conversation: Conversation, chat_id: int) -> int:
     async with conversation.db.session() as session:
         return await balance(session, (await wallet(session, "chat", chat_id)).id)
+
+
+async def test_buying_for_yourself_offers_to_continue_your_ask_in_a_group(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    """Personal packs are paid in private, but your own Derpcoins pay in the group too: the button goes there."""
+    await exhaust_sponsorship(conversation, settings)
+    conversation.meet(CARL, FORUM)
+    conversation.meet(CARL)
+    asked = await conversation.send(CARL, FORUM, "derp what's 2+2?", thread_id=5)
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    _after, [offer] = await buy(conversation, CARL, f"{PACK}:user:{CARL.id}", "ch-own")
+    assert int(offer["chat_id"]) == FORUM.id and int(offer["message_thread_id"]) == 5
+    assert int(offer["reply_parameters"]["message_id"]) == asked.message_id
+    assert "650" not in str(offer["rich_message"])  # nothing about the purchase in the group
+    offer_id = max(mid for (cid, mid) in conversation.api.messages if cid == FORUM.id)
+    model.reply("4, on me")
+    after = conversation.seq
+    await conversation.press(CARL, FORUM.id, offer_id, button_data(offer))
+    [answer] = conversation.api.calls_of("sendRichMessage", after=after)
+    assert "on me" in str(answer["rich_message"]) and int(answer["message_thread_id"]) == 5
+    async with conversation.db.session() as session:
+        [run] = await session.scalars(select(AgentRun))
+        assert run.wallet_id == (await wallet(session, "user", CARL.id)).id

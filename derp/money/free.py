@@ -9,7 +9,8 @@ An ask nobody could pay for is the person's waiting question in that chat
 (``chat_members.waiting_message_id``, the newest one wins). For
 ``waiting_minutes`` it can be resumed, once: right after consenting to (or an
 admin enabling) free models, or with the Continue button a purchase offers the
-buyer for their own waiting question in the chat and topic the purchase was for.
+buyer for their own waiting question (in the chat and topic a chat pack was for; for
+Derpcoins of their own, in whichever chat they asked last).
 Each resume claims the question (``claim``), so presses never answer it twice.
 
 The out-of-Derpcoins offer says when the free daily Derpcoins refill (a date-time
@@ -185,18 +186,36 @@ async def offer_continue(
     bot: Bot,
     settings: Settings,
     *,
-    chat_id: int,
-    thread_id: int | None,
     user_id: int,
     locale: str,
+    chat: tuple[int, int | None] | None,
 ) -> None:
-    """After a purchase: the buyer's own question waiting in that chat and topic gets a Continue button."""
+    """After a purchase: the buyer's own waiting question gets a Continue button, replying to it.
+
+    ``chat`` is the chat and topic a chat pack was for; None for the buyer's own Derpcoins, which pay
+    wherever they ask, so their latest waiting question in any chat qualifies.
+    """
+    since = datetime.now(UTC) - timedelta(minutes=settings.waiting_minutes)
     async with db.session() as session:
-        waiting = await waiting_question(session, settings, chat_id, user_id)
-    if waiting is None or waiting.thread_id != thread_id:
+        chat_id = (
+            chat[0]
+            if chat is not None
+            else await session.scalar(
+                select(ChatMember.chat_id)
+                .where(
+                    ChatMember.user_id == user_id,
+                    ChatMember.waiting_message_id.is_not(None),
+                    ChatMember.waiting_at > since,
+                )
+                .order_by(ChatMember.waiting_at.desc())
+                .limit(1)
+            )
+        )
+        waiting = await waiting_question(session, settings, chat_id, user_id) if chat_id is not None else None
+    if waiting is None or chat_id is None or (chat is not None and waiting.thread_id != chat[1]):
         return
     again = markup(button(t(locale, "money.continue"), Unblock(action="continue")))
-    target = Target(chat_id, thread_id, waiting.message_id)
+    target = Target(chat_id, waiting.thread_id, waiting.message_id)
     with contextlib.suppress(TelegramAPIError):  # the purchase is recorded; the button is a courtesy
         await send_markdown(bot, target, t(locale, "money.continue_offer"), reply_markup=again)
 
