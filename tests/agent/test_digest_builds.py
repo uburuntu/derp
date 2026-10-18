@@ -4,7 +4,6 @@ from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
-
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
