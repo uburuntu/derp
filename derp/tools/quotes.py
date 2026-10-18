@@ -646,7 +646,7 @@ def _picture(data: bytes | None, max_pixels: int) -> Image.Image | None:
 
 
 def _within_budget(messages: Sequence[Quoted]) -> list[Quoted]:
-    """At most ``MAX_MESSAGES``, and text cut so the whole quote stays within ``MAX_TOTAL_CHARS``."""
+    """At most ``MAX_MESSAGES``, text cut with "…" past ``MAX_TOTAL_CHARS`` in all (later ones just "…")."""
     kept: list[Quoted] = []
     left = MAX_TOTAL_CHARS
     for message in messages[:MAX_MESSAGES]:

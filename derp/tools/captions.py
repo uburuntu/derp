@@ -268,7 +268,7 @@ def encode_sticker(image: Image.Image) -> bytes:
     image = image.resize(size, Image.Resampling.LANCZOS)
     for quality in (90, 75, 60, 40):
         buffer = io.BytesIO()
-        image.save(buffer, format="WEBP", quality=quality, method=6)
+        image.save(buffer, format="WEBP", quality=quality, method=5)  # 6 is far slower for ~1% smaller
         if buffer.tell() <= STICKER_BYTES:
             break
     return buffer.getvalue()
