@@ -195,8 +195,13 @@ def finish_run(
     status: str,
     context_tokens: int = 0,
     error_type: str | None = None,
+    carried: Sequence[ModelMessage] = (),
 ) -> RunTotals:
-    """Close a run: aggregate usage, ledger each provider response, keep the new history."""
+    """Close a run: aggregate usage, ledger each provider response, keep the new history.
+
+    ``carried`` (a resumed run: the paused turn whose call it answered) heads the kept history, so a
+    replay pairs that call with its result; the run that made it already ledgered it.
+    """
     result = totals(messages)
     for response in (m for m in messages if isinstance(m, ModelResponse)):
         record_usage(
@@ -211,7 +216,7 @@ def finish_run(
         )
     usages = [response_usage(m) for m in messages if isinstance(m, ModelResponse)]
     run.status = status
-    run.messages = serialize_messages(messages)
+    run.messages = serialize_messages([*carried, *messages])
     run.served_model = result.served_model
     run.context_tokens = context_tokens
     run.input_tokens = result.input_tokens

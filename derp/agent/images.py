@@ -1,4 +1,4 @@
-"""Making images: OpenRouter's Images API on the image pin, then a photo reply.
+"""Making images: OpenRouter's Images API on the image pin (sent by the tool, through ``outputs``).
 
 Billing is all-or-nothing per image. The provider call is ledgered against the
 run only once Telegram accepted the photo (or, for an image kept for a next
@@ -14,17 +14,14 @@ from dataclasses import dataclass
 from typing import cast
 
 from aiogram import Bot
-from aiogram.types import BufferedInputFile, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.media import inspect, referenced_media
 from derp.db.engine import Database
-from derp.history.capture import record_outgoing
 from derp.inference.api import GeneratedImage, OpenRouterAPI, OpenRouterError
 from derp.inference.ledger import record_usage, simple_usage
 from derp.inference.roles import ModelRole, RolePin
 from derp.telegram.media import MediaGateway, chat_photo_bytes, profile_photo_bytes, sniff_image
-from derp.telegram.sender import Target
 
 log = logging.getLogger("derp.images")
 ASPECT_RATIOS = ("1:1", "16:9", "9:16", "4:3", "3:4")
@@ -116,38 +113,6 @@ async def draw(
 
 def filename(image: GeneratedImage) -> str:
     return "derp.jpg" if "jpeg" in image.media_type else "derp.png"
-
-
-async def make_image(
-    *,
-    db: Database,
-    api: OpenRouterAPI,
-    bot: Bot,
-    gateway: MediaGateway,
-    pin: RolePin,
-    target: Target,
-    job: ImageJob,
-    run_id: int,
-    funding: str,
-    user_id: int,
-) -> Message:
-    """Generate, send and ledger one image (approved actions); raises when nothing reached the chat."""
-    image = await draw(db=db, api=api, bot=bot, gateway=gateway, pin=pin, chat_id=target.chat_id, job=job)
-    try:
-        sent = await bot.send_photo(
-            chat_id=target.chat_id,
-            message_thread_id=target.thread_id,
-            photo=BufferedInputFile(image.data, filename=filename(image)),
-            reply_parameters=target.reply_parameters,
-        )
-    except BaseException:
-        async with db.transaction() as session:  # absorbed
-            record_image(session, image, target.chat_id, user_id, funding="creator", run_id=None)
-        raise
-    async with db.transaction() as session:
-        record_image(session, image, target.chat_id, user_id, funding=funding, run_id=run_id)
-        await record_outgoing(session, [sent], bot.id)
-    return sent
 
 
 def record_image(

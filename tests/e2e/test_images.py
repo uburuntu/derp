@@ -120,9 +120,10 @@ class BrokenImages(FakeImages):
         raise OpenRouterError(502, "upstream down")
 
 
-async def test_an_approved_image_that_fails_turns_its_prompt_into_the_failure_note(
+async def test_an_approved_image_that_fails_is_answered_and_not_charged(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
+    """The resumed run hears the image failed and says so; the "drawing…" prompt goes."""
     images = BrokenImages()
     conversation.overrides["api"] = images
     await conversation.restart()
@@ -130,18 +131,41 @@ async def test_an_approved_image_that_fails_turns_its_prompt_into_the_failure_no
     prompt_id, run = await ask_for_a_dragon(conversation, model)
     async with conversation.db.session() as session:
         before = await balance(session, wallet_id)
+    model.reply("The dragon machine broke, nothing was charged for it.")
     after = conversation.seq
     await conversation.press(JO, JO.id, prompt_id, run)
     assert set(images.prompts) == {"a dragon"}  # every pinned model was tried
-    assert conversation.api.calls_of("deleteMessage", after=after) == []
-    assert conversation.api.calls_of("sendRichMessage", after=after) == []  # no second message
-    note = conversation.api.calls_of("editMessageText", after=after)[-1]
-    assert int(note["message_id"]) == prompt_id
-    assert note["rich_message"]["markdown"] == "The image didn't come out — nothing was charged."
-    assert "reply_markup" not in conversation.api.message(JO.id, prompt_id)
+    assert "image failed" in results_of(model, "generate_image")[0]
+    [answer] = conversation.api.calls_of("sendRichMessage", after=after)
+    assert "machine broke" in answer["rich_message"]["markdown"]
+    [deleted] = conversation.api.calls_of("deleteMessage", after=after)
+    assert int(deleted["message_id"]) == prompt_id
     async with conversation.db.session() as session:
         approved = await session.scalar(select(AgentRun).where(AgentRun.trigger == "callback"))
-        assert approved is not None and approved.status == "failed" and approved.charged_credits == 0
+        assert approved is not None and approved.status == "completed" and approved.charged_credits == 0
+        assert await session.scalar(select(ProviderCall.run_id).where(ProviderCall.kind == "image")) is None
+        assert await balance(session, wallet_id) == before
+
+
+async def test_an_approval_whose_history_is_gone_says_it_failed(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    """Privacy actions drop run transcripts: with nothing to resume, the prompt becomes the failure note."""
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    wallet_id = await fund(conversation, 150)
+    prompt_id, run = await ask_for_a_dragon(conversation, model)
+    async with conversation.db.transaction() as session:
+        await session.execute(update(AgentRun).values(messages=None))
+        before = await balance(session, wallet_id)
+    after = conversation.seq
+    await conversation.press(JO, JO.id, prompt_id, run)
+    note = conversation.api.message(JO.id, prompt_id)
+    assert "didn't come out" in str(note["rich_message"]) and images.prompts == []
+    assert conversation.api.calls_of("sendRichMessage", after=after) == []
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(AgentRun.id).where(AgentRun.trigger == "callback")) is None
         assert await balance(session, wallet_id) == before
 
 
@@ -314,8 +338,11 @@ async def test_a_drawn_image_feeds_the_meme_tool(conversation: Conversation, mod
 
 
 async def ask_for_a_dragon(conversation: Conversation, model: ScriptedModel) -> tuple[int, str]:
-    """An image request that has to ask first: the prompt's message id and its Run button's data."""
-    model.reply(tool_call("generate_image", prompt="a dragon"), ".")
+    """An image request that has to ask first: the prompt's message id and its Make it button's data.
+
+    The asking run pauses on the call, so the next scripted reply is the resumed run's.
+    """
+    model.reply(tool_call("generate_image", prompt="a dragon"))
     asked = await conversation.send(JO, text="draw a dragon")
     prompt = await conversation.expect_reply(asked)
     await conversation.settle(asked)

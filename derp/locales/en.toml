@@ -283,7 +283,6 @@ expired = "⌛ This request expired — nothing was made or charged. Ask again i
 not_yours = "Only the person who asked can decide."
 no_coins = "Not enough Derpcoins for this anymore — nothing was charged."
 failed = "The image didn't come out — nothing was charged."
-unconfirmed = "Telegram didn't confirm the image arrived — nothing was charged."
 
 [scheduler]
 reminder = "⏰ Reminder from {name}: {text}"
