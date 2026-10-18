@@ -120,7 +120,7 @@ async def test_an_edit_rewrites_in_place_or_waits_as_one_proposal(database: Data
         assert await rewrite(session, note, "meetups are on   Thursdays", propose=False, author_id=7) is note
         first = await rewrite(session, note, "meetups are on Mondays", propose=True, author_id=8)
         second = await rewrite(session, note, "meetups are on Sundays", propose=True, author_id=9)
-        assert isinstance(first, Note) and first is second  # one pending edit per note, the latest text
+        assert isinstance(second, Note) and first is second  # one pending edit per note, the latest text
         assert (second.state, second.replaces_id, second.author_id) == ("proposed", note.id, 9)
         note_id = note.id
     async with database.session() as session:

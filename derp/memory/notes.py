@@ -24,9 +24,8 @@ CHAT_NOTES_CAP = 50
 USER_NOTES_CAP = 20
 RULES_CHARS = 2000
 PROMPT_CHARS = 3000  # notes shown to the model per run, newest first
-MY_SHARE = (
-    1000  # of those, kept for the asker's own notes; a share either kind leaves unused goes to the other
-)
+# Of those, kept for the asker's own notes; a share either kind leaves unused goes to the other.
+MY_SHARE = 1000
 FOUND_NOTES = 20  # notes one search returns
 ADMIN_STATUSES = {"creator", "administrator"}
 
