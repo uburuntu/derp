@@ -167,29 +167,29 @@ class Runtime:
             retries=2,  # a second chance at a bad tool call: two misses in a row would end the turn
         )
 
-    async def answer(
-        self, message: TgMessage, chat: Chat, *, trigger: str = "message", named: bool = False
-    ) -> Outcome | None:
-        """Answer an invocation, queued per chat topic; ``named``: Derp's name was all that invoked it.
+    async def screen(self, message: TgMessage, chat: Chat) -> Verdict:
+        """Whether a name-only mention speaks to Derp, asked along with what its run would need to know.
 
-        None when an owner blocked the chat or the asker, a name-only mention wasn't addressed to Derp, or the
-        trigger was merged into a newer one or is a duplicate.
+        Called before anything is posted or queued: a passing mention never posts, nor supersedes a question
+        waiting its turn. The verdict goes on to ``answer``.
+        """
+        async with self.db.session() as session:
+            images = await run_media(session, chat.id, message.message_id, _replied_id(message))
+        return await self.decider.decide(
+            message, bot_id=self.bot.id, tz=chat_time(chat), named=True, images=images
+        )
+
+    async def answer(
+        self, message: TgMessage, chat: Chat, *, trigger: str = "message", verdict: Verdict | None = None
+    ) -> Outcome | None:
+        """Answer an invocation, queued per chat topic; ``verdict``: what ``screen`` already decided.
+
+        None when an owner blocked the chat or the asker, or the trigger was merged into a newer one or is a duplicate.
         """
         if message.from_user is None:
             raise ValueError("an invocation needs a sender")
         async with self.db.session() as session:
             if await is_blocked(session, chat.id, message.from_user.id):
-                return None
-        verdict: Verdict | None = None
-        if (
-            named
-        ):  # decided before queueing, so a passing mention never supersedes a question waiting its turn
-            async with self.db.session() as session:
-                images = await run_media(session, chat.id, message.message_id, _replied_id(message))
-            verdict = await self.decider.decide(
-                message, bot_id=self.bot.id, tz=chat_time(chat), named=True, images=images
-            )
-            if not verdict.addressed:
                 return None
         key = (chat.id, Target.reply_to_message(message).thread_id)
         async with self.lanes.turn(key, message.from_user.id, message.message_id) as go:

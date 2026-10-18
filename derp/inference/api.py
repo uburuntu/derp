@@ -172,7 +172,7 @@ class OpenRouterAPI:
 
     # Decisions (System One API: Jev; output tokens are free)
 
-    async def decide(self, model: str, state: Json, questions: Json, *, zdr: bool = True) -> Decided:
+    async def decide(self, model: str, state: str | Json, questions: Json, *, zdr: bool = True) -> Decided:
         """Ask typed questions (``noul``/``choice``/``score``) about ``state``; every question gets its answer.
 
         The ``v1/systemone`` endpoint takes the same body and provider preferences as the alpha Decisions API.
