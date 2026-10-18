@@ -10,8 +10,9 @@ COPY . /app
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-dev --no-editable
 
 FROM python:3.14-slim-bookworm AS runtime
+# Colour emoji for quote stickers; FriBiDi lets Pillow's bundled Raqm shape joined emoji and scripts.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-noto-color-emoji libfribidi0 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app
 WORKDIR /app

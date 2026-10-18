@@ -257,8 +257,12 @@ STICKER_BYTES = 512 * 1024
 
 
 def sticker(data: bytes, max_pixels: int = DEFAULTS.max_pixels) -> bytes:
+    """A picture as a static sticker (``encode_sticker``)."""
+    return encode_sticker(open_image(data, max_pixels))
+
+
+def encode_sticker(image: Image.Image) -> bytes:
     """A static sticker: WebP with transparency kept, the longer side exactly 512 px, under 512 KB."""
-    image = open_image(data, max_pixels)
     scale = STICKER_SIDE / max(image.size)
     size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
     image = image.resize(size, Image.Resampling.LANCZOS)
