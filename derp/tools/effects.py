@@ -32,6 +32,13 @@ STREAMS = "stream=codec_type,width,height,avg_frame_rate,duration:stream_side_da
 BACKGROUND_TIMEOUT = 45
 
 
+class SilentError(EffectError):
+    """The file has no audio stream: nothing to hear, now or on a retry."""
+
+    def __init__(self) -> None:
+        super().__init__("no sound in that file")
+
+
 @dataclass(frozen=True, slots=True)
 class Probe:
     width: int  # displayed (rotation applied); 0 without video
@@ -178,7 +185,7 @@ async def reverse(pool: WorkerPool, data: bytes, *, voice: bool = False) -> byte
             raise EffectError(f"too long to reverse ({MAX_REVERSE_SECONDS} s at most)")
         if voice or not info.video:
             if not info.audio:
-                raise EffectError("no sound in that file")
+                raise SilentError
             args = ["-vn", "-af", "areverse", "-c:a", "libopus", "-b:a", "64k", "-f", "ogg"]
             return await _render(pool, source, "reversed.ogg", args, what="reverse", read=MAX_REVERSE_SECONDS)
         width, height = captions.media_size(info.width, info.height)
@@ -220,9 +227,18 @@ async def audio_sample(pool: WorkerPool, data: bytes) -> bytes:
     """The first seconds of the sound as small mono WAV, for song recognition."""
     async with _workspace(pool, data) as source:
         if not (await probe(pool, source)).audio:
-            raise EffectError("no sound in that file")
+            raise SilentError
         args = ["-vn", "-t", str(SAMPLE_SECONDS), "-ac", "1", "-ar", "16000", "-f", "wav"]
         return await _render(pool, source, "sample.wav", args, what="sample")
+
+
+async def speech(pool: WorkerPool, data: bytes) -> bytes:
+    """The sound of a video, video note or audio file as OGG/Opus, for speech-to-text (which takes no video)."""
+    async with _workspace(pool, data) as source:
+        if not (await probe(pool, source)).audio:
+            raise SilentError
+        args = ["-vn", "-c:a", "libopus", "-b:a", "32k", "-f", "ogg"]
+        return await _render(pool, source, "speech.ogg", args, what="audio")
 
 
 async def remove_background(pool: WorkerPool, data: bytes, model: Path) -> bytes:

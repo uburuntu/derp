@@ -34,11 +34,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from derp.agent.models import AgentRun, RunOutput
 from derp.agent.runs import ledger_side_call
 from derp.db.engine import Database
+from derp.history.capture import refresh_notes
 from derp.history.models import Message, MessageMedia
 from derp.history.render import kind_label
 from derp.inference.openrouter import chat_settings
 from derp.inference.roles import ModelRole, RolePin
-from derp.telegram.media import Media, MediaGateway, MediaUnavailableError
+from derp.telegram.media import Media, MediaGateway, MediaUnavailableError, known_type
 from derp.tools.effects import still
 from derp.tools.workers import EffectError, WorkerPool
 
@@ -196,11 +197,14 @@ async def inspect(
 
 async def _picture(gateway: MediaGateway, row: MessageMedia, frames: WorkerPool | None) -> Inspected:
     file = row.file_id, row.bot_id, row.file_unique_id, row.file_size
-    try:
-        return Inspected(row, await gateway.image(*file, mime_type=row.mime_type))
-    except MediaUnavailableError as unavailable:
-        failure = unavailable
-    if frames is not None:
+    known = known_type(row.mime_type)
+    failure = MediaUnavailableError("not an image")
+    if row.type not in CLIPS:  # a clip is never a picture itself: not downloaded just to find out
+        try:
+            return Inspected(row, await gateway.image(*file, mime_type=row.mime_type))
+        except MediaUnavailableError as unavailable:
+            failure = unavailable
+    if frames is not None and (known is None or known.startswith("video/")):  # never TGS, PDF & co
         try:
             frame = await still(frames, await gateway.fetch(*file))
             return Inspected(row, await gateway.normalize(frame), still="frame")
@@ -247,19 +251,10 @@ async def store_description(
     session: AsyncSession, media: MessageMedia, description: str, run_id: int
 ) -> None:
     row = await session.get(MessageMedia, (media.chat_id, media.message_id, media.idx))
-    message = await session.get(Message, (media.chat_id, media.message_id))
-    if row is None or message is None:
+    if row is None:
         return
     row.description, row.description_run_id = description, run_id
-    notes = [
-        m.transcript or m.description or ""
-        for m in await session.scalars(
-            select(MessageMedia).where(
-                MessageMedia.chat_id == media.chat_id, MessageMedia.message_id == media.message_id
-            )
-        )
-    ]
-    message.extra_text = " ".join(n for n in notes if n) or None
+    await refresh_notes(session, media.chat_id, media.message_id)
 
 
 async def note_images(

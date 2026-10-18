@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 import pytest
 from sqlalchemy import select
 
-from derp.history.models import TOO_LONG, UNHEARD, Message, MessageMedia
+from derp.history.models import SILENT, TOO_BIG, TOO_LONG, UNHEARD, Message, MessageMedia
 from derp.history.transcription import Transcriber
 from derp.inference.api import OpenRouterError, Transcript
 from derp.inference.models import ProviderCall
@@ -48,6 +48,7 @@ async def use_stt(conversation: Conversation, stt: FakeSTT) -> None:
             api=stt,  # type: ignore[arg-type]
             gateway=s.media,
             pins=s.pins,
+            workers=s.workers,
             settings=s.settings,
             notify=lambda text: notify_owners(s.bot, s.settings, text),
         )
@@ -240,7 +241,23 @@ async def test_the_speech_in_a_video_is_heard_once_someone_asks(
     sent = await conversation.send(EVA, group, caption="дерп, а тут?", video=huge)
     await conversation.expect_reply(sent)
     assert len(stt.calls) == 1  # past Telegram's download limit: never fetched
-    assert "[video 0:01 — couldn't transcribe]" in str(model.requests[-1])
+    assert "[video 0:01 — too big to download]" in str(model.requests[-1])
+
+    silent = tmp_path / "silent.mp4"
+    process = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=1", "-c:v", "libx264",
+        str(silent),
+    )  # fmt: skip
+    assert await process.wait() == 0
+    conversation.api.register_file("v3", silent.read_bytes())
+    model.reply("тишина")
+    mute = {**video, "file_id": "v3", "file_unique_id": "u-v3"}
+    sent = await conversation.send(EVA, group, caption="дерп, что тут говорят?", video=mute)
+    await conversation.expect_reply(sent)
+    assert len(stt.calls) == 1 and "[video 0:01 — no sound]" in str(model.requests[-1])
+    async with conversation.db.session() as session:
+        reasons = set(await session.scalars(select(MessageMedia.transcript_model)))
+    assert {TOO_BIG, SILENT} <= reasons  # settled: never fetched or probed again
 
 
 async def test_derp_is_told_why_a_voice_note_has_no_transcript(
@@ -275,7 +292,14 @@ async def test_runs_settle_pending_transcriptions_before_reading_the_chat(
 ) -> None:
     stt = FakeSTT()
     conversation.overrides["transcriber"] = Derived(
-        lambda s: WatchedTranscriber(db=s.db, api=stt, gateway=s.media, pins=s.pins, settings=s.settings)  # type: ignore[arg-type]
+        lambda s: WatchedTranscriber(
+            db=s.db,
+            api=stt,  # type: ignore[arg-type]
+            gateway=s.media,
+            pins=s.pins,
+            workers=s.workers,
+            settings=s.settings,
+        )
     )
     await conversation.restart()
     model.reply("hi")

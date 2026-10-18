@@ -12,6 +12,8 @@ from derp.db.base import Base
 
 # ``message_media.transcript_model`` of a recording whose transcript is empty because none was made: why.
 TOO_LONG = "too-long"  # over ``media.voice_max_seconds``: never transcribed
+TOO_BIG = "too-big"  # past the Bot API download limit: never fetched
+SILENT = "silent"  # no audio track: nothing to hear
 UNHEARD = "failed"  # the last attempt failed (download, ffmpeg, provider); an invocation may retry
 
 
@@ -187,7 +189,9 @@ class MessageMedia(Base):
     transcript: Mapped[
         str | None
     ]  # None: not tried yet; "": tried, nothing (``transcript_model`` may say why)
-    transcript_model: Mapped[str | None]  # the model, or why the transcript is empty: TOO_LONG / UNHEARD
+    transcript_model: Mapped[
+        str | None
+    ]  # the model, or why the transcript is empty: TOO_LONG / TOO_BIG / SILENT / UNHEARD
     description: Mapped[str | None]
     description_run_id: Mapped[int | None]  # the run whose note it is; cleared with the note
 

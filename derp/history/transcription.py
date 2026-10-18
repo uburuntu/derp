@@ -2,18 +2,18 @@
 
 Runs inline during capture, before handlers, so an invocation by voice is
 answered from its transcript. Creator-funded and ledgered as ``kind='stt'``;
-nothing is posted. Long recordings, failed downloads (Telegram hands bots
-files up to 20 MB) and provider errors leave the message with an empty
-transcript (like an image whose note came back empty) and the reason in
-``transcript_model``, so the transcript line can say it — they never fail
-capture; a failed one is tried again when an invocation replies to it. Which
+nothing is posted. Long recordings, files past the 20 MB bots may download,
+files without sound, failed downloads and provider errors leave the message
+with an empty transcript (like an image whose note came back empty) and the
+reason in ``transcript_model``, so the transcript line can say it — they never
+fail capture; only a failed one is tried again, when an invocation replies to it. Which
 messages get transcribed is decided here (``transcribe``). Ambient voice (not
 part of an invocation) stops being transcribed once the day's creator-paid STT reaches
 ``ambient_stt_daily_usd``; owners get one ping per UTC day when that happens.
 Audio files (forwarded memos, recordings) and videos are transcribed only as
 part of an invocation, never ambient. Anything but OGG audio goes through
-ffmpeg first (audio track only: the provider takes audio formats, not video
-containers).
+ffmpeg first, in the media worker pool (``effects.speech``: audio track only,
+the provider takes audio formats, not video containers).
 
 Updates are handled concurrently, so a run may start while a voice note sent
 just before it is still being transcribed: ``settle`` lets it wait for those,
@@ -22,11 +22,9 @@ briefly, before it reads the chat.
 
 import asyncio
 import logging
-import tempfile
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
-from pathlib import Path
 
 from aiogram.types import Message as TgMessage
 from sqlalchemy import func, select
@@ -34,19 +32,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.history.capture import content_type
-from derp.history.models import TOO_LONG, UNHEARD, Message, MessageMedia
+from derp.history.capture import content_type, refresh_notes
+from derp.history.models import SILENT, TOO_BIG, TOO_LONG, UNHEARD, Message, MessageMedia
 from derp.inference.api import OpenRouterAPI, OpenRouterError, Transcript
 from derp.inference.ledger import record_usage, simple_usage
 from derp.inference.models import ProviderCall
 from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole
-from derp.telegram.media import MediaGateway
+from derp.telegram.media import MediaGateway, TooLargeError
+from derp.tools.effects import SilentError, speech
+from derp.tools.workers import WorkerPool
 
 log = logging.getLogger("derp.transcription")
 SPOKEN = ("voice", "video_note")  # transcribed whenever stored
 AUDIBLE = (*SPOKEN, "audio", "video")  # audio files and videos: only as part of an invocation
-FFMPEG_SECONDS = 60
 SETTLE_SECONDS = 5.0  # how long a run waits for transcriptions still running before its message
 Notify = Callable[[str], Awaitable[None]]
 
@@ -63,31 +62,6 @@ async def stt_spent_today(session: AsyncSession, now: datetime) -> Decimal:
     return Decimal(spent or 0)
 
 
-async def extract_audio(media: bytes) -> bytes:
-    """Audio track of a video, video note or audio file as OGG/Opus (MP4 needs a seekable input, hence the temp file).
-
-    ffmpeg recognizes the container from its content, so the file needs no (user-supplied) extension.
-    """
-    with tempfile.TemporaryDirectory() as folder:
-        source = Path(folder) / "input"
-        source.write_bytes(media)
-        process = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-loglevel", "error", "-i", str(source), "-vn", "-c:a", "libopus", "-b:a", "32k", "-f", "ogg",
-            "pipe:1",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )  # fmt: skip
-        try:
-            async with asyncio.timeout(FFMPEG_SECONDS):
-                audio, _ = await process.communicate()
-        except TimeoutError:
-            process.kill()
-            raise
-    if process.returncode != 0 or not audio:
-        raise ValueError("ffmpeg could not extract audio")
-    return audio
-
-
 class Transcriber:
     def __init__(
         self,
@@ -96,12 +70,14 @@ class Transcriber:
         api: OpenRouterAPI,
         gateway: MediaGateway,
         pins: PinStore,
+        workers: WorkerPool,
         settings: Settings,
         notify: Notify | None = None,
     ) -> None:
         self.db = db
         self.api = api
         self.gateway = gateway
+        self.workers = workers
         self.pins = pins
         self.max_seconds = settings.media.voice_max_seconds
         self.ambient_cap = Decimal(str(settings.ambient_stt_daily_usd))
@@ -189,6 +165,9 @@ class Transcriber:
         if (media.duration or 0) > self.max_seconds:
             await self._mark(media, TOO_LONG)
             return None
+        if (media.file_size or 0) > self.gateway.max_bytes:
+            await self._mark(media, TOO_BIG)
+            return None
         if ambient and await self._over_ambient_cap():
             return None
         try:
@@ -196,8 +175,11 @@ class Transcriber:
                 media.file_id, bot_id=media.bot_id, key=media.file_unique_id, size_hint=media.file_size
             )
             ogg = media.type == "voice" or (media.type == "audio" and media.mime_type == "audio/ogg")
-            audio = data if ogg else await extract_audio(data)
+            audio = data if ogg else await speech(self.workers, data)
             transcript = await self._speech_to_text(audio, media.duration or 0)
+        except (TooLargeError, SilentError) as settled:  # the same next time: never retried
+            await self._mark(media, TOO_BIG if isinstance(settled, TooLargeError) else SILENT)
+            return None
         except Exception as error:  # noqa: BLE001 - capture never fails over a transcript (ffmpeg, network…)
             log.info("no transcript for a %s: %s", media.type, type(error).__name__)
             await self._mark(media, UNHEARD)
@@ -214,12 +196,11 @@ class Transcriber:
                 units=media.duration or 0,
             )
             row = await session.get(MessageMedia, (media.chat_id, media.message_id, media.idx))
-            message = await session.get(Message, (chat_id, message_id))
-            if row is None or message is None:
+            if row is None:
                 return None
             row.transcript = transcript.text
             row.transcript_model = transcript.model
-            message.extra_text = " ".join(filter(None, (message.extra_text, transcript.text))) or None
+            await refresh_notes(session, chat_id, message_id)
         return transcript.text
 
     async def _mark(self, media: MessageMedia, reason: str) -> None:

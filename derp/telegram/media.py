@@ -10,7 +10,11 @@ Pictures a model sees go through one step, ``normalize``: decoded once (JPEG,
 PNG, GIF, WebP, TIFF, BMP, HEIC/HEIF, AVIF; within the media workers' pixel
 and side caps, ``check_dimensions``), turned upright by EXIF, scaled down to ``VISION_SIDE``,
 transparency put on white, encoded as JPEG. ``MediaGateway.image`` fetches and
-normalizes; a file whose MIME type says it isn't a picture is never downloaded.
+normalizes; a file whose MIME type says it isn't a picture is never downloaded
+(``application/octet-stream`` or none says nothing: the bytes are sniffed).
+An animated sticker (TGS, gzipped Lottie JSON) is useless to Pillow and
+ffmpeg alike, so it is never downloaded, whatever its row says: ``fetch``
+refuses a file Telegram stores as ``.tgs``.
 """
 
 import asyncio
@@ -18,6 +22,7 @@ import io
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from typing import cast
 
 import aiohttp
 import pillow_heif
@@ -43,6 +48,8 @@ HEIF_BRANDS = {b"heic": "image/heic", b"heix": "image/heic", b"mif1": "image/hei
 DECODABLE = ("JPEG", "PNG", "GIF", "WEBP", "TIFF", "BMP", "HEIF", "AVIF")  # never EPS, PSD & co
 VISION_SIDE = 1568  # the longer side of a picture sent to a model: past this, providers scale down anyway
 VISION_QUALITY = 88
+UNKNOWN_TYPES = {"application/octet-stream"}  # what clients send when they don't know: sniff instead
+TGS = "application/x-tgsticker"
 
 pillow_heif.register_heif_opener()  # a format registry entry, so Pillow (and the effects) open iPhone photos
 
@@ -55,10 +62,22 @@ class MediaUnavailableError(Exception):
         self.reason = reason
 
 
+class TooLargeError(MediaUnavailableError):
+    """Past what the Bot API lets bots download: it won't fit later either."""
+
+    def __init__(self) -> None:
+        super().__init__("too large")
+
+
 @dataclass(frozen=True, slots=True)
 class Media:
     data: bytes
     media_type: str
+
+
+def known_type(mime_type: str | None) -> str | None:
+    """A MIME type that says something about the file, else None (missing, or a generic byte stream)."""
+    return mime_type if mime_type and mime_type not in UNKNOWN_TYPES else None
 
 
 def sniff_image(data: bytes) -> str | None:
@@ -72,6 +91,20 @@ def sniff_image(data: bytes) -> str | None:
     return None
 
 
+def _eight_bit(image: Image.Image) -> Image.Image:
+    """Deep grayscale (16-bit PNG, 32-bit or float TIFF) as 8-bit ``L``: converted directly it clips to white.
+
+    16-bit samples scale by their fixed range; 32-bit and float ones, which have none, by the picture's own.
+    """
+    if image.mode.startswith("I;16"):
+        return image.convert("I").point(lambda value: value / 256).convert("L")
+    if image.mode in ("I", "F"):
+        low, high = cast(tuple[float, float], image.getextrema())
+        scale = 255 / (high - low) if high > low else 1
+        return image.point(lambda value: (value - low) * scale).convert("L")
+    return image
+
+
 def normalize(data: bytes, max_pixels: int = DEFAULTS.max_pixels) -> Media:
     """A picture as a model should get it: upright, at most ``VISION_SIDE``, opaque, JPEG (an animation's first frame).
 
@@ -82,7 +115,7 @@ def normalize(data: bytes, max_pixels: int = DEFAULTS.max_pixels) -> Media:
         with Image.open(io.BytesIO(data), formats=DECODABLE) as source:
             check_dimensions(*source.size, max_pixels)
             source.draft("RGB", (VISION_SIDE, VISION_SIDE))  # a big JPEG decodes at a fraction of its size
-            upright = ImageOps.exif_transpose(source)
+            upright = _eight_bit(ImageOps.exif_transpose(source))
             clear = upright.mode in ("RGBA", "LA", "PA") or "transparency" in upright.info
             image = upright.convert("RGBA" if clear else "RGB")
             image.thumbnail((VISION_SIDE, VISION_SIDE), Image.Resampling.LANCZOS)
@@ -126,14 +159,16 @@ class MediaGateway:
             self._cache.move_to_end(cache_key)
             return hit[1]
         if size_hint and size_hint > self.max_bytes:
-            raise MediaUnavailableError("too large")
+            raise TooLargeError
         try:
             async with asyncio.timeout(self.timeout):
                 file = await self.bot.get_file(file_id)
                 if file.file_size and file.file_size > self.max_bytes:
-                    raise MediaUnavailableError("too large")
+                    raise TooLargeError
                 if not file.file_path:
                     raise MediaUnavailableError("not downloadable")
+                if file.file_path.endswith(".tgs"):  # Telegram names files by type; rows may not know it
+                    raise MediaUnavailableError("an animated sticker")
                 buffer = io.BytesIO()
                 await self.bot.download_file(file.file_path, buffer)
         except TimeoutError:
@@ -144,7 +179,7 @@ class MediaGateway:
             raise MediaUnavailableError(f"download failed ({type(error).__name__})") from None
         data = buffer.getvalue()
         if len(data) > self.max_bytes:
-            raise MediaUnavailableError("too large")
+            raise TooLargeError
         self._remember(cache_key, data)
         return data
 
@@ -158,7 +193,7 @@ class MediaGateway:
         mime_type: str | None = None,
     ) -> Media:
         """A file as a picture for a model (``normalize``); one whose ``mime_type`` isn't an image is never fetched."""
-        if mime_type and not mime_type.startswith("image/"):
+        if (known := known_type(mime_type)) and not known.startswith("image/"):
             raise MediaUnavailableError("not an image")
         return await self.normalize(await self.fetch(file_id, bot_id=bot_id, key=key, size_hint=size_hint))
 

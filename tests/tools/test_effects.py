@@ -156,8 +156,18 @@ async def test_reversing_and_its_limits() -> None:
 async def test_frames_and_samples_for_recognition() -> None:
     assert Image.open(io.BytesIO(await effects.still(POOL, clip()))).format == "JPEG"
     assert (await effects.audio_sample(POOL, clip()))[:4] == b"RIFF"
-    with pytest.raises(EffectError, match="no sound"):
+    with pytest.raises(effects.SilentError):
         await effects.audio_sample(POOL, clip(sound=False))
+
+
+@needs_ffmpeg
+async def test_speech_is_the_sound_of_any_clip_or_recording_as_ogg() -> None:
+    memo = ffmpeg("-f", "lavfi", "-i", "sine=duration=1", "-f", "mp3")
+    assert (await effects.speech(POOL, clip()))[:4] == (await effects.speech(POOL, memo))[:4] == b"OggS"
+    with pytest.raises(effects.SilentError):
+        await effects.speech(POOL, clip(sound=False))
+    with pytest.raises(EffectError):
+        await effects.speech(POOL, b"not a video")
 
 
 def test_background_model_availability(tmp_path: Path) -> None:
