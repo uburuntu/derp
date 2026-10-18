@@ -13,6 +13,7 @@ from derp.agent.tools import (
     history,
     images,
     memory,
+    quotes,
     scheduler,
     self_service,
     telegram,
@@ -40,6 +41,7 @@ FAMILIES: tuple[Family, ...] = (
     effects.background_family,
     effects.song_family,
     effects.profile_family,
+    quotes.family,
 )
 
 
