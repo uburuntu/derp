@@ -19,7 +19,7 @@ from pydantic_ai.toolsets import FunctionToolset
 import derp
 from derp.agent.deps import RunDeps
 from derp.agent.toolsets import ALL_TIERS, Family
-from derp.config import Settings
+from derp.config import Settings, WatchLimits
 from derp.inference.openrouter import REASONING_ROOM
 from derp.locales import t
 from derp.memory import notes
@@ -59,6 +59,17 @@ def _tools(families: Sequence[Family]) -> list[str]:
             summary = (tool.description or "").strip().partition("\n")[0]
             lines.append(f"- {name} ({tiers}{', toolbox' if toolbox else ''}): {summary}")
     return lines
+
+
+def _watch_limits(limits: WatchLimits) -> str:
+    return (
+        f"clips with sound up to {_minutes(limits.clip_seconds)}, audio up to {_minutes(limits.audio_seconds)} "
+        f"and PDFs up to {limits.pdf_pages} pages"
+    )
+
+
+def _minutes(seconds: int) -> str:
+    return f"{seconds / 60:g} minute{'s' if seconds != 60 else ''}"
 
 
 def facts(topic: Topic, settings: Settings, username: str, families: Sequence[Family]) -> list[str]:
@@ -122,7 +133,7 @@ def facts(topic: Topic, settings: Settings, username: str, families: Sequence[Fa
         case "terms":
             return [t("en", "pages.terms").strip()]
         case "limits":
-            caps, media = settings.run_caps, settings.media
+            caps, media, watching = settings.run_caps, settings.media, settings.watching
             return [
                 (
                     f"- Per answer: {caps.tool_calls} tool calls, {caps.visible_outputs} visible outputs (messages, "
@@ -133,6 +144,11 @@ def facts(topic: Topic, settings: Settings, username: str, families: Sequence[Fa
                 (
                     f"- Media: files up to {media.max_input_bytes // 2**20} MB and {media.max_pixels / 1e6:g} "
                     f"megapixels; voice, audio and video transcribed up to {media.voice_max_seconds // 60} minutes."
+                ),
+                (
+                    f"- Watching whole files: paid answers take {_watch_limits(watching.paid)}; the free "
+                    f"allowance takes {_watch_limits(watching.sponsored)}; free models get a still frame or "
+                    "preview picture only."
                 ),
             ]
         case "commands":

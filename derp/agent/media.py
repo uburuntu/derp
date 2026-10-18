@@ -11,9 +11,9 @@ description stored on ``message_media`` (and folded into search text), so later
 runs — and models without vision — see "[photo: a grey cat on a laptop]"
 instead of a bare placeholder. Descriptions are written only for images a run
 actually inspected. What isn't a picture itself (an animated or video sticker, a
-GIF, a file) is seen through Telegram's preview picture of it; asked for
-explicitly (``frames``), videos, GIFs and video messages are seen through one
-still frame first. Every picture reaches the model normalized
+GIF, a file) is seen through Telegram's preview picture of it. Asked for
+explicitly, ``inspect_media`` opens clips, audio and PDFs whole (``agent.watch``);
+what it can't is seen through one still frame first (``frames``). Every picture reaches the model normalized
 (``MediaGateway.image``). Notes for one run are made concurrently
 under a timeout; every provider response is ledgered, and an image whose paid note
 came back empty is marked with an empty description so it is never paid for twice.
