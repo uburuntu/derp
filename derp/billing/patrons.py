@@ -11,19 +11,18 @@ buttons survive deploys. Never pinned.
 
 import asyncio
 import contextlib
-import math
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, Message
-from sqlalchemy import Date, cast, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from derp.agent.models import AgentRun
 from derp.billing.menu import top_up_button
 from derp.billing.models import PatronPost, Purchase
+from derp.billing.runway import daily_pace, lasts
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat, User
@@ -39,9 +38,6 @@ from derp.telegram.text import literal
 
 COALESCE = timedelta(minutes=30)
 HIDE_WINDOW = timedelta(minutes=10)
-PACE_DAYS = 14  # runway: the wallet's average daily spend over this many days
-MIN_ACTIVE_DAYS = 3  # fewer days with spending: runway in answers at a typical turn's price
-MONTH_DAYS = 30
 LATELY_DAYS = 30
 LATELY_SHOWN = 3
 HYPES = 3  # rotating wordings, chosen per post so edits keep theirs
@@ -57,28 +53,9 @@ async def runway(
     session: AsyncSession, locale: str, wallet_id: int, left: int, turn_price: int, now: datetime
 ) -> str:
     """The wallet's balance and how long it lasts at the chat's recent pace (or in answers, early on)."""
-    charged = await session.execute(
-        select(
-            func.coalesce(func.sum(AgentRun.charged_credits), 0),
-            func.count(func.distinct(cast(func.timezone("UTC", AgentRun.created_at), Date))),
-            func.min(AgentRun.created_at),
-        ).where(
-            AgentRun.wallet_id == wallet_id,
-            AgentRun.created_at >= now - timedelta(days=PACE_DAYS),
-            AgentRun.charged_credits > 0,
-        )
-    )
-    spent, active, first = charged.one()
     amount = f"{left:,}"
-    if active >= MIN_ACTIVE_DAYS and first is not None and spent > 0:
-        # Average over the days since spending began in the window (a young wallet isn't diluted).
-        span = min(PACE_DAYS, max(active, math.ceil((now - first).total_seconds() / 86400)))
-        days = left / (int(spent) / span)
-        if days > MONTH_DAYS:
-            return t(locale, "patron.runway_month", balance=amount)
-        if days >= 2:
-            return t(locale, "patron.runway_days", balance=amount, days=round(days))
-        return t(locale, "patron.runway_day" if days >= 1 else "patron.runway_hours", balance=amount)
+    if (pace := await daily_pace(session, wallet_id, now)) is not None:
+        return t(locale, "patron.runway", balance=amount, lasts=lasts(locale, left, pace))
     answers = left // max(1, turn_price)
     if answers < 1:
         return t(locale, "patron.runway_none", balance=amount)

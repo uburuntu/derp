@@ -75,7 +75,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Group wallet: anyone can buy Derpcoins for a group; they are spent first in that group. In a group, /buy asks
   whose wallet first — the group's (its balance is shown to everyone) or the presser's own — and the pack menu then
   opens only for the presser, with payment links; the payment happens in their private chat with Derp, where the
-  receipt goes too. A personal purchase never shows anyone's balance in the group.
+  receipt goes too. The group's pack menu also estimates roughly how long each pack would last at the group's
+  recent pace (left out while the group has spent too little to tell). A personal purchase never shows anyone's balance in the group.
 - Buying for a group posts one quiet thank-you in that group (in the topic it was bought from): the buyer's name,
   the exact amount and roughly how long the wallet lasts at the group's recent pace (early on, about how many
   answers). More purchases soon after update that post instead of adding new ones. Only the buyer can hide their
