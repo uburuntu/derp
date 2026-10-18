@@ -15,7 +15,8 @@ page Derp posted into a group on someone's request isn't anyone's panel: a press
 there toasts the outcome and drops the buttons instead of opening a panel. The
 jobs page lists the chat's reminders and scheduled prompts with buttons for the
 ones the viewer may touch; ``scheduler.jobs`` decides, here and for the Resume
-button on a paused job's note. Callback data carries only ids.
+button on a paused job's note and the Snooze buttons on a fired reminder.
+Callback data carries only ids (and a snooze its firing and length).
 """
 
 from datetime import UTC, datetime
@@ -37,7 +38,19 @@ from derp.history.retention import default_days, kept_days
 from derp.locales import day_count, resolve, t
 from derp.memory.notes import is_admin
 from derp.money.free import POLICY_VERSION, consented
-from derp.scheduler.jobs import JobAction, ResumeJob, act_on_job, live_jobs, local_time, may_touch, rezone
+from derp.scheduler.jobs import (
+    SNOOZES,
+    JobAction,
+    ResumeJob,
+    Snooze,
+    SnoozeJob,
+    act_on_job,
+    live_jobs,
+    local_time,
+    may_touch,
+    rezone,
+    snoozed_until,
+)
 from derp.settings.privacy import switch_context
 from derp.telegram.buttons import Press, button, link, markup, on_press
 from derp.telegram.sender import Target, send_markdown
@@ -285,7 +298,7 @@ async def apply_setting(
 
 
 async def apply_job(
-    db: Database, chat: Chat, user_id: int, admin: bool, action: JobAction, value: str
+    db: Database, chat: Chat, user_id: int, admin: bool, action: JobAction | Snooze, value: str
 ) -> str | None:
     """A press on one of this chat's jobs (``scheduler.jobs.act_on_job`` decides); returns an alert key, if any."""
     if not value.isdigit():
@@ -355,6 +368,23 @@ async def on_resume(press: Press, data: ResumeJob, db: Database, bot: Bot) -> No
     await press.edit(t(chat.locale or press.locale, "scheduler.resumed", id=data.id))
 
 
+async def on_snooze(press: Press, data: SnoozeJob, db: Database, bot: Bot) -> None:
+    """[+10 min] [+1 h] [Tomorrow] on a fired reminder: its creator or an admin, checked on the press."""
+    async with db.session() as session:
+        chat = await session.get(Chat, press.chat_id)
+    if chat is None or data.by not in SNOOZES:
+        return await press.deny("settings.job_gone")
+    admin = await is_admin(bot, chat, press.user_id)
+    snooze = Snooze(snoozed_until(data.by, datetime.now(UTC), chat_time(chat)), data.run)
+    alert = await apply_job(db, chat, press.user_id, admin, snooze, str(data.id))
+    if alert in ("settings.job_not_yours", "settings.job_full"):
+        return await press.deny(alert)
+    await press.strip()  # snoozed, or nothing left to snooze: these buttons are spent
+    if alert:
+        return await press.deny(alert)
+    await press.toast(f"scheduler.snoozed_{data.by}")
+
+
 def build_router() -> Router:
     router = Router(name="settings")
     router.message.register(on_settings, Command("settings"))
@@ -373,4 +403,5 @@ def build_router() -> Router:
     }
     on_press(router, SettingsAction, F.action.in_(actions))(on_action)
     on_press(router, ResumeJob, F.id > 0)(on_resume)
+    on_press(router, SnoozeJob, F.id > 0)(on_snooze)
     return router

@@ -17,7 +17,8 @@ Creators pause, resume, change and cancel their own jobs, admins any
 (``act_on_job``, behind the agent's tools, the /settings jobs page and the
 Resume button); a job that repeats after the change needs an admin in groups.
 Giving a job a new time schedules it there: a paused job or a finished one-off
-comes back on. The worker claims due rows with ``SKIP LOCKED`` and every
+comes back on. A fired reminder's Snooze buttons do the same for a one-off; a
+repeating one keeps its series and gets one extra firing. The worker claims due rows with ``SKIP LOCKED`` and every
 action locks its row, so a change racing a firing lands either before the
 claim (the job fires on the new terms) or after it (on top of the moved-on row).
 """
@@ -44,7 +45,8 @@ MISS_LIMIT = 3  # unfunded firings in a row before a job pauses
 LIVE = ("active", "paused")  # jobs still scheduled; done and cancelled ones only await deletion
 
 type JobAction = Literal["pause", "resume", "cancel"]
-type Refusal = Literal["gone", "not_yours", "passed", "admins", "full"]
+type Refusal = Literal["gone", "not_yours", "passed", "admins", "full", "fired"]
+SNOOZES = ("10m", "1h", "1d")  # the Snooze buttons on a fired reminder: +10 minutes, +1 hour, tomorrow
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +57,36 @@ class Change:
     text: str | None = None
     kind: Literal["message", "prompt"] | None = None
     repeat: Literal["once", "daily", "weekdays", "weekly", "monthly"] | None = None  # once: stop repeating
+
+
+@dataclass(frozen=True, slots=True)
+class Snooze:
+    """Fire a reminder again at ``until``.
+
+    A one-off moves there; a repeating job keeps its series and gets one extra firing (``Job.snooze_of``),
+    which a later snooze moves instead of adding another.
+    """
+
+    until: datetime
+    run: int  # the firing whose button was pressed: once the job fired again, that button is stale
+
+
+class SnoozeJob(CallbackData, prefix="jobsnooze"):
+    """A Snooze button on a fired reminder (handled with the jobs page in ``settings/panel.py``)."""
+
+    id: int
+    run: int  # Job.runs as it fired
+    by: str  # one of SNOOZES
+
+
+def snoozed_until(by: str, now: datetime, tz: tzinfo) -> datetime:
+    match by:
+        case "10m":
+            return now + timedelta(minutes=10)
+        case "1h":
+            return now + timedelta(hours=1)
+        case _:  # tomorrow at this local time
+            return following(now, "daily", tz)
 
 
 class ResumeJob(CallbackData, prefix="jobresume"):
@@ -151,17 +183,29 @@ def may_touch(job: Job, user_id: int | None, admin: bool) -> bool:
 
 
 async def act_on_job(
-    session: AsyncSession, chat: Chat, job_id: int, user_id: int, admin: bool, action: JobAction | Change
+    session: AsyncSession,
+    chat: Chat,
+    job_id: int,
+    user_id: int,
+    admin: bool,
+    action: JobAction | Change | Snooze,
 ) -> Job | Refusal:
-    """Pause, resume, cancel or change one of this chat's jobs; returns the job, or why it was refused.
+    """Pause, resume, cancel, change or snooze one of this chat's jobs; returns the job, or why not.
 
-    Resuming an active job leaves it be. ``admin`` is always true in a private chat.
+    A snoozed repeating job returns its extra firing. Resuming an active job leaves it be; cancelling a series cancels its extra firing too. ``admin`` is
+    always true in a private chat.
     """
     job = await session.get(Job, job_id, with_for_update=True)
     if job is None or job.chat_id != chat.id or job.state == "cancelled":
         return "gone"
     if not may_touch(job, user_id, admin):
         return "not_yours"
+    if isinstance(action, Snooze):
+        if job.runs != action.run:
+            return "fired"
+        if job.repeat is not None:
+            return await _extra(session, job, action.until)
+        action = Change(at=action.until)
     if job.state == "done" and not isinstance(action, Change):
         return "gone"
     match action:
@@ -172,6 +216,8 @@ async def act_on_job(
                 return "passed"
         case "cancel":
             job.state = "cancelled"
+            extra = (Job.snooze_of == job.id) & Job.state.in_(LIVE)
+            await session.execute(update(Job).where(extra).values(state="cancelled"))
         case Change():
             return await _change(session, job, action, admin)
         case _:
@@ -195,6 +241,29 @@ async def _change(session: AsyncSession, job: Job, change: Change, admin: bool) 
         job.next_at = job.anchor_at = change.at
         job.state, job.misses = "active", 0
     return job
+
+
+async def _extra(session: AsyncSession, job: Job, until: datetime) -> Job | Refusal:
+    """Move a repeating job's extra firing to ``until``, adding it if it has none pending."""
+    extra = await session.scalar(
+        select(Job).where(Job.snooze_of == job.id, Job.state == "active").with_for_update()
+    )
+    if extra is None:
+        if not await has_room(session, job.chat_id, job.creator_id):
+            return "full"
+        extra = Job(
+            chat_id=job.chat_id,
+            thread_id=job.thread_id,
+            creator_id=job.creator_id,
+            kind=job.kind,
+            text=job.text,
+            snooze_of=job.id,
+            state="active",
+        )
+        session.add(extra)
+    extra.next_at = extra.anchor_at = until
+    await session.flush()
+    return extra
 
 
 async def pause_jobs(session: AsyncSession, chat_id: int, creator_id: int | None = None) -> None:

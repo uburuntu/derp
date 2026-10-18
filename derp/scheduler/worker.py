@@ -4,7 +4,8 @@ A job is claimed and rescheduled (or finished) in one transaction before it
 fires, so a crash mid-send never fires it twice. Prompt jobs run as an agent
 turn with the creator as invoker, funded at fire time like any message; an
 unfunded firing posts a short note, and ``MISS_LIMIT`` of them in a row pause
-the job (that note carries a Resume button). A chat that refuses Derp's messages
+the job (that note carries a Resume button). A reminder carries Snooze buttons
+for the firing it posts. A chat that refuses Derp's messages
 pauses its jobs.
 """
 
@@ -25,7 +26,7 @@ from derp.history.models import Chat, User
 from derp.history.render import chat_time
 from derp.locales import resolve, t
 from derp.ops.owner import is_blocked
-from derp.scheduler.jobs import MISS_LIMIT, ResumeJob, next_after
+from derp.scheduler.jobs import MISS_LIMIT, SNOOZES, ResumeJob, SnoozeJob, next_after
 from derp.scheduler.models import Job
 from derp.telegram.buttons import button, markup
 from derp.telegram.sender import Target, send_markdown
@@ -102,9 +103,12 @@ async def fire(db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, n
     try:
         if job.kind == "message":
             name = (user.first_name if user else None) or "someone"
-            await send_markdown(
-                bot, target, t(locale, "scheduler.reminder", name=name, text=job.text), trusted=False
-            )
+            snooze = [
+                button(t(locale, f"scheduler.snooze_{by}"), SnoozeJob(id=job.id, run=job.runs, by=by))
+                for by in SNOOZES
+            ]
+            text = t(locale, "scheduler.reminder", name=name, text=job.text)
+            await send_markdown(bot, target, text, trusted=False, reply_markup=markup(snooze))
             return
         outcome = await runtime.answer(as_message(job, chat, user, now), chat, trigger="job")
         if outcome is not None and outcome.refused:
