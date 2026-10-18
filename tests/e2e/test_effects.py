@@ -327,7 +327,7 @@ async def test_derp_looks_at_a_gif_and_a_video_message_through_a_frame(
         for part in message.parts
         if isinstance(part, ToolReturnPart) and part.tool_name == "inspect_media"
     ]
-    assert "still frame of the animation" in labels[0] and "still frame of the video note" in labels[1]
+    assert "still frame of the gif" in labels[0] and "still frame of the video note" in labels[1]
     async with conversation.db.session() as session:
         notes = set(await session.scalars(select(MessageMedia.description)))
     assert {"a test pattern", "a test pattern again"} <= notes

@@ -1,5 +1,7 @@
+import io
 from datetime import UTC, datetime
 
+from PIL import Image
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -17,7 +19,14 @@ from derp.inference.models import ProviderCall
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+def png(color: str = "grey", size: tuple[int, int] = (32, 32)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+PNG = png()
 DORA = Person(601, "Dora")
 
 
@@ -52,7 +61,8 @@ async def test_photo_question_sends_pixels_and_stores_a_note(
 
     def look(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         (image,) = images_in(messages[-1:])
-        assert image.media_type == "image/png" and image.data == PNG
+        assert image.media_type == "image/jpeg"  # normalized for the model
+        assert Image.open(io.BytesIO(image.data)).size == (32, 32)
         return ModelResponse(parts=[TextPart("a very square cat")])
 
     model.reply(look, "grey square cat on black background")

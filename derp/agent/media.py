@@ -31,9 +31,10 @@ from derp.agent.models import AgentRun, RunOutput
 from derp.agent.runs import ledger_side_call
 from derp.db.engine import Database
 from derp.history.models import Message, MessageMedia
+from derp.history.render import kind_label
 from derp.inference.openrouter import chat_settings
 from derp.inference.roles import ModelRole, RolePin
-from derp.telegram.media import Media, MediaGateway, MediaUnavailableError, sniff_image
+from derp.telegram.media import Media, MediaGateway, MediaUnavailableError
 from derp.tools.effects import still
 from derp.tools.workers import EffectError, WorkerPool
 
@@ -55,7 +56,7 @@ DESCRIBE_PROMPT = (
 class Inspected:
     row: MessageMedia
     image: Media
-    frame: bool = False  # a still taken from a clip
+    still: str = ""  # how a picture stands in for a clip: "frame" (taken from it)
 
 
 async def referenced_media(
@@ -172,33 +173,46 @@ async def run_media(session: AsyncSession, chat_id: int, message_id: int, reply_
 async def inspect(
     gateway: MediaGateway, rows: Sequence[MessageMedia], *, frames: WorkerPool | None = None
 ) -> list[Inspected]:
-    """Download what can be downloaded; oversized files are skipped, and clips too unless ``frames``.
+    """Each row as a picture a model can take (``MediaGateway.image``), or skipped when it has none.
 
-    ``frames`` is the worker pool that takes a clip's still frame.
+    The row's own file when it is a picture; else, with ``frames`` (the worker pool of an explicit look),
+    a still frame of the clip.
     """
     inspected: list[Inspected] = []
     for row in rows:
         try:
-            data = await gateway.fetch(
-                row.file_id, bot_id=row.bot_id, key=row.file_unique_id, size_hint=row.file_size
-            )
-            if media_type := sniff_image(data):
-                inspected.append(Inspected(row, Media(data, media_type)))
-            elif frames is not None:
-                inspected.append(Inspected(row, Media(await still(frames, data), "image/jpeg"), frame=True))
-            else:
-                log.info("media #%s skipped: not an image", row.message_id)
+            inspected.append(await _picture(gateway, row, frames))
         except MediaUnavailableError as unavailable:
             log.info("media #%s skipped: %s", row.message_id, unavailable.reason)
-        except EffectError as failed:
-            log.info("media #%s frame failed: %s", row.message_id, failed.reason)
     return inspected
+
+
+async def _picture(gateway: MediaGateway, row: MessageMedia, frames: WorkerPool | None) -> Inspected:
+    try:
+        image = await gateway.image(
+            row.file_id,
+            bot_id=row.bot_id,
+            key=row.file_unique_id,
+            size_hint=row.file_size,
+            mime_type=row.mime_type,
+        )
+        return Inspected(row, image)
+    except MediaUnavailableError:
+        if frames is None:
+            raise
+    try:
+        clip = await gateway.fetch(
+            row.file_id, bot_id=row.bot_id, key=row.file_unique_id, size_hint=row.file_size
+        )
+        return Inspected(row, await gateway.normalize(await still(frames, clip)), still="frame")
+    except EffectError as failed:
+        raise MediaUnavailableError(f"no frame ({failed.reason})") from None
 
 
 def as_content(items: Sequence[Inspected]) -> list[str | BinaryContent]:
     content: list[str | BinaryContent] = []
     for item in items:
-        what = f"a still frame of the {item.row.type.replace('_', ' ')}" if item.frame else "image"
+        what = f"a still frame of the {kind_label(item.row.type)}" if item.still else "image"
         content.append(f"({what} from #{item.row.message_id})")
         content.append(BinaryContent(item.image.data, media_type=item.image.media_type))
     return content

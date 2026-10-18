@@ -16,6 +16,7 @@ from derp.billing.menu import BuyAction
 from derp.inference.api import GeneratedImage, OpenRouterError
 from derp.inference.models import ProviderCall
 from derp.money.wallets import balance, claw_back, credit, wallet
+from derp.telegram.media import normalize
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 from tests.e2e.test_effects import jpeg, results_of
@@ -225,7 +226,7 @@ async def test_a_profile_photo_gets_an_ai_edit_in_one_call(
     asked = await conversation.send(JO, text="add me a fun hat to my profile picture")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
-    assert [data for data, _ in images.references[0]] == [avatar]
+    assert [data for data, _ in images.references[0]] == [normalize(avatar).data]
     assert conversation.api.calls_of("setChatPhoto") == []  # the person sets it themselves
 
 
@@ -248,7 +249,7 @@ async def test_a_photo_then_make_it_a_cat_edits_that_photo(
     asked = await conversation.send(JO, club, "derp make it a cat")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
-    assert [data for data, _ in images.references[0]] == [dog]
+    assert [data for data, _ in images.references[0]] == [normalize(dog).data]
 
 
 async def test_a_member_is_drawn_by_name(conversation: Conversation, model: ScriptedModel) -> None:
@@ -266,7 +267,7 @@ async def test_a_member_is_drawn_by_name(conversation: Conversation, model: Scri
     asked = await conversation.send(JO, club, "дерп нарисуй Васю рыцарем")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
-    assert [data for data, _ in images.references[0]] == [avatar]
+    assert [data for data, _ in images.references[0]] == [normalize(avatar).data]
 
 
 async def test_the_chat_photo_is_a_source_for_edits(conversation: Conversation, model: ScriptedModel) -> None:
@@ -282,7 +283,7 @@ async def test_the_chat_photo_is_a_source_for_edits(conversation: Conversation, 
     asked = await conversation.send(JO, club, "derp put a santa hat on our chat picture")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
-    assert [data for data, _ in images.references[0]] == [logo]
+    assert [data for data, _ in images.references[0]] == [normalize(logo).data]
 
 
 def meme_of_the_sent_image(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:

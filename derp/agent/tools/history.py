@@ -183,7 +183,7 @@ async def inspect_media(ctx: RunContext[RunDeps], message_id: int) -> list[str |
         user_id=deps.user_id,
     )
     notes = [
-        f"#{item.row.message_id}{' (one frame)' if item.frame else ''}: {item.row.description or item.row.type}"
+        f"#{item.row.message_id}{' (one frame)' if item.still else ''}: {item.row.description or item.row.type}"
         for item in inspected
     ]
     if not deps.pin.vision:
