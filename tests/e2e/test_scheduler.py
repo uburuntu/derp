@@ -7,7 +7,7 @@ from derp.inference.models import ProviderCall
 from derp.money.wallets import claw_back, credit, wallet
 from derp.scheduler.jobs import MISS_LIMIT, ResumeJob
 from derp.scheduler.models import Job
-from derp.scheduler.worker import run_due
+from derp.scheduler.worker import claim_due, run_due
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
@@ -39,6 +39,41 @@ async def test_a_reminder_fires_once_in_its_chat(conversation: Conversation, mod
     assert await fire_now(conversation) == 0  # done: never again
     async with conversation.db.session() as session:
         assert await session.scalar(select(Job.state)) == "done"
+
+
+async def test_a_reminder_moves_in_place_and_fires_at_the_new_time(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(LEE, YARD)
+    conversation.meet(MAX, YARD)
+    model.reply(tool_call("schedule", text="take the bins out", in_minutes=30), "Will do.")
+    await conversation.settle(
+        await conversation.send(LEE, YARD, "derp remind us in 30 min to take the bins out")
+    )
+    async with conversation.db.session() as session:
+        job_id = await session.scalar(select(Job.id))
+    model.reply(tool_call("edit_job", job_id=job_id, in_minutes=5), "Nope.")
+    await conversation.settle(
+        await conversation.send(MAX, YARD, "derp move Lee's reminder to 5 min from now")
+    )
+    assert "Only its creator or an admin" in str(model.requests[-1][-1])
+
+    model.reply(tool_call("edit_job", job_id=job_id, in_minutes=120, text="bins and recycling"), "Moved.")
+    await conversation.settle(
+        await conversation.send(LEE, YARD, "derp move it to two hours from now, add recycling")
+    )
+    assert f"Updated job {job_id}: next run ![" in str(model.requests[-1][-1])
+    async with conversation.db.session() as session:
+        [job] = (await session.scalars(select(Job))).all()  # the same job, changed in place
+    assert job.id == job_id and job.text == "bins and recycling"
+    assert job.next_at > datetime.now(UTC) + timedelta(minutes=110)
+    assert (
+        await claim_due(conversation.db, datetime.now(UTC) + timedelta(minutes=31)) == []
+    )  # not at the old time
+    after = conversation.seq
+    assert await fire_now(conversation) == 1
+    posted = conversation.api.calls_of("sendRichMessage", after=after)
+    assert [c["rich_message"]["markdown"] for c in posted] == ["⏰ Reminder from Lee: bins and recycling"]
 
 
 async def test_repeating_jobs_need_an_admin_in_groups(

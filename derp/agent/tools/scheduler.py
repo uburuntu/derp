@@ -1,7 +1,8 @@
 """Scheduling tools: reminders and scheduled prompts in this chat.
 
 Anyone may schedule a one-off; in groups only admins may schedule repeating
-jobs, members cancel their own jobs and admins any. A reminder just posts its
+jobs, members change and cancel their own jobs and admins any (an edit that
+leaves a job repeating needs an admin too). A reminder just posts its
 text; a scheduled prompt is answered by Derp when it fires, paid by its
 creator's funding at that moment.
 
@@ -26,10 +27,11 @@ from derp.scheduler.jobs import (
     MAX_AHEAD,
     MIN_AHEAD,
     PERSON_LIMIT,
+    Change,
     JobAction,
     act_on_job,
-    active_counts,
     has_offset,
+    has_room,
     live_jobs,
     parse_local,
     show_time,
@@ -37,6 +39,31 @@ from derp.scheduler.jobs import (
 from derp.scheduler.models import Job
 
 toolset = FunctionToolset[RunDeps]()
+NO_ZONE = (
+    "This chat's time zone isn't set, so a wall-clock time can't be placed. Ask once where they are, set it "
+    "with change_setting(time_zone, <IANA zone>), then try again. If they said UTC, give `at` with +00:00."
+)
+
+
+def _when(deps: RunDeps, at: str | None, in_minutes: int | None) -> datetime | str | None:
+    """The time asked for (None when neither was given), or what to tell the model instead."""
+    now = datetime.now(UTC)
+    if at and not deps.chat.timezone and not has_offset(at):
+        return NO_ZONE
+    when = parse_local(at, deps.tz) if at else now + timedelta(minutes=in_minutes) if in_minutes else None
+    if at and when is None:
+        return "Give `at` as an ISO local date-time like 2026-10-20 09:00."
+    if when is not None and not now + MIN_AHEAD <= when <= now + MAX_AHEAD:
+        return "The time must be between a minute and a year from now."
+    return when
+
+
+def _text(text: str) -> str:
+    return text.strip()[:1000] or "⏰"
+
+
+def _repeats(job: Job) -> str:
+    return f", repeating {job.repeat}" if job.repeat else ""
 
 
 @toolset.tool
@@ -61,42 +88,30 @@ async def schedule(
     deps = ctx.deps
     if deps.trigger_message_id == 0:
         return "This is a scheduled task firing now; carry out the request instead of scheduling a new one."
-    now = datetime.now(UTC)
-    if at and not deps.chat.timezone and not has_offset(at):
-        return (
-            "This chat's time zone isn't set, so a wall-clock time can't be placed. Ask once where they are, "
-            "set it with change_setting(time_zone, <IANA zone>), then schedule again. If they said UTC, give "
-            "`at` with +00:00."
-        )
-    when = parse_local(at, deps.tz) if at else now + timedelta(minutes=in_minutes) if in_minutes else None
+    when = _when(deps, at, in_minutes)
     if when is None:
         return "Give `at` (ISO local date-time) or `in_minutes`."
-    if not now + MIN_AHEAD <= when <= now + MAX_AHEAD:
-        return "The time must be between a minute and a year from now."
+    if isinstance(when, str):
+        return when
     if repeat and not await is_admin(deps.bot, deps.chat, deps.user_id):
         return "Only admins can schedule repeating jobs in this group; one-off reminders are fine."
     async with deps.db.transaction() as session:
-        total, mine = await active_counts(session, deps.chat.id, deps.user_id)
-        if total >= CHAT_LIMIT or mine >= PERSON_LIMIT:
+        if not await has_room(session, deps.chat.id, deps.user_id):
             return f"Too many scheduled jobs here (limit {CHAT_LIMIT} per chat, {PERSON_LIMIT} per person). Cancel some first."
         job = Job(
             chat_id=deps.chat.id,
             thread_id=deps.target.thread_id,
             creator_id=deps.user_id,
             kind="prompt" if answer_it else "message",
-            text=text.strip()[:1000] or "⏰",
+            text=_text(text),
             repeat=repeat,
             next_at=when,
             anchor_at=when,
         )
         session.add(job)
         await session.flush()
-        job_id = job.id
-    again = f", repeating {repeat}" if repeat else ""
     paid = " Each run is paid like a normal answer from their Derpcoins." if answer_it else ""
-    return (
-        f"Scheduled job {job_id} for {show_time(when, deps.tz)}{again}.{paid} Show the time exactly as given."
-    )
+    return f"Scheduled job {job.id} for {show_time(when, deps.tz)}{_repeats(job)}.{paid} Show the time exactly as given."
 
 
 @toolset.tool
@@ -119,7 +134,7 @@ async def list_jobs(ctx: RunContext[RunDeps]) -> str:
     return "\n".join(lines)
 
 
-async def _act(deps: RunDeps, job_id: int, action: JobAction) -> Job | str:
+async def _act(deps: RunDeps, job_id: int, action: JobAction | Change) -> Job | str:
     """The job after ``action``, or what to tell the model instead."""
     admin = await is_admin(deps.bot, deps.chat, deps.user_id)
     async with deps.db.transaction() as session:
@@ -128,9 +143,13 @@ async def _act(deps: RunDeps, job_id: int, action: JobAction) -> Job | str:
         case "gone":
             return "No such scheduled job here."
         case "not_yours":
-            return f"Only its creator or an admin can {action} that one."
+            return "Only its creator or an admin can change that one."
         case "passed":
-            return "That one-off time has passed; schedule a new one instead."
+            return "That one-off's time has passed; give it a new time with edit_job."
+        case "admins":
+            return "Only admins can have a job repeat in this group; it can stay a one-off."
+        case "full":
+            return f"Too many scheduled jobs here (limit {CHAT_LIMIT} per chat, {PERSON_LIMIT} per person). Cancel some first."
         case job:
             return job
 
@@ -159,4 +178,40 @@ async def resume_job(ctx: RunContext[RunDeps], job_id: int) -> str:
     return f"Resumed job {job_id}; next run {show_time(outcome.next_at, ctx.deps.tz)}."
 
 
-family = Family("scheduler", toolset, deferred=("list_jobs", "cancel_job", "resume_job"))
+@toolset.tool
+async def edit_job(
+    ctx: RunContext[RunDeps],
+    job_id: int,
+    at: str | None = None,
+    in_minutes: int | None = None,
+    text: str | None = None,
+    repeat: Literal["once", "daily", "weekdays", "weekly", "monthly"] | None = None,
+    answer_it: bool | None = None,
+) -> str:
+    """Change a scheduled job of this chat in place: move it, reword it or change how it repeats.
+
+    Args:
+        job_id: The job number from schedule or list_jobs.
+        at: A new local date-time, as in schedule; a paused job or a one-off that already fired comes back on.
+        in_minutes: Alternatively, a new time in minutes from now.
+        text: New reminder text or request; leave out to keep it.
+        repeat: A new repeat rule at the job's local time, or "once" to stop repeating; leave out to keep it.
+        answer_it: True to make it a prompt Derp answers, false a plain reminder; leave out to keep it.
+    """
+    deps = ctx.deps
+    when = _when(deps, at, in_minutes)
+    if isinstance(when, str):
+        return when
+    kind = None if answer_it is None else "prompt" if answer_it else "message"
+    change = Change(at=when, text=_text(text) if text else None, kind=kind, repeat=repeat)
+    outcome = await _act(deps, job_id, change)
+    if isinstance(outcome, str):
+        return outcome
+    paused = " It stays paused until resumed." if outcome.state == "paused" else ""
+    return (
+        f"Updated job {job_id}: next run {show_time(outcome.next_at, deps.tz)}{_repeats(outcome)}.{paused} "
+        "Show the time exactly as given."
+    )
+
+
+family = Family("scheduler", toolset, deferred=("list_jobs", "edit_job", "cancel_job", "resume_job"))

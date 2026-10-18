@@ -13,11 +13,17 @@ new zone (``rezone``). Chats without a zone run on UTC, but their jobs were
 placed as instants (relative times, explicit offsets), so a first zone keeps
 those instants too.
 
-Creators pause, resume and cancel their own jobs, admins any (``act_on_job``,
-behind the agent's tools, the /settings jobs page and the Resume button).
+Creators pause, resume, change and cancel their own jobs, admins any
+(``act_on_job``, behind the agent's tools, the /settings jobs page and the
+Resume button); a job that repeats after the change needs an admin in groups.
+Giving a job a new time schedules it there: a paused job or a finished one-off
+comes back on. The worker claims due rows with ``SKIP LOCKED`` and every
+action locks its row, so a change racing a firing lands either before the
+claim (the job fires on the new terms) or after it (on top of the moved-on row).
 """
 
 import calendar
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -38,7 +44,17 @@ MISS_LIMIT = 3  # unfunded firings in a row before a job pauses
 LIVE = ("active", "paused")  # jobs still scheduled; done and cancelled ones only await deletion
 
 type JobAction = Literal["pause", "resume", "cancel"]
-type Refusal = Literal["gone", "not_yours", "passed"]
+type Refusal = Literal["gone", "not_yours", "passed", "admins", "full"]
+
+
+@dataclass(frozen=True, slots=True)
+class Change:
+    """An edit to a job in place; fields left ``None`` stay as they are."""
+
+    at: datetime | None = None  # a new time: the job is scheduled there (and comes back on)
+    text: str | None = None
+    kind: Literal["message", "prompt"] | None = None
+    repeat: Literal["once", "daily", "weekdays", "weekly", "monthly"] | None = None  # once: stop repeating
 
 
 class ResumeJob(CallbackData, prefix="jobresume"):
@@ -130,22 +146,24 @@ async def live_jobs(session: AsyncSession, chat_id: int) -> list[tuple[Job, str 
 
 
 def may_touch(job: Job, user_id: int | None, admin: bool) -> bool:
-    """Its creator or an admin may pause, resume or cancel a job."""
+    """Its creator or an admin may pause, resume, change or cancel a job."""
     return admin or job.creator_id == user_id
 
 
 async def act_on_job(
-    session: AsyncSession, chat: Chat, job_id: int, user_id: int, admin: bool, action: JobAction
+    session: AsyncSession, chat: Chat, job_id: int, user_id: int, admin: bool, action: JobAction | Change
 ) -> Job | Refusal:
-    """Pause, resume or cancel one of this chat's jobs; returns the job, or why it was refused.
+    """Pause, resume, cancel or change one of this chat's jobs; returns the job, or why it was refused.
 
-    Resuming an active job leaves it be.
+    Resuming an active job leaves it be. ``admin`` is always true in a private chat.
     """
     job = await session.get(Job, job_id, with_for_update=True)
-    if job is None or job.chat_id != chat.id or job.state not in LIVE:
+    if job is None or job.chat_id != chat.id or job.state == "cancelled":
         return "gone"
     if not may_touch(job, user_id, admin):
         return "not_yours"
+    if job.state == "done" and not isinstance(action, Change):
+        return "gone"
     match action:
         case "pause":
             job.state = "paused"
@@ -154,6 +172,28 @@ async def act_on_job(
                 return "passed"
         case "cancel":
             job.state = "cancelled"
+        case Change():
+            return await _change(session, job, action, admin)
+        case _:
+            pass
+    return job
+
+
+async def _change(session: AsyncSession, job: Job, change: Change, admin: bool) -> Job | Refusal:
+    repeat = job.repeat if change.repeat is None else None if change.repeat == "once" else change.repeat
+    if repeat and not admin:
+        return "admins"
+    if job.state == "done":  # a one-off that fired: only a new time brings it back
+        if change.at is None:
+            return "passed"
+        if not await has_room(session, job.chat_id, job.creator_id):
+            return "full"
+    job.repeat = repeat
+    job.text = change.text or job.text
+    job.kind = change.kind or job.kind
+    if change.at is not None:
+        job.next_at = job.anchor_at = change.at
+        job.state, job.misses = "active", 0
     return job
 
 
@@ -195,8 +235,9 @@ def show_time(moment: datetime, tz: tzinfo) -> str:
     return f"![{local_time(moment, tz)}](tg://time?unix={int(moment.timestamp())}&format=wDT)"
 
 
-async def active_counts(session: AsyncSession, chat_id: int, user_id: int) -> tuple[int, int]:
+async def has_room(session: AsyncSession, chat_id: int, user_id: int) -> bool:
+    """Whether one more live job fits the chat's and this person's limits."""
     live = (Job.chat_id == chat_id) & Job.state.in_(LIVE)
     total = await session.scalar(select(func.count()).where(live)) or 0
     mine = await session.scalar(select(func.count()).where(live, Job.creator_id == user_id)) or 0
-    return int(total), int(mine)
+    return total < CHAT_LIMIT and mine < PERSON_LIMIT
