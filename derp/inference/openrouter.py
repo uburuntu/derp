@@ -23,7 +23,7 @@ from pydantic_ai.native_tools import AbstractNativeTool, WebFetchTool
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from derp.config import Settings
-from derp.inference.roles import RolePin
+from derp.inference.roles import EFFORTS, Effort, RolePin
 
 
 def build_provider(settings: Settings) -> OpenRouterProvider:
@@ -115,17 +115,27 @@ def chat_model(pin: RolePin, provider: OpenRouterProvider) -> OpenRouterModel:
     return DerpOpenRouterModel(pin.model, provider=provider)
 
 
-def chat_settings(pin: RolePin, *, max_tokens: int, session: str | None = None) -> OpenRouterModelSettings:
+# Reasoning tokens count against max_tokens: a deeper effort gets this many times the room, so it still answers.
+REASONING_ROOM: dict[Effort, int] = {"medium": 2, "high": 4}
+
+
+def chat_settings(
+    pin: RolePin, *, max_tokens: int, session: str | None = None, effort: Effort | None = None
+) -> OpenRouterModelSettings:
     """Per-request settings: fallbacks, per-request ZDR, usage accounting, prompt caching.
 
     ``session`` (a ``conversation_id``) makes OpenRouter's provider routing sticky for that conversation;
-    without it the conversation is keyed by the first system and user messages.
+    without it the conversation is keyed by the first system and user messages. ``effort`` deepens the
+    pin's reasoning for one run (same model and prefix, so the prompt cache stays warm).
 
     No ``sort: price`` or ``:floor`` on chat roles: OpenRouter's default routing
     keeps tool-calling quality (Exacto) which matters more than the last cent.
     """
+    reasoning = pin.reasoning
+    if effort is not None and reasoning is not None and EFFORTS.index(effort) > EFFORTS.index(reasoning):
+        reasoning = effort
     settings = OpenRouterModelSettings(
-        max_tokens=max_tokens,
+        max_tokens=max_tokens * REASONING_ROOM.get(reasoning, 1) if reasoning else max_tokens,
         openrouter_usage={"include": True},
         openrouter_provider=provider_config(pin),
         openrouter_cache_instructions=True,
@@ -135,11 +145,11 @@ def chat_settings(pin: RolePin, *, max_tokens: int, session: str | None = None) 
         settings["openrouter_models"] = list(pin.fallbacks)
     if session is not None:
         settings["extra_body"] = {"session_id": session}
-    if pin.reasoning == "none":
+    if reasoning == "none":
         # Some providers ignore effort "none"; only an explicit disable stops hidden reasoning.
         settings["openrouter_reasoning"] = {"enabled": False}
-    elif pin.reasoning is not None:
-        settings["openrouter_reasoning"] = {"effort": pin.reasoning, "exclude": True}
+    elif reasoning is not None:
+        settings["openrouter_reasoning"] = {"effort": reasoning, "exclude": True}
     return settings
 
 

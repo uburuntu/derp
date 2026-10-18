@@ -18,7 +18,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   aren't pictures are seen through Telegram's preview picture of them. Photos inside rich messages and in
   messages quoted from another chat count like any photo. A photo someone sent just before calling Derp comes
   along with the question ("make it a cat" edits it), and a reply to Derp's answer about a photo still sees
-  that photo. Asked about a video, GIF or video note, it looks at a still frame of it. Media tools also take
+  that photo, unless the question is clearly about something else. Asked about a video, GIF or video note, it looks at a still frame of it. Media tools also take
   videos, GIFs and audio (memes, reversing, song recognition). Group voice messages nobody asked about are transcribed
   in the background up to a daily limit; past it, a voice message is transcribed when someone calls Derp in
   reply to it. Short audio files (forwarded memos, recordings) and the speech in videos are transcribed when
@@ -38,7 +38,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 ## groups
 
 - Call Derp by @mention, by name (derp, дерп and their inflections) or by replying to one of its messages. It
-  stays quiet otherwise and never joins in on its own.
+  stays quiet otherwise and never joins in on its own. A message with just the name answers only when it talks to
+  Derp ("derp, settle this for us"); the word used as slang ("classic derp moment") or Derp talked about to others ("derp
+  drew a horse yesterday") gets nothing. If that check is unavailable, Derp answers as usual.
 - Context: while the group allows it, Derp reads the chat to keep up and remembers it for the retention period.
   Admins can switch to mentions only in /settings (that deletes the stored context). With Telegram's privacy mode
   on and Derp not an admin, it only sees messages addressed to it anyway.
@@ -61,7 +63,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   reaction) reached the chat, the work so far is charged, and Derp says so. Reply /info to any answer to see its
   model, tokens, cost and who paid.
 - Free daily Derpcoins: everyone gets an allowance each UTC day on a cheaper model with fewer tools; it doesn't
-  accumulate. Drawing images needs paid Derpcoins (Derp+, bought packs or a group wallet).
+  accumulate. Drawing images needs paid Derpcoins (Derp+, bought packs or a group wallet). On paid Derpcoins a
+  clearly hard question (multi-step math, code, proofs) gets more thinking, which costs a little more.
 - Packs: bought with Telegram Stars in /buy; bought Derpcoins don't expire.
 - Derp+: a Stars subscription with a monthly allowance that doesn't roll over; nothing else changes. Cancel it in
   Telegram's Stars settings; it runs to the end of the paid period. If a renewal payment fails, Derp tells the

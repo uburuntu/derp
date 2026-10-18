@@ -4,7 +4,8 @@ Content-free by default (numeric IDs, kinds, counts, durations, outcomes). The
 only content export is a redacted, truncated exchange when an agent run fails.
 Pydantic AI is deliberately not instrumented at all (its spans record exception
 messages and prompts), so the only span is the content-free ``telegram.update``
-around each update; agent runs add no spans of their own. Logfire is optional and fails
+around each update; agent runs add no spans of their own (pre-run decisions log one content-free
+event: probabilities, outcome, duration). Logfire is optional and fails
 soft; HTTPX is never instrumented globally because Telegram file URLs embed the
 bot token.
 """
@@ -98,3 +99,21 @@ def record_run_failure(run_id: int, error: BaseException, exchange: str) -> None
         exchange=_redactor(exchange)[:EXCHANGE_LIMIT],
     )
     log.error("agent run %s failed: %s", run_id, type(error).__name__)
+
+
+def record_decision(chat_id: int, outcome: str, duration_ms: int, **answers: float | str) -> None:
+    """One call to the decision pin: its outcome, duration and answers as probabilities or labels."""
+    attributes: dict[str, Any] = {
+        "chat_id": chat_id,
+        "outcome": outcome,
+        "duration_ms": duration_ms,
+        **answers,
+    }
+    logfire.info("agent.decision", **attributes)
+    log.info(
+        "decision in %s: %s in %d ms %s",
+        chat_id,
+        outcome,
+        duration_ms,
+        " ".join(f"{name}={value}" for name, value in answers.items()),
+    )
