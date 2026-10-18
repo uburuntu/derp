@@ -228,7 +228,7 @@ async def test_cancelling_an_expensive_image_charges_nothing_for_it(
     after = conversation.seq
     await conversation.press(JO, JO.id, prompt_id, cancel)
     closed = conversation.api.calls_of("editMessageText", after=after)[-1]
-    text = "Cancelled — the image wasn't made, and nothing was charged."
+    text = "Cancelled — the image wasn't made or charged."
     assert closed["rich_message"]["markdown"] == text and images.prompts == []
     async with conversation.db.session() as session:
         assert await session.scalar(select(Approval.state)) == "denied"

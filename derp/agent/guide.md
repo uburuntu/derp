@@ -132,9 +132,10 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   with Make it / Cancel buttons first; only the asker decides. Make it finishes the whole request: "draw a frog and
   caption it", "draw it and make it a sticker" or "draw it, then cut it out" still get the caption, sticker or
   cutout. It is charged once the result is in the chat, like any answer. An unanswered prompt expires and loses its
-  buttons; cancelling or letting it expire is free. Once the answer arrives the prompt disappears; if nothing
-  arrives, the prompt says so and nothing is charged. If the payer can no longer cover it when Make it is pressed,
-  the prompt says so, with a button to buy (in a group, to top up the group).
+  buttons; cancelling or letting it expire charges nothing for the action (the reply that asked is charged like
+  any reply). Once the answer arrives the prompt disappears; if nothing arrives, the prompt says so and nothing is
+  charged. If the payer can no longer cover it when Make it is pressed, the prompt says so, with a button to buy
+  (in a group, to top up the group).
 - Balances are private: /credits in a group answers ephemerally or by DM, never in the group.
 - Derpcoins aren't money: no cash-out, no transfers between people. Payment problems: /paysupport. A refund
   returns the Stars and removes what is left of that purchase's Derpcoins; refunding a Derp+ payment also ends

@@ -9,8 +9,9 @@ the requester can decide; a decision is final, an undecided prompt expires after
 the expired notice without buttons. Make it resumes the asking run from its
 stored history (``resumption``): the call runs with exactly the job the prompt
 priced and the model finishes what was asked (a caption, a sticker, a cutout),
-funded afresh since the asking run is long settled. Denial and expiry cost
-nothing. Once the run answered, its prompt is deleted, else it becomes the
+funded afresh since the asking run is long settled. Denial and expiry charge
+nothing for the action (the asking run paid its own turn when its prompt
+landed). Once the run answered, its prompt is deleted, else it becomes the
 failure note; an action the payer can no longer cover turns it into that note
 with a buy button.
 """

@@ -125,7 +125,7 @@ async def test_the_profile_is_published_once_and_kept(conversation: Conversation
     await publish_profile(conversation.services.bot)
     api = conversation.api
     assert api.profile[("name", "")] == "Derp" and api.profile[("name", "ru")] == "Дерп"
-    assert api.profile[("short_description", "ru")].startswith("Острый на язык")
+    assert api.profile[("short_description", "ru")].startswith("Свой человек")
     (button,) = api.calls_of("setChatMenuButton")
     assert button["menu_button"]["type"] == "commands"  # not a stale web app
     (rights,) = api.calls_of("setMyDefaultAdministratorRights")
