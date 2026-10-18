@@ -11,20 +11,22 @@ A report on one answer starts from the /info receipt's button (ephemeral in
 groups; buttons there work like anywhere else): a category files it at once,
 with the answer's run and message, one report per person per answer (a second
 press changes its category). For ``DETAILS_WINDOW`` the author's next text
-message in that chat or in private (not a command, and in groups not addressed
-to Derp) becomes its text, unless they skip.
+message in the chat where they pressed (``details_chat_id``; not a command, and
+in groups not addressed to Derp) becomes its text, unless they skip. A person
+has one window at a time: opening one closes their others, and a report that
+already has its text keeps it when recategorized. ``details_for`` is looked up
+by ``CaptureMiddleware`` in its per-message transaction, which hands the
+handlers ``report_id``.
 """
 
 import contextlib
 from datetime import UTC, datetime, timedelta
-from typing import Any
-
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReactionTypeEmoji
-from sqlalchemy import func, select, update
+from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.invocation import Trigger, starts_with_command
@@ -117,33 +119,47 @@ def _categories(locale: str, data: ReportAction) -> InlineKeyboardMarkup | None:
     return markup(*([pick(a), pick(b)] for a, b in zip(REPORT_KINDS[::2], REPORT_KINDS[1::2], strict=True)))
 
 
-async def _file_report(db: Database, user_id: int, data: ReportAction) -> bool:
-    """File (or recategorize) the person's report on the run and open its details window; False if gone."""
+async def _file_report(db: Database, user_id: int, chat_id: int, data: ReportAction) -> bool | None:
+    """File (or recategorize) the person's report on the run; None if the run is gone.
+
+    True when the details window opened in ``chat_id`` (where the receipt was pressed), closing the person's
+    other windows; False when the report already has its text (or the person is blocked: nothing reaches
+    the owners, and nothing says so).
+    """
     async with db.transaction() as session:
         run = await session.get(AgentRun, data.run, with_for_update=True)  # double taps file once
         if run is None:
-            return False
+            return None
         if await is_blocked(session, run.chat_id, user_id):
-            return True  # blocked: nothing reaches the owners, and nothing says so
-        report_id = await session.scalar(
-            select(Feedback.id).where(
+            return False
+        report = await session.scalar(
+            select(Feedback).where(
                 Feedback.user_id == user_id,
                 Feedback.run_id == run.id,
                 Feedback.kind.in_(REPORT_KINDS),
                 Feedback.state == "open",
             )
         )
-        if report_id is None:
+        if report is None:
             report_id = await file(
                 session, user_id=user_id, chat_id=run.chat_id, text="", kind=data.kind,
                 message_id=data.message, run_id=run.id,
             )  # fmt: skip
-        await session.execute(
-            update(Feedback)
-            .where(Feedback.id == report_id)
-            .values(kind=data.kind, details_until=datetime.now(UTC) + DETAILS_WINDOW)
-        )
+            report = await session.get_one(Feedback, report_id)  # the row just added: no query
+        report.kind = data.kind
+        if report.text:
+            return False
+        await _close_windows(session, user_id)
+        report.details_until, report.details_chat_id = datetime.now(UTC) + DETAILS_WINDOW, chat_id
     return True
+
+
+async def _close_windows(session: AsyncSession, user_id: int, *more: ColumnElement[bool]) -> None:
+    await session.execute(
+        update(Feedback)
+        .where(Feedback.user_id == user_id, Feedback.details_until.is_not(None), *more)
+        .values(details_until=None, details_chat_id=None)
+    )
 
 
 async def on_report(press: Press, data: ReportAction, db: Database) -> None:
@@ -151,46 +167,43 @@ async def on_report(press: Press, data: ReportAction, db: Database) -> None:
     if data.step == "open":
         return await press.edit(t(locale, "report.ask"), _categories(locale, data))
     if data.step == "kind":
-        if data.kind not in REPORT_KINDS or not await _file_report(db, press.user_id, data):
-            return await press.deny("buttons.stale")
-        skip = button(t(locale, "report.skip"), ReportAction(step="skip", run=data.run))
-        return await press.edit(t(locale, "report.filed"), markup(skip))
-    async with db.transaction() as session:
-        await session.execute(
-            update(Feedback)
-            .where(
-                Feedback.user_id == press.user_id,
-                Feedback.run_id == data.run,
-                Feedback.details_until.is_not(None),
-            )
-            .values(details_until=None)
+        opened = (
+            await _file_report(db, press.user_id, press.chat_id, data) if data.kind in REPORT_KINDS else None
         )
+        if opened is None:
+            return await press.deny("buttons.stale")
+        if not opened:
+            return await press.edit(t(locale, "report.done"))
+        skip = button(t(locale, "report.skip"), ReportAction(step="skip", run=data.run))
+        private = press.message.chat.type == "private"
+        return await press.edit(t(locale, "report.filed" if private else "report.filed_here"), markup(skip))
+    async with db.transaction() as session:
+        await _close_windows(session, press.user_id, Feedback.run_id == data.run)
     return await press.edit(t(locale, "report.done"))
 
 
-async def awaiting_details(
-    message: Message, db: Database, trigger: Trigger | None = None
-) -> bool | dict[str, Any]:
-    """A report's author writing its text: their next text message in its chat or in private, within the window.
+async def details_for(session: AsyncSession, message: Message, trigger: Trigger | None) -> int | None:
+    """The report whose text this message is: its author's next text message where they pressed, in the window.
 
     Commands are never details, nor in groups a message addressed to Derp (that is an ask).
     """
     sender = message.from_user
-    if sender is None or message.guest_query_id or not (message.text or message.caption):
-        return False
-    if starts_with_command(message):
-        return False
-    private = message.chat.type == "private"
-    if not private and trigger is not None:
-        return False
-    where = [Feedback.user_id == sender.id, Feedback.details_until > datetime.now(UTC)]
-    if not private:
-        where.append(Feedback.chat_id == message.chat.id)
-    async with db.session() as session:
-        report = await session.scalar(
-            select(Feedback.id).where(*where).order_by(Feedback.details_until.desc()).limit(1)
+    if sender is None or not (message.text or message.caption) or starts_with_command(message):
+        return None
+    if message.chat.type != "private" and trigger is not None:
+        return None
+    return await session.scalar(
+        select(Feedback.id).where(
+            Feedback.details_chat_id == message.chat.id,
+            Feedback.user_id == sender.id,
+            Feedback.details_until > datetime.now(UTC),
         )
-    return False if report is None else {"report_id": report}
+    )
+
+
+async def giving_details(message: Message, report_id: int | None = None) -> bool:
+    """The filter: ``CaptureMiddleware`` found this message to be a report's text."""
+    return report_id is not None
 
 
 async def on_details(message: Message, report_id: int, db: Database, bot: Bot) -> None:
@@ -200,7 +213,7 @@ async def on_details(message: Message, report_id: int, db: Database, bot: Bot) -
         added = await session.scalar(
             update(Feedback)
             .where(Feedback.id == report_id, Feedback.details_until.is_not(None))
-            .values(text=text.strip()[:MAX_CHARS], details_until=None)
+            .values(text=text.strip()[:MAX_CHARS], details_until=None, details_chat_id=None)
             .returning(Feedback.id)
         )
     if added is None:
@@ -302,7 +315,7 @@ def build_router() -> Router:
     router = Router(name="feedback")
     router.message.register(on_feedback, Command("feedback"))
     router.message.register(on_feedbacks, Command("feedbacks"), from_owner)
-    router.message.register(on_details, awaiting_details)
+    router.message.register(on_details, giving_details)
     on_press(router, FeedbackAction, F.action.in_({"page", "done", "thank"}))(on_review)
     on_press(router, ReportAction, F.step.in_({"open", "kind", "skip"}))(on_report)
     return router

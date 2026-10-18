@@ -14,6 +14,7 @@ from derp.history.members import track_message
 from derp.history.models import Message as MessageRow
 from derp.history.render import chat_time
 from derp.history.transcription import Transcriber
+from derp.ops.feedback import details_for
 from derp.ops.owner import is_blocked
 
 
@@ -36,7 +37,8 @@ class CaptureMiddleware(BaseMiddleware):
     message (stored only while the chat keeps ambient context, its reply not saved, no invocation
     transcription). Nobody blocked is screened.
 
-    Adds ``trigger`` (or None) and ``chat_row`` to handler data. Guest-mode
+    Adds ``trigger`` (or None), ``chat_row`` and ``report_id`` (the /info report this message is the
+    text of, or None: ``ops.feedback.details_for``) to handler data. Guest-mode
     messages pass through untouched: they are never stored.
     """
 
@@ -82,9 +84,11 @@ class CaptureMiddleware(BaseMiddleware):
                 and not await store_message(session, replied, capture="invocation", bot_id=me.id)
             ):
                 replied = None
+            report_id = None
             if not self.edits:
                 await track_message(session, event, stored=stored)
                 await index_sticker(session, event, me.id)
+                report_id = None if blocked else await details_for(session, event, trigger)
         transcriber: Transcriber | None = data.get("transcriber")
         if transcriber is not None and not self.edits:
             # A replied-to recording is transcribed on demand (no-op if it already has a transcript).
@@ -95,4 +99,5 @@ class CaptureMiddleware(BaseMiddleware):
                     await transcriber.transcribe(message, thread_id=thread, ambient=capped)
         data["trigger"] = trigger
         data["chat_row"] = chat
+        data["report_id"] = report_id
         return await handler(event, data)

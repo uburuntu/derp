@@ -160,3 +160,110 @@ async def test_report_details_in_private_get_a_plain_line_until_the_window_close
     asked = await conversation.send(ERIN, text="hello again")
     assert (await conversation.expect_reply(asked))["rich_message"]["markdown"] == "okay"
     assert (await reports(conversation))[0].text == ""
+
+
+async def open_report(conversation: Conversation, person: Person, chat_id: int, receipt_id: int) -> str:
+    """Open Report a problem on a receipt Derp sent in ``chat_id``; the callback data of "Wrong answer"."""
+    report = keyboard(conversation.api.message(chat_id, receipt_id)["reply_markup"])["⚠️ Report a problem"]
+    await conversation.press(person, chat_id, receipt_id, report)
+    return keyboard(conversation.api.message(chat_id, receipt_id)["reply_markup"])["Wrong answer"]
+
+
+async def test_details_come_only_from_the_chat_where_the_receipt_was_pressed(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(ERIN, LOFT)
+    conversation.meet(ERIN)
+    async with conversation.db.transaction() as session:
+        await credit(session, (await wallet(session, "chat", LOFT.id)).id, "stars:loft", 650, "purchase")
+        await credit(session, (await wallet(session, "user", ERIN.id)).id, "stars:e", 650, "purchase")
+    answer_id = await answered(conversation, model, ERIN, LOFT)
+    await conversation.settle(await conversation.ephemeral_command(ERIN, LOFT, "/info", reply_to=answer_id))
+    ephemeral = (LOFT.id, max(eid for (cid, eid) in conversation.api.ephemerals if cid == LOFT.id))
+    shown = conversation.api.ephemerals[ephemeral]
+    await conversation.press_ephemeral(
+        ERIN, *ephemeral, keyboard(shown["reply_markup"])["⚠️ Report a problem"]
+    )
+    pick = keyboard(conversation.api.ephemerals[ephemeral]["reply_markup"])["Wrong answer"]
+    await conversation.press_ephemeral(ERIN, *ephemeral, pick)
+    assert "everyone in the chat will see it" in conversation.api.ephemerals[ephemeral]["rich_markdown"]
+
+    # A DM to Derp inside the window is an ordinary ask, not the group report's text.
+    model.reply("hi in private")
+    dm = await conversation.send(ERIN, text="hey, unrelated")
+    assert (await conversation.expect_reply(dm))["rich_message"]["markdown"] == "hi in private"
+    await conversation.settle(dm)
+    assert (await reports(conversation))[0].text == ""
+    details = await conversation.send(ERIN, LOFT, "it got the date wrong")
+    await conversation.settle(details)
+    assert conversation.api.message(LOFT.id, details.message_id)["_bot_reaction"] == [
+        {"type": "emoji", "emoji": "👌"}
+    ]
+    assert (await reports(conversation))[0].text == "it got the date wrong"
+
+
+async def test_a_receipt_sent_by_dm_takes_the_details_in_private_not_in_the_group(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(ERIN, LOFT)
+    conversation.meet(ERIN)
+    async with conversation.db.transaction() as session:
+        await credit(session, (await wallet(session, "chat", LOFT.id)).id, "stars:loft", 650, "purchase")
+    answer_id = await answered(conversation, model, ERIN, LOFT)
+    info = await conversation.send(ERIN, LOFT, "/info", reply_to=answer_id)  # sent the ordinary way: by DM
+    await conversation.settle(info)
+    receipt_id = max(mid for (cid, mid) in conversation.api.messages if cid == ERIN.id)
+    await conversation.press(
+        ERIN, ERIN.id, receipt_id, await open_report(conversation, ERIN, ERIN.id, receipt_id)
+    )
+    [filed] = await reports(conversation)
+    assert (filed.chat_id, filed.details_chat_id) == (LOFT.id, ERIN.id)
+
+    # Erin's next group message is just a message: nothing marks it, nothing reveals the report.
+    chatter = await conversation.send(ERIN, LOFT, "anyone up for lunch?")
+    await conversation.settle(chatter)
+    assert "_bot_reaction" not in conversation.api.message(LOFT.id, chatter.message_id)
+    assert (await reports(conversation))[0].text == ""
+    details = await conversation.send(ERIN, text="the answer was about the wrong Tuesday")
+    reply = await conversation.expect_reply(details)
+    assert reply["rich_message"]["markdown"] == "Added to your report — thanks."
+    assert (await reports(conversation))[0].text == "the answer was about the wrong Tuesday"
+
+
+async def test_one_details_window_at_a_time_and_a_filled_report_keeps_its_text(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    async with conversation.db.transaction() as session:
+        await credit(session, (await wallet(session, "user", ERIN.id)).id, "stars:e", 650, "purchase")
+
+    async def receipt(answer_id: int) -> int:
+        await conversation.settle(await conversation.send(ERIN, text="/info", reply_to=answer_id))
+        return max(mid for (cid, mid) in conversation.api.messages if cid == ERIN.id)
+
+    answers = [await answered(conversation, model, ERIN, Room.private(ERIN)) for _ in range(2)]
+    first, second = [await receipt(answer_id) for answer_id in answers]
+    await conversation.press(ERIN, ERIN.id, first, await open_report(conversation, ERIN, ERIN.id, first))
+    wrong = await open_report(conversation, ERIN, ERIN.id, second)
+    await conversation.press(ERIN, ERIN.id, second, wrong)
+
+    details = await conversation.send(ERIN, text="the second one was off")
+    assert (await conversation.expect_reply(details))["rich_message"]["markdown"].startswith("Added")
+    model.reply("an ordinary answer")
+    asked = await conversation.send(ERIN, text="and what about Friday?")  # the first report's window closed
+    assert (await conversation.expect_reply(asked))["rich_message"]["markdown"] == "an ordinary answer"
+    await conversation.settle(asked)
+    assert [r.text for r in await reports(conversation)] == ["", "the second one was off"]
+
+    # Recategorizing the filled report keeps its text and opens no window.
+    again = await receipt(answers[1])
+    wrong = await open_report(conversation, ERIN, ERIN.id, again)
+    await conversation.press(ERIN, ERIN.id, again, wrong.replace("wrong_answer", "wrong_image"))
+    assert (
+        conversation.api.calls_of("editMessageText")[-1]["rich_message"]["markdown"] == "Reported — thanks."
+    )
+    model.reply("still ordinary")
+    asked = await conversation.send(ERIN, text="ok then")
+    assert (await conversation.expect_reply(asked))["rich_message"]["markdown"] == "still ordinary"
+    await conversation.settle(asked)
+    filled = (await reports(conversation))[1]
+    assert (filled.kind, filled.text, filled.details_until) == ("wrong_image", "the second one was off", None)

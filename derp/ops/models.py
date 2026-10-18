@@ -24,7 +24,9 @@ class Feedback(Base):
         ),
         CheckConstraint("state in ('open', 'done')", name="state"),
         Index("ix_feedback_state_id", "state", "id"),
-        Index("ix_feedback_details", "user_id", postgresql_where="details_until is not null"),
+        Index(
+            "ix_feedback_details", "details_chat_id", "user_id", postgresql_where="details_until is not null"
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -35,5 +37,6 @@ class Feedback(Base):
     kind: Mapped[str] = mapped_column(String(16))
     text: Mapped[str]
     details_until: Mapped[datetime | None]  # a report's author may add a line until then (their next message)
+    details_chat_id: Mapped[int | None]  # ... in this chat: where they pressed the receipt's buttons
     state: Mapped[str] = mapped_column(String(4), default="open", server_default="open")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
