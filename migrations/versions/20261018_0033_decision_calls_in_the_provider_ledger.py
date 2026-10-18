@@ -6,7 +6,7 @@ which old code never writes. Autogenerate does not compare check constraints,
 so this one is written out.
 
 Revision ID: 0033
-Revises: 0029
+Revises: 0031
 Create Date: 2026-10-18 12:02:43.381403
 """
 
@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "0033"
-down_revision: str | None = "0029"
+down_revision: str | None = "0031"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

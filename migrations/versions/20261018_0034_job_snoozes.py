@@ -5,7 +5,7 @@ series (``jobs.snooze_of``), so a later snooze moves that one extra firing
 instead of adding another. A nullable column only; old code ignores it.
 
 Revision ID: 0034
-Revises: 0029
+Revises: 0033
 Create Date: 2026-10-18 12:00:15.619990
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0034"
-down_revision: str | None = "0029"
+down_revision: str | None = "0033"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
