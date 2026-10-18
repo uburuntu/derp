@@ -57,7 +57,7 @@ class Unblock(CallbackData, prefix="free"):
 class Answers(Protocol):
     """What an unblocking press needs from the runtime: answering the question that ran out of Derpcoins."""
 
-    async def answer(self, message: Message, chat: Chat) -> object: ...
+    async def answer(self, message: Message, chat: Chat, *, again: bool) -> object: ...
 
 
 def consented(user: User | None) -> bool:
@@ -211,7 +211,7 @@ async def resume(press: Press, db: Database, settings: Settings, runtime: Answer
         async with db.session() as session:
             chat = await session.get(Chat, press.chat_id)
         if chat is not None:
-            await runtime.answer(trigger, chat)
+            await runtime.answer(trigger, chat, again=True)  # older than what the asker said since
     return taken
 
 
