@@ -7,7 +7,7 @@ first bubble, the avatar (or an initials circle) beside its last. A quote is lai
 its size, then drawn at twice the output density and scaled down, so curves and text come out smooth.
 Colour emoji come from Noto Color Emoji when it is installed (the image has ``fonts-noto-color-emoji``),
 else the text font draws them. Bytes that won't open as a picture give an initials circle or no media,
-never an error.
+never an error. A quote too long to read once shrunk to a sticker comes out as a picture instead.
 """
 
 import io
@@ -42,6 +42,9 @@ MAX_CHARS = 1000  # of one message
 MAX_TOTAL_CHARS = 3000
 PNG_SIDE = 2048
 STICKER_SIDE = 512
+# Body text this many pixels tall in the 512 px sticker is the smallest that stays readable: Telegram shows a
+# sticker at well under half its size, so a longer quote (smaller text once fitted) goes out as a picture.
+STICKER_TEXT = 22
 
 # Geometry at 1×, in pixels.
 TEXT_SIZE, NAME_SIZE, REPLY_SIZE = 16, 15, 14
@@ -148,6 +151,7 @@ class Theme:
     link: RGB
     code: RGB
     names: tuple[str, ...]
+    backdrop: RGB  # behind a picture quote: the chat background a bubble of this colour sits on
 
     @classmethod
     def of(cls, colour: str | None) -> Theme:
@@ -157,8 +161,10 @@ class Theme:
             raise EffectError("unknown colour (use a name like pink or a hex code like #1b1429)") from None
         bubble = (rgb[0], rgb[1], rgb[2])
         if 0.2126 * bubble[0] + 0.7152 * bubble[1] + 0.0722 * bubble[2] < 150:
-            return cls(bubble, (255, 255, 255), (113, 186, 250), (126, 224, 166), NAMES_DARK)
-        return cls(bubble, (0, 0, 0), (36, 129, 204), (31, 138, 76), NAMES_LIGHT)
+            dark = mix(bubble, (0, 0, 0), 0.45)
+            return cls(bubble, (255, 255, 255), (113, 186, 250), (126, 224, 166), NAMES_DARK, dark)
+        light = mix(bubble, (255, 255, 255), 0.35)
+        return cls(bubble, (0, 0, 0), (36, 129, 204), (31, 138, 76), NAMES_LIGHT, light)
 
     def name(self, peer: int) -> RGB:
         return _rgb(self.names[abs(peer) % len(self.names)])
@@ -657,14 +663,23 @@ def _within_budget(messages: Sequence[Quoted]) -> list[Quoted]:
     return kept
 
 
+@dataclass(frozen=True, slots=True)
+class Rendered:
+    output: Output  # what came out: a sticker only when its text stays readable at sticker size
+    data: bytes
+
+
 def render(
     messages: Sequence[Quoted],
     *,
     output: Output = "sticker",
     bubble: str | None = None,
     max_pixels: int = DEFAULTS.max_pixels,
-) -> bytes:
-    """The quote as a WebP sticker (512 px, under 512 KB, transparent) or a transparent PNG."""
+) -> Rendered:
+    """The quote as a WebP sticker (512 px, under 512 KB, transparent) or a PNG picture on a chat backdrop.
+
+    A sticker is asked for, not promised: one whose body text would shrink under ``STICKER_TEXT`` is a picture.
+    """
     messages = _within_budget(messages)
     if not messages:
         raise EffectError("nothing to quote")
@@ -672,22 +687,26 @@ def render(
     media = [_picture(m.media, max_pixels) for m in messages]
     avatars = _avatars(messages, max_pixels)
     _, (width, height) = Typesetter(1, theme).layout(messages, media)
-    target = (
-        STICKER_SIDE / max(width, height) if output == "sticker" else min(2.0, PNG_SIDE / max(width, height))
-    )
+    fitted = STICKER_SIDE / max(width, height)
+    if TEXT_SIZE * fitted < STICKER_TEXT:
+        output = "image"
+    target = fitted if output == "sticker" else min(2.0, PNG_SIDE / max(width, height))
     setter = Typesetter(min(max(2 * target, 1.0), 8.0), theme)
     bubbles, size = setter.layout(messages, media)
     check_dimensions(*size, max_pixels)
     canvas = setter.paint(bubbles, size, media, avatars)
     if output == "sticker":
-        return encode_sticker(canvas)
+        return Rendered("sticker", encode_sticker(canvas))
     ratio = target / setter.scale
     final = canvas.resize(
         (max(1, round(size[0] * ratio)), max(1, round(size[1] * ratio))), Image.Resampling.LANCZOS
     )
+    pad = round(PAD_X * target)
+    picture = Image.new("RGBA", (final.width + 2 * pad, final.height + 2 * pad), (*theme.backdrop, 255))
+    picture.alpha_composite(final, (pad, pad))
     buffer = io.BytesIO()
-    final.save(buffer, format="PNG")
-    return buffer.getvalue()
+    picture.convert("RGB").save(buffer, format="PNG")
+    return Rendered("image", buffer.getvalue())
 
 
 def _avatars(messages: Sequence[Quoted], max_pixels: int) -> list[Image.Image | None]:

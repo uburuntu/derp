@@ -214,8 +214,9 @@ async def sticker(pool: WorkerPool, data: bytes) -> bytes:
 
 async def quote(
     pool: WorkerPool, messages: Sequence[quotes.Quoted], output: quotes.Output, bubble: str | None = None
-) -> bytes:
-    """Messages as a Telegram-looking quote: a WebP sticker or a PNG; pictures over the input cap are left out."""
+) -> quotes.Rendered:
+    """Messages as a Telegram-looking quote: a WebP sticker, or a PNG picture when asked or too long for a
+    sticker; pictures over the input cap are left out."""
     cap = pool.limits.max_input_bytes
     fitting = [
         replace(

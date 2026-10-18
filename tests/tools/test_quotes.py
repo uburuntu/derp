@@ -3,6 +3,7 @@ import io
 import random
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PIL import Image
@@ -44,6 +45,10 @@ def opened(data: bytes) -> Image.Image:
     image = Image.open(io.BytesIO(data))
     image.load()
     return image
+
+
+def rendered(messages: list[Quoted], **options: Any) -> bytes:
+    return quotes.render(messages, **options).data
 
 
 def flagged(text: str, entities: list[dict[str, object]]) -> dict[str, frozenset[str]]:
@@ -114,7 +119,7 @@ def test_emoji_clusters() -> None:
 
 def test_without_an_emoji_font_the_text_font_draws_emoji(no_emoji_font: None) -> None:
     assert quotes.spans("ok 😂") == [quotes.Span("ok 😂")]
-    assert opened(quotes.render([Quoted(1, "A", "ok 😂🇷🇺")])).format == "WEBP"
+    assert opened(rendered([Quoted(1, "A", "ok 😂🇷🇺")])).format == "WEBP"
 
 
 @installed
@@ -174,7 +179,7 @@ def test_initials() -> None:
 
 
 def test_a_sticker_is_transparent_webp_512_px_under_512_kb() -> None:
-    data = quotes.render([Quoted(1, "Ann", "short")])
+    data = rendered([Quoted(1, "Ann", "short")])
     image = opened(data)
     assert image.format == "WEBP" and image.mode == "RGBA"
     assert max(image.size) == 512 and min(image.size) <= 512 and len(data) <= 512 * 1024
@@ -187,9 +192,19 @@ def test_a_busy_quote_stays_within_the_sticker_limits() -> None:
         Quoted(i % 3, f"Person {i}", long, avatar=noise(), media=noise() if i % 2 else None)
         for i in range(14)
     ]
-    data = quotes.render(messages)
-    image = opened(data)
-    assert max(image.size) == 512 and len(data) <= 512 * 1024
+    quote = quotes.render(messages)
+    assert quote.output == "image"  # far too long to read at sticker size
+    assert opened(quote.data).format == "PNG"
+
+
+def test_a_sticker_is_only_made_while_its_text_stays_readable() -> None:
+    line = "Съешь же ещё этих мягких французских булок, да выпей чаю."
+    short = quotes.render([Quoted(1, "Ann", line), Quoted(2, "Bob", "ага")])
+    assert short.output == "sticker" and opened(short.data).format == "WEBP"
+    long = quotes.render([Quoted(i % 2, f"P{i}", line * 3) for i in range(6)])
+    assert long.output == "image"
+    picture = opened(long.data)
+    assert picture.format == "PNG" and picture.mode == "RGB"  # a photo: flat backdrop, no transparency
 
 
 def test_too_many_messages_are_cut_to_the_limit() -> None:
@@ -199,10 +214,11 @@ def test_too_many_messages_are_cut_to_the_limit() -> None:
     assert [len(m.text) for m in cut] == [2000, 1000, 1] and cut[1].text.endswith("…") and cut[2].text == "…"
 
 
-def test_an_image_is_a_transparent_png() -> None:
-    image = opened(quotes.render([Quoted(1, "Ann", "hi")], output="image", bubble="pink"))
-    assert image.format == "PNG" and image.mode == "RGBA"
-    assert image.getpixel((0, 0))[3] == 0  # pyright: ignore[reportOptionalSubscript, reportIndexIssue]
+def test_an_image_is_a_png_on_a_backdrop_matching_the_bubble() -> None:
+    quote = quotes.render([Quoted(1, "Ann", "hi")], output="image", bubble="pink")
+    image = opened(quote.data)
+    assert quote.output == "image" and image.format == "PNG" and image.mode == "RGB"
+    assert image.getpixel((0, 0)) == quotes.Theme.of("pink").backdrop
 
 
 def _reddish(data: bytes) -> int:
@@ -211,14 +227,14 @@ def _reddish(data: bytes) -> int:
 
 
 def test_the_avatar_is_drawn_and_garbage_falls_back_to_initials() -> None:
-    with_photo = quotes.render([Quoted(1, "Ann", "hi", avatar=picture((255, 0, 0)))], output="image")
+    with_photo = rendered([Quoted(1, "Ann", "hi", avatar=picture((255, 0, 0)))], output="image")
     assert _reddish(with_photo) > 100
     for broken in (b"not an image", b"", None, b"\x89PNG\r\n\x1a\n garbage"):
-        assert _reddish(quotes.render([Quoted(1, "Ann", "hi", avatar=broken)], output="image")) == 0
+        assert _reddish(rendered([Quoted(1, "Ann", "hi", avatar=broken)], output="image")) == 0
 
 
 def test_garbage_media_is_left_out() -> None:
-    data = quotes.render([Quoted(1, "Ann", "hi", media=b"\xff\xd8\xff garbage")])
+    data = rendered([Quoted(1, "Ann", "hi", media=b"\xff\xd8\xff garbage")])
     assert opened(data).format == "WEBP"
     assert quotes.render([Quoted(1, "Ann", "", media=b"junk", sticker=True)])  # no picture, no text: a bubble
 
@@ -230,8 +246,8 @@ def test_every_style_renders() -> None:
         kinds, text.split(), strict=True
     )]  # fmt: skip
     reply = Reply("Bob", 2, "earlier")
-    assert opened(quotes.render([Quoted(1, "Ann", text, entities, reply=reply)])).format == "WEBP"
-    assert opened(quotes.render([Quoted(1, "Ann", text, entities)], bubble="#ffffff")).format == "WEBP"
+    assert opened(rendered([Quoted(1, "Ann", text, entities, reply=reply)])).format == "WEBP"
+    assert opened(rendered([Quoted(1, "Ann", text, entities)], bubble="#ffffff")).format == "WEBP"
 
 
 def test_an_unknown_colour_is_refused() -> None:
@@ -249,5 +265,5 @@ def test_the_spoiler_cloud_is_the_same_every_time() -> None:
 def test_the_pool_leaves_out_pictures_over_the_input_cap() -> None:
     pool = WorkerPool(MediaLimits(max_input_bytes=1000))
     big = noise(100)
-    data = asyncio.run(effects.quote(pool, [Quoted(1, "Ann", "hi", avatar=big, media=big)], "sticker"))
-    assert opened(data).format == "WEBP"
+    quote = asyncio.run(effects.quote(pool, [Quoted(1, "Ann", "hi", avatar=big, media=big)], "sticker"))
+    assert opened(quote.data).format == "WEBP"

@@ -8,7 +8,7 @@ from sqlalchemy import select, update
 from derp.agent.models import RunOutput
 from derp.history.models import Message
 from derp.money.models import RunFee
-from derp.tools import effects
+from derp.tools import effects, quotes
 from derp.tools.quotes import Quoted
 from derp.tools.workers import WorkerPool
 from tests.e2e.harness import Conversation, Person, Room
@@ -66,11 +66,11 @@ async def test_a_quote_of_the_last_messages_as_an_image_leaves_out_forgotten_one
     ids = [one.message_id, two.message_id, secret.message_id]
     model.reply(tool_call("make_quote", message_ids=ids, output="image"), ".")
     asked = await conversation.send(ZOE, DECK, "derp quote those as a picture")
-    sent = await conversation.expect_reply(asked, method="sendDocument")
+    sent = await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
 
     picture = Image.open(io.BytesIO(sent.attachments[0].data))
-    assert picture.format == "PNG" and picture.mode == "RGBA"
+    assert picture.format == "PNG" and picture.mode == "RGB"
     result = results_of(model, "make_quote")[0]
     assert result.startswith("Sent it as #") and f"#{secret.message_id}" in result
 
@@ -109,7 +109,7 @@ async def test_derps_own_messages_are_quoted_as_the_chat_saw_them(
     drawn: list[list[Quoted]] = []
     draw = effects.quote
 
-    async def spy(pool: WorkerPool, messages: list[Quoted], *rest: Any) -> bytes:
+    async def spy(pool: WorkerPool, messages: list[Quoted], *rest: Any) -> quotes.Rendered:
         drawn.append(messages)
         return await draw(pool, messages, *rest)
 

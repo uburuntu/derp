@@ -50,18 +50,18 @@ async def make_quote(
     Args:
         message_ids: The stored messages to quote by #id (up to 10), shown oldest first.
         count: Instead of ids: this many messages ending with the one replied to (or the last ones before this ask).
-        output: sticker, or image (a PNG file).
+        output: sticker, or image (a picture). A quote too long to read as a sticker is sent as a picture anyway.
         background: Bubble colour if they ask for one: a name ("pink") or hex ("#1b1429").
     """
     deps = ctx.deps
     try:
         check_budget(deps)
         rows, missing = await _chosen(deps, message_ids, count)
-        data = await effects.quote(deps.workers, await _quoted(deps, rows), output, background)
-        if output == "sticker":
-            made = Made("sticker", data, "quote.webp", "quote sticker")
+        quote = await effects.quote(deps.workers, await _quoted(deps, rows), output, background)
+        if quote.output == "sticker":
+            made = Made("sticker", quote.data, "quote.webp", "quote sticker")
         else:
-            made = Made("document", data, "quote.png", "quote")
+            made = Made("photo", quote.data, "quote.png", "quote picture")
         result = await emit(deps, made, final=True)
     except Refused as refused:
         return str(refused)
