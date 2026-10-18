@@ -150,7 +150,9 @@ async def test_jobs_page_lets_people_manage_their_own_and_admins_all(
     panel = max(k[1] for k in conversation.api.ephemerals if k[0] == CLUBHOUSE.id)
     await conversation.press_ephemeral(MEMBER, CLUBHOUSE.id, panel, data("page", "jobs"))
     page = conversation.api.ephemerals[(CLUBHOUSE.id, panel)]
-    assert f"#{theirs}" in page["rich_markdown"] and "daily" in page["rich_markdown"]
+    assert f"job {theirs} ·" in page["rich_markdown"] and "daily" in page["rich_markdown"]
+    assert f"#{theirs}" not in page["rich_markdown"]  # "#" cites messages
+    assert "⏸ job" in str(page["reply_markup"])
     assert r"water the \*plants\* \<b\>now\<\/b\>" in page["rich_markdown"]  # shown literally
     assert set(buttons(page["reply_markup"])) == {
         data("jpause", str(mine)), data("jdrop", str(mine)), data("page", "main")
