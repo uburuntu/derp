@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from derp.history.models import TOO_LONG, UNHEARD, Message, MessageMedia
+from derp.history.models import SILENT, TOO_LONG, UNHEARD, Message, MessageMedia
 from derp.history.render import MessageView, estimate_tokens, render_line, render_payload, render_transcript
 
 
@@ -122,4 +122,14 @@ def test_recordings_without_a_transcript_say_why() -> None:
         "[audio 0:30]",
         "[voice 0:02]",
         "[voice 0:05: hi]",
+    ]
+
+
+def test_a_described_recording_shows_its_description_and_its_transcript() -> None:
+    both = MessageMedia(type="video", duration=12, description="a man in a kitchen", transcript="buy bread")
+    mute = MessageMedia(type="video", duration=3, description="a cat", transcript="", transcript_model=SILENT)
+    lines = [render_line(MessageView(row(kind="video"), "Ann", [m]), ZoneInfo("UTC")) for m in (both, mute)]
+    assert [line.split(": ", 1)[1] for line in lines] == [
+        "[video 0:12: a man in a kitchen — buy bread]",
+        "[video 0:03 — no sound: a cat]",
     ]

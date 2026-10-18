@@ -13,6 +13,7 @@ from derp.history.capture import (
     message_values,
     payload_for,
     record_outgoing,
+    refresh_notes,
     store_message,
     unstored_view,
     upsert_chat,
@@ -265,6 +266,31 @@ async def test_an_edit_that_swaps_the_photo_drops_notes_about_the_old_one(databa
         message = await session.get(Message, (-100, 10))
         assert media is not None and (media.file_unique_id, media.description) == ("b", None)
         assert message is not None and message.extra_text is None
+
+
+@pytest.mark.db
+async def test_search_text_reads_every_file_note_and_keeps_them_across_a_swap(database: Database) -> None:
+    def post(photo: str, **extra: Any) -> TgMessage:
+        size = {"file_id": f"f-{photo}", "file_unique_id": photo, "width": 10, "height": 10}
+        quoted = {"origin": {"type": "hidden_user", "sender_user_name": "Ghost", "date": 1}, "photo": [size]}
+        video = CLIP | {"file_id": "clip", "file_unique_id": "uclip"}
+        return tg(video=video, external_reply=quoted, **extra)
+
+    async with database.transaction() as session:
+        await upsert_chat(session, post("a").chat)
+        await store_message(session, post("a"), capture="ambient", bot_id=BOT_ID)
+        clip, photo = [await session.get(MessageMedia, (-100, 10, idx)) for idx in (0, 1)]
+        assert clip is not None and photo is not None
+        clip.description, clip.transcript, photo.description = "a kitchen", "buy bread", "a cat"
+        await refresh_notes(session, -100, 10)
+    async with database.session() as session:
+        message = await session.get(Message, (-100, 10))
+        assert message is not None and message.extra_text == "a kitchen — buy bread a cat"
+    async with database.transaction() as session:  # the quoted picture changes; the clip's notes stay
+        await store_message(session, post("b", edit_date=1_700_000_100), capture="ambient", bot_id=BOT_ID)
+    async with database.session() as session:
+        message = await session.get(Message, (-100, 10))
+        assert message is not None and message.extra_text == "a kitchen — buy bread"
 
 
 @pytest.mark.db

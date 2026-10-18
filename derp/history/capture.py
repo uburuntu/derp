@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from derp.history.digests import mark_stale
 from derp.history.models import Chat, ForumTopic, Message, MessageMedia, Sticker, User
 from derp.history.polls import upsert_poll
-from derp.history.render import MessageView, sender_label
+from derp.history.render import MessageView, media_note, sender_label
 from derp.telegram.media import TGS
 from derp.telegram.text import plain_emoji
 
@@ -328,12 +328,6 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
         replaced = {
             r["idx"] for r in media if existing.get(r["idx"], r["file_unique_id"]) != r["file_unique_id"]
         }
-        if replaced:  # an edit swapped the file: notes about the old one no longer apply
-            await session.execute(
-                update(Message)
-                .where(Message.chat_id == message.chat.id, Message.message_id == message.message_id)
-                .values(extra_text=None)
-            )
         await session.execute(
             delete(MessageMedia).where(
                 MessageMedia.chat_id == message.chat.id,
@@ -354,6 +348,8 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
                     | (dict.fromkeys(STALE_NOTES) if row["idx"] in replaced else {}),
                 )
             )
+        if replaced:  # an edit swapped a file: notes about the old one no longer apply
+            await refresh_notes(session, message.chat.id, message.message_id)
     if message.poll is not None:
         await upsert_poll(
             session,
@@ -366,6 +362,21 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
         await mark_stale(session, message.chat.id, message.message_id)
     await _track_topic(session, message)
     return True
+
+
+async def refresh_notes(session: AsyncSession, chat_id: int, message_id: int) -> None:
+    """``messages.extra_text`` (searchable) from the notes on the message's files: every writer of a note calls it."""
+    media = await session.scalars(
+        select(MessageMedia)
+        .where(MessageMedia.chat_id == chat_id, MessageMedia.message_id == message_id)
+        .order_by(MessageMedia.idx)
+    )
+    notes = " ".join(note for row in media if (note := media_note(row))) or None
+    await session.execute(
+        update(Message)
+        .where(Message.chat_id == chat_id, Message.message_id == message_id)
+        .values(extra_text=notes)
+    )
 
 
 async def _track_topic(session: AsyncSession, message: TgMessage) -> None:

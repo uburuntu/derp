@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.history.capture import content_type
+from derp.history.capture import content_type, refresh_notes
 from derp.history.models import SILENT, TOO_BIG, TOO_LONG, UNHEARD, Message, MessageMedia
 from derp.inference.api import OpenRouterAPI, OpenRouterError, Transcript
 from derp.inference.ledger import record_usage, simple_usage
@@ -196,12 +196,11 @@ class Transcriber:
                 units=media.duration or 0,
             )
             row = await session.get(MessageMedia, (media.chat_id, media.message_id, media.idx))
-            message = await session.get(Message, (chat_id, message_id))
-            if row is None or message is None:
+            if row is None:
                 return None
             row.transcript = transcript.text
             row.transcript_model = transcript.model
-            message.extra_text = " ".join(filter(None, (message.extra_text, transcript.text))) or None
+            await refresh_notes(session, chat_id, message_id)
         return transcript.text
 
     async def _mark(self, media: MessageMedia, reason: str) -> None:

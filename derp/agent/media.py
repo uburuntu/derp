@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from derp.agent.models import AgentRun, RunOutput
 from derp.agent.runs import ledger_side_call
 from derp.db.engine import Database
+from derp.history.capture import refresh_notes
 from derp.history.models import Message, MessageMedia
 from derp.history.render import kind_label
 from derp.inference.openrouter import chat_settings
@@ -250,19 +251,10 @@ async def store_description(
     session: AsyncSession, media: MessageMedia, description: str, run_id: int
 ) -> None:
     row = await session.get(MessageMedia, (media.chat_id, media.message_id, media.idx))
-    message = await session.get(Message, (media.chat_id, media.message_id))
-    if row is None or message is None:
+    if row is None:
         return
     row.description, row.description_run_id = description, run_id
-    notes = [
-        m.transcript or m.description or ""
-        for m in await session.scalars(
-            select(MessageMedia).where(
-                MessageMedia.chat_id == media.chat_id, MessageMedia.message_id == media.message_id
-            )
-        )
-    ]
-    message.extra_text = " ".join(n for n in notes if n) or None
+    await refresh_notes(session, media.chat_id, media.message_id)
 
 
 async def note_images(

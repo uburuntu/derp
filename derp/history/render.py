@@ -2,7 +2,7 @@
 
 One line per message: ``[10:42] #123 Ann ↩#120: text [photo: a cat] {🔥3}``; a reply to a
 message in another chat names where it came from instead (``↩ (from News: photo) «quoted part»``).
-Media show their stored description or transcript when one exists (or why a
+Media show their stored description and transcript when they exist (or why a
 recording has none: too long, too big, silent, or transcription failed); payloads
 (dice, polls, locations, service events…) become short bracketed notes.
 Contacts render without phone numbers: the window never needs them.
@@ -94,8 +94,17 @@ def kind_label(kind: str) -> str:
     return {"animation": "gif", "live_photo": "photo"}.get(kind, kind.replace("_", " "))
 
 
+def media_note(media: MessageMedia) -> str:
+    """What is known about a file in words: its description, then its transcript ("" when neither).
+
+    The one reading of a media row: its transcript line here, and the message's search text
+    (``capture.refresh_notes``).
+    """
+    return " — ".join(note for note in (media.description, media.transcript) if note)
+
+
 def render_media(media: MessageMedia) -> str:
-    detail = media.transcript or media.description
+    detail = media_note(media)
     match media.type:
         case "sticker":
             label = f"sticker {media.sticker_emoji or ''}".rstrip()
