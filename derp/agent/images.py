@@ -14,13 +14,11 @@ from dataclasses import dataclass
 from typing import cast
 
 from aiogram import Bot
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.media import inspect, referenced_media
 from derp.db.engine import Database
 from derp.inference.api import GeneratedImage, OpenRouterAPI, OpenRouterError
-from derp.inference.ledger import record_usage, simple_usage
-from derp.inference.roles import ModelRole, RolePin
+from derp.inference.roles import RolePin
 from derp.telegram.media import Media, MediaGateway, chat_photo_bytes, profile_photo_bytes
 
 log = logging.getLogger("derp.images")
@@ -113,26 +111,3 @@ async def draw(
 
 def filename(image: GeneratedImage) -> str:
     return "derp.jpg" if "jpeg" in image.media_type else "derp.png"
-
-
-def record_image(
-    session: AsyncSession,
-    image: GeneratedImage,
-    chat_id: int,
-    user_id: int,
-    *,
-    funding: str,
-    run_id: int | None,
-) -> None:
-    """Ledger the provider call: against the run once delivered, else as ``creator`` without a run."""
-    record_usage(
-        session,
-        simple_usage(image.model, image.cost_usd),
-        kind="image",
-        funding=funding,
-        role=ModelRole.IMAGE.value,
-        run_id=run_id,
-        chat_id=chat_id,
-        user_id=user_id,
-        units=1,
-    )

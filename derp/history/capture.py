@@ -6,6 +6,7 @@ messages are never stored.
 """
 
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -432,7 +433,28 @@ async def is_stored(session: AsyncSession, chat_id: int, message_id: int) -> boo
     return found is not None
 
 
-async def record_outgoing(session: AsyncSession, messages: Iterable[TgMessage], bot_id: int) -> None:
+@dataclass(frozen=True, slots=True)
+class Spoken:
+    """The script of a voice message Derp performed (``model``), kept as its transcript: never listened to."""
+
+    text: str
+    model: str
+
+
+async def record_outgoing(
+    session: AsyncSession, messages: Iterable[TgMessage], bot_id: int, *, spoken: Spoken | None = None
+) -> None:
     """Derp's own messages, recorded after Telegram accepted them."""
     for message in messages:
         await store_message(session, message, capture="derp", bot_id=bot_id)
+        if spoken is not None and message.voice is not None:
+            await session.execute(
+                update(MessageMedia)
+                .where(
+                    MessageMedia.chat_id == message.chat.id,
+                    MessageMedia.message_id == message.message_id,
+                    MessageMedia.type == "voice",
+                )
+                .values(transcript=spoken.text, transcript_model=spoken.model)
+            )
+            await refresh_notes(session, message.chat.id, message.message_id)
