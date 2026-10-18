@@ -144,6 +144,9 @@ class Settings(BaseSettings):
         0.25  # …as does one costing more than this share of the payer's balance
     )
     approval_minutes: int = 15
+    waiting_minutes: int = (
+        30  # an ask nobody could pay for can still be resumed (buying, free models) this long
+    )
     image_price_usd: float = 0.045  # upper estimate of one standard image on the image pin
     stt_price_usd_per_minute: float = 0.007  # upper estimate on the STT pin, used when no cost is reported
     # One web search's fee (Parallel "fast", pinned in inference.openrouter: $1 per 1,000 searches):

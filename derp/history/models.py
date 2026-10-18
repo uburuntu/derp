@@ -208,6 +208,10 @@ class ChatMember(Base):
     first_seen: Mapped[datetime] = mapped_column(server_default=func.now())
     last_seen: Mapped[datetime] = mapped_column(server_default=func.now())
     offered_on: Mapped[date | None]  # the last UTC day they got the out-of-Derpcoins offer here (money.free)
+    waiting_message_id: Mapped[
+        int | None
+    ]  # their latest ask here nobody could pay for, until resumed (money.free)
+    waiting_at: Mapped[datetime | None]
 
 
 class MemberEvent(Base):

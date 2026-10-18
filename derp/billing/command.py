@@ -33,6 +33,7 @@ from derp.db.engine import Database
 from derp.history.models import Chat
 from derp.history.render import one_line
 from derp.locales import resolve, t
+from derp.money.free import offer_continue
 from derp.money.funding import Funder
 from derp.money.wallets import balance
 from derp.ops.owner import notify_owners
@@ -148,8 +149,9 @@ async def on_payment(message: Message, db: Database, settings: Settings, bot: Bo
     if not new:
         return
     added, amount = f"{order.credits:,}", f"{left:,}"
+    chat_id, thread_id = _paid_for(message, order)
     if order.target == "chat":
-        await _thank_patron(message, db, bot, funder, order, purchase.id, locale, amount)
+        await _thank_patron(message, db, bot, funder, order, purchase.id, locale, amount, thread_id)
     else:
         if order.kind == "plan":
             renewed = payment.is_recurring and not payment.is_first_recurring
@@ -159,11 +161,23 @@ async def on_payment(message: Message, db: Database, settings: Settings, bot: Bo
         else:
             text = t(locale, "billing.thanks", credits=added, balance=amount)
         await _receipt(bot, message, locale, text, added)
+    await offer_continue(  # the buyer's own ask that ran out of Derpcoins there can go on now
+        db, bot, settings, chat_id=chat_id, thread_id=thread_id, user_id=message.from_user.id, locale=locale
+    )
     await notify_owners(
         bot,
         settings,
         f"⭐ {purchase.stars} · {purchase.product} · {order.target} wallet · +{order.credits} dc",
     )
+
+
+def _paid_for(message: Message, order: Order) -> tuple[int, int | None]:
+    """The chat and forum topic a purchase is for: a chat pack's chat (its topic from the invoice, or where
+    it was paid), else the chat the payment came in."""
+    here = message.message_thread_id if message.is_topic_message else None
+    if order.target != "chat":
+        return message.chat.id, here
+    return order.target_id, order.thread_id or (here if message.chat.id == order.target_id else None)
 
 
 async def _receipt(bot: Bot, message: Message, locale: str, text: str, added: str) -> None:
@@ -187,12 +201,10 @@ async def _thank_patron(
     purchase_id: int,
     locale: str,
     amount: str,
+    thread: int | None,
 ) -> None:
     """The chat's patron post, in the topic the purchase was made in; a link payer also gets a receipt."""
     paid_here = message.chat.id == order.target_id
-    thread = order.thread_id or None
-    if thread is None and paid_here and message.is_topic_message:
-        thread = message.message_thread_id
     try:
         await patrons.thank(
             db, bot, funder, purchase_id=purchase_id, chat_id=order.target_id, thread_id=thread, locale=locale

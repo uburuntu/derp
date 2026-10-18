@@ -6,7 +6,7 @@ from sqlalchemy import select
 from derp.agent.models import AgentRun, RunOutput
 from derp.billing.models import Purchase
 from derp.history.models import Chat, Message, User
-from derp.money.free import POLICY_VERSION, FreeModels
+from derp.money.free import POLICY_VERSION, Unblock
 from derp.money.wallets import credit, wallet
 from derp.ops.feedback import FeedbackAction
 from derp.ops.models import Feedback
@@ -190,7 +190,7 @@ async def test_free_models_need_the_persons_own_press(
     async with conversation.db.session() as session:
         assert (await session.get(User, REX.id)).free_models_consent_version is None  # type: ignore[union-attr]
     notice_id, consent = last_button(conversation, REX.id, "free:consent")
-    assert consent == FreeModels(action="consent").pack()
+    assert consent == Unblock(action="consent").pack()
     [notice] = [c for c in conversation.api.calls_of("sendRichMessage") if c.fields.get("reply_markup")]
     assert "may store" in notice["rich_message"]["markdown"] and not notice.fields.get("reply_parameters")
     await conversation.press(REX, REX.id, notice_id, consent)

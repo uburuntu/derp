@@ -83,6 +83,11 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   topping up the group's wallet). In a group each person sees it at most once a UTC day; after that Derp only reacts
   with 🙈. Asking Derp to turn them on only brings up the notice; the person (or in a group an admin)
   presses its button. Free models get read-only and Telegram tools only.
+- A request that ran out of Derpcoins isn't lost: when the asker buys Derpcoins shortly after (for themselves, or
+  for the group in the topic they asked in), Derp offers a Continue your request button under it. Only the asker
+  can press it, and only once; it answers the original request, charged like any answer. A purchase by someone else
+  never replays another person's request, and an old request just says to ask again. Turning on free models answers
+  the waiting request the same way.
 - An action that costs more than the approval threshold (or a large share of the payer's balance) shows its price
   with Make it / Cancel buttons first; only the asker decides. Make it finishes the whole request: "draw a frog and
   caption it", "draw it and make it a sticker" or "draw it, then cut it out" still get the caption, sticker or
