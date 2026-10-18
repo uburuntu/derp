@@ -166,11 +166,14 @@ class Transcriber:
     async def _transcribe(self, chat_id: int, message_id: int, *, ambient: bool) -> str | None:
         async with self.db.session() as session:
             media = await session.scalar(
-                select(MessageMedia).where(
+                select(MessageMedia)
+                .where(
                     MessageMedia.chat_id == chat_id,
                     MessageMedia.message_id == message_id,
                     MessageMedia.type.in_(SPOKEN if ambient else AUDIBLE),
                 )
+                .order_by(MessageMedia.idx)  # the message's own recording before one it quotes
+                .limit(1)
             )
             user_id = await session.scalar(
                 select(Message.user_id).where(Message.chat_id == chat_id, Message.message_id == message_id)

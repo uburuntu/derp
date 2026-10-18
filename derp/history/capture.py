@@ -61,6 +61,8 @@ def classify(message: TgMessage) -> str:
     content = content_type(message)
     if content in TYPED_KINDS:
         return content
+    if content == "rich_message":  # text with structure (Derp's answers among them); its media are rows
+        return "text"
     if content in {"giveaway_winners"} or content in SERVICE_TYPES:
         return "service"
     return "other"
@@ -159,10 +161,62 @@ def _file(kind: str, item: Any) -> dict[str, Any]:
     }
 
 
+def _rich_blocks(message: TgMessage) -> Iterator[Any]:
+    """A rich message's blocks in reading order, nested ones (collages, quotes, details, list items) included."""
+    stack: list[Any] = list(reversed(message.rich_message.blocks)) if message.rich_message else []
+    while stack:
+        block = stack.pop()
+        yield block
+        stack.extend(
+            reversed([*(getattr(block, "blocks", None) or ()), *(getattr(block, "items", None) or ())])
+        )
+
+
+def _visible(text: Any) -> str:
+    """What a reader sees of rich text: never the URL, user or emoji id behind it."""
+    if text is None or isinstance(text, str):
+        return text or ""
+    if isinstance(text, list):
+        return "".join(_visible(part) for part in text)  # pyright: ignore[reportUnknownVariableType]
+    for field in ("text", "alternative_text", "expression"):
+        if (value := getattr(text, field, None)) is not None:
+            return _visible(value)
+    button = getattr(text, "button", None)
+    return button.text if button is not None else ""
+
+
+def _rich_text(message: TgMessage) -> str | None:
+    """The visible text of a rich message, a line per block (table rows with ``|`` between cells)."""
+    lines: list[str] = []
+    for block in _rich_blocks(message):
+        parts = [
+            _visible(getattr(block, field, None)) for field in ("summary", "text", "expression", "caption")
+        ]
+        parts += [
+            " | ".join(_visible(cell.text) for cell in row) for row in getattr(block, "cells", None) or ()
+        ]
+        lines.append(" ".join(part for part in parts if part))
+    return "\n".join(line for line in lines if line) or None
+
+
+def _rich_media(message: TgMessage) -> Iterator[tuple[str, Any]]:
+    for block in _rich_blocks(message):
+        if block.type == "photo" and block.photo:
+            yield "photo", max(block.photo, key=lambda size: size.width * size.height)
+        elif block.type in ("video", "animation", "document"):
+            yield block.type, getattr(block, block.type)
+
+
 def media_rows(message: TgMessage, bot_id: int) -> list[dict[str, Any]]:
-    """Media attached to a message, with the bot whose file_ids (previews included) they are."""
+    """Media of a message, with the bot whose file_ids (previews included) they are.
+
+    Its own file, then the media blocks of a rich message, then the media of the message it quotes from
+    another chat (``external_reply``), so each can be looked at like any attachment.
+    """
+    quoted = _attachments(message.external_reply) if message.external_reply is not None else ()
+    found = [*_attachments(message), *_rich_media(message), *quoted]
     base = {"chat_id": message.chat.id, "message_id": message.message_id, "bot_id": bot_id}
-    return [base | {"idx": idx} | _file(kind, item) for idx, (kind, item) in enumerate(_attachments(message))]
+    return [base | {"idx": idx} | _file(kind, item) for idx, (kind, item) in enumerate(found)]
 
 
 async def upsert_user(session: AsyncSession, user: TgUser) -> None:
@@ -222,7 +276,7 @@ def message_values(message: TgMessage, *, capture: str) -> dict[str, Any]:
         "date": utc(message.date),
         "edit_date": utc(message.edit_date) if message.edit_date else None,
         "kind": kind,
-        "text": message.text or message.caption,
+        "text": message.text or message.caption or _rich_text(message),
         "entities": _dump(message.entities or message.caption_entities) or None,
         "reply_to_message_id": reply.message_id
         if reply is not None and reply.chat.id == message.chat.id
