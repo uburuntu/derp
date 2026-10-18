@@ -41,6 +41,7 @@ UNTOOLED_ROLES = (
 # Roles whose price snapshot estimates calls before they are made (turn minimums, media looks).
 PRICED_ROLES = (*CHAT_ROLES, ModelRole.STT, ModelRole.MEDIA)
 OUTPUT_TOKENS_PER_TURN = 400
+OPT_IN_TIERS = ("flex", "priority")  # service tiers a request must ask for, which Derp never does
 INTELLIGENCE_MARGIN = 2.0
 
 
@@ -116,7 +117,7 @@ def build_catalog(
         pricing = endpoint.get("pricing") or {}
         if pricing.get("prompt") is None or pricing.get("completion") is None:
             continue
-        if endpoint.get("service_tier"):  # flex/priority routes take an explicit opt-in Derp never sends
+        if endpoint.get("service_tier") in OPT_IN_TIERS:
             continue
         catalog.zdr.setdefault(str(endpoint["model_id"]), []).append(
             Route(

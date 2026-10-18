@@ -114,12 +114,17 @@ def test_the_media_pin_is_priced_from_its_standard_routes_only() -> None:
     """Flex and priority endpoints need an opt-in Derp never sends: their prices aren't what a look costs."""
     pins = {ModelRole.MEDIA: DEFAULT_PINS[ModelRole.MEDIA]}
     lite = DEFAULT_PINS[ModelRole.MEDIA].model
-    standard = route(lite, "0.0000003", "0.0000025") | {"supported_parameters": []}
+    standard = route(lite, "0.0000003", "0.0000025") | {"supported_parameters": [], "service_tier": None}
     flex = standard | {"tag": "google-vertex/global/flex", "service_tier": "flex", "pricing": {
         "prompt": "0.00000015", "completion": "0.00000125"}}  # fmt: skip
     (change,) = plan(pins, build_catalog([], [standard, flex], []), allowlist=ALLOW, windows=WINDOWS)
     assert change.reason == "price snapshot" and change.price == (Decimal("0.3"), Decimal("2.5"))
     assert not plan(pins, build_catalog([], [flex], []), allowlist=ALLOW, windows=WINDOWS)  # no live route
+    priority = flex | {"service_tier": "priority"}
+    assert not plan(pins, build_catalog([], [priority], []), allowlist=ALLOW, windows=WINDOWS)
+    named = standard | {"service_tier": "standard"}  # a tier name that isn't an opt-in prices like no tier
+    (change,) = plan(pins, build_catalog([], [named], []), allowlist=ALLOW, windows=WINDOWS)
+    assert change.price == (Decimal("0.3"), Decimal("2.5"))
 
 
 def scripted(*, russian: str, call_tool: bool) -> FunctionModel:
