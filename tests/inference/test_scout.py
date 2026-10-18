@@ -93,6 +93,13 @@ def test_free_role_availability_uses_catalog_not_zdr() -> None:
     assert change.pin.model == "y/free:free"
 
 
+def test_the_decision_pin_lives_on_a_zdr_route_without_tools_and_gets_no_challengers() -> None:
+    pins = {ModelRole.DECISION: RolePin(model="typesafe/jev-1.14", reasoning=None, vision=False)}
+    jev = route("typesafe/jev-1.14", "0.000000042", "0") | {"supported_parameters": []}
+    catalog = build_catalog([model("deepseek/smart", 90, "0.0000001", "0.0000001")], [jev], [])
+    assert plan(pins, catalog, allowlist=ALLOW, windows=WINDOWS) == []
+
+
 def scripted(*, russian: str, call_tool: bool) -> FunctionModel:
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         last = str(messages[-1].parts[-1])
