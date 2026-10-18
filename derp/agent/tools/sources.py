@@ -7,9 +7,9 @@ Message media is the one named, or else the current message's, the one it
 replies to, or the images the run looks at (``RunDeps.seen``: the asker's photo
 just before, the image behind an answered run). A profile photo belongs to a
 person named in this chat (name or @username, matched against members seen
-here), else a stored message's author (a forward's original author when Telegram
-names them), else the replied-to message's, else the asker; tools never take a
-user id.
+here; "me" is the asker), else a stored message's author (a forward's original
+author when Telegram names them), else the replied-to message's, else the
+asker; tools never take a user id.
 Failures raise ``Refused``, whose text is meant for the model.
 """
 
@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from derp.agent.deps import RunDeps
+from derp.agent.images import Portrait
 from derp.agent.outputs import Kept, Refused
 from derp.history.models import Message, MessageMedia, User
 from derp.history.queries import resolve_members
@@ -95,14 +96,26 @@ async def message_media(deps: RunDeps, message_id: int | None, types: tuple[str,
     return Source(data, row.type, image=kind is not None and kind != "image/gif")
 
 
-def _name(user: User) -> str:
-    full = " ".join(p for p in (user.first_name, user.last_name) if p)
-    return f"{full} (@{user.username})" if user.username else full
+def _name(first_name: str, last_name: str | None, username: str | None) -> str:
+    full = " ".join(p for p in (first_name, last_name) if p)
+    return f"{full} (@{username})" if username else full
 
 
-async def resolve_person(deps: RunDeps, name: str) -> int:
-    """The one member of this chat a name or @username points at."""
+def _named(user: User) -> Portrait:
+    return Portrait(user.id, _name(user.first_name, user.last_name, user.username))
+
+
+async def _portrait(deps: RunDeps, user_id: int) -> Portrait:
+    async with deps.db.session() as session:
+        user = await session.get(User, user_id)
+    return _named(user) if user is not None else Portrait(user_id)
+
+
+async def resolve_person(deps: RunDeps, name: str) -> Portrait:
+    """The one member of this chat a name or @username points at ("me": the asker)."""
     wanted = name.strip().lstrip("@").casefold()
+    if wanted == "me":
+        return await _portrait(deps, deps.user_id)
     async with deps.db.session() as session:
         ids = await resolve_members(session, deps.chat.id, [name])
         users = list(await session.scalars(select(User).where(User.id.in_(ids)))) if ids else []
@@ -112,16 +125,16 @@ async def resolve_person(deps: RunDeps, name: str) -> int:
         exact = [
             u
             for u in users
-            if wanted in ((u.username or "").casefold(), u.first_name.casefold(), _name(u).casefold())
+            if wanted in ((u.username or "").casefold(), u.first_name.casefold(), _named(u).name.casefold())
         ]
         users = exact or users
     if len(users) > 1:
-        options = ", ".join(_name(u) for u in users[:8])
+        options = ", ".join(_named(u).name for u in users[:8])
         raise Refused(f"{name!r} could be: {options}. Ask which one, or use their @username.")
-    return users[0].id
+    return _named(users[0])
 
 
-async def photo_owner(deps: RunDeps, message_id: int | None, name: str | None = None) -> int:
+async def photo_owner(deps: RunDeps, message_id: int | None, name: str | None = None) -> Portrait:
     """Whose profile photo: the named person, else message_id's author, else the replied-to one's, else the asker.
 
     A message's author is its sender, or for a forward the person it was forwarded from when Telegram names
@@ -131,7 +144,7 @@ async def photo_owner(deps: RunDeps, message_id: int | None, name: str | None = 
         return await resolve_person(deps, name)
     anchor = message_id if message_id is not None else await replied_to(deps)
     if anchor is None:
-        return deps.user_id
+        return await _portrait(deps, deps.user_id)
     async with deps.db.session() as session:
         found = (
             await session.execute(
@@ -141,16 +154,20 @@ async def photo_owner(deps: RunDeps, message_id: int | None, name: str | None = 
             )
         ).first()
     sender, origin = found if found else (None, {})
-    author = origin["sender_user"]["id"] if origin and origin.get("type") == "user" else None
-    if author is None and sender is None and message_id is not None:
+    if origin and origin.get("type") == "user":
+        author = origin["sender_user"]
+        return Portrait(
+            author["id"], _name(author["first_name"], author.get("last_name"), author.get("username"))
+        )
+    if sender is None and message_id is not None:
         raise Refused(f"Message #{message_id} isn't in this chat's history or has no person behind it.")
-    return author or sender or deps.user_id
+    return await _portrait(deps, sender or deps.user_id)
 
 
 async def avatar_source(deps: RunDeps, message_id: int | None, name: str | None = None) -> Source:
     owner = await photo_owner(deps, message_id, name)
     try:
-        data = await profile_photo_bytes(deps.bot, deps.gateway, owner)
+        data = await profile_photo_bytes(deps.bot, deps.gateway, owner.user_id)
     except MediaUnavailableError as unavailable:
         raise Refused(f"No profile photo to use: {unavailable.reason}.") from None
     return Source(data, "profile_photo", image=sniff_image(data) is not None)

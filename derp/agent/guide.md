@@ -28,6 +28,10 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   knight", "meme @vasya's avatar" or "meme our chat photo". People are found by name or @username among those seen
   in this chat; in reply to a forward, it's the person it was forwarded from when Telegram shows them. Derp sends
   the result; bots can't change anyone's profile photo, so people set it themselves.
+- Several members can be drawn together from their profile pictures: "draw Anya, Bob and me as our dungeon
+  party" (a handful of people per picture; "me" is whoever asks). Each likeness stays on its own character;
+  someone without a visible profile photo is drawn from the description instead, and Derp says so. The price is the
+  same as any image.
 - One tool's result feeds the next: draw a picture, then meme it, cut it out or make it a sticker, in one answer.
   Only the end result is posted (no trail of in-between pictures), and the drawing and the cutout are paid for
   only if something made from them arrives.
