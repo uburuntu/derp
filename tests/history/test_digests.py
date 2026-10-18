@@ -4,8 +4,19 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from derp.db.engine import Database
-from derp.history.digests import day_stats, is_current, latest_before, mark_stale, save, scope_key
-from derp.history.models import Chat, Message
+from derp.history.digests import (
+    aimed_at,
+    day_bounds,
+    day_stats,
+    is_current,
+    last_said,
+    latest_before,
+    mark_stale,
+    save,
+    scope_key,
+    span_messages,
+)
+from derp.history.models import Chat, ChatMember, Message, User
 from derp.history.queries import Scope
 
 CHAT = -710
@@ -66,3 +77,78 @@ async def test_edits_inside_a_digest_mark_it_stale(seeded: Database) -> None:
         await session.refresh(digest)
         assert digest.stale and not is_current(digest, stats)
         assert await latest_before(session, CHAT, 0, 5) is None
+
+
+ASKER, OTHER = 11, 12
+
+
+@pytest.mark.db
+async def test_catching_up_starts_after_the_askers_last_message_before_others_spoke(
+    database: Database,
+) -> None:
+    start = datetime(2026, 10, 10, 10, tzinfo=UTC)
+    said = [
+        ASKER,
+        OTHER,
+        ASKER,
+        OTHER,
+        OTHER,
+        ASKER,
+        ASKER,
+    ]  # ids 1..7; 6 and 7 are a burst ending in the ask
+    async with database.transaction() as session:
+        session.add(Chat(id=CHAT, type="supergroup", title="D"))
+        await session.flush()
+        for n, sender in enumerate(said, 1):
+            row = msg(n, start + timedelta(hours=n))
+            row.user_id = sender
+            session.add(row)
+    scope = Scope(CHAT, tz=TZ)
+    async with database.session() as session:
+        anchor = await last_said(session, scope, ASKER, 7)
+        assert anchor is not None and anchor.message_id == 3
+        assert await last_said(session, scope, ASKER, 2) is None  # nobody else spoke before that
+        until = day_bounds(DAY, TZ)[1]  # 15:00 UTC: the end of the 10th in Tokyo
+        rows = await span_messages(session, scope, 3, 7, until)
+        assert [r.message_id for r in rows] == [4]  # the rest of the anchor's chat day, and never the ask
+
+
+@pytest.mark.db
+async def test_lines_aimed_at_someone_are_replies_names_handles_and_tags(database: Database) -> None:
+    at = datetime(2026, 10, 10, 10, tzinfo=UTC)
+    texts = {
+        1: (ASKER, "I'm off", None, None),
+        2: (OTHER, "ok bye", 1, None),  # a reply to them
+        3: (OTHER, "Маше напишите кто-нибудь?", None, None),  # their name, inflected
+        4: (OTHER, "@masha_k are you in?", None, None),
+        5: (
+            OTHER,
+            "pinging you",
+            None,
+            [{"type": "text_mention", "offset": 0, "length": 7, "user": {"id": ASKER}}],
+        ),
+        6: (OTHER, "машина сломалась", None, None),  # not her name
+        7: (ASKER, "Маша here, talking about myself", None, None),
+        8: (None, "Маша, Derp says hi", None, None),
+    }
+    async with database.transaction() as session:
+        session.add(Chat(id=CHAT, type="supergroup", title="D"))
+        session.add_all(
+            [User(id=ASKER, first_name="Маша", username="masha_k"), User(id=OTHER, first_name="Lev")]
+        )
+        await session.flush()
+        session.add(ChatMember(chat_id=CHAT, user_id=ASKER, names=["Маша К"]))
+        for n, (sender, text, reply, entities) in texts.items():
+            row = msg(n, at + timedelta(minutes=n))
+            row.user_id, row.text, row.reply_to_message_id, row.entities = sender, text, reply, entities
+            row.is_derp = sender is None
+            session.add(row)
+    async with database.session() as session:
+        found = await aimed_at(
+            session, Scope(CHAT), ASKER, start=at, end=None, after_id=1, before_id=99, limit=10
+        )
+        assert [r.message_id for r in found] == [2, 3, 4, 5]
+        newest = await aimed_at(
+            session, Scope(CHAT), ASKER, start=at, end=None, after_id=1, before_id=99, limit=2
+        )
+        assert [r.message_id for r in newest] == [4, 5]
