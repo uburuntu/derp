@@ -77,6 +77,8 @@ async def test_buying_offers_to_continue_the_ask_and_a_double_tap_runs_it_once(
     ]
     assert len(answers) == 1 and int(answers[0]["reply_parameters"]["message_id"]) == ask_id
     assert "reply_markup" not in conversation.api.message(CARL.id, offer_id)  # one press only
+    toast = conversation.api.calls_of("answerCallbackQuery", after=after)[0]
+    assert toast.sequence < answers[0].sequence  # the button stops spinning before the run
     async with conversation.db.session() as session:
         [run] = await session.scalars(select(AgentRun))
         assert (run.trigger_message_id, run.user_id, run.funding, run.charged_credits) == (
@@ -127,6 +129,31 @@ async def test_a_stale_continue_says_so_and_runs_nothing(
     assert model.requests == []
     async with conversation.db.session() as session:
         assert await session.scalar(select(AgentRun.id)) is None
+
+
+async def test_continue_on_a_deleted_question_says_it_is_stale(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    await blocked(conversation, settings)
+    _after, [offer] = await buy(conversation, CARL, f"{PACK}:user:{CARL.id}", "ch-gone")
+    offer_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
+    conversation.api.messages[(CARL.id, offer_id)].pop("reply_to_message")  # gone: Telegram sends no reply
+    await conversation.press(CARL, CARL.id, offer_id, button_data(offer))
+    assert "no longer waiting" in str(conversation.api.message(CARL.id, offer_id)["rich_message"])
+    assert model.requests == []
+
+
+async def test_consenting_after_the_question_went_stale_says_so(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    await blocked(conversation, settings)
+    offer_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
+    async with conversation.db.transaction() as session:
+        await session.execute(update(ChatMember).values(waiting_at=datetime.now(UTC) - timedelta(hours=1)))
+    consent = conversation.api.message(CARL.id, offer_id)["reply_markup"]["inline_keyboard"][0][1]
+    await conversation.press(CARL, CARL.id, offer_id, consent["callback_data"])
+    assert "no longer waiting" in str(conversation.api.message(CARL.id, offer_id)["rich_message"])
+    assert model.requests == []
 
 
 async def test_an_old_ask_gets_no_offer(

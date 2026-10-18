@@ -33,7 +33,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from derp.agent.models import AgentRun
+from derp.agent.models import AgentRun, RunOutput
 from derp.billing.menu import buy_button, top_up_button
 from derp.config import Settings
 from derp.db.engine import Database
@@ -145,7 +145,8 @@ async def wait(db: Database, chat_id: int, user_id: int, message_id: int) -> Non
 async def waiting_question(
     session: AsyncSession, settings: Settings, chat_id: int, user_id: int
 ) -> StoredMessage | None:
-    """The person's waiting question in this chat: recent, still stored, and no newer ask of theirs answered."""
+    """The person's waiting question in this chat: recent, still stored, and no newer ask of theirs answered
+    (a run that delivered something; failed ones don't count)."""
     member = await session.get(ChatMember, (chat_id, user_id))
     since = datetime.now(UTC) - timedelta(minutes=settings.waiting_minutes)
     if member is None or member.waiting_message_id is None or member.waiting_at is None:
@@ -153,11 +154,14 @@ async def waiting_question(
     if member.waiting_at <= since:
         return None
     answered_since = await session.scalar(  # a newer ask of theirs got an answer: this one is behind them
-        select(AgentRun.id).where(
+        select(AgentRun.id)
+        .join(RunOutput, RunOutput.run_id == AgentRun.id)  # an answer that reached the chat
+        .where(
             AgentRun.chat_id == chat_id,
             AgentRun.user_id == user_id,
             AgentRun.trigger_message_id > member.waiting_message_id,
         )
+        .limit(1)
     )
     question = await session.get(StoredMessage, (chat_id, member.waiting_message_id))
     return (
@@ -276,13 +280,17 @@ def build_router() -> Router:
         press: Press, data: Unblock, db: Database, settings: Settings, runtime: Answers
     ) -> None:
         bot = press.bot
+        stale = t(press.locale, "money.continue_stale")
         if data.action == "continue":
-            asker = press.message.reply_to_message.from_user if press.message.reply_to_message else None
-            if asker is None or asker.id != press.user_id:  # a patron's purchase never replays others' asks
+            asked = press.message.reply_to_message
+            if asked is None:  # the question was deleted
+                return await press.edit(stale)
+            if asked.from_user is None or asked.from_user.id != press.user_id:  # never someone else's ask
                 return await press.deny("money.continue_not_yours")
             await press.strip()
+            await press.toast()  # answered now: the run that follows can take a while
             if await resume(press, db, settings, runtime) is False:
-                await press.edit(t(press.locale, "money.continue_stale"))
+                await press.edit(stale)
             return None
         if data.action == "consent":
             async with db.transaction() as session:
@@ -306,7 +314,8 @@ def build_router() -> Router:
             await press.toast()
             await send_markdown(bot, Target(chat.id), t(chat.locale or press.locale, "money.free_enabled"))
         await press.strip(lambda b: b.callback_data != data.pack())  # buying stays possible
-        await resume(press, db, settings, runtime)
+        if await resume(press, db, settings, runtime) is False:
+            await press.edit(stale)
         return None
 
     return router

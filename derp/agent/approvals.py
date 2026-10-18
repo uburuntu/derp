@@ -147,6 +147,7 @@ async def on_decision(press: Press, data: ApprovalAction, db: Database, runtime:
     if state != "pending":
         return await press.deny(f"approvals.already_{state}")
     await press.edit(t(press.locale, "approvals.making" if data.run else "approvals.cancelled"))
+    await press.toast()  # answered now: the run that follows can take a while
     if data.run and approval is not None and chat is not None:
         await runtime.run_approved(approval, chat, press.locale)
 
