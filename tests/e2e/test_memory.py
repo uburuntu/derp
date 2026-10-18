@@ -190,14 +190,14 @@ async def test_a_decided_proposal_loses_its_buttons_and_the_rest_keep_theirs(
     listing = await conversation.send(GINA, CLUB, "/memory")
     shown = await conversation.expect_reply(listing)
     rows = shown["reply_markup"]["inline_keyboard"]
-    assert sorted(row[0]["text"] for row in rows) == [f"✅ #{i}" for i in sorted(ids)]
-    approved = int(rows[0][0]["text"].split("#")[1])
+    assert sorted(row[0]["text"] for row in rows) == [f"✅ note {i}" for i in sorted(ids)]
+    approved = int(rows[0][0]["text"].split()[-1])
     menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == CLUB.id)
 
     after = conversation.seq
     await conversation.press(GINA, CLUB.id, menu_id, rows[0][0]["callback_data"])
     toast = conversation.api.calls_of("answerCallbackQuery", after=after)[-1]
-    assert toast["text"] == f"Note #{approved} saved." and not toast.fields.get("show_alert")
+    assert toast["text"] == f"Note {approved} saved." and not toast.fields.get("show_alert")
     left = conversation.api.message(CLUB.id, menu_id)["reply_markup"]["inline_keyboard"]
     assert left == [rows[1]]  # only the undecided proposal keeps its buttons
 
@@ -247,3 +247,129 @@ async def test_remember_follows_the_chat_notes_mode(
     assert (note.state if note else None) == state
     if state is None:
         assert "turned off" in results_of(model, "remember")[0]
+
+
+async def test_a_corrected_fact_rewrites_its_note(conversation: Conversation, model: ScriptedModel) -> None:
+    conversation.meet(GINA, CLUB)
+    model.reply(tool_call("remember", text="meetups are on Fridays"), "noted")
+    first = await conversation.send(GINA, CLUB, "derp, remember: meetups are on Fridays")
+    await conversation.expect_reply(first)
+    await conversation.settle(first)
+    async with conversation.db.session() as session:
+        note_id = await session.scalar(select(Note.id))
+
+    def correct(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        assert f"- note {note_id}: meetups are on Fridays" in str(messages[-1])
+        return tool_call("edit_note", note_id=note_id, text="meetups are on Thursdays")(messages, info)
+
+    model.reply(correct, "fixed")
+    second = await conversation.send(GINA, CLUB, "derp, actually change that to Thursdays")
+    await conversation.expect_reply(second)
+    await conversation.settle(second)
+    assert results_of(model, "edit_note") == [f"Note {note_id} updated."]
+    async with conversation.db.session() as session:
+        assert [(n.id, n.text) for n in await session.scalars(select(Note))] == [
+            (note_id, "meetups are on Thursdays")
+        ]
+    shown = await conversation.expect_reply(await conversation.send(GINA, CLUB, "/memory"))
+    assert f"- note {note_id}: meetups are on Thursdays" in shown["rich_message"]["markdown"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "editor", "whose", "says", "text"),
+    [
+        ("auto", HANK, None, "updated", "new"),
+        ("members", HANK, None, "updated", "new"),
+        ("admins", GINA, None, "updated", "new"),
+        ("admins", HANK, None, "Proposed the change", "old"),
+        ("off", HANK, None, "Only admins can change chat notes", "old"),
+        ("off", GINA, None, "updated", "new"),
+        ("auto", HANK, GINA, "someone else's personal note", "old"),
+        ("off", GINA, GINA, "updated", "new"),  # personal notes are their owner's in every mode
+    ],
+)
+async def test_editing_a_note_follows_the_saving_rules(
+    conversation: Conversation,
+    model: ScriptedModel,
+    mode: str,
+    editor: Person,
+    whose: Person | None,
+    says: str,
+    text: str,
+) -> None:
+    conversation.meet(GINA, CLUB, status="administrator")
+    conversation.meet(HANK, CLUB)
+    await conversation.settle(await conversation.send(HANK, CLUB, "hello"))
+    async with conversation.db.transaction() as session:
+        await session.execute(update(Chat).where(Chat.id == CLUB.id).values(notes_mode=mode))
+        note = Note(chat_id=CLUB.id, user_id=whose.id if whose else None, text="old", author_id=GINA.id)
+        session.add(note)
+        await session.flush()
+        note_id = note.id
+
+    model.reply(tool_call("edit_note", note_id=note_id, text="new"), "ok")
+    asked = await conversation.send(editor, CLUB, "derp, change that note to: new")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    assert says in results_of(model, "edit_note")[0]
+    async with conversation.db.session() as session:
+        edited = await session.get(Note, note_id)
+        assert edited is not None and edited.text == text
+
+
+async def test_an_admin_approves_a_proposed_edit_into_its_note(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(GINA, CLUB, status="administrator")
+    conversation.meet(HANK, CLUB)
+    await conversation.settle(await conversation.send(HANK, CLUB, "hello"))
+    async with conversation.db.transaction() as session:
+        await session.execute(update(Chat).where(Chat.id == CLUB.id).values(notes_mode="admins"))
+        note = Note(chat_id=CLUB.id, text="films to watch: Alien", author_id=GINA.id)
+        session.add(note)
+        await session.flush()
+        note_id = note.id
+    model.reply(tool_call("edit_note", note_id=note_id, text="films to watch: Alien, Heat"), "proposed")
+    asked = await conversation.send(HANK, CLUB, "derp, add Heat to the films list")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+
+    shown = await conversation.expect_reply(await conversation.send(GINA, CLUB, "/memory"))
+    text = shown["rich_message"]["markdown"]
+    assert f"- note {note_id}, changed to: films to watch: Alien, Heat" in text
+    approve = shown["reply_markup"]["inline_keyboard"][0][0]
+    assert approve["text"] == f"✅ note {note_id}, changed to"
+    menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == CLUB.id)
+    after = conversation.seq
+    await conversation.press(GINA, CLUB.id, menu_id, approve["callback_data"])
+    assert (
+        conversation.api.calls_of("answerCallbackQuery", after=after)[-1]["text"] == f"Note {note_id} saved."
+    )
+    async with conversation.db.session() as session:
+        assert [(n.id, n.text, n.state) for n in await session.scalars(select(Note))] == [
+            (note_id, "films to watch: Alien, Heat", "active")
+        ]
+
+
+async def test_notes_left_out_of_the_prompt_can_be_found(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(GINA, CLUB)
+    await conversation.settle(await conversation.send(GINA, CLUB, "hello"))
+    async with conversation.db.transaction() as session:
+        session.add(Note(chat_id=CLUB.id, text="the wifi password is hunter2", author_id=GINA.id))
+        session.add_all(
+            Note(chat_id=CLUB.id, text=f"lore {i} " + "x" * 280, author_id=GINA.id) for i in range(12)
+        )
+
+    def search(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        situation = str(messages[-1])
+        assert "older not shown; find_notes searches them" in situation and "hunter2" not in situation
+        return tool_call("find_notes", query="wifi")(messages, info)
+
+    model.reply(search, "it's hunter2")
+    asked = await conversation.send(GINA, CLUB, "derp what's the wifi password?")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    [found] = results_of(model, "find_notes")
+    assert "(chat): the wifi password is hunter2" in found and "lore" not in found

@@ -1,4 +1,4 @@
-"""Memory tools: remember, forget a note, set chat rules.
+"""Memory tools: remember, find, edit and forget notes, set chat rules.
 
 Permissions come from the chat's notes mode and the asker's admin status —
 never from tool arguments. Not offered to free-model runs.
@@ -8,14 +8,16 @@ from typing import Literal
 
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.deps import RunDeps
 from derp.agent.outputs import Refused, check_budget, deliver
 from derp.agent.toolsets import Family
 from derp.history.models import Chat, Message
+from derp.history.render import neutralize
 from derp.memory.command import rules_keyboard, rules_prompt
 from derp.memory.models import Note
-from derp.memory.notes import RULES_CHARS, add_note, is_admin
+from derp.memory.notes import FOUND_NOTES, RULES_CHARS, add_note, is_admin, load_memory, matching, rewrite
 from derp.money.funding import Funding
 from derp.telegram.sender import send_markdown
 
@@ -29,6 +31,8 @@ async def remember(ctx: RunContext[RunDeps], text: str, about: Literal["chat", "
     Use "me" for facts about the person talking to you (their preferences, plans), "chat" for things
     the whole chat should know. Chat notes follow the chat notes policy in the situation; personal
     notes are saved when asked, or when something about the person is clearly worth keeping.
+    A correction of a saved fact is edit_note, not a second note. Keep a list (films to watch, places,
+    games) as one note that you edit to add or strike items, not as many tiny notes.
 
     Args:
         text: The fact, one short sentence (max 300 characters).
@@ -59,6 +63,53 @@ async def remember(ctx: RunContext[RunDeps], text: str, about: Literal["chat", "
 
 
 @toolset.tool
+async def find_notes(ctx: RunContext[RunDeps], query: str = "") -> str:
+    """Search this chat's notes and the current person's own notes, older ones the situation left out too.
+
+    Args:
+        query: Words to look for (parts of words match too); empty lists every note, newest first.
+    """
+    deps = ctx.deps
+    async with deps.db.session() as session:
+        memory = await load_memory(session, deps.chat.id, deps.user_id)
+    found = matching(memory, query)
+    if not found:
+        return "No notes match."
+    lines = [
+        f"- note {n.id} ({'chat' if n.user_id is None else 'about them'}): {neutralize(n.text)}"
+        for n in found[:FOUND_NOTES]
+    ]
+    if len(found) > FOUND_NOTES:
+        lines.append(f"{len(found) - FOUND_NOTES} more match; search with more specific words.")
+    return "\n".join(lines)
+
+
+@toolset.tool
+async def edit_note(ctx: RunContext[RunDeps], note_id: int, text: str) -> str:
+    """Rewrite a saved note in place: corrections ("actually, it's Thursdays") and lists (add or strike an
+    item). Chat notes follow the chat notes policy; a personal note is only its owner's to change.
+
+    Args:
+        note_id: The number of "note 42".
+        text: The note's full new text (max 300 characters).
+    """
+    deps = ctx.deps
+    async with deps.db.transaction() as session:
+        found = await _changeable(session, deps, note_id)
+        if isinstance(found, str):
+            return found
+        note, direct = found
+        if not direct and deps.chat.notes_mode != "admins":
+            return "Only admins can change chat notes here."
+        result = await rewrite(session, note, text, propose=not direct, author_id=deps.user_id)
+    if isinstance(result, str):
+        return f"Not changed: {result}."
+    if not direct:
+        return f"Proposed the change to note {note_id}; an admin has to approve it in /memory."
+    return f"Note {note_id} updated."
+
+
+@toolset.tool
 async def forget_note(ctx: RunContext[RunDeps], note_id: int) -> str:
     """Delete a saved note by its number (chat notes or the current person's own notes).
 
@@ -67,19 +118,29 @@ async def forget_note(ctx: RunContext[RunDeps], note_id: int) -> str:
     """
     deps = ctx.deps
     async with deps.db.transaction() as session:
-        note = await session.get(Note, note_id)
-        if note is None or note.chat_id != deps.chat.id:
-            return "No such note in this chat."
-        if note.user_id is not None and note.user_id != deps.user_id:
-            return "That is someone else's personal note; only they can remove it."
-        if (
-            note.user_id is None
-            and deps.chat.notes_mode in {"admins", "off"}
-            and not await is_admin(deps.bot, deps.chat, deps.user_id)
-        ):
+        found = await _changeable(session, deps, note_id)
+        if isinstance(found, str):
+            return found
+        note, direct = found
+        if not direct:
             return "Only admins can remove chat notes here."
         await session.delete(note)
     return f"Forgot note {note_id}."
+
+
+async def _changeable(session: AsyncSession, deps: RunDeps, note_id: int) -> tuple[Note, bool] | str:
+    """The run's note and whether the asker may change it directly (chat notes in admins and off modes:
+    admins only), or why it isn't theirs to change."""
+    note = await session.get(Note, note_id)
+    if note is None or note.chat_id != deps.chat.id or note.state != "active":
+        return "No such note in this chat."
+    if note.user_id is not None:
+        if note.user_id != deps.user_id:
+            return "That is someone else's personal note; only they can change it."
+        return note, True
+    if deps.chat.notes_mode in {"admins", "off"}:
+        return note, await is_admin(deps.bot, deps.chat, deps.user_id)
+    return note, True
 
 
 @toolset.tool(sequential=True)

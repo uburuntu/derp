@@ -96,10 +96,15 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 ## memory
 
 - Notes: "remember that…" saves a short note. Chat notes are shared in that chat; personal notes belong to one
-  person in one chat and only they can remove them. Nothing crosses chats.
+  person in one chat and only they can change or remove them. Nothing crosses chats.
+- A saved fact can be corrected ("actually, it's Thursdays"): Derp rewrites that note instead of adding a second
+  one. A list (films to watch, places, games) lives in one note that Derp edits to add or strike items.
+- Derp sees the newest notes with every message, with room kept for the asker's own; it searches older ones
+  when they matter.
 - Admins choose the chat notes mode in /settings: auto (Derp also saves lasting chat lore on its own,
-  sparingly), members (saved only when someone asks), admins (only when asked; others' notes become proposals
-  approved in /memory) or off. Personal notes work in every mode.
+  sparingly), members (saved only when someone asks), admins (only when asked; others' new notes and changes
+  become proposals approved in /memory) or off (only admins change or remove the chat notes left). Personal
+  notes work in every mode.
 - Rules: standing instructions an admin sets for how Derp behaves in the chat. Rules quoted word for word apply at
   once; anything Derp would reword is shown with Apply / Cancel for that admin.
 - /memory lists the rules and notes. Notes and rules need bought or free daily Derpcoins (not free models).
