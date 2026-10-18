@@ -27,7 +27,7 @@ class CaptureMiddleware(BaseMiddleware):
     The message an invocation replies to is part of the invocation: stored too if Derp hadn't kept
     it (privacy mode, ambient off), so its text and media are available to the run. Stored voice
     messages and video notes are transcribed before handlers run (ambient ones only under the daily
-    creator cap), audio files only when they are part of an invocation.
+    creator cap), audio files and videos only when they are part of an invocation.
 
     Adds ``trigger`` (or None) and ``chat_row`` to handler data. Guest-mode
     messages pass through untouched: they are never stored.

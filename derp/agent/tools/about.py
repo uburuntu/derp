@@ -130,7 +130,7 @@ def facts(topic: Topic, settings: Settings, username: str, families: Sequence[Fa
                 ),
                 (
                     f"- Media: files up to {media.max_input_bytes // 2**20} MB and {media.max_pixels / 1e6:g} "
-                    f"megapixels; voice transcribed up to {media.voice_max_seconds // 60} minutes."
+                    f"megapixels; voice, audio and video transcribed up to {media.voice_max_seconds // 60} minutes."
                 ),
             ]
         case "commands":
