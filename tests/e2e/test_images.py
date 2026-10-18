@@ -288,11 +288,124 @@ async def test_a_member_is_drawn_by_name(conversation: Conversation, model: Scri
     await conversation.settle(await conversation.send(vasya, club, "привет"))
     avatar = jpeg("green")
     conversation.api.register_file(f"profile-{vasya.id}", avatar)
-    model.reply(tool_call("generate_image", prompt="this person as a knight", person="Вася"), ".")
+    model.reply(tool_call("generate_image", prompt="this person as a knight", people=["Вася"]), ".")
     asked = await conversation.send(JO, club, "дерп нарисуй Васю рыцарем")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
     assert [data for data, _ in images.references[0]] == [normalize(avatar).data]
+
+
+async def club_with(conversation: Conversation, *members: Person) -> Room:
+    """A group where Jo and ``members`` have spoken, so they can be found by name."""
+    club = Room(-1509, title="Club")
+    for person in (JO, *members):
+        conversation.meet(person, club)
+        await conversation.settle(await conversation.send(person, club, "hi"))
+    return club
+
+
+async def test_two_members_are_drawn_together_each_from_their_photo(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 650)
+    ann, bob = Person(1510, "Ann", username="a"), Person(1511, "Bob", username="b")
+    club = await club_with(conversation, ann, bob)
+    conversation.api.register_file(f"profile-{ann.id}", jpeg("green"))
+    conversation.api.register_file(f"profile-{bob.id}", jpeg("blue"))
+    prompt = "Ann and Bob as knights, Ann with a sword, Bob with a shield"
+    model.reply(tool_call("generate_image", prompt=prompt, people=["@a", "@b"]), ".")
+    asked = await conversation.send(JO, club, "derp draw @a and @b as knights")
+    await conversation.expect_reply(asked, method="sendPhoto")
+    await conversation.settle(asked)
+    [references] = images.references  # one image, both avatars, in the order named
+    assert [data for data, _ in references] == [normalize(jpeg("green")).data, normalize(jpeg("blue")).data]
+    [sent] = images.prompts
+    assert sent.startswith(prompt)
+    assert "reference image 1 is Ann (@a), reference image 2 is Bob (@b)" in sent
+
+
+async def test_a_member_joins_a_photo_from_the_chat(conversation: Conversation, model: ScriptedModel) -> None:
+    """The photo comes first, so the member's avatar is numbered after it."""
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 650)
+    ann = Person(1515, "Ann")
+    club = await club_with(conversation, ann)
+    conversation.api.register_file(f"profile-{ann.id}", jpeg("green"))
+    conversation.api.register_file("dog", jpeg("brown"))
+    posted = await conversation.send(JO, club, photo=[{"file_id": "dog", "file_unique_id": "u-dog",
+                                                       "width": 64, "height": 64}])  # fmt: skip
+    await conversation.settle(posted)
+    call = tool_call("generate_image", prompt="Ann walking this dog", edit=True, people=["Ann"])
+    model.reply(call, ".", "a brown dog")
+    asked = await conversation.send(JO, club, "derp draw Ann walking this dog")
+    await conversation.expect_reply(asked, method="sendPhoto")
+    await conversation.settle(asked)
+    [references] = images.references
+    assert [data for data, _ in references] == [normalize(jpeg("brown")).data, normalize(jpeg("green")).data]
+    assert "reference image 2 is Ann (profile photos)" in images.prompts[0]
+
+
+async def test_a_group_portrait_draws_someone_without_a_photo_from_the_description(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    """ "Me" is the asker; a member with no visible photo is named so the model draws them anyway."""
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 650)
+    anya, bob = Person(1512, "Anya"), Person(1513, "Bob")
+    club = await club_with(conversation, anya, bob)
+    conversation.api.register_file(f"profile-{anya.id}", jpeg("green"))
+    conversation.api.register_file(f"profile-{JO.id}", jpeg("orange"))
+    party = "a dysfunctional dungeon party: Anya the rogue, Bob the bard, Jo the wizard"
+    model.reply(
+        tool_call("generate_image", prompt=party, people=["Anya", "Bob", "me"]), "Bob has no photo, so."
+    )
+    asked = await conversation.send(JO, club, "derp draw Anya, Bob and me as our dysfunctional dungeon party")
+    await conversation.expect_reply(asked, method="sendPhoto")
+    await conversation.settle(asked)
+    [references] = images.references
+    assert [data for data, _ in references] == [normalize(jpeg("green")).data, normalize(jpeg("orange")).data]
+    [sent] = images.prompts
+    assert "reference image 1 is Anya, reference image 2 is Jo" in sent
+    assert "No photo of Bob: draw them from the description." in sent
+    [result] = results_of(model, "generate_image")
+    assert "No profile photo of Bob" in result
+
+
+async def test_a_portrait_approval_stored_with_a_single_avatar_still_resumes(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    """Prompts priced before group portraits kept one ``avatar_of`` id: Make it still draws that person."""
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 150)
+    ann = Person(1514, "Ann", username="a")
+    club = await club_with(conversation, ann)
+    conversation.api.register_file(f"profile-{ann.id}", jpeg("green"))
+    model.reply(tool_call("generate_image", prompt="Ann as a knight", people=["Ann"]), ".")
+    asked = await conversation.send(JO, club, "derp draw Ann as a knight")
+    card = await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    async with conversation.db.transaction() as session:
+        approval = await session.scalar(select(Approval))
+        assert approval is not None and approval.args["job"]["avatar_of"] == [
+            {"id": ann.id, "name": "Ann (@a)"}
+        ]
+        old = {"prompt": "Ann as a knight", "aspect_ratio": "1:1", "references": [], "avatar_of": ann.id}
+        approval.args = {**approval.args, "job": old}
+    prompt_id = max(mid for (cid, mid) in conversation.api.messages if cid == club.id)
+    make_it = card["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    await conversation.press(JO, club.id, prompt_id, make_it)
+    assert [[data for data, _ in sent] for sent in images.references] == [[normalize(jpeg("green")).data]]
+    [sent] = images.prompts
+    assert sent.startswith("Ann as a knight\n\nPeople: reference image 1 is the person (profile photos).")
 
 
 async def test_a_forward_is_drawn_as_its_original_author(
