@@ -1,8 +1,9 @@
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from derp.db.engine import Database
 from derp.history.models import Chat
@@ -15,13 +16,15 @@ GROUP = -100
 CREATOR, OTHER = 1, 2
 
 
-async def setup(db: Database, repeat: str | None = None, *, due: timedelta = timedelta(hours=1)) -> Chat:
+async def setup(
+    db: Database, repeat: str | None = None, *, due: timedelta = timedelta(hours=1), kind: str = "message"
+) -> Chat:
     """A group with one active job of CREATOR's, due after ``due``; returns the chat."""
     at = datetime.now(UTC) + due
     async with db.transaction() as session:
         chat = Chat(id=GROUP, type="supergroup", timezone="Europe/Berlin")
         session.add(chat)
-        session.add(Job(chat_id=GROUP, creator_id=CREATOR, kind="message", text="bins", repeat=repeat,
+        session.add(Job(chat_id=GROUP, creator_id=CREATOR, kind=kind, text="bins", repeat=repeat,
                         next_at=at, anchor_at=at))  # fmt: skip
     return chat
 
@@ -44,8 +47,8 @@ async def test_creators_and_admins_move_and_reword_a_job_others_cannot(database:
     assert await act(database, chat, OTHER, False, Change(at=later)) == "not_yours"
     moved = await act(database, chat, CREATOR, False, Change(at=later, text="recycling"))
     assert isinstance(moved, Job) and moved.next_at == later == moved.anchor_at and moved.text == "recycling"
-    reworded = await act(database, chat, OTHER, True, Change(kind="prompt"))
-    assert isinstance(reworded, Job) and reworded.kind == "prompt" and reworded.next_at == later
+    reworded = await act(database, chat, OTHER, True, Change(text="glass"))  # a plain reminder: any admin
+    assert isinstance(reworded, Job) and reworded.text == "glass" and reworded.next_at == later
 
 
 async def test_a_job_that_will_repeat_needs_an_admin_and_once_stops_it(database: Database) -> None:
@@ -159,3 +162,67 @@ async def test_snoozing_a_repeating_reminder_adds_one_extra_firing(database: Dat
     assert await act(database, chat, CREATOR, True, "cancel") != "gone"
     async with database.session() as session:
         assert set((await session.scalars(select(Job.state))).all()) == {"cancelled"}
+
+
+async def test_what_a_prompt_costs_its_creator_stays_the_creators(database: Database) -> None:
+    chat = await setup(database, "daily", kind="prompt")
+    for change in (
+        Change(text="roast us"),
+        Change(kind="message"),
+        Change(repeat="weekly"),
+        Change(repeat="once"),
+    ):
+        assert await act(database, chat, OTHER, True, change) == "creators"
+    later = datetime.now(UTC) + timedelta(days=1)
+    moved = await act(database, chat, OTHER, True, Change(at=later, text="bins"))  # same text: only a move
+    assert isinstance(moved, Job) and moved.next_at == later
+    assert await act(database, chat, OTHER, False, "pause") == "not_yours"
+    for action in ("pause", "resume", "cancel"):
+        assert isinstance(await act(database, chat, OTHER, True, action), Job)
+
+
+async def test_a_reminder_becomes_a_prompt_only_by_its_creator(database: Database) -> None:
+    chat = await setup(database)
+    assert await act(database, chat, OTHER, True, Change(kind="prompt")) == "creators"
+    made = await act(database, chat, CREATOR, False, Change(kind="prompt", text="tell a joke"))
+    assert isinstance(made, Job) and (made.kind, made.text) == ("prompt", "tell a joke")
+
+
+async def test_a_new_repeat_alone_moves_the_next_run_onto_the_rule(database: Database) -> None:
+    berlin = ZoneInfo("Europe/Berlin")
+    today = datetime.now(berlin).date()
+    saturday = today + timedelta(days=(5 - today.weekday()) % 7 or 7)  # a Saturday ahead
+    at = datetime.combine(saturday, time(9), berlin).astimezone(UTC)
+    chat = await setup(database, "weekly")
+    async with database.transaction() as session:
+        await session.execute(update(Job).values(next_at=at, anchor_at=at))
+    weekdays = await act(database, chat, CREATOR, True, Change(repeat="weekdays"))
+    assert isinstance(weekdays, Job)
+    assert (
+        weekdays.next_at.astimezone(berlin).weekday() == 0 and weekdays.next_at.astimezone(berlin).hour == 9
+    )
+    assert weekdays.anchor_at == at  # the series keeps its wall time and day
+
+
+async def test_pausing_a_series_pauses_its_snoozed_extra_and_resuming_brings_both_back(
+    database: Database,
+) -> None:
+    chat = await setup(database, "daily", due=-timedelta(seconds=1))
+    await claim_due(database, datetime.now(UTC))
+    soon = datetime.now(UTC) + timedelta(minutes=10)
+    extra = await act(database, chat, CREATOR, False, Snooze(soon, 1))
+    assert isinstance(extra, Job)
+
+    async def states() -> list[str]:
+        async with database.session() as session:
+            return list((await session.scalars(select(Job.state).order_by(Job.id))).all())
+
+    await act(database, chat, CREATOR, False, "pause")
+    assert await states() == ["paused", "paused"]
+    await act(database, chat, CREATOR, False, "resume")
+    assert await states() == ["active", "active"]
+    await act(database, chat, CREATOR, False, "pause")
+    async with database.transaction() as session:  # the extra's moment passes while paused
+        await session.execute(update(Job).where(Job.id == extra.id).values(next_at=datetime.now(UTC)))
+    await act(database, chat, CREATOR, False, "resume")
+    assert await states() == ["active", "cancelled"]

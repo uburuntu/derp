@@ -273,3 +273,32 @@ async def test_a_paused_job_resumes_from_its_note_for_its_creator_only(conversat
         assert resumed is not None and resumed.state == "active" and resumed.misses == 0
     shown = conversation.api.message(YARD.id, note_id)
     assert "reply_markup" not in shown and "is back on" in str(shown["rich_message"])
+
+
+async def test_a_scheduled_prompt_stays_its_creators_and_a_firing_never_edits_it(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(LEE, YARD, status="administrator")
+    conversation.meet(MAX, YARD, status="administrator")
+    async with conversation.db.transaction() as session:
+        await credit(session, (await wallet(session, "user", LEE.id)).id, "stars:lee", 650, "purchase")
+    model.reply(
+        tool_call("schedule", text="tell us a joke", in_minutes=30, repeat="daily", answer_it=True), "Set."
+    )
+    await conversation.settle(await conversation.send(LEE, YARD, "derp every day tell us a joke"))
+    async with conversation.db.session() as session:
+        job_id = await session.scalar(select(Job.id))
+
+    model.reply(tool_call("edit_job", job_id=job_id, text="write us an essay", repeat="weekly"), "Nope.")
+    await conversation.settle(await conversation.send(MAX, YARD, "derp make Lee's joke a weekly essay"))
+    assert "only they can make one, reword it" in str(model.requests[-1][-1])  # Lee's Derpcoins, Lee's call
+    model.reply(tool_call("edit_job", job_id=job_id), "Hm.")
+    await conversation.settle(await conversation.send(LEE, YARD, "derp change the joke job"))
+    assert "Nothing to change" in str(model.requests[-1][-1])
+
+    model.reply(tool_call("edit_job", job_id=job_id, repeat="once"), "here's a joke")
+    await fire_now(conversation)
+    assert "scheduled task firing now" in str(model.requests[-1][-1])
+    async with conversation.db.session() as session:
+        job = await session.get(Job, job_id)
+        assert job is not None and (job.text, job.repeat) == ("tell us a joke", "daily")

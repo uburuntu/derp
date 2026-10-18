@@ -359,7 +359,7 @@ async def test_notes_left_out_of_the_prompt_can_be_found(
     async with conversation.db.transaction() as session:
         session.add(Note(chat_id=CLUB.id, text="the wifi password is hunter2", author_id=GINA.id))
         session.add_all(
-            Note(chat_id=CLUB.id, text=f"lore {i} " + "x" * 280, author_id=GINA.id) for i in range(12)
+            Note(chat_id=CLUB.id, text=f"lore {i} " + "x" * 480, author_id=GINA.id) for i in range(12)
         )
 
     def search(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

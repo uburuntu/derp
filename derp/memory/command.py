@@ -11,7 +11,7 @@ from derp.db.engine import Database
 from derp.history.models import Chat
 from derp.locales import resolve, t
 from derp.memory.models import Note
-from derp.memory.notes import decide, is_admin, load_memory
+from derp.memory.notes import decide, is_admin, load_memory, may_change
 from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, send_markdown
 
@@ -118,7 +118,12 @@ async def on_note_action(press: Press, data: NoteAction, bot: Bot, db: Database)
         note = await session.get(Note, data.note_id)
         if chat is None or note is None or note.chat_id != chat.id or note.state != "proposed":
             refusal = "memory.gone"
-        elif not await is_admin(bot, chat, press.user_id):
+        elif (
+            may_change(
+                "decide", None, press.user_id, await is_admin(bot, chat, press.user_id), chat.notes_mode
+            )
+            == "refused"
+        ):
             return await press.deny("memory.admins_only")
         else:
             shown_id = note.replaces_id or note.id
