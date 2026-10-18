@@ -93,7 +93,7 @@ class Decisions(BaseModel, frozen=True):
     price_usd_per_m_input: float = 0.042  # estimate for a call without a reported cost
 
 
-class Speech(BaseModel, frozen=True):
+class VoiceMessages(BaseModel, frozen=True):
     """Voice messages on the speech pin (``agent.tools.voice``): stock voices acting out inline audio tags."""
 
     max_chars: int = 400  # of one performance, audio tags included (they are billed as characters)
@@ -193,7 +193,7 @@ class Settings(BaseSettings):
     retention: Retention = Retention()
     media: MediaLimits = MediaLimits()
     decisions: Decisions = Decisions()
-    speech: Speech = Speech()
+    speech: VoiceMessages = VoiceMessages()
 
     # Telemetry — optional, fails soft
     logfire_token: str = Field(default="", repr=False)
