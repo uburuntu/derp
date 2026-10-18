@@ -177,20 +177,30 @@ class OpenRouterAPI:
 
         The ``v1/systemone`` endpoint takes the same body and provider preferences as the alpha Decisions API.
         """
-        body: Json = {"model": model, "state": state, "questions": questions}
-        if zdr:
-            body["provider"] = {"zdr": True, "data_collection": "deny"}
+        body = decision_body(model, state, questions, zdr=zdr)
         result = await self._request("POST", "systemone", json=body)
         answers = result.get("answers")
         if not isinstance(answers, dict) or answers.keys() != questions.keys():
             raise OpenRouterError(502, "answers do not match the questions")
-        tokens = int((result.get("usage") or {}).get("input_tokens") or len(json.dumps(body).encode()) // 4)
+        tokens = int((result.get("usage") or {}).get("input_tokens") or estimated_tokens(body))
         return Decided(
             answers=cast(dict[str, Json], answers),
             model=str(result.get("model") or model),
             cost_usd=_reported_cost(result, self._decision_token_price * tokens),
             input_tokens=tokens,
         )
+
+
+def decision_body(model: str, state: str | Json, questions: Json, *, zdr: bool = True) -> Json:
+    body: Json = {"model": model, "state": state, "questions": questions}
+    if zdr:
+        body["provider"] = {"zdr": True, "data_collection": "deny"}
+    return body
+
+
+def estimated_tokens(body: Json) -> int:
+    """Input tokens of a request the provider reported none for: UTF-8 bytes / 4."""
+    return len(json.dumps(body).encode()) // 4
 
 
 def _reported_cost(result: Json, estimate: Decimal) -> Decimal:

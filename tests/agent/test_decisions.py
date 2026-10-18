@@ -141,7 +141,7 @@ async def test_one_call_asks_what_applies_on_short_state_and_is_ledgered(
         photo = await session.get(MessageMedia, (CHAT, 3, 0))
     images = Referenced([photo], fallback=True) if photo else Referenced([])
     verdict = await deciding.decide(
-        tg(6, "derp, what breed is this?"), bot_id=42, tz=UTC_TZ, named=True, images=images
+        tg(6, "derp, what breed is this?"), bot_id=42, tz=UTC_TZ, named=True, images=images, effort=True
     )
     assert verdict == Verdict()
     ((state, questions),) = api.asked
@@ -165,15 +165,40 @@ async def test_one_call_asks_what_applies_on_short_state_and_is_ledgered(
 
 
 @pytest.mark.db
-async def test_effort_alone_is_asked_only_for_paid_turns(database: Database, settings: Settings) -> None:
+async def test_effort_is_asked_only_when_the_turn_allows_it(database: Database, settings: Settings) -> None:
     await seed(database)
-    api = FakeDecisions({"effort": {"type": "score", "probabilities": {"0": 0.01, "1": 0.02, "2": 0.97}}})
+    api = FakeDecisions(
+        {
+            "addressed": {"type": "noul", "noul": 0.9},
+            "effort": {"type": "score", "probabilities": {"0": 0.01, "1": 0.02, "2": 0.97}},
+        }
+    )
     deciding = Decider(database, cast(OpenRouterAPI, api), await pins(database, settings), Decisions())
-    message = tg(5, "@DerpRobot prove sqrt(2) is irrational")
+    message = tg(7, "@DerpRobot prove sqrt(2) is irrational")
     assert await deciding.decide(message, bot_id=42, tz=UTC_TZ, images=Referenced([])) == Verdict()
     assert api.asked == []  # nothing to ask on an unpaid mention without fallback images
-    assert (await deciding.decide(message, bot_id=42, tz=UTC_TZ, paid=True)).effort == "high"
-    assert list(api.asked[0][1]) == ["effort"]
+    assert await deciding.decide(message, bot_id=42, tz=UTC_TZ, named=True) == Verdict()
+    assert (await deciding.decide(message, bot_id=42, tz=UTC_TZ, effort=True)).effort == "high"
+    assert [list(questions) for _, questions in api.asked] == [["addressed"], ["effort"]]
+
+
+@pytest.mark.db
+async def test_a_message_not_stored_yet_is_screened_with_the_lines_before_it(
+    database: Database, settings: Settings
+) -> None:
+    """Capture screens a name-only mention before storing it: the state still carries its topic's last lines."""
+    await seed(database)
+    api = FakeDecisions({"addressed": {"type": "noul", "noul": 0.02}})
+    deciding = Decider(database, cast(OpenRouterAPI, api), await pins(database, settings), Decisions())
+    verdict = await deciding.decide(tg(9, "classic derp moment"), bot_id=42, tz=UTC_TZ, named=True)
+    assert verdict == Verdict(addressed=False)
+    ((state, _),) = api.asked
+    assert [line.split(" ", 2)[2] for line in state["previous_messages"]] == [
+        "Bob: nice pic",
+        "Bob: who's coming tonight?",
+        "Ann: derp, what breed is this?",
+    ]
+    assert state["new_message"] == "[09:09] #9 Ann: classic derp moment"
 
 
 @pytest.mark.db
@@ -183,6 +208,8 @@ async def test_effort_alone_is_asked_only_for_paid_turns(database: Database, set
         FakeDecisions(error=OpenRouterError(503, "down")),
         FakeDecisions(delay=1),  # past the timeout
         FakeDecisions({"addressed": {"type": "noul"}, "effort": {}}),  # unreadable answers
+        FakeDecisions({"addressed": {"noul": 0.9}, "effort": {"probabilities": [0.1, 0.9]}}),
+        FakeDecisions({"addressed": {"noul": 0.9}, "effort": {"probabilities": None}}),
     ],
 )
 async def test_failures_decide_as_if_nothing_was_asked(
@@ -192,13 +219,64 @@ async def test_failures_decide_as_if_nothing_was_asked(
     deciding = Decider(
         database, cast(OpenRouterAPI, api), await pins(database, settings), Decisions(timeout_seconds=0.05)
     )
-    assert await deciding.decide(tg(6, "derp moment"), bot_id=42, tz=UTC_TZ, named=True) == Verdict()
+    verdict = await deciding.decide(tg(6, "derp moment"), bot_id=42, tz=UTC_TZ, named=True, effort=True)
+    assert verdict == Verdict()
     assert len(api.asked) == 1
+
+
+@pytest.mark.db
+async def test_a_timed_out_call_is_ledgered_at_an_estimate(database: Database, settings: Settings) -> None:
+    """The provider bills a call we stopped waiting for: the ledger keeps up with OpenRouter's bill."""
+    await seed(database)
+    api = FakeDecisions(delay=1)
+    deciding = Decider(
+        database, cast(OpenRouterAPI, api), await pins(database, settings), Decisions(timeout_seconds=0.05)
+    )
+    assert await deciding.decide(tg(6, "derp moment"), bot_id=42, tz=UTC_TZ, named=True) == Verdict()
+    async with database.session() as session:
+        call = await session.scalar(select(ProviderCall))
+    assert call is not None and call.kind == "decision" and call.model == "typesafe/jev-1.14"
+    assert call.input_tokens > 100
+    assert call.cost_usd == round(Decimal("0.042") * call.input_tokens / 1_000_000, 8)
+
+
+class Broken:
+    """Stands in for the database or the pin store: every use fails."""
+
+    def session(self) -> Any:
+        raise ConnectionError("down")
+
+    transaction = session
+
+    async def get(self, _role: object) -> Any:
+        raise ConnectionError("down")
+
+
+@pytest.mark.db
+async def test_the_state_the_pin_and_the_ledger_failing_decide_as_if_unasked(
+    database: Database, settings: Settings
+) -> None:
+    await seed(database)
+    api = FakeDecisions({"addressed": {"type": "noul", "noul": 0.01}})
+    store = await pins(database, settings)
+    message = tg(6, "derp moment")
+    no_state = Decider(cast(Database, Broken()), cast(OpenRouterAPI, api), store, Decisions())
+    no_pin = Decider(database, cast(OpenRouterAPI, api), cast(PinStore, Broken()), Decisions())
+    for deciding in (no_state, no_pin):
+        assert await deciding.decide(message, bot_id=42, tz=UTC_TZ, named=True) == Verdict()
+    assert api.asked == []
+
+    class NoLedger:  # reads work, the ledger write fails
+        session = database.session
+        transaction = Broken.session
+
+    unledgered = Decider(cast(Database, NoLedger()), cast(OpenRouterAPI, api), store, Decisions())
+    assert await unledgered.decide(message, bot_id=42, tz=UTC_TZ, named=True) == Verdict(addressed=False)
 
 
 async def test_disabled_decisions_ask_nothing() -> None:
     api = FakeDecisions()
     verdict = await decider(api, enabled=False).decide(
-        tg(6, "derp lol"), bot_id=42, tz=UTC_TZ, named=True, paid=True
+        tg(6, "derp lol"), bot_id=42, tz=UTC_TZ, named=True, effort=True
     )
     assert verdict == Verdict() and api.asked == []
