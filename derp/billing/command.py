@@ -149,9 +149,9 @@ async def on_payment(message: Message, db: Database, settings: Settings, bot: Bo
     if not new:
         return
     added, amount = f"{order.credits:,}", f"{left:,}"
-    chat_id, thread_id = _paid_for(message, order)
+    topic = _topic(message, order) if order.target == "chat" else None
     if order.target == "chat":
-        await _thank_patron(message, db, bot, funder, order, purchase.id, locale, amount, thread_id)
+        await _thank_patron(message, db, bot, funder, order, purchase.id, locale, amount, topic)
     else:
         if order.kind == "plan":
             renewed = payment.is_recurring and not payment.is_first_recurring
@@ -161,8 +161,13 @@ async def on_payment(message: Message, db: Database, settings: Settings, bot: Bo
         else:
             text = t(locale, "billing.thanks", credits=added, balance=amount)
         await _receipt(bot, message, locale, text, added)
-    await offer_continue(  # the buyer's own ask that ran out of Derpcoins there can go on now
-        db, bot, settings, chat_id=chat_id, thread_id=thread_id, user_id=message.from_user.id, locale=locale
+    await offer_continue(  # the buyer's own ask that ran out of Derpcoins can go on now
+        db,
+        bot,
+        settings,
+        user_id=message.from_user.id,
+        locale=locale,
+        chat=(order.target_id, topic) if order.target == "chat" else None,
     )
     await notify_owners(
         bot,
@@ -171,13 +176,12 @@ async def on_payment(message: Message, db: Database, settings: Settings, bot: Bo
     )
 
 
-def _paid_for(message: Message, order: Order) -> tuple[int, int | None]:
-    """The chat and forum topic a purchase is for: a chat pack's chat (its topic from the invoice, or where
-    it was paid), else the chat the payment came in."""
-    here = message.message_thread_id if message.is_topic_message else None
-    if order.target != "chat":
-        return message.chat.id, here
-    return order.target_id, order.thread_id or (here if message.chat.id == order.target_id else None)
+def _topic(message: Message, order: Order) -> int | None:
+    """The forum topic a chat pack is for: the invoice's, else the one it was paid in (if paid in that chat)."""
+    here = (
+        message.message_thread_id if message.is_topic_message and message.chat.id == order.target_id else None
+    )
+    return order.thread_id or here
 
 
 async def _receipt(bot: Bot, message: Message, locale: str, text: str, added: str) -> None:

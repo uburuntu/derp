@@ -14,7 +14,8 @@ from derp.agent.approvals import close_expired
 from derp.agent.models import AgentRun, Approval, RunOutput
 from derp.billing.menu import BuyAction
 from derp.inference.api import GeneratedImage, OpenRouterError
-from derp.inference.models import ProviderCall
+from derp.inference.models import ModelPin, ProviderCall
+from derp.inference.roles import DEFAULT_PINS, ModelRole
 from derp.money.wallets import balance, claw_back, credit, wallet
 from derp.telegram.media import normalize
 from tests.e2e.harness import Conversation, Person, Room
@@ -406,6 +407,30 @@ async def test_expired_approval_prompts_lose_their_buttons(
     async with conversation.db.session() as session:
         assert set(await session.scalars(select(Approval.state))) == {"expired"}
     assert await close_expired(conversation.db, bot, datetime.now(UTC)) == 0
+
+
+async def test_a_small_balance_that_covers_the_price_gets_the_image(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    """The prompt asks because the price is a large share; Make it then needs that price, nothing more."""
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    wallet_id = await fund(conversation, 80)
+    async with conversation.db.transaction() as session:  # a typical paid turn now costs about 43 credits
+        pin = DEFAULT_PINS[ModelRole.CHAT].model_dump(mode="json")
+        session.add(ModelPin(role="chat", pin=pin, price_prompt=Decimal(2), price_completion=Decimal(0)))
+    model.cost = 0.0001  # turns report their cost: 1 credit each
+    prompt_id, run = await ask_for_a_dragon(conversation, model)
+    model.reply(".")
+    after = conversation.seq
+    await conversation.press(JO, JO.id, prompt_id, run)
+    assert conversation.api.calls_of("sendPhoto", after=after) and images.prompts == ["a dragon"]
+    async with conversation.db.session() as session:
+        approved = await session.scalar(select(AgentRun).where(AgentRun.trigger == "callback"))
+        asking = await session.scalar(select(AgentRun).where(AgentRun.trigger != "callback"))
+        assert approved is not None and asking is not None and approved.charged_credits == 48 + 1
+        assert await balance(session, wallet_id) == 80 - 49 - asking.charged_credits
 
 
 async def test_an_approval_that_cant_be_paid_any_more_offers_buying(

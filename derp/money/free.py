@@ -9,7 +9,8 @@ An ask nobody could pay for is the person's waiting question in that chat
 (``chat_members.waiting_message_id``, the newest one wins). For
 ``waiting_minutes`` it can be resumed, once: right after consenting to (or an
 admin enabling) free models, or with the Continue button a purchase offers the
-buyer for their own waiting question in the chat and topic the purchase was for.
+buyer for their own waiting question (in the chat and topic a chat pack was for; for
+Derpcoins of their own, in whichever chat they asked last).
 Each resume claims the question (``claim``), so presses never answer it twice.
 
 The out-of-Derpcoins offer says when the free daily Derpcoins refill (a date-time
@@ -32,7 +33,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from derp.agent.models import AgentRun
+from derp.agent.models import AgentRun, RunOutput
 from derp.billing.menu import buy_button, top_up_button
 from derp.config import Settings
 from derp.db.engine import Database
@@ -144,7 +145,8 @@ async def wait(db: Database, chat_id: int, user_id: int, message_id: int) -> Non
 async def waiting_question(
     session: AsyncSession, settings: Settings, chat_id: int, user_id: int
 ) -> StoredMessage | None:
-    """The person's waiting question in this chat: recent, still stored, and no newer ask of theirs answered."""
+    """The person's waiting question in this chat: recent, still stored, and no newer ask of theirs answered
+    (a run that delivered something; failed ones don't count)."""
     member = await session.get(ChatMember, (chat_id, user_id))
     since = datetime.now(UTC) - timedelta(minutes=settings.waiting_minutes)
     if member is None or member.waiting_message_id is None or member.waiting_at is None:
@@ -152,11 +154,14 @@ async def waiting_question(
     if member.waiting_at <= since:
         return None
     answered_since = await session.scalar(  # a newer ask of theirs got an answer: this one is behind them
-        select(AgentRun.id).where(
+        select(AgentRun.id)
+        .join(RunOutput, RunOutput.run_id == AgentRun.id)  # an answer that reached the chat
+        .where(
             AgentRun.chat_id == chat_id,
             AgentRun.user_id == user_id,
             AgentRun.trigger_message_id > member.waiting_message_id,
         )
+        .limit(1)
     )
     question = await session.get(StoredMessage, (chat_id, member.waiting_message_id))
     return (
@@ -185,18 +190,36 @@ async def offer_continue(
     bot: Bot,
     settings: Settings,
     *,
-    chat_id: int,
-    thread_id: int | None,
     user_id: int,
     locale: str,
+    chat: tuple[int, int | None] | None,
 ) -> None:
-    """After a purchase: the buyer's own question waiting in that chat and topic gets a Continue button."""
+    """After a purchase: the buyer's own waiting question gets a Continue button, replying to it.
+
+    ``chat`` is the chat and topic a chat pack was for; None for the buyer's own Derpcoins, which pay
+    wherever they ask, so their latest waiting question in any chat qualifies.
+    """
+    since = datetime.now(UTC) - timedelta(minutes=settings.waiting_minutes)
     async with db.session() as session:
-        waiting = await waiting_question(session, settings, chat_id, user_id)
-    if waiting is None or waiting.thread_id != thread_id:
+        chat_id = (
+            chat[0]
+            if chat is not None
+            else await session.scalar(
+                select(ChatMember.chat_id)
+                .where(
+                    ChatMember.user_id == user_id,
+                    ChatMember.waiting_message_id.is_not(None),
+                    ChatMember.waiting_at > since,
+                )
+                .order_by(ChatMember.waiting_at.desc())
+                .limit(1)
+            )
+        )
+        waiting = await waiting_question(session, settings, chat_id, user_id) if chat_id is not None else None
+    if waiting is None or chat_id is None or (chat is not None and waiting.thread_id != chat[1]):
         return
     again = markup(button(t(locale, "money.continue"), Unblock(action="continue")))
-    target = Target(chat_id, thread_id, waiting.message_id)
+    target = Target(chat_id, waiting.thread_id, waiting.message_id)
     with contextlib.suppress(TelegramAPIError):  # the purchase is recorded; the button is a courtesy
         await send_markdown(bot, target, t(locale, "money.continue_offer"), reply_markup=again)
 
@@ -210,9 +233,22 @@ async def resume(press: Press, db: Database, settings: Settings, runtime: Answer
     if taken:
         async with db.session() as session:
             chat = await session.get(Chat, press.chat_id)
+            trigger = await _with_reply(session, trigger)
         if chat is not None:
             await runtime.answer(trigger, chat, again=True)  # older than what the asker said since
     return taken
+
+
+async def _with_reply(session: AsyncSession, asked: Message) -> Message:
+    """The asked message with what it replied to: Telegram doesn't nest replies in the pressed message's
+    copy, but the reply of an invocation is stored with it, so the run sees the question as first asked."""
+    row = await session.get(StoredMessage, (asked.chat.id, asked.message_id))
+    replied_id = row.reply_to_message_id if row is not None else None
+    replied = await session.get(StoredMessage, (asked.chat.id, replied_id)) if replied_id else None
+    if asked.reply_to_message is not None or replied is None or replied.deleted_at is not None:
+        return asked
+    reply = Message(message_id=replied.message_id, date=replied.date, chat=asked.chat)
+    return asked.model_copy(update={"reply_to_message": reply})
 
 
 async def note_empty_wallet(
@@ -244,13 +280,17 @@ def build_router() -> Router:
         press: Press, data: Unblock, db: Database, settings: Settings, runtime: Answers
     ) -> None:
         bot = press.bot
+        stale = t(press.locale, "money.continue_stale")
         if data.action == "continue":
-            asker = press.message.reply_to_message.from_user if press.message.reply_to_message else None
-            if asker is None or asker.id != press.user_id:  # a patron's purchase never replays others' asks
+            asked = press.message.reply_to_message
+            if asked is None:  # the question was deleted
+                return await press.edit(stale)
+            if asked.from_user is None or asked.from_user.id != press.user_id:  # never someone else's ask
                 return await press.deny("money.continue_not_yours")
             await press.strip()
+            await press.toast()  # answered now: the run that follows can take a while
             if await resume(press, db, settings, runtime) is False:
-                await press.edit(t(press.locale, "money.continue_stale"))
+                await press.edit(stale)
             return None
         if data.action == "consent":
             async with db.transaction() as session:
@@ -274,7 +314,8 @@ def build_router() -> Router:
             await press.toast()
             await send_markdown(bot, Target(chat.id), t(chat.locale or press.locale, "money.free_enabled"))
         await press.strip(lambda b: b.callback_data != data.pack())  # buying stays possible
-        await resume(press, db, settings, runtime)
+        if await resume(press, db, settings, runtime) is False:
+            await press.edit(stale)
         return None
 
     return router

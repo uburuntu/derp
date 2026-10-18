@@ -48,7 +48,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.approvals import close_prompt, resumption
-from derp.agent.context import Window, build_window
+from derp.agent.context import Window, build_window, messages_tokens
 from derp.agent.decisions import Decider
 from derp.agent.deps import RunDeps
 from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
@@ -119,8 +119,9 @@ class Ask:
 
     A paused run (an action waiting for its requester's approval) resumes with ``request`` None: its
     stored history ends on the call, ``approved`` lets that call run, and the model goes on from its
-    result. ``carried`` is the paused turn, kept at the head of this run's history (never re-ledgered)
-    so a later replay pairs the call with its result.
+    result. ``carried`` is the paused run's request and the paused turn, kept at the head of this run's
+    history (never re-ledgered) so a replay pairs the call with its result (the request itself is left
+    out of replays like every run's) and pausing again resumes with what was asked.
     """
 
     history: list[ModelMessage]
@@ -707,8 +708,10 @@ class Runtime:
             history=history,
             request=None,
             trigger_message_id=paused.trigger_message_id or 0,
+            tokens=messages_tokens(history),
             approved=approved,
-            carried=history[frontier:],
+            # The request turn stays at the head, so pausing again still resumes with what was asked.
+            carried=[*history[:1], *history[max(frontier, 1) :]],
         )
         funds = await self.funder.reserve(
             chat_id=chat.id,
