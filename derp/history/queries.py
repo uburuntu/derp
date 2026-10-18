@@ -96,6 +96,8 @@ STOP_WORDS = frozenset(
     "нам нас о об он она они от по про с со так там то ты у уже что чтобы чей чья это я".split()
 )
 FUSION_K = 60  # reciprocal-rank fusion: how much a hit high in one phrasing's list outweighs breadth
+FIRST_PASS = 200  # term matches per phrasing ranked by terms and age before word similarity reorders them
+FUZZY_MIN_CHARS = 4  # a phrasing whose words are all shorter is never matched by trigrams
 
 
 def terms(query: str) -> list[str]:
@@ -117,21 +119,50 @@ def terms(query: str) -> list[str]:
 async def _ranked(
     session: AsyncSession, filters: list[ColumnElement[bool]], query: str, limit: int
 ) -> list[int]:
-    """One phrasing's matches, best first: any of its terms (more is better), or a fuzzy match."""
-    fuzzy = literal(query).op("<%")(Message.text)  # word similarity past the threshold, via the trigram index
-    similarity = func.word_similarity(query, func.coalesce(Message.text, ""))
+    """One phrasing's matches, best first: any of its terms (more is better), else a fuzzy match.
+
+    The trigram scan is the costly part on a big chat, so it runs only when the terms found fewer than
+    ``limit`` messages and the phrasing has a word long enough to misspell. Function words alone find nothing.
+    """
     words = terms(query)
-    if words:
-        tsquery = func.to_tsquery("simple", " | ".join(words))
-        matched = or_(Message.tsv.op("@@")(tsquery), fuzzy)
-        score = func.ts_rank(Message.tsv, tsquery) * 10 + similarity
-    else:
-        matched, score = fuzzy, similarity
-    age_days = func.extract("epoch", func.now() - Message.date) / 86400
+    if not words:
+        return []
+    tsquery = func.to_tsquery("simple", " | ".join(words))
+    exact = Message.tsv.op("@@")(tsquery)
+    found = await _best(session, [*filters, exact], tsquery, query, limit, first_pass=FIRST_PASS)
+    if len(found) >= limit or max(len(word.removesuffix(":*")) for word in words) < FUZZY_MIN_CHARS:
+        return found
+    fuzzy = literal(query).op("<%")(Message.text)  # word similarity past the threshold, via the trigram index
+    return await _best(session, [*filters, or_(exact, fuzzy)], tsquery, query, limit, first_pass=None)
+
+
+async def _best(
+    session: AsyncSession,
+    where: list[ColumnElement[bool]],
+    tsquery: ColumnElement[Any],
+    query: str,
+    limit: int,
+    *,
+    first_pass: int | None,
+) -> list[int]:
+    """Matches by term rank plus word similarity to the phrasing, newer ones favoured.
+
+    With ``first_pass``, only that many best by term rank and age get a similarity, so a word in
+    thousands of messages costs one cheap rank per match and a similarity for a few hundred.
+    """
+    age = 1 + func.extract("epoch", func.now() - Message.date) / 86400 / 30
+    first = (func.ts_rank(Message.tsv, tsquery) * 10 / age).label("first")
+    candidates = (
+        select(Message.message_id, Message.text, age.label("age"), first)
+        .where(*where)
+        .order_by(first.desc(), Message.message_id.desc())
+        .limit(first_pass)
+        .subquery()
+    )
+    similarity = func.word_similarity(query, func.coalesce(candidates.c.text, ""))
     ids = await session.scalars(
-        select(Message.message_id)
-        .where(*filters, matched)
-        .order_by((score / (1 + age_days / 30)).desc(), Message.message_id.desc())
+        select(candidates.c.message_id)
+        .order_by((candidates.c.first + similarity / candidates.c.age).desc(), candidates.c.message_id.desc())
         .limit(limit)
     )
     return list(ids)

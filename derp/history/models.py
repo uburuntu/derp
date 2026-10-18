@@ -124,9 +124,14 @@ class Message(Base):
         Index("ix_messages_chat_thread_date", "chat_id", "thread_id", "date"),
         Index("ix_messages_chat_user_date", "chat_id", "user_id", "date"),
         Index("ix_messages_date", "date"),
-        Index("ix_messages_tsv", "tsv", postgresql_using="gin"),
+        # chat_id leads both GIN indexes (btree_gin), so a search never reads other chats' postings
+        Index("ix_messages_chat_tsv", "chat_id", "tsv", postgresql_using="gin"),
         Index(
-            "ix_messages_text_trgm", "text", postgresql_using="gin", postgresql_ops={"text": "gin_trgm_ops"}
+            "ix_messages_chat_text_trgm",
+            "chat_id",
+            "text",
+            postgresql_using="gin",
+            postgresql_ops={"text": "gin_trgm_ops"},
         ),
     )
 
