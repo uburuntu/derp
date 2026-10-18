@@ -90,7 +90,7 @@ async def test_run_stops_at_the_credits_it_could_hold(
 ) -> None:
     wallet_id = await buy(conversation, CARL, 5)
     model.cost = 0.004  # 5 credits per model turn: the first one uses up the hold
-    model.reply(tool_call("search_history", query="cats"), "never reached")
+    model.reply(tool_call("search_history", queries=["cats"]), "never reached")
     sent = await conversation.send(CARL, text="find cats")
     reply = await conversation.expect_reply(sent)
     assert "too expensive" in reply["rich_message"]["markdown"]
@@ -127,7 +127,9 @@ async def test_a_capped_run_that_reacted_says_it_was_charged(
 ) -> None:
     wallet_id = await buy(conversation, CARL, 5)
     model.cost = 0.003  # 4 credits a turn: the second one reaches the 5 held
-    model.reply(tool_call("react", emoji="🔥"), tool_call("search_history", query="cats"), "never reached")
+    model.reply(
+        tool_call("react", emoji="🔥"), tool_call("search_history", queries=["cats"]), "never reached"
+    )
     sent = await conversation.send(CARL, text="find cats")
     reply = (await conversation.expect_reply(sent))["rich_message"]["markdown"]
     assert "too expensive" in reply and "work so far was charged" in reply

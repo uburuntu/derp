@@ -150,7 +150,7 @@ async def test_group_progress_is_a_chat_action_so_the_react_tool_sets_the_only_r
 ) -> None:
     conversation.meet(KATE, PARTY)
     # Progress in groups is a chat action, so a later tool call never puts a status emoji on the message.
-    model.reply(tool_call("react", emoji="🔥"), tool_call("search_history", query="exam"), ".")
+    model.reply(tool_call("react", emoji="🔥"), tool_call("search_history", queries=["exam"]), ".")
     asked = await conversation.send(KATE, PARTY, "derp I passed my exam!")
     await conversation.settle(asked)
     reactions = [c["reaction"] for c in conversation.api.calls_of("setMessageReaction", after=asked.after)]

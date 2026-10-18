@@ -56,7 +56,7 @@ async def test_group_progress_is_a_chat_action_never_a_reaction(
     conversation.meet(FRED, GROUP)
 
     def search(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
-        return ModelResponse(parts=[ToolCallPart("search_history", {"query": "x"}, tool_call_id="s1")])
+        return ModelResponse(parts=[ToolCallPart("search_history", {"queries": ["x"]}, tool_call_id="s1")])
 
     model.reply(search, "nothing found")
     asked = await conversation.send(FRED, GROUP, "@DerpRobot find x", entities=MENTION)

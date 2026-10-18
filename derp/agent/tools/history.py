@@ -19,7 +19,16 @@ from derp.agent.media import CLIPS, IMAGE_LIKE, as_content, inspect, note_images
 from derp.agent.toolsets import Family
 from derp.history.digests import day_stats, is_current, scope_key
 from derp.history.models import Digest, ForumTopic, Message, Poll
-from derp.history.queries import ChatQuery, Scope, around, id_range, resolve_members, run_query, search
+from derp.history.queries import (
+    ChatQuery,
+    Scope,
+    around,
+    conversations,
+    id_range,
+    resolve_members,
+    run_query,
+    search,
+)
 from derp.history.render import describe_time, load_views, render_transcript
 from derp.money.funding import Funding, run_cost
 
@@ -39,18 +48,27 @@ async def _render(ctx: RunContext[RunDeps], rows: list[Message]) -> str:
     return render_transcript(views, ctx.deps.tz)
 
 
+SEARCH_HITS = 8  # best matches shown, each with the messages around it
+SEARCH_CONTEXT = 2  # messages shown before and after each match
+
+
 @toolset.tool
 async def search_history(
     ctx: RunContext[RunDeps],
-    query: str,
+    queries: list[str],
     days: float | None = None,
     user: str | None = None,
     whole_chat: bool = False,
 ) -> str:
-    """Search this chat's stored messages (text, voice transcripts, media descriptions).
+    """Find stored messages in this chat by gist (text, voice transcripts, media descriptions), with context.
+
+    People remember the gist, not the wording: send up to five short phrasings in one call — the asker's
+    words, synonyms and paraphrases, the Russian and English versions, names as written in chat
+    (nicknames, @usernames). Any word may match; messages matching more phrasings rank higher.
+    Each match comes with the messages around it.
 
     Args:
-        query: Words to look for; quotes for phrases, `-word` to exclude.
+        queries: Keywords or short phrases, one phrasing each, best guess first.
         days: Only the last N days.
         user: Only messages from this person (name or @username).
         whole_chat: Search all forum topics instead of the current one.
@@ -60,10 +78,14 @@ async def search_history(
         user_ids = await resolve_members(session, ctx.deps.chat.id, [user]) if user else []
         if user and not user_ids:
             return f"No one called {user!r} has been seen in this chat."
-        rows = await search(session, _scope(ctx, whole_chat), query, since=since, user_ids=user_ids)
-    if not rows:
+        hits = await search(
+            session, _scope(ctx, whole_chat), queries[:5], since=since, user_ids=user_ids, limit=SEARCH_HITS
+        )
+        windows = await conversations(session, hits, before=SEARCH_CONTEXT, after=SEARCH_CONTEXT)
+        blocks = [render_transcript(await load_views(session, window), ctx.deps.tz) for window in windows]
+    if not blocks:
         return "No matching messages are stored (older messages may have expired)."
-    return await _render(ctx, rows)
+    return "\n\n".join(blocks)
 
 
 @toolset.tool

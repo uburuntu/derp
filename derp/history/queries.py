@@ -7,6 +7,8 @@ chat's: ``since``/``until`` without an offset and ``group_by='day'`` follow the
 chat's time zone (``Scope.tz``).
 """
 
+import math
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
@@ -87,43 +89,106 @@ async def resolve_members(session: AsyncSession, chat_id: int, names: Sequence[s
     return sorted(ids)
 
 
+STOP_WORDS = frozenset(
+    "a an and are as at be by did do does for from had has have how i in is it its me my of on or our "  # noqa: SIM905
+    "said say says so that the their them they this to us was we were what when where which who whom "
+    "why with you your а без бы в во вы да для до если же за и из или к как ко кто ли мне мы на не "
+    "нам нас о об он она они от по про с со так там то ты у уже что чтобы чей чья это я".split()
+)
+FUSION_K = 60  # reciprocal-rank fusion: how much a hit high in one phrasing's list outweighs breadth
+
+
+def terms(query: str) -> list[str]:
+    """A phrasing's words as ``simple`` tsquery terms: function words dropped, longer words by their stem.
+
+    The stem is a crude prefix (about 70% of the word), so inflections meet:
+    ``квартиру`` finds ``квартира``, ``recommended`` finds ``recommend``.
+    """
+    found: list[str] = []
+    for word in re.findall(r"\w+", query.lower()):
+        if word in STOP_WORDS or (len(word) < 3 and not word.isdigit()):
+            continue
+        stem = word if len(word) < 4 else f"{word[: max(4, math.ceil(len(word) * 0.7))]}:*"
+        if stem not in found:
+            found.append(stem)
+    return found
+
+
+async def _ranked(
+    session: AsyncSession, filters: list[ColumnElement[bool]], query: str, limit: int
+) -> list[int]:
+    """One phrasing's matches, best first: any of its terms (more is better), or a fuzzy match."""
+    fuzzy = literal(query).op("<%")(Message.text)  # word similarity past the threshold, via the trigram index
+    similarity = func.word_similarity(query, func.coalesce(Message.text, ""))
+    words = terms(query)
+    if words:
+        tsquery = func.to_tsquery("simple", " | ".join(words))
+        matched = or_(Message.tsv.op("@@")(tsquery), fuzzy)
+        score = func.ts_rank(Message.tsv, tsquery) * 10 + similarity
+    else:
+        matched, score = fuzzy, similarity
+    age_days = func.extract("epoch", func.now() - Message.date) / 86400
+    ids = await session.scalars(
+        select(Message.message_id)
+        .where(*filters, matched)
+        .order_by((score / (1 + age_days / 30)).desc(), Message.message_id.desc())
+        .limit(limit)
+    )
+    return list(ids)
+
+
 async def search(
     session: AsyncSession,
     scope: Scope,
-    query: str,
+    queries: Sequence[str],
     *,
     since: datetime | None = None,
     user_ids: Sequence[int] = (),
-    limit: int = 20,
+    limit: int = 8,
 ) -> list[Message]:
-    """Ranked full-text matches (``simple`` config), topped up with fuzzy trigram matches."""
+    """Best matches for any of several phrasings of one question, merged by reciprocal rank."""
     filters = [scope.messages()]
     if since is not None:
         filters.append(Message.date >= since)
     if user_ids:
         filters.append(Message.user_id.in_(user_ids))
-    tsquery = func.websearch_to_tsquery("simple", query)
-    age_days = func.extract("epoch", func.now() - Message.date) / 86400
-    ranked = await session.scalars(
-        select(Message)
-        .where(*filters, Message.tsv.op("@@")(tsquery))
-        .order_by((func.ts_rank(Message.tsv, tsquery) / (1 + age_days / 30)).desc())
-        .limit(limit)
+    await session.execute(
+        select(func.set_config("pg_trgm.word_similarity_threshold", str(TRIGRAM_THRESHOLD), True))
     )
-    rows = list(ranked)
-    if len(rows) < limit:
-        seen = [r.message_id for r in rows] or [0]
-        fuzzy = await session.scalars(
-            select(Message)
-            .where(*filters, Message.message_id.notin_(seen))
-            .where(func.word_similarity(query, func.coalesce(Message.text, "")) >= TRIGRAM_THRESHOLD)
-            .order_by(
-                func.word_similarity(query, func.coalesce(Message.text, "")).desc(), Message.date.desc()
-            )
-            .limit(limit - len(rows))
-        )
-        rows.extend(fuzzy)
-    return rows
+    fused: dict[int, float] = {}
+    for query in dict.fromkeys(q.strip() for q in queries if q.strip()):
+        for rank, message_id in enumerate(await _ranked(session, filters, query, limit * 3)):
+            fused[message_id] = fused.get(message_id, 0.0) + 1 / (FUSION_K + rank)
+    best = sorted(fused, key=lambda mid: (-fused[mid], -mid))[:limit]
+    if not best:
+        return []
+    rows = {
+        row.message_id: row
+        for row in await session.scalars(select(Message).where(*filters, Message.message_id.in_(best)))
+    }
+    return [rows[mid] for mid in best if mid in rows]
+
+
+async def conversations(
+    session: AsyncSession, hits: Sequence[Message], *, before: int, after: int
+) -> list[list[Message]]:
+    """Each hit with the messages around it in its topic, overlapping windows merged, in the hits' order."""
+    windows: list[dict[int, Message]] = []
+    for hit in hits:
+        window = {
+            row.message_id: row
+            for row in await around(session, hit.chat_id, hit.message_id, before=before, after=after)
+        }
+        joined = [w for w in windows if w.keys() & window.keys()]
+        for other in joined[1:]:
+            windows.remove(other)
+        if joined:
+            for other in joined[1:]:
+                joined[0].update(other)
+            joined[0].update(window)
+        else:
+            windows.append(window)
+    return [[window[mid] for mid in sorted(window)] for window in windows]
 
 
 async def around(
