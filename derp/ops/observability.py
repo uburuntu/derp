@@ -14,6 +14,7 @@ import logging
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 import logfire
@@ -71,6 +72,9 @@ def update_attributes(update: Update) -> dict[str, Any]:
         attributes["message_id"] = message_id
     if isinstance(thread_id := getattr(event, "message_thread_id", None), int):
         attributes["thread_id"] = thread_id
+    sent = getattr(event, "edit_date", None) or getattr(event, "date", None)
+    if isinstance(sent, datetime):  # how late Telegram delivered it
+        attributes["age_s"] = int((datetime.now(UTC) - sent).total_seconds())
     return attributes
 
 

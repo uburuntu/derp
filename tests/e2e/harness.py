@@ -210,14 +210,24 @@ class Conversation:
         )
 
     async def ephemeral_command(
-        self, person: Person, room: Room, text: str, ephemeral_id: int = 77, *, reply_to: int | None = None
+        self,
+        person: Person,
+        room: Room,
+        text: str,
+        ephemeral_id: int = 77,
+        *,
+        reply_to: int | None = None,
+        age: int = 0,
     ) -> int:
-        """An ephemeral command (as a reply to ``reply_to``): message id 0, visible only to the sender and Derp."""
+        """An ephemeral command (as a reply to ``reply_to``): message id 0, visible only to the sender and Derp.
+
+        ``age`` is how many seconds ago it was sent: a delivery that late may be past the reply window.
+        """
         command = text.split()[0]
         message: dict[str, Any] = {
             "message_id": 0,
             "ephemeral_message_id": ephemeral_id,
-            "date": int(datetime.now(UTC).timestamp()),
+            "date": int(datetime.now(UTC).timestamp()) - age,
             "chat": room.payload(person),
             "from": person.payload(),
             "text": text,

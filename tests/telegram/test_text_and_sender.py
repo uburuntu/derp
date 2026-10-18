@@ -203,3 +203,33 @@ def test_visible_reads_markdown_back_as_the_text_and_entities_telegram_shows() -
         {"type": "bold", "offset": 0, "length": 18},
         {"type": "italic", "offset": 7, "length": 6},
     ]
+
+
+async def test_a_refused_ephemeral_reply_is_never_replayed_after_an_ambiguous_retry() -> None:
+    from typing import Any, cast
+
+    import pytest
+    from aiogram import Bot
+    from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+    from aiogram.methods import SendMessage
+
+    from derp.telegram.sender import send_markdown
+
+    class Expired:
+        def __init__(self) -> None:
+            self.chats: list[int] = []
+
+        async def send_rich_message(self, **fields: Any) -> Message:
+            self.chats.append(fields["chat_id"])
+            if fields["reply_parameters"] is None:  # the unanchored retry: it may have been delivered
+                raise TelegramNetworkError(SendMessage(chat_id=1, text="x"), "reset")
+            raise TelegramBadRequest(SendMessage(chat_id=1, text="x"), "REPLY_TO_INVALID")
+
+        async def send_message(self, **fields: Any) -> Message:
+            self.chats.append(fields["chat_id"])
+            raise TelegramBadRequest(SendMessage(chat_id=1, text="x"), "REPLY_TO_INVALID")
+
+    bot = Expired()
+    with pytest.raises(TelegramNetworkError):
+        await send_markdown(cast(Bot, bot), Target(-5, ephemeral_to=7, ephemeral_reply_to=3), "your notes")
+    assert 7 not in bot.chats  # no private copy of what may already be on their screen

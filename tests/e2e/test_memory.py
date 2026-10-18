@@ -5,6 +5,8 @@ from sqlalchemy import select, update
 
 from derp.history.models import Chat
 from derp.memory.models import Note
+from tests.e2e.conftest import BOT_ID
+from tests.e2e.fake_api import Call
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 from tests.e2e.test_effects import results_of
@@ -174,6 +176,36 @@ async def test_a_public_memory_reply_keeps_personal_notes_out(conversation: Conv
 
     await conversation.settle(await conversation.ephemeral_command(GINA, CLUB, "/memory", 811))
     assert "hates mondays" in conversation.api.calls_of("sendRichMessage")[-1]["rich_message"]["markdown"]
+
+
+async def test_a_late_ephemeral_memory_still_reaches_only_its_asker(conversation: Conversation) -> None:
+    """Telegram refuses a reply once the command's 15 seconds are spent (a delivery stall can spend them)."""
+    conversation.meet(GINA, CLUB)
+    conversation.meet(GINA)  # she started Derp, so it can write to her
+    async with conversation.db.transaction() as session:
+        session.add(Note(chat_id=CLUB.id, user_id=GINA.id, text="Gina hates mondays", author_id=GINA.id))
+
+    def sent_after(after: int) -> list[Call]:
+        calls = [
+            c for m in ("sendRichMessage", "sendMessage") for c in conversation.api.calls_of(m, after=after)
+        ]
+        return sorted(calls, key=lambda c: c.sequence)
+
+    after = conversation.seq
+    await conversation.settle(await conversation.ephemeral_command(GINA, CLUB, "/memory", 812, age=20))
+    sent = sent_after(after)
+    assert all(c.fields.get("ephemeral_message_parameters") for c in sent if int(c["chat_id"]) == CLUB.id)
+    (private,) = [c for c in sent if int(c["chat_id"]) == GINA.id]
+    assert "hates mondays" in private["rich_message"]["markdown"] and not private.fields.get("reply_markup")
+
+    conversation.api.set_member_status(chat_id=CLUB.id, user_id=BOT_ID, status="administrator")
+    after = conversation.seq
+    await conversation.settle(await conversation.ephemeral_command(GINA, CLUB, "/memory", 813, age=20))
+    last = sent_after(after)[-1]  # an admin Derp may answer ephemerally without the reply
+    assert int(last["chat_id"]) == CLUB.id and not last.fields.get("reply_parameters")
+    assert int(last["ephemeral_message_parameters"]["receiver_user_id"]) == GINA.id
+    assert "hates mondays" in last["rich_message"]["markdown"]
+    assert not any(int(c["chat_id"]) == GINA.id for c in sent_after(after))
 
 
 async def test_a_decided_proposal_loses_its_buttons_and_the_rest_keep_theirs(

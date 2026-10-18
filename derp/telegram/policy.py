@@ -6,6 +6,7 @@ have been delivered, so replaying it could duplicate a message or a charge.
 """
 
 import asyncio
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from derp.telegram.heartbeat import mark_poll_success
 
 # A send that failed this way may still have been delivered: never replay it, and never call it refused.
 AMBIGUOUS = (TelegramNetworkError, TelegramServerError, TimeoutError)
+log = logging.getLogger("derp.telegram")
 
 
 def is_read(method: str) -> bool:
@@ -53,9 +55,10 @@ class TelegramRequestPolicy(BaseRequestMiddleware):
                 if attempt == self.attempts or error.retry_after > self.max_retry_after:
                     raise
                 await self._sleep(error.retry_after)
-            except AMBIGUOUS:
+            except AMBIGUOUS as error:
                 if not is_read(name) or attempt == self.attempts:
                     raise
+                log.warning("%s retried after %s (attempt %s)", name, type(error).__name__, attempt)
                 await self._sleep(2 ** (attempt - 1))
             else:
                 if name == "getUpdates":

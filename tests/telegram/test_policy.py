@@ -55,10 +55,12 @@ async def test_ambiguous_send_is_never_replayed() -> None:
     assert script.calls == 1
 
 
-async def test_reads_retry_network_errors() -> None:
+async def test_reads_retry_network_errors(caplog: pytest.LogCaptureFixture) -> None:
     read = GetChat(chat_id=1)
     script = Script(TelegramNetworkError(method=read, message="reset"), "chat")
     assert await policy()(script, BOT, read) == "chat"
+    # a stalled poll is visible, by method and error type only
+    assert caplog.messages == ["getChat retried after TelegramNetworkError (attempt 1)"]
 
 
 async def test_successful_poll_marks_heartbeat(tmp_path: Path) -> None:

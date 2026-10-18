@@ -117,6 +117,7 @@ class FakeBotAPI:
         self.poll_ids = 0
         self.inline_results: dict[str, bool] = {}  # result id → has a keyboard
         self.ephemerals: dict[tuple[int, int], JsonObject] = {}  # (chat, ephemeral id) → message
+        self.ephemeral_commands: dict[tuple[int, int], int] = {}  # (chat, ephemeral id) → when it was sent
         # callback query id → (presser, pressed an ephemeral message, when): ephemeral answers to presses
         self.presses: dict[str, tuple[int, bool, float]] = {}
         self.invoice_links: dict[str, JsonObject] = {}  # createInvoiceLink URL → its fields
@@ -198,6 +199,9 @@ class FakeBotAPI:
         if isinstance(query := raw.get("callback_query"), Mapping):
             pressed_ephemeral = bool((query.get("message") or {}).get("ephemeral_message_id"))
             self.presses[str(query["id"])] = (int(query["from"]["id"]), pressed_ephemeral, time.monotonic())
+        if isinstance(message := raw.get("message"), Mapping) and message.get("ephemeral_message_id"):
+            key = (int(message["chat"]["id"]), int(message["ephemeral_message_id"]))
+            self.ephemeral_commands[key] = int(message["date"])
         async with self.condition:
             self.updates.append(raw)
             self.updates.sort(key=lambda item: int(item["update_id"]))
@@ -404,8 +408,16 @@ class FakeBotAPI:
                     raise ValueError("presses on ephemeral messages can't be replaced, only edited")
                 if time.monotonic() - at > EPHEMERAL_SECONDS:
                     raise Refusal(400, "Bad Request: query is too old")
-            elif not (isinstance(reply, Mapping) and reply.get("ephemeral_message_id")):
-                raise ValueError("non-admin bots send ephemeral messages only as replies to ephemeral ones")
+            elif isinstance(reply, Mapping) and (answered := reply.get("ephemeral_message_id")):
+                sent = self.ephemeral_commands.get((chat_id, int(answered)))
+                if sent is None:
+                    raise ValueError(f"ephemeral message {answered!r} was never received")
+                if datetime.now(UTC).timestamp() - sent > EPHEMERAL_SECONDS:
+                    raise Refusal(400, "Bad Request: REPLY_TO_INVALID")
+            elif receiver.get("is_bot") or self.member_statuses.get(
+                (chat_id, int(self.bot_user["id"]))
+            ) not in {"creator", "administrator"}:  # the wording here is the fake's own
+                raise Refusal(400, "Bad Request: ephemeral messages need a reply, a press or admin rights")
             message.update(message_id=0, ephemeral_message_id=len(self.calls), receiver_user=receiver)
             self.ephemerals[(chat_id, int(message["ephemeral_message_id"]))] = message
             return message

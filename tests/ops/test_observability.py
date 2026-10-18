@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from aiogram.types import Update
 
 from derp.ops.observability import update_attributes
@@ -32,7 +34,7 @@ def test_update_attributes_are_numeric_only() -> None:
             "update_id": 7,
             "message": {
                 "message_id": 42,
-                "date": 0,
+                "date": int(datetime.now(UTC).timestamp()) - 20,
                 "message_thread_id": 3,
                 "chat": {"id": -1001, "type": "supergroup", "title": "secret title"},
                 "from": {"id": 5, "is_bot": False, "first_name": "Ann"},
@@ -41,6 +43,7 @@ def test_update_attributes_are_numeric_only() -> None:
         }
     )
     attributes = update_attributes(update)
+    assert 20 <= attributes.pop("age_s") <= 22  # how late it arrived: a delivery stall shows here
     assert attributes == {
         "update_id": 7,
         "update_type": "message",

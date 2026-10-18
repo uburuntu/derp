@@ -10,8 +10,13 @@ otherwise leak chat content in a URL. Rich messages come back from Telegram as
 blocks without text, so the sent Markdown is kept as their ``text`` for history:
 as written, before ``links`` (a caller's rewrite of message references into
 links) was applied to what Telegram renders.
+
+An ephemeral reply Telegram refuses (its 15 seconds ran out while the update
+was on its way) is retried unanchored, which Telegram takes from admin bots at
+any time, then goes to the person's private chat; never to the whole group.
 """
 
+import logging
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -41,6 +46,7 @@ _REMOTE_MEDIA = re.compile(
 _FENCE = "```"
 RICH_CHUNK = RICH_LIMIT - 768  # headroom for fence repair and entity overhead
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+log = logging.getLogger("derp.sender")
 type Links = Callable[[str], str]  # rewrites message references into links (``history.links``)
 
 
@@ -168,8 +174,44 @@ async def send_markdown(
     except TelegramAPIError as error:
         if sent:
             raise PartialDeliveryError(error, sent) from error
-        raise
+        receiver = target.ephemeral_to
+        if not (isinstance(error, TelegramBadRequest) and receiver and target.ephemeral_reply_to):
+            raise
+        return await _answer_refused(
+            bot, target, receiver, markdown, chunks, links=links, reply_markup=reply_markup, silent=silent
+        )
     return sent
+
+
+async def _answer_refused(
+    bot: Bot,
+    target: Target,
+    receiver: int,
+    markdown: str,
+    chunks: list[str],
+    *,
+    links: Links | None,
+    reply_markup: InlineKeyboardMarkup | None,
+    silent: bool,
+) -> list[Message]:
+    """An ephemeral reply Telegram refused, sent unanchored or else privately; [] when not in the chat.
+
+    The private copy goes without its buttons: they act on the chat they were pressed in.
+    """
+    loose = Target(target.chat_id, target.thread_id, ephemeral_to=receiver)
+    sent: list[Message] = []
+    try:
+        await _send_chunks(bot, loose, chunks, sent, links=links, reply_markup=reply_markup, silent=silent)
+    except TelegramBadRequest as error:
+        if sent:
+            raise PartialDeliveryError(error, sent) from error
+    else:
+        return sent
+    delivered = await send_privately(bot, receiver, markdown)
+    log.warning(
+        "ephemeral reply refused in %s, %s", loose.chat_id, "sent privately" if delivered else "dropped"
+    )
+    return []
 
 
 async def send_privately(
