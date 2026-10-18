@@ -277,11 +277,12 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
             failure = "timed out" if isinstance(error, TimeoutError) else "failed"
             if isinstance(error, TimeoutError) and not responses(captured):
                 await _absorb(deps, pin.model, usd, input_tokens)  # it may finish after we stopped waiting
-    await ledger_side_call(
-        deps.db, captured, kind="media", funding=deps.funding.value, role=ModelRole.MEDIA,
-        context_tokens=input_tokens, run_id=deps.run_id, chat_id=deps.chat.id, user_id=deps.user_id,
-        requested_model=pin.model,
-    )  # fmt: skip
+        finally:  # a response already in is ledgered even when Stop lands after it
+            await ledger_side_call(
+                deps.db, captured, kind="media", funding=deps.funding.value, role=ModelRole.MEDIA,
+                context_tokens=input_tokens, run_id=deps.run_id, chat_id=deps.chat.id, user_id=deps.user_id,
+                requested_model=pin.model,
+            )  # fmt: skip
     first, _, rest = text.partition("\n")
     summary = " ".join(first.split())[:300]
     if not summary:
