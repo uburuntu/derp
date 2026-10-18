@@ -384,3 +384,22 @@ thanked = "🙏 Разработчик Дерпа прочитал ваш отз
 [units]
 day = "{days} дн."
 days = "{days} дн."
+
+# What a quote bubble says for a message with no text or picture to draw.
+[quote.kinds]
+photo = "Фотография"
+video = "Видео"
+voice = "Голосовое сообщение"
+video_note = "Видеосообщение"
+audio = "Аудио"
+document = "Файл"
+sticker = "Стикер"
+animation = "GIF"
+poll = "Опрос"
+dice = "Кубик"
+location = "Геопозиция"
+venue = "Место"
+contact = "Контакт"
+checklist = "Чек-лист"
+story = "История"
+other = "Сообщение"

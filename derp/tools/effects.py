@@ -1,4 +1,4 @@
-"""Media effects on bytes: captioned memes (images and video), reversing, background removal, samples.
+"""Media effects on bytes: captioned memes (images and video), quotes, reversing, background removal, samples.
 
 Each public function takes a slot of the given worker pool (whose limits it
 follows), works in a throwaway directory and returns the result's bytes. ffmpeg only ever reads local files of whitelisted
@@ -12,13 +12,13 @@ import json
 import math
 import sys
 import tempfile
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
-from derp.tools import captions
+from derp.tools import captions, quotes
 from derp.tools.workers import EffectError, WorkerPool, check_dimensions, run
 
 # Containers chat media arrives in; playlists, concat lists and session descriptions are excluded.
@@ -210,6 +210,25 @@ async def sticker(pool: WorkerPool, data: bytes) -> bytes:
     pool.check_input(data)
     async with pool.slot():
         return await asyncio.to_thread(captions.sticker, data, pool.limits.max_pixels)
+
+
+async def quote(
+    pool: WorkerPool, messages: Sequence[quotes.Quoted], output: quotes.Output, bubble: str | None = None
+) -> bytes:
+    """Messages as a Telegram-looking quote: a WebP sticker or a PNG; pictures over the input cap are left out."""
+    cap = pool.limits.max_input_bytes
+    fitting = [
+        replace(
+            m,
+            avatar=m.avatar if m.avatar and len(m.avatar) <= cap else None,
+            media=m.media if m.media and len(m.media) <= cap else None,
+        )
+        for m in messages
+    ]
+    async with pool.slot():
+        return await asyncio.to_thread(
+            quotes.render, fitting, output=output, bubble=bubble, max_pixels=pool.limits.max_pixels
+        )
 
 
 async def still(pool: WorkerPool, data: bytes) -> bytes:
