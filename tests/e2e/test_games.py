@@ -12,6 +12,7 @@ from tests.e2e.model import ScriptedModel, tool_call
 ADA = Person(1801, "Ada")
 BEN = Person(1802, "Ben")
 CY = Person(1803, "Cy")
+DEE = Person(1804, "Dee")
 QUIZ_ROOM = Room(-1018, title="Quiz night")
 
 
@@ -61,20 +62,22 @@ async def test_a_quiz_scores_first_answers_into_the_leaderboard(
         answer("poll-1", BEN, 1),  # right
         answer("poll-1", BEN, 0),  # a redelivered or changed answer scores nothing
         answer("poll-2", BEN, 0),  # right
-        answer("poll-1", CY, 0),  # wrong at zero stays zero
-        answer("poll-2", CY, 0),  # right
-        answer("poll-1", ADA, 0),  # wrong
+        answer("poll-1", CY, 0),  # wrong, then
+        answer("poll-2", CY, 0),  # right: even, the same as right then wrong
+        answer("poll-1", ADA, 1),  # right, then
+        answer("poll-2", ADA, 1),  # wrong
+        answer("poll-1", DEE, 0),  # wrong: below zero, counted as zero
         answer("poll-3", ADA, 0, 1),  # regular polls don't score
     ):
         await conversation.settle(await conversation.push("poll_answer", update))
     async with conversation.db.session() as session:
         scores = {(s.user_id, s.points, s.answers) for s in await session.scalars(select(GameScore))}
-    assert scores == {(BEN.id, 2, 2), (CY.id, 1, 2), (ADA.id, 0, 1)}
+    assert scores == {(BEN.id, 2, 2), (CY.id, 0, 2), (ADA.id, 0, 2), (DEE.id, -1, 1)}
 
     model.reply(tool_call("chat_query", query={"preset": "quiz_leaderboard", "days": 1}), "Ben wins.")
     board = await conversation.send(CY, QUIZ_ROOM, "derp who's winning?")
     await conversation.settle(board)
-    assert result_of(model, "chat_query") == "Ben: 2\nCy: 1"
+    assert result_of(model, "chat_query") == "Ben: 2"
 
 
 async def test_an_unconfirmed_poll_stops_the_series_without_a_resend(

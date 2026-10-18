@@ -18,8 +18,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   it), and a reply to Derp's answer about a photo still sees that photo. Asked about a video, GIF or video note, it looks at a still frame of it. Media tools also take videos,
   GIFs and audio (memes, reversing, song recognition). Group voice messages nobody asked about are transcribed
   in the background up to a daily limit; past it, a voice message is transcribed when someone calls Derp in
-  reply to it. Short audio files (forwarded memos, recordings) are transcribed when someone calls Derp with one
-  or in reply to one. Recordings over the length limit aren't transcribed, and Derp says so instead of guessing.
+  reply to it. Short audio files (forwarded memos, recordings) and the speech in videos are transcribed when
+  someone calls Derp with one or in reply to one. Recordings over the length limit aren't transcribed, and Derp says so instead of guessing.
 - Profile pictures and the chat photo work as sources: "add me a hat on my profile picture", "draw Vasya as a
   knight", "meme @vasya's avatar" or "meme our chat photo". People are found by name or @username among those
   seen in this chat. Derp sends the result; bots can't change anyone's profile photo, so people set it themselves.
@@ -121,7 +121,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 
 ## privacy
 
-- Bot commands and inline/guest conversations are never stored. Telemetry holds numbers only, never text.
+- Bot commands and inline/guest conversations are never stored. Telemetry holds numbers only, except
+  that when an answer fails a shortened copy of that exchange, credentials masked, is kept for debugging.
 - /forget as a reply removes that message; /forget alone removes everything the person said in that chat, with
   their reactions, votes, notes and reminders there. Day summaries that mention it are redone without it.
 - Shortening how long a chat's history is kept asks for confirmation first, since older messages get deleted;

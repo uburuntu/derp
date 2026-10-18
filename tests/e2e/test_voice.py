@@ -209,6 +209,40 @@ async def test_audio_in_other_formats_is_converted_first(
     assert stt.calls[-1][1].startswith(b"OggS") and stt.calls[-1][2] == "ogg"
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+async def test_the_speech_in_a_video_is_heard_once_someone_asks(
+    conversation: Conversation, model: ScriptedModel, tmp_path: Path
+) -> None:
+    stt = FakeSTT()
+    await use_stt(conversation, stt)
+    group = Room(-1012, title="Clips")
+    conversation.meet(EVA, group)
+    target = tmp_path / "clip.mp4"
+    process = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+        "-f", "lavfi", "-i", "color=c=black:s=64x64:d=1", "-shortest", "-c:v", "libx264", "-c:a", "aac", str(target),
+    )  # fmt: skip
+    assert await process.wait() == 0
+    conversation.api.register_file("v1", target.read_bytes())
+    video = {"file_id": "v1", "file_unique_id": "u-v1", "width": 64, "height": 64, "duration": 1}
+    clip = await conversation.send(EVA, group, video=video)
+    await conversation.settle(clip)
+    assert stt.calls == []  # videos nobody asked about are never transcribed
+
+    model.reply("хлеб")
+    asked = await conversation.send(EVA, group, "дерп, что он сказал?", reply_to=clip.message_id)
+    await conversation.expect_reply(asked)
+    assert len(stt.calls) == 1 and stt.calls[0][1].startswith(b"OggS") and stt.calls[0][2] == "ogg"
+    assert "[video 0:01: купи хлеба]" in str(model.requests[-1])
+
+    huge = {**video, "file_id": "v2", "file_unique_id": "u-v2", "file_size": 21 * 2**20}
+    model.reply("не скачать")
+    sent = await conversation.send(EVA, group, caption="дерп, а тут?", video=huge)
+    await conversation.expect_reply(sent)
+    assert len(stt.calls) == 1  # past Telegram's download limit: never fetched
+    assert "[video 0:01 — couldn't transcribe]" in str(model.requests[-1])
+
+
 async def test_derp_is_told_why_a_voice_note_has_no_transcript(
     conversation: Conversation, model: ScriptedModel
 ) -> None:

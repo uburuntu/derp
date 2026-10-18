@@ -6,8 +6,9 @@ stopped, and votes only in its own non-anonymous polls. Updates for polls
 that were never captured are ignored, since they carry no chat.
 
 A member's first answer to one of Derp's quizzes scores the game: +1 when
-right, −1 when wrong, with each chat-local day's points floored at zero
-(quiz answers can't be changed, and a redelivered answer scores nothing).
+right, −1 when wrong. A chat-local day's points are their plain sum, so the
+order of answers doesn't matter; readers count a day as at least zero (quiz
+answers can't be changed, and a redelivered answer scores nothing).
 """
 
 from datetime import UTC, datetime
@@ -123,15 +124,12 @@ async def score(session: AsyncSession, poll: Poll, user_id: int, *, right: bool)
     day = datetime.now(UTC).astimezone(chat_time(await session.get(Chat, poll.chat_id))).date()
     delta = 1 if right else -1
     statement = insert(GameScore).values(
-        chat_id=poll.chat_id, user_id=user_id, day=day, points=max(delta, 0), answers=1
+        chat_id=poll.chat_id, user_id=user_id, day=day, points=delta, answers=1
     )
     await session.execute(
         statement.on_conflict_do_update(
             index_elements=[GameScore.chat_id, GameScore.user_id, GameScore.day],
-            set_={
-                "points": func.greatest(GameScore.points + delta, 0),
-                "answers": GameScore.answers + 1,
-            },
+            set_={"points": GameScore.points + delta, "answers": GameScore.answers + 1},
         )
     )
 

@@ -397,7 +397,7 @@ async def _groups(
 
 async def _quiz_points(session: AsyncSession, scope: Scope, query: ChatQuery) -> list[tuple[str, int]]:
     since, until = _period(query, scope.tz)
-    points = func.sum(GameScore.points)
+    points = func.sum(func.greatest(GameScore.points, 0))  # a day counts as at least zero
     statement = (
         select(
             func.coalesce(func.concat_ws(" ", User.first_name, User.last_name), literal("someone")), points
