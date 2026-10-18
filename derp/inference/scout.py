@@ -32,7 +32,12 @@ from derp.inference.roles import ModelRole, RolePin
 log = logging.getLogger("derp.scout")
 MIN_UPTIME = 95.0
 CHAT_ROLES = (ModelRole.CHAT, ModelRole.CHAT_SPONSORED)
-UNTOOLED_ROLES = (ModelRole.STT, ModelRole.DECISION, ModelRole.SPEECH, ModelRole.MEDIA)  # live: a ZDR route, tools or not
+UNTOOLED_ROLES = (
+    ModelRole.STT,
+    ModelRole.DECISION,
+    ModelRole.SPEECH,
+    ModelRole.MEDIA,
+)  # live: a ZDR route, tools or not
 # Roles whose price snapshot estimates calls before they are made (turn minimums, media looks).
 PRICED_ROLES = (*CHAT_ROLES, ModelRole.STT, ModelRole.MEDIA)
 OUTPUT_TOKENS_PER_TURN = 400
