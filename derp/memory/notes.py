@@ -9,6 +9,7 @@ in the prompt; chat rules (admin-written) are the only trusted chat text.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -19,15 +20,18 @@ from derp.history.models import Chat
 from derp.history.render import neutralize, one_line
 from derp.memory.models import Note
 
-NOTE_CHARS = 300
+NOTE_CHARS = 500  # room for a list kept as one note
 CHAT_NOTES_CAP = 50
 USER_NOTES_CAP = 20
 RULES_CHARS = 2000
-PROMPT_CHARS = 3000  # notes shown to the model per run, newest first
+PROMPT_CHARS = 5000  # notes shown to the model per run, newest first: ten full ones
 # Of those, kept for the asker's own notes; a share either kind leaves unused goes to the other.
-MY_SHARE = 1000
+MY_SHARE = 1500
 FOUND_NOTES = 20  # notes one search returns
 ADMIN_STATUSES = {"creator", "administrator"}
+
+type NoteChange = Literal["add", "edit", "forget", "decide"]  # decide: approve or reject a proposal
+type Verdict = Literal["direct", "propose", "refused"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +48,25 @@ async def is_admin(bot: Bot, chat: Chat, user_id: int) -> bool:
     except TelegramAPIError:
         return False
     return str(member.status) in ADMIN_STATUSES
+
+
+def may_change(change: NoteChange, owner: int | None, user_id: int, admin: bool, mode: str) -> Verdict:
+    """Whether ``user_id`` may make ``change`` to a note owned by ``owner`` (None: a chat note) directly, only
+    as a proposal an admin approves, or not at all; every surface that changes notes only words the verdict.
+
+    A personal note is only its owner's. Chat notes follow the chat's ``notes_mode``: ``admins`` turns a
+    member's new note or edit into a proposal (removing one stays an admin's), ``off`` takes no new ones and
+    leaves the rest to admins. Admins decide proposals in any mode.
+    """
+    if change == "decide":
+        return "direct" if admin else "refused"
+    if owner is not None:
+        return "direct" if owner == user_id else "refused"
+    if mode == "off" and change == "add":
+        return "refused"
+    if admin or mode not in {"admins", "off"}:
+        return "direct"
+    return "propose" if mode == "admins" and change != "forget" else "refused"
 
 
 async def add_note(
@@ -81,15 +104,18 @@ async def rewrite(
     session: AsyncSession, note: Note, text: str, *, propose: bool, author_id: int
 ) -> Note | str:
     """Rewrite an active note in place, or (``propose``) make the text that note's one pending edit, which an
-    admin approves like a proposed note; returns the changed note or the edit, or the reason nothing changed."""
+    admin approves like a proposed note; returns the changed note or the edit, or the reason nothing changed.
+    A rewrite in place discards the pending edit: it was written against the older text."""
     text = " ".join(text.split())
     if reason := _invalid(text):
         return reason
+    pending = await session.scalar(select(Note).where(Note.replaces_id == note.id))
     if not propose:
         note.text = text
+        if pending is not None:
+            await session.delete(pending)
         await session.flush()
         return note
-    pending = await session.scalar(select(Note).where(Note.replaces_id == note.id))
     if pending is None:
         pending = Note(
             chat_id=note.chat_id, text=text, author_id=author_id, state="proposed", replaces_id=note.id
@@ -115,7 +141,10 @@ def _invalid(text: str) -> str | None:
     if not text:
         return "empty note"
     if len(text) > NOTE_CHARS:
-        return f"too long (max {NOTE_CHARS} characters)"
+        return (
+            f"too long (max {NOTE_CHARS} characters); shorten it, and a list that outgrew one note drops "
+            "its struck items or goes on in a second list note"
+        )
     return None
 
 

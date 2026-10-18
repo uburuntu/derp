@@ -10,11 +10,13 @@ from derp.memory.notes import (
     PROMPT_CHARS,
     USER_NOTES_CAP,
     Memory,
+    NoteChange,
     add_note,
     budgeted,
     decide,
     load_memory,
     matching,
+    may_change,
     notes_block,
     rewrite,
 )
@@ -24,7 +26,7 @@ from derp.memory.notes import (
 async def test_notes_are_validated_capped_and_scoped(database: Database) -> None:
     async with database.transaction() as session:
         assert await add_note(session, -1, "   ", user_id=None, author_id=1) == "empty note"
-        assert str(await add_note(session, -1, "x" * 301, user_id=None, author_id=1)).startswith("too long")
+        assert str(await add_note(session, -1, "x" * 501, user_id=None, author_id=1)).startswith("too long")
         for index in range(USER_NOTES_CAP):
             await add_note(session, -1, f"fact {index}", user_id=7, author_id=7)
         assert str(await add_note(session, -1, "one more", user_id=7, author_id=7)).startswith("full")
@@ -88,7 +90,7 @@ def test_an_unused_share_goes_to_the_other_kind() -> None:
 
 
 def test_left_out_notes_are_counted_and_searchable_only_with_the_tools() -> None:
-    memory = Memory([_note(100 + i, "c" * 288) for i in range(15)], [])  # 300-char lines: 10 fit
+    memory = Memory([_note(100 + i, "c" * 488) for i in range(15)], [])  # 500-char lines: 10 fit
     with_tools, without = notes_block(memory, "Ann", "members"), notes_block(memory, "Ann")
     assert with_tools is not None and without is not None
     assert "Chat notes (5 older not shown; find_notes searches them):" in with_tools
@@ -157,3 +159,52 @@ async def test_rejected_or_orphaned_edits_go_and_edits_dont_fill_the_cap(databas
         for index in range(CHAT_NOTES_CAP - 1):
             assert isinstance(await add_note(session, -1, f"more {index}", user_id=None, author_id=7), Note)
         assert str(await add_note(session, -1, "one too many", user_id=None, author_id=7)).startswith("full")
+
+
+ME, ANN = 7, 8
+
+
+@pytest.mark.parametrize(
+    ("change", "owner", "admin", "mode", "verdict"),
+    [
+        ("add", ME, False, "off", "direct"),  # personal notes work in every mode
+        ("edit", ANN, True, "auto", "refused"),  # and stay their owner's, admins included
+        ("forget", ME, False, "admins", "direct"),
+        ("add", None, False, "auto", "direct"),
+        ("edit", None, False, "members", "direct"),
+        ("add", None, False, "admins", "propose"),
+        ("edit", None, False, "admins", "propose"),
+        ("forget", None, False, "admins", "refused"),  # removing is never proposed
+        ("edit", None, True, "admins", "direct"),
+        ("add", None, True, "off", "refused"),
+        ("edit", None, False, "off", "refused"),
+        ("forget", None, True, "off", "direct"),
+        ("decide", None, False, "auto", "refused"),
+        ("decide", None, True, "off", "direct"),
+    ],
+)
+def test_one_rule_says_who_changes_which_note(
+    change: NoteChange, owner: int | None, admin: bool, mode: str, verdict: str
+) -> None:
+    assert may_change(change, owner, ME, admin, mode) == verdict
+
+
+@pytest.mark.db
+async def test_a_direct_edit_discards_the_older_proposed_edit(database: Database) -> None:
+    async with database.transaction() as session:
+        note = await add_note(session, -1, "meetups are on Fridays", user_id=None, author_id=ME)
+        assert isinstance(note, Note)
+        await rewrite(session, note, "meetups are on Mondays", propose=True, author_id=ANN)
+        await rewrite(session, note, "meetups are on Thursdays", propose=False, author_id=ME)
+    async with database.session() as session:
+        rows = list(await session.scalars(select(Note)))
+        assert [(n.text, n.state) for n in rows] == [("meetups are on Thursdays", "active")]
+
+
+@pytest.mark.db
+async def test_a_list_that_outgrows_its_note_is_told_what_to_do(database: Database) -> None:
+    async with database.transaction() as session:
+        films = "Films: " + ", ".join(f"Film {i}" for i in range(60))
+        reason = await add_note(session, -1, films, user_id=None, author_id=ME)
+        assert isinstance(reason, str) and "struck items" in reason and "second list note" in reason
+        assert isinstance(await add_note(session, -1, films[:500], user_id=None, author_id=ME), Note)
