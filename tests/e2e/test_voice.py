@@ -293,8 +293,13 @@ async def test_runs_settle_pending_transcriptions_before_reading_the_chat(
     stt = FakeSTT()
     conversation.overrides["transcriber"] = Derived(
         lambda s: WatchedTranscriber(
-            db=s.db, api=stt, gateway=s.media, pins=s.pins, workers=s.workers, settings=s.settings
-        )  # type: ignore[arg-type]
+            db=s.db,
+            api=stt,  # type: ignore[arg-type]
+            gateway=s.media,
+            pins=s.pins,
+            workers=s.workers,
+            settings=s.settings,
+        )
     )
     await conversation.restart()
     model.reply("hi")
