@@ -9,7 +9,7 @@ from derp.inference.models import ProviderCall
 from derp.inference.openrouter import CallUsage
 from derp.inference.roles import ModelRole
 
-type Made = GeneratedImage | Speech  # provider results that wait for delivery before they are ledgered
+type Billed = GeneratedImage | Speech  # provider results that wait for delivery before they are ledgered
 
 
 def record_usage(
@@ -65,7 +65,7 @@ def simple_usage(
 
 
 def record_made(
-    session: AsyncSession, made: Made, *, funding: str, run_id: int | None, chat_id: int, user_id: int
+    session: AsyncSession, made: Billed, *, funding: str, run_id: int | None, chat_id: int, user_id: int
 ) -> ProviderCall:
     """An image or a voice line: against the run once delivered, else ``creator`` without a run (absorbed)."""
     match made:

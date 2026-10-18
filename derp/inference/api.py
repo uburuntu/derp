@@ -78,7 +78,6 @@ class OpenRouterAPI:
         self._image_price = Decimal(str(settings.image_price_usd))
         self._stt_minute_price = Decimal(str(settings.stt_price_usd_per_minute))
         self._decision_token_price = Decimal(str(settings.decisions.price_usd_per_m_input)) / 1_000_000
-        self._speech = settings.speech
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -185,9 +184,12 @@ class OpenRouterAPI:
             language=result.get("language"),
         )
 
-    # Text-to-speech (raw MP3 back, no usage: priced per character from ``settings.speech``)
+    # Text-to-speech (raw MP3 back, no usage: priced per character by the caller)
 
-    async def speak(self, model: str, text: str, voice: str, *, zdr: bool = True) -> Speech:
+    async def speak(
+        self, model: str, text: str, voice: str, *, cost_usd: Decimal, zdr: bool = True
+    ) -> Speech:
+        """``cost_usd``: what the line costs by its characters, which the response never reports."""
         body: Json = {"model": model, "input": text, "voice": voice, "response_format": "mp3"}
         if zdr:
             body["provider"] = {"zdr": True, "data_collection": "deny"}
@@ -197,7 +199,7 @@ class OpenRouterAPI:
         return Speech(
             data=response.content,
             model=model,
-            cost_usd=Decimal(str(self._speech.price_usd(model, len(text)))).quantize(Decimal("0.00000001")),
+            cost_usd=cost_usd,
             characters=len(text),
             generation_id=response.headers.get("x-generation-id"),
         )

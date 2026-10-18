@@ -27,7 +27,7 @@ DRAFT_INTERVAL = 0.4  # seconds between drafts: ≤ 12.5 per 5 s
 ACTION_INTERVAL = 4.5  # Telegram shows a chat action for ~5 s
 DRAFT_TAIL = 3000  # characters of a long partial answer shown in the draft
 SEARCH_TOOLS = ("search", "read_messages", "chat_query", "chat_info", "inspect_media", "fetch", "digest")
-DRAW_TOOLS = ("image", "meme", "sticker", "background", "reverse")
+DRAW_TOOLS = ("image", "meme", "sticker", "background", "reverse", "quote")
 
 THINKING, SEARCHING, DRAWING, RECORDING, WORKING = "thinking", "searching", "drawing", "recording", "working"
 STAGES = frozenset({THINKING, SEARCHING, DRAWING, RECORDING, WORKING})

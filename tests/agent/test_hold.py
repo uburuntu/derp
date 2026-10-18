@@ -12,7 +12,7 @@ from pydantic_ai.usage import RunUsage
 
 from derp.agent.deps import RunDeps
 from derp.agent.guard import Guard
-from derp.agent.outputs import Kept, Made, Pending, hold_left
+from derp.agent.outputs import Kept, Made, Pending, Refused, afford, hold_left
 from derp.agent.runs import start_run
 from derp.agent.tools.web import search_budget
 from derp.config import Settings
@@ -77,3 +77,17 @@ async def test_searches_go_before_the_answer_does(database: Database, settings: 
     assert not await guard.check(room_for_a_turn)  # …but the run may still use tools
     spent = await context(database, settings, held=76 + 12)
     assert await guard.check(spent)  # one more turn would reach the hold: wrap up
+
+
+@pytest.mark.db
+async def test_side_work_leaves_a_turn_to_talk_about_it_unless_its_price_was_agreed(
+    database: Database, settings: Settings
+) -> None:
+    ctx = await context(database, settings, held=200)  # 124 left; 112 after one more turn
+    await afford(ctx, 112, next_turn=True)
+    with pytest.raises(Refused, match="about 113"):
+        await afford(ctx, 113, next_turn=True)
+    await afford(ctx, 124, next_turn=False)  # an approved image: its run was funded for it alone
+    with pytest.raises(Refused):
+        await afford(ctx, 125, next_turn=False)
+    await afford(await context(database, settings, held=0, free=True), 10**6, next_turn=True)  # no hold

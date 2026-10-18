@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from derp.agent.models import AgentRun, RunOutput
 from derp.config import Settings
 from derp.history.models import MessageMedia
-from derp.inference.api import Speech
+from derp.inference.api import OpenRouterError, Speech
 from derp.inference.models import ProviderCall
 from derp.money.models import RunFee
 from derp.money.wallets import balance, credit, wallet
@@ -172,3 +172,55 @@ async def test_a_kept_voice_message_can_be_played_backwards(
             select(func.count()).where(ProviderCall.kind == "speech", ProviderCall.run_id == run_id)
         )
         assert speech_calls == 1  # the voice line travelled with the reversed result and was charged once
+
+
+@needs_ffmpeg
+async def test_derps_own_voice_message_is_read_from_its_script_never_listened_to(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    await voiced(conversation)
+    await fund(conversation, 650)
+    model.reply(tool_call("speak", script=SCRIPT, voice="harry"), ".")
+    asked = await conversation.send(MAX, text="yell at the team that prod is down")
+    await conversation.expect_reply(asked, method="sendVoice", timeout=30)
+    await conversation.settle(asked, timeout=30)
+    async with conversation.db.session() as session:
+        voice_id = await session.scalar(select(MessageMedia.message_id).where(MessageMedia.type == "voice"))
+    model.reply(tool_call("inspect_media", message_id=voice_id, question="what did you yell?"), "that")
+    again = await conversation.send(MAX, text="wait, what did you yell?")
+    await conversation.expect_reply(again)
+    await conversation.settle(again)
+    result = results_of(model, "inspect_media")[-1]
+    assert f"#{voice_id} (voice" in result and "Derp's own voice message" in result and SCRIPT in result
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(ProviderCall.id).where(ProviderCall.kind == "media")) is None
+
+
+@dataclass
+class TimingOut(FakeSpeech):
+    """The primary model's call times out (it may still have been made and billed)."""
+
+    async def speak(self, model: str, text: str, voice: str, **_: object) -> Speech:
+        self.lines.append((model, text, voice))
+        raise OpenRouterError(0, "ReadTimeout")
+
+
+async def test_a_timed_out_voice_line_is_absorbed_and_never_tried_again_elsewhere(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    speech = TimingOut()
+    conversation.overrides["api"] = speech
+    await conversation.restart()
+    await fund(conversation, 650)
+    model.reply(tool_call("speak", script="[yells] ЭЙ"), "my voice broke")
+    asked = await conversation.send(MAX, text="yell hey")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    assert speech.lines == [("elevenlabs/eleven-v4-turbo", "[yells] ЭЙ", "callum")]  # no fallback call
+    assert results_of(model, "speak")[0] == "The voice message timed out; nothing was charged for it."
+    estimate = Decimal(str(settings.speech.list_price("elevenlabs/eleven-v4-turbo") * 10 / 1_000_000))
+    async with conversation.db.session() as session:
+        call = await session.scalar(select(ProviderCall).where(ProviderCall.kind == "speech"))
+        assert call is not None and (call.funding, call.run_id, call.units) == ("creator", None, 10)
+        assert call.cost_usd == estimate
+        assert await session.scalar(select(RunFee.id)) is None

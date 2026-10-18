@@ -105,9 +105,12 @@ def test_the_speech_pin_lives_on_a_zdr_route_without_tools_and_falls_back_when_d
     turbo = route("elevenlabs/turbo", "0.00002", "0") | {"supported_parameters": []}
     full = route("elevenlabs/full", "0.00004", "0") | {"supported_parameters": []}
     pins = {ModelRole.SPEECH: pin}
-    assert plan(pins, build_catalog([], [turbo, full], []), allowlist=ALLOW, windows=WINDOWS) == []
-    [change] = plan(pins, build_catalog([], [full], []), allowlist=ALLOW, windows=WINDOWS)
+    [snapshot] = plan(pins, build_catalog([], [turbo, full], []), allowlist=ALLOW, windows=WINDOWS)
+    # Priced per character: OpenRouter's "prompt" price, per 1M characters like tokens; no completion price.
+    assert snapshot.pin == pin and snapshot.price == (Decimal(20), Decimal(0))
+    [change, priced] = plan(pins, build_catalog([], [full], []), allowlist=ALLOW, windows=WINDOWS)
     assert change.safe and change.pin.model == "elevenlabs/full"
+    assert priced.pin.model == "elevenlabs/full" and priced.price == (Decimal(40), Decimal(0))
 
 
 def test_the_media_pin_is_priced_from_its_standard_routes_only() -> None:

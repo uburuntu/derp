@@ -21,8 +21,9 @@ from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import User
 from derp.inference.ledger import estimate_cost
-from derp.inference.models import ModelPin, ProviderCall
+from derp.inference.models import ProviderCall
 from derp.inference.openrouter import REASONING_ROOM
+from derp.inference.pins import snapshot_prices
 from derp.inference.roles import ModelRole
 from derp.money.models import RunFee, Wallet
 from derp.money.wallets import balance, capture, credit, release, reserve, wallet
@@ -108,15 +109,10 @@ class Funder:
 
         Input is the prompt prefix (persona, tool schemas) plus half the window, priced uncached.
         """
-        prices = await session.get(ModelPin, funding.role.value)
-        if prices is None or prices.price_prompt is None:
+        prices = await snapshot_prices(session, funding.role, None)
+        if prices is None:
             return 1
-        usd = estimate_cost(
-            self.prefix.get(funding, 0) + self.window(funding) // 2,
-            output_tokens,
-            float(prices.price_prompt),
-            float(prices.price_completion or 0),
-        )
+        usd = estimate_cost(self.prefix.get(funding, 0) + self.window(funding) // 2, output_tokens, *prices)
         return max(1, self.settings.credits_for_usd(float(usd)))
 
     async def affords_deeper(self, session: AsyncSession, funds: Funds) -> bool:

@@ -22,7 +22,9 @@ SETTINGS = Settings(_env_file=None, source_revision="abc123")  # pyright: ignore
 
 
 def render(*topics: str, settings: Settings = SETTINGS) -> str:
-    return guide(cast(Any, topics), settings=settings, username="DerpRobot", families=FAMILIES)
+    return guide(
+        cast(Any, topics), settings=settings, username="DerpRobot", families=FAMILIES, voice_credits=9
+    )
 
 
 def context(settings: Settings = SETTINGS) -> RunContext[RunDeps]:
@@ -42,6 +44,7 @@ def test_facts_follow_the_running_configuration() -> None:
     money = render("money")
     assert all(f"{pack.stars}⭐ → {pack.credits:,}" in money for pack in SETTINGS.packs)
     assert f"{SETTINGS.plan.stars}⭐" in money
+    assert "the longest costs up to about 9 Derpcoins" in money  # priced by voice.rates, passed in
     watching = SETTINGS.watching.model_copy(
         update={"paid": WatchLimits(clip_seconds=90, audio_seconds=60, pdf_pages=7)}
     )
@@ -50,6 +53,13 @@ def test_facts_follow_the_running_configuration() -> None:
         "paid answers take clips with sound up to 1.5 minutes, audio up to 1 minute and PDFs up to 7 pages"
         in limits
     )
+
+
+def test_voice_lines_and_quote_stickers_are_effects_tools() -> None:
+    families = {family.name: family for family in FAMILIES}
+    tools = families["effects"].toolset.tools
+    assert tools["speak"].sequential and tools["make_quote"].sequential
+    assert "voice" not in families and "quotes" not in families
 
 
 def test_commands_and_every_registered_tool_are_listed() -> None:

@@ -18,10 +18,10 @@ from pydantic_ai.toolsets import FunctionToolset
 
 import derp
 from derp.agent.deps import RunDeps
+from derp.agent.tools import voice
 from derp.agent.toolsets import ALL_TIERS, Family
 from derp.config import Settings, WatchLimits
 from derp.inference.openrouter import REASONING_ROOM
-from derp.inference.roles import ModelRole
 from derp.locales import t
 from derp.memory import notes
 from derp.money.funding import Funding
@@ -73,17 +73,16 @@ def _minutes(seconds: int) -> str:
     return f"{seconds / 60:g} minute{'s' if seconds != 60 else ''}"
 
 
-def facts(topic: Topic, settings: Settings, username: str, families: Sequence[Family]) -> list[str]:
-    """The current values for a topic, generated from what is running."""
+def facts(
+    topic: Topic, settings: Settings, username: str, families: Sequence[Family], voice_credits: int
+) -> list[str]:
+    """The current values for a topic, generated from what is running (``voice_credits``: the longest voice
+    line at most, ``voice.rates``)."""
     match topic:
         case "overview":
             return [f"- This bot: @{username}."]
         case "money":
             plan = settings.plan
-            speech = settings.speech
-            voice_credits = settings.credits_for_usd(
-                speech.price_usd(settings.model_pins[ModelRole.SPEECH].model, speech.max_chars)
-            )
             return [
                 (
                     f"- 1 Derpcoin = ${settings.usd_per_credit:g} of provider cost; answers are charged at cost × "
@@ -109,7 +108,7 @@ def facts(topic: Topic, settings: Settings, username: str, families: Sequence[Fa
                     "free allowance, voice messages included."
                 ),
                 (
-                    f"- A voice message: up to {settings.speech.max_chars} characters; the longest costs about "
+                    f"- A voice message: up to {settings.speech.max_chars} characters; the longest costs up to about "
                     f"{voice_credits} Derpcoins."
                 ),
             ]
@@ -181,10 +180,17 @@ def facts(topic: Topic, settings: Settings, username: str, families: Sequence[Fa
             return []
 
 
-def guide(topics: Sequence[Topic], *, settings: Settings, username: str, families: Sequence[Family]) -> str:
+def guide(
+    topics: Sequence[Topic],
+    *,
+    settings: Settings,
+    username: str,
+    families: Sequence[Family],
+    voice_credits: int,
+) -> str:
     parts: list[str] = []
     for topic in dict.fromkeys(topics or TOPICS):
-        body = [guide_sections().get(topic, ""), *facts(topic, settings, username, families)]
+        body = [guide_sections().get(topic, ""), *facts(topic, settings, username, families, voice_credits)]
         parts.append(f"## {topic}\n" + "\n".join(line for line in body if line))
     return "\n\n".join(parts)
 
@@ -205,7 +211,11 @@ async def about_derp(ctx: RunContext[RunDeps], topics: list[Topic]) -> str:
     deps = ctx.deps
     me = await deps.bot.me()
     families = [family for family in FAMILIES if family.available(deps)]
-    return guide(topics, settings=deps.settings, username=me.username or "", families=families)
+    longest = (await voice.rates(deps)).most(deps.settings.speech.max_chars)
+    return guide(
+        topics, settings=deps.settings, username=me.username or "", families=families,
+        voice_credits=deps.settings.credits_for_usd(float(longest)),
+    )  # fmt: skip
 
 
 @cache

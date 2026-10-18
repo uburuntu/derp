@@ -1,7 +1,7 @@
 from aiogram.types import Message
 
 from derp.telegram.sender import Target, sanitize_untrusted, split_rich
-from derp.telegram.text import as_written, literal, split_text, truncate, utf16_len
+from derp.telegram.text import as_written, literal, split_text, truncate, utf16_len, visible
 
 
 def test_utf16_measure_counts_astral_as_two() -> None:
@@ -177,3 +177,29 @@ def test_literal_text_cannot_format_or_add_buttons() -> None:
     assert literal("*hi* <tg-button>x</tg-button> [a](b) ok") == (
         r"\*hi\* \<tg\-button\>x\<\/tg\-button\> \[a\]\(b\) ok"
     )
+
+
+def test_visible_reads_markdown_back_as_the_text_and_entities_telegram_shows() -> None:
+    text, entities = visible("**Итог:** see [the doc](https://x.y) and #123 😀 _now_")
+    assert text == "Итог: see the doc and #123 😀 now"
+    assert entities == [
+        {"type": "bold", "offset": 0, "length": 5},
+        {"type": "text_link", "offset": 10, "length": 7, "url": "https://x.y"},
+        {"type": "italic", "offset": 30, "length": 3},  # after the emoji: two UTF-16 units
+    ]
+    markdown = (
+        "# Title\n- a ~~b~~ ||c||\n- [x] done\n```py\nx = 1  # **not bold**\n```\n#3 chat \\*literal\\*"
+    )
+    text, entities = visible(markdown)
+    assert text == "Title\n• a b c\n☑ done\nx = 1  # **not bold**\n#3 chat *literal*"
+    assert [(e["type"], text[e["offset"] : e["offset"] + e["length"]]) for e in entities] == [
+        ("bold", "Title"),
+        ("strikethrough", "b"),
+        ("spoiler", "c"),
+        ("pre", "x = 1  # **not bold**"),
+    ]
+    assert visible("2*3*4 = snake_case_name") == ("2*3*4 = snake_case_name", [])
+    assert visible("**Nested _italic_ bold**")[1] == [
+        {"type": "bold", "offset": 0, "length": 18},
+        {"type": "italic", "offset": 7, "length": 6},
+    ]

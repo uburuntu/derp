@@ -22,6 +22,7 @@ from derp.agent.images import Portrait
 from derp.agent.outputs import Kept, Refused
 from derp.history.models import Message, MessageMedia, User
 from derp.history.queries import resolve_members
+from derp.history.render import load_views
 from derp.telegram.media import MediaUnavailableError, chat_photo_bytes, profile_photo_bytes, sniff_image
 
 VISUAL = ("photo", "sticker", "document", "animation", "video", "video_note")
@@ -96,13 +97,8 @@ async def message_media(deps: RunDeps, message_id: int | None, types: tuple[str,
     return Source(data, row.type, image=kind is not None and kind != "image/gif")
 
 
-def _name(first_name: str, last_name: str | None, username: str | None) -> str:
-    full = " ".join(p for p in (first_name, last_name) if p)
-    return f"{full} (@{username})" if username else full
-
-
 def _named(user: User) -> Portrait:
-    return Portrait(user.id, _name(user.first_name, user.last_name, user.username))
+    return Portrait(user.id, user.label)
 
 
 async def _portrait(deps: RunDeps, user_id: int) -> Portrait:
@@ -125,7 +121,7 @@ async def resolve_person(deps: RunDeps, name: str) -> Portrait:
         exact = [
             u
             for u in users
-            if wanted in ((u.username or "").casefold(), u.first_name.casefold(), _named(u).name.casefold())
+            if wanted in ((u.username or "").casefold(), u.first_name.casefold(), u.full_name.casefold())
         ]
         users = exact or users
     if len(users) > 1:
@@ -146,19 +142,14 @@ async def photo_owner(deps: RunDeps, message_id: int | None, name: str | None = 
     if anchor is None:
         return await _portrait(deps, deps.user_id)
     async with deps.db.session() as session:
-        found = (
-            await session.execute(
-                select(Message.user_id, Message.forward_origin).where(
-                    Message.chat_id == deps.chat.id, Message.message_id == anchor
-                )
-            )
-        ).first()
-    sender, origin = found if found else (None, {})
-    if origin and origin.get("type") == "user":
-        author = origin["sender_user"]
-        return Portrait(
-            author["id"], _name(author["first_name"], author.get("last_name"), author.get("username"))
+        row = await session.scalar(
+            select(Message).where(Message.chat_id == deps.chat.id, Message.message_id == anchor)
         )
+        views = await load_views(session, [row]) if row is not None else []
+    who = views[0].author if views else None
+    if who is not None and who.user_id is not None:
+        return Portrait(who.user_id, who.label)
+    sender = row.user_id if row is not None else None
     if sender is None and message_id is not None:
         raise Refused(f"Message #{message_id} isn't in this chat's history or has no person behind it.")
     return await _portrait(deps, sender or deps.user_id)

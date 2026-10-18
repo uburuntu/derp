@@ -13,21 +13,21 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   history and nothing from them is stored except accounting. They can still look things up (weather, exchange
   rates, time zones, Wikipedia and the like), calculate, answer about Derp itself and, beyond free models, search
   the web; they can't draw, post polls or stickers, or set reminders.
-- It looks at photos (iPhone HEIC files and other image files too), stickers and albums, listens to voice messages
-  and video notes (transcribed), and opens links. Animated and video stickers, GIFs and files that aren't pictures
-  are seen through Telegram's preview picture of them. Photos inside rich messages and in messages quoted from
-  another chat count like any photo. A photo someone sent just before calling Derp comes along with the question
-  ("make it a cat" edits it), and a reply to Derp's answer about a photo still sees that photo, unless the question
-  is clearly about something else. Asked about a video, GIF, video note, audio file, voice message or PDF, it opens
-  the whole thing: watches clips with their sound, listens to audio and reads PDFs, and answers with what happens
-  when (timestamps, page numbers, quoted speech), on a separate model that keeps nothing. That costs a little extra
-  and has per-tier length and page limits; free models, files past the limits and asks the answer can't afford get
-  a still frame or preview picture instead, and Derp says why. Media tools also take videos, GIFs and audio
-  (memes, reversing, song recognition). Group voice messages nobody asked
-  about are transcribed in the background up to a daily limit; past it, a voice message is transcribed when someone
-  calls Derp in reply to it. Short audio files (forwarded memos, recordings) and the speech in videos are
-  transcribed when someone calls Derp with one or in reply to one. Recordings over the length limit, files too big for
-  Telegram to hand bots and videos without sound aren't transcribed, and Derp says so instead of guessing.
+- It looks at pictures in any image format (photos, iPhone HEIC files, image files), stickers and albums, photos
+  inside rich messages and in messages quoted from another chat, and it opens links. A photo someone sent just
+  before calling Derp comes along with the question ("make it a cat" edits it), and a reply to Derp's answer about
+  a photo still sees that photo, unless the question is clearly about something else. Speech becomes text: voice
+  messages and video notes are transcribed (in groups, ones nobody asked about only up to a daily limit; past it,
+  when someone calls Derp in reply to one), and so are short audio files (forwarded memos, recordings) and the
+  speech in videos when someone calls Derp with one or in reply to one. Recordings over the length limit, files too
+  big for Telegram to hand bots and videos without sound aren't transcribed, and Derp says so instead of guessing.
+  Asked about a video, GIF, video note, audio file, voice message or PDF, it opens the whole thing on a separate
+  model that keeps nothing: watches clips with their sound, listens to audio and reads PDFs, and answers with what
+  happens when (timestamps, page numbers, quoted speech). That costs a little extra, and paid answers take longer
+  clips and recordings and more pages than the free allowance; its own voice messages need no listening, since it
+  knows what it said. Whatever isn't opened whole (on free models, past the limits, when the answer can't afford
+  it, or animated stickers and GIFs nobody asked about) is seen through a still frame or Telegram's preview
+  picture, and Derp says why. Media tools also take videos, GIFs and audio (memes, reversing, song recognition).
 - Profile pictures and the chat photo work as sources: "add me a hat on my profile picture", "draw Vasya as a
   knight", "meme @vasya's avatar" or "meme our chat photo". People are found by name or @username among those seen
   in this chat; in reply to a forward, it's the person it was forwarded from when Telegram shows them. Derp sends
@@ -99,7 +99,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   whose wallet first — the group's (its balance is shown to everyone) or the presser's own — and the pack menu then
   opens only for the presser, with payment links; the payment happens in their private chat with Derp, where the
   receipt goes too. The group's pack menu also estimates roughly how long each pack would last at the group's
-  recent pace (left out while the group has spent too little to tell). A personal purchase never shows anyone's balance in the group.
+  recent pace (left out while the group has spent too little to tell). A personal purchase never shows anyone's
+  balance in the group.
 - Buying for a group posts one quiet thank-you in that group (in the topic it was bought from): the buyer's name,
   the exact amount and roughly how long the wallet lasts at the group's recent pace (early on, about how many
   answers). More purchases soon after update that post instead of adding new ones. Only the buyer can hide their
@@ -114,8 +115,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   Derpcoins in groups" in /settings), then the asker's free daily ones.
 - When nobody can pay, Derp offers free models: opt-in (an admin turns them on for a group), and their providers
   may store what they get. The offer says when the free daily Derpcoins refill and offers buying first (in a group,
-  topping up the group's wallet). In a group each person sees it at most once a UTC day; after that Derp only reacts
-  with 🙈. Asking Derp to turn them on only brings up the notice; the person (or in a group an admin)
+  topping up the group's wallet). In a group each person sees it at most once a UTC day; after that Derp only
+  reacts with 🙈. Asking Derp to turn them on only brings up the notice; the person (or in a group an admin)
   presses its button. Free models get read-only and Telegram tools only.
 - A request that ran out of Derpcoins isn't lost: when the asker buys Derpcoins shortly after (for themselves, for
   their latest such request wherever they asked; for a group, in the topic they asked in), Derp offers a Continue
@@ -156,8 +157,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - A reminder posts its text at a time; a scheduled prompt makes Derp answer a request at that time ("every
   morning post a fun fact"). Both can repeat daily, on weekdays, weekly or monthly in the chat's time zone.
 - Time zone: each chat has one, set by telling Derp where you are ("I'm in Moscow", "use Berlin time"). Until it is
-  set, Derp asks once before scheduling at a clock time. In a group anyone can set a missing zone; changing it needs
-  an admin. Repeating jobs keep their local time when the zone changes; one-off reminders keep their moment, and
+  set, Derp asks once before scheduling at a clock time. In a group anyone can set a missing zone; changing it
+  needs an admin. Repeating jobs keep their local time when the zone changes; one-off reminders keep their moment, and
   setting the first zone moves nothing. Day summaries and "today" follow the chat's zone; the free daily
   Derpcoins still refill on the UTC day.
 - Anyone can schedule one-offs; repeating jobs in groups need an admin. Creators manage their own jobs and

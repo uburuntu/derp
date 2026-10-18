@@ -16,7 +16,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from derp.agent.approvals import ask, needs_approval
 from derp.agent.deps import RunDeps
 from derp.agent.images import ImageJob, Portrait, draw, filename
-from derp.agent.outputs import Made, Pending, Refused, check_budget, deliver, emit, hold_left
+from derp.agent.outputs import Made, Pending, Refused, afford, check_budget, deliver, emit
 from derp.agent.tools.sources import (
     avatar_source,
     chat_photo_source,
@@ -101,8 +101,10 @@ async def generate_image(
             except Refused as refused:
                 return str(refused)
             raise ApprovalRequired  # the run pauses here; Make it resumes it from this call
-    if (left := await hold_left(ctx)) is not None and price > left:
-        return f"Not enough Derpcoins left in this answer for an image (needs about {price}). Tell them /buy gets more."
+    try:  # an approved image was agreed to at this price: its resumed run is funded for it alone
+        await afford(ctx, price, next_turn=not ctx.tool_call_approved)
+    except Refused as refused:
+        return str(refused)
     extra = [source.data] if source is not None else []
     try:
         image = await draw(

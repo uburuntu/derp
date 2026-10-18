@@ -32,17 +32,14 @@ class Portrait:
     """A member whose profile photo is a reference (resolved by name or message, never a model's user id)."""
 
     user_id: int
-    name: str = ""  # who the image model is told it is ("" in jobs stored before names were kept)
+    name: str = ""  # who the image model is told it is ("": a member never seen here)
 
     def as_arg(self) -> dict[str, object]:
         return {"id": self.user_id, "name": self.name}
 
     @classmethod
-    def from_arg(cls, arg: object) -> Portrait:
-        if isinstance(arg, dict):
-            found = cast(dict[str, object], arg)
-            return cls(int(cast(int, found["id"])), str(found.get("name") or ""))
-        return cls(int(cast(int, arg)))  # a bare id: a job stored before names were kept
+    def from_arg(cls, arg: dict[str, object]) -> Portrait:
+        return cls(int(cast(int, arg["id"])), str(arg.get("name") or ""))
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,16 +63,14 @@ class ImageJob:
 
     @classmethod
     def from_args(cls, args: dict[str, object]) -> ImageJob:
-        """A stored job; one from before group portraits (a single ``avatar_of`` id) loads as one portrait."""
+        """The job an approval prompt priced (``as_args``)."""
         references = cast(list[int], args.get("references") or [])
-        avatars = args.get("avatar_of")
-        if not isinstance(avatars, list):
-            avatars = [] if avatars is None else [avatars]
+        avatars = cast(list[dict[str, object]], args.get("avatar_of") or [])
         return cls(
             prompt=str(args.get("prompt", "")),
             aspect_ratio=str(args.get("aspect_ratio", "1:1")),
             references=tuple(int(r) for r in references),
-            avatar_of=tuple(Portrait.from_arg(avatar) for avatar in cast(list[object], avatars)),
+            avatar_of=tuple(Portrait.from_arg(avatar) for avatar in avatars),
             faceless=tuple(str(name) for name in cast(list[object], args.get("faceless") or [])),
             chat_photo=bool(args.get("chat_photo")),
         )

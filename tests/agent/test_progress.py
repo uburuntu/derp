@@ -29,3 +29,7 @@ async def test_group_action_follows_the_stage_at_once() -> None:
     await asyncio.sleep(0.01)
     await progress.close()
     assert bot.actions == ["typing", "upload_photo", "typing", "record_voice"]
+
+
+def test_drawing_tools_show_the_drawing_stage() -> None:
+    assert {stage_for_tool(name) for name in ("make_quote", "make_meme", "make_sticker")} == {"drawing"}

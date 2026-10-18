@@ -213,20 +213,18 @@ async def test_speak_returns_mp3_priced_per_character_under_zdr() -> None:
 
     api = api_with(httpx.MockTransport(handle))
     script = "[shouting] ОПЯТЬ?! [laughs]"
-    speech = await api.speak("elevenlabs/eleven-v4-turbo", script, "callum")
+    speech = await api.speak("elevenlabs/eleven-v4-turbo", script, "callum", cost_usd=Decimal("0.00048"))
     assert seen["path"] == "/api/v1/audio/speech"
     assert seen["response_format"] == "mp3" and seen["input"] == script and seen["voice"] == "callum"
     assert seen["provider"] == {"zdr": True, "data_collection": "deny"}
     assert speech.data == b"ID3mp3" and speech.generation_id == "gen-tts-1"
     assert speech.characters == len(script)
-    assert speech.cost_usd == Decimal("0.00002") * len(script)  # $20 per 1M characters, the list price
-    unlisted = await api.speak("someone/new-tts", "hi", "callum")
-    assert unlisted.cost_usd == Decimal("0.00008")  # priced as the dearest listed model, never free
+    assert speech.cost_usd == Decimal("0.00048")  # as priced by the caller: no cost comes back
     with pytest.raises(OpenRouterError) as caught:
-        await api.speak("elevenlabs/eleven-v4-turbo", "x", "nobody")
+        await api.speak("elevenlabs/eleven-v4-turbo", "x", "nobody", cost_usd=Decimal("0.00002"))
     assert caught.value.status == 400 and not caught.value.retryable
     with pytest.raises(OpenRouterError, match="no audio"):
-        await api.speak("elevenlabs/eleven-v4-turbo", "x", "mute")
+        await api.speak("elevenlabs/eleven-v4-turbo", "x", "mute", cost_usd=Decimal("0.00002"))
 
 
 async def test_decide_asks_the_systemone_endpoint_under_zdr() -> None:

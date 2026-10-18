@@ -126,15 +126,17 @@ class VoiceMessages(BaseModel, frozen=True):
     """Voice messages on the speech pin (``agent.tools.voice``): stock voices acting out inline audio tags."""
 
     max_chars: int = 400  # of one performance, audio tags included (they are billed as characters)
-    # USD per 1M characters by model (list prices): the speech endpoint returns audio only, never a cost.
-    # A pinned model missing here is priced at the dearest one, never as free.
+    # The speech endpoint returns audio only, never a cost: a line is priced per character at the speech
+    # pin's price snapshot (``agent.tools.voice.rates``). Fallback, USD per 1M characters at list price: the
+    # pin's other models, and its primary until the scout snapshots it. A model missing here is priced at the
+    # dearest one, never as free.
     prices: dict[str, float] = Field(
-        default_factory=lambda: {"elevenlabs/eleven-v4-turbo": 20.0, "elevenlabs/eleven-v4": 40.0}
+        default_factory=lambda: {"elevenlabs/eleven-v4-turbo": 40.0, "elevenlabs/eleven-v4": 80.0}
     )
 
-    def price_usd(self, model: str, characters: int) -> float:
-        per_million = self.prices.get(model, max(self.prices.values(), default=40.0))
-        return characters * per_million / 1_000_000
+    def list_price(self, model: str) -> float:
+        """The fallback USD per 1M characters for ``model``."""
+        return self.prices.get(model, max(self.prices.values(), default=80.0))
 
 
 class Settings(BaseSettings):

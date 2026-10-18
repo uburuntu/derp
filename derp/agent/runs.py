@@ -24,8 +24,8 @@ from derp.history.render import estimate_tokens
 from derp.history.retention import expired
 from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.ledger import cancelled_cost, estimate_cost, record_usage
-from derp.inference.models import ModelPin
 from derp.inference.openrouter import response_usage, responses
+from derp.inference.pins import snapshot_prices
 from derp.inference.roles import ModelRole
 
 
@@ -93,19 +93,18 @@ async def price_unreported(
     if not unpriced:
         return
     async with db.session() as session:
-        prices = await session.get(ModelPin, role.value)
+        prices = await snapshot_prices(session, role, None)
     for response in unpriced:
         cost: Decimal | None = None
         if api is not None and response.provider_response_id:
             with contextlib.suppress(OpenRouterError):
                 cost = await cancelled_cost(api, response.provider_response_id)
-        if cost is None and prices is not None and prices.price_prompt is not None:
+        if cost is None and prices is not None:
             written = sum(estimate_tokens(p.content) for p in response.parts if isinstance(p, TextPart))
             cost = estimate_cost(
                 response.usage.input_tokens or context_tokens,
                 response.usage.output_tokens or written,
-                float(prices.price_prompt),
-                float(prices.price_completion or 0),
+                *prices,
             )
         if cost is not None:
             response.provider_details = {

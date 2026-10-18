@@ -1,5 +1,7 @@
 """Real OpenRouter calls (fractions of a cent). Run with ``pytest -m live``; never in CI."""
 
+from decimal import Decimal
+
 import pytest
 from pydantic_ai import Agent
 
@@ -71,7 +73,9 @@ async def test_speech_pin_speaks_mp3_under_zdr() -> None:
     pin = settings.model_pins[ModelRole.SPEECH]
     api = OpenRouterAPI(settings)
     try:
-        speech = await api.speak(pin.model, "[laughs] Okay.", "callum", zdr=pin.zdr)
+        speech = await api.speak(
+            pin.model, "[laughs] Okay.", "callum", cost_usd=Decimal("0.0006"), zdr=pin.zdr
+        )
     finally:
         await api.close()
     print(speech.model, len(speech.data), speech.cost_usd, speech.generation_id)

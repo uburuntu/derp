@@ -1,8 +1,16 @@
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from derp.history.models import SILENT, TOO_LONG, UNHEARD, Message, MessageMedia
-from derp.history.render import MessageView, estimate_tokens, render_line, render_payload, render_transcript
+from derp.history.models import SILENT, TOO_LONG, UNHEARD, Message, MessageMedia, User
+from derp.history.render import (
+    Author,
+    MessageView,
+    author,
+    estimate_tokens,
+    render_line,
+    render_payload,
+    render_transcript,
+)
 
 
 def row(**fields: object) -> Message:
@@ -133,3 +141,21 @@ def test_a_described_recording_shows_its_description_and_its_transcript() -> Non
         "[video 0:12: a man in a kitchen — buy bread]",
         "[video 0:03 — no sound: a cat]",
     ]
+
+
+def test_the_author_is_a_forwards_named_origin_else_the_sender() -> None:
+    lev = {"type": "user", "sender_user": {"id": 5, "first_name": "Lev", "last_name": "T", "username": "lev"}}
+    assert author(row(user_id=2, forward_origin=lev), {}, {}) == Author("Lev T", 5, None, "lev", "Lev")
+    assert author(row(forward_origin=lev), {}, {}).label == "Lev T @lev"
+    hidden = {"type": "hidden_user", "sender_user_name": "Ghost"}
+    assert author(row(user_id=2, forward_origin=hidden), {}, {}) == Author("Ghost")
+    channel = {"type": "channel", "chat": {"id": -100500, "title": "News"}}
+    assert author(row(user_id=2, forward_origin=channel), {}, {}) == Author("News", chat_id=-100500)
+
+    ann = User(id=2, first_name="Ann", last_name="Lee", username="ann")
+    assert author(row(user_id=2), {2: ann}, {}) == Author("Ann Lee", 2, None, "ann", "Ann")
+    assert author(row(user_id=3), {}, {}) == Author("user 3", 3)
+    assert author(row(user_id=99, is_derp=True), {}, {}) == Author("Derp", 99)
+    admin = row(user_id=1087968824, sender_chat_id=-1)
+    assert author(admin, {}, {-1: "Deck"}) == Author("Deck", chat_id=-1)  # anonymous admin: the chat
+    assert author(row(), {}, {}) == Author("someone")

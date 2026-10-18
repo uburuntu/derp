@@ -39,7 +39,7 @@ UNTOOLED_ROLES = (
     ModelRole.MEDIA,
 )  # live: a ZDR route, tools or not
 # Roles whose price snapshot estimates calls before they are made (turn minimums, media looks).
-PRICED_ROLES = (*CHAT_ROLES, ModelRole.STT, ModelRole.MEDIA)
+PRICED_ROLES = (*CHAT_ROLES, ModelRole.STT, ModelRole.MEDIA, ModelRole.SPEECH)
 OUTPUT_TOKENS_PER_TURN = 400
 OPT_IN_TIERS = ("flex", "priority")  # service tiers a request must ask for, which Derp never does
 INTELLIGENCE_MARGIN = 2.0

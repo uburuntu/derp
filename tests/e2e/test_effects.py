@@ -272,7 +272,7 @@ async def test_a_member_named_by_the_asker_is_the_source_in_one_call(
     assert len(conversation.api.calls_of("sendPhoto", after=asked.after)) == 2
     ambiguous, missing, sent = results_of(model, "make_meme")
     assert sent.startswith("Sent it as #")
-    assert "Vasya (@vasya_k)" in ambiguous and "Vasilisa" in ambiguous
+    assert "Vasya @vasya_k" in ambiguous and "Vasilisa" in ambiguous
     assert "No one called 'Petya' here" in missing
     assert results_of(model, "reverse_media")[0].startswith("Sent it as #")
 

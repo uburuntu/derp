@@ -6,17 +6,14 @@ def test_a_job_round_trips_through_its_stored_args() -> None:
         "a dungeon party",
         "16:9",
         references=(7,),
-        avatar_of=(Portrait(1, "Anya"), Portrait(2, "Jo (@jo)")),
+        avatar_of=(Portrait(1, "Anya"), Portrait(2, "Jo @jo")),
         faceless=("Bob",),
         chat_photo=True,
     )
     assert ImageJob.from_args(job.as_args()) == job
 
 
-def test_a_job_stored_with_one_avatar_id_still_loads() -> None:
-    old = {"prompt": "a knight", "aspect_ratio": "1:1", "references": [], "avatar_of": 5, "chat_photo": False}
-    assert ImageJob.from_args(old).avatar_of == (Portrait(5),)
-    assert ImageJob.from_args({**old, "avatar_of": None}).avatar_of == ()
+def test_a_job_without_optional_args_loads_with_defaults() -> None:
     assert ImageJob.from_args({"prompt": "a knight"}) == ImageJob("a knight")
 
 
