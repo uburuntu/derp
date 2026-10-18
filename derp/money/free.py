@@ -1,4 +1,4 @@
-"""Free models: the last rung after paid and sponsored, only with consent; and the money notices of a run.
+"""Free models (the last rung, only with consent), the waiting question, and the money notices of a run.
 
 Free OpenRouter models are not zero-data-retention: their providers may store
 prompts. So a person opts in once for their private chats (recorded with the
@@ -147,7 +147,9 @@ async def waiting_question(
     """The person's waiting question in this chat: recent, still stored, and no newer ask of theirs answered."""
     member = await session.get(ChatMember, (chat_id, user_id))
     since = datetime.now(UTC) - timedelta(minutes=settings.waiting_minutes)
-    if member is None or member.waiting_message_id is None or (member.waiting_at or since) <= since:
+    if member is None or member.waiting_message_id is None or member.waiting_at is None:
+        return None
+    if member.waiting_at <= since:
         return None
     answered_since = await session.scalar(  # a newer ask of theirs got an answer: this one is behind them
         select(AgentRun.id).where(

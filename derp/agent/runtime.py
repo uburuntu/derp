@@ -185,11 +185,9 @@ class Runtime:
         # Where each topic's last window started: kept while it fits, so consecutive runs share a cacheable prefix.
         # Keyed by funding tier too: tiers have their own budget and model, so they'd only reset each other.
         self.window_starts: dict[tuple[int, int | None, str], int] = {}
+        # A call waiting for its requester's approval ends the run with DeferredToolRequests (approvals.py).
         self.agent = Agent[RunDeps, str | DeferredToolRequests](
-            output_type=[
-                str,
-                DeferredToolRequests,
-            ],  # a call waiting for approval ends the run (approvals.py)
+            output_type=[str, DeferredToolRequests],
             deps_type=RunDeps,
             instructions=PERSONA,
             capabilities=CAPABILITIES,
@@ -618,7 +616,8 @@ class Runtime:
                             toolsets=toolsets_for(deps, families),
                             capabilities=[guard],
                         )
-                    text, messages = str(result.output), result.new_messages()  # nothing here asks first
+                    text = result.output if isinstance(result.output, str) else ""  # nothing here asks first
+                    messages = result.new_messages()
                 except Exception as exc:  # noqa: BLE001 - the caller says so; nothing is charged
                     status, error_type, messages = "failed", type(exc).__name__, list(captured)
             await price_unreported(
