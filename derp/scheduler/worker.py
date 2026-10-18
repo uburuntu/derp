@@ -5,8 +5,7 @@ fires, so a crash mid-send never fires it twice. Prompt jobs run as an agent
 turn with the creator as invoker, funded at fire time like any message; an
 unfunded firing posts a short note, and ``MISS_LIMIT`` of them in a row pause
 the job (that note carries a Resume button). A reminder carries Snooze buttons
-for the firing it posts. A chat that refuses Derp's messages
-pauses its jobs.
+for the firing it posts. A chat that refuses Derp's messages pauses its jobs.
 """
 
 import asyncio

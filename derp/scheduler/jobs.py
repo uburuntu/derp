@@ -18,9 +18,10 @@ Creators pause, resume, change and cancel their own jobs, admins any
 Resume button); a job that repeats after the change needs an admin in groups.
 Giving a job a new time schedules it there: a paused job or a finished one-off
 comes back on. A fired reminder's Snooze buttons do the same for a one-off; a
-repeating one keeps its series and gets one extra firing. The worker claims due rows with ``SKIP LOCKED`` and every
-action locks its row, so a change racing a firing lands either before the
-claim (the job fires on the new terms) or after it (on top of the moved-on row).
+repeating one keeps its series and gets one extra firing. The worker claims due
+rows with ``SKIP LOCKED`` and every action locks its row, so a change racing a
+firing lands either before the claim (the job fires on the new terms) or after
+it (on top of the moved-on row).
 """
 
 import calendar
@@ -192,8 +193,8 @@ async def act_on_job(
 ) -> Job | Refusal:
     """Pause, resume, cancel, change or snooze one of this chat's jobs; returns the job, or why not.
 
-    A snoozed repeating job returns its extra firing. Resuming an active job leaves it be; cancelling a series cancels its extra firing too. ``admin`` is
-    always true in a private chat.
+    A snoozed repeating job returns its extra firing. Resuming an active job leaves it be; cancelling a
+    series cancels its extra firing too. ``admin`` is always true in a private chat.
     """
     job = await session.get(Job, job_id, with_for_update=True)
     if job is None or job.chat_id != chat.id or job.state == "cancelled":

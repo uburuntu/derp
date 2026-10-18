@@ -43,6 +43,7 @@ NO_ZONE = (
     "This chat's time zone isn't set, so a wall-clock time can't be placed. Ask once where they are, set it "
     "with change_setting(time_zone, <IANA zone>), then try again. If they said UTC, give `at` with +00:00."
 )
+FULL = f"Too many scheduled jobs here (limit {CHAT_LIMIT} per chat, {PERSON_LIMIT} per person). Cancel some first."
 
 
 def _when(deps: RunDeps, at: str | None, in_minutes: int | None) -> datetime | str | None:
@@ -97,7 +98,7 @@ async def schedule(
         return "Only admins can schedule repeating jobs in this group; one-off reminders are fine."
     async with deps.db.transaction() as session:
         if not await has_room(session, deps.chat.id, deps.user_id):
-            return f"Too many scheduled jobs here (limit {CHAT_LIMIT} per chat, {PERSON_LIMIT} per person). Cancel some first."
+            return FULL
         job = Job(
             chat_id=deps.chat.id,
             thread_id=deps.target.thread_id,
@@ -149,7 +150,7 @@ async def _act(deps: RunDeps, job_id: int, action: JobAction | Change) -> Job | 
         case "admins":
             return "Only admins can have a job repeat in this group; it can stay a one-off."
         case "full":
-            return f"Too many scheduled jobs here (limit {CHAT_LIMIT} per chat, {PERSON_LIMIT} per person). Cancel some first."
+            return FULL
         case job:
             return job
 
