@@ -40,3 +40,26 @@ def test_empty_optionals_mean_not_given() -> None:
 def test_strings_stay_strings_and_good_arguments_pass_through() -> None:
     args = {"items": [{"question": "[1, 2]"}], "note": '["not a list"]'}
     assert fix(args) == args
+
+
+def test_placeholders_the_schema_rejects_mean_not_given() -> None:
+    from derp.history.queries import ChatQuery
+
+    schema = ChatQuery.model_json_schema()
+    sent = {  # how GLM fills a query it means as "everything": every optional set to something
+        "kinds": "text", "users": [], "days": 0, "since": None, "min_reactions": 0,
+        "group_by": [], "from_derp": False, "whole_chat": False, "limit": 20, "contains": "",
+    }  # fmt: skip
+    fixed = repair_object(sent, schema, schema.get("$defs", {}))
+    assert fixed == {
+        "kinds": ["text"], "users": [], "since": None, "from_derp": False, "whole_chat": False, "limit": 20,
+    }  # fmt: skip
+    ChatQuery.model_validate(fixed)
+
+
+def test_a_lone_item_becomes_a_list_and_accepted_zeroes_stay() -> None:
+    assert fix({"items": '{"question": "q"}', "kinds": "text", "days": 0}) == {
+        "items": [{"question": "q"}],
+        "kinds": ["text"],
+        "days": 0,
+    }
