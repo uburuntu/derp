@@ -139,12 +139,15 @@ def _complete(messages: list[ModelMessage]) -> bool:
     return bool(messages) and isinstance(messages[-1], ModelResponse) and called <= answered
 
 
-def _messages_tokens(messages: list[ModelMessage]) -> int:
+def messages_tokens(messages: list[ModelMessage]) -> int:
     total = 0
     for message in messages:
         for part in message.parts:
             if isinstance(part, TextPart):
                 total += estimate_tokens(part.content)
+            elif isinstance(part, UserPromptPart):  # a resumed run's request (replays carry none)
+                content = [part.content] if isinstance(part.content, str) else part.content
+                total += sum(estimate_tokens(item) for item in content if isinstance(item, str))
             elif isinstance(part, ToolCallPart):
                 total += estimate_tokens(part.tool_name + part.args_as_json_str())
             elif isinstance(part, ToolReturnPart):
@@ -212,7 +215,7 @@ async def build_window(
                 replay = []
             if _complete(replay):
                 seen_runs.add(run.id)
-                cost = _messages_tokens(replay)
+                cost = messages_tokens(replay)
                 if spent + cost > limit:
                     overflow = True
                     break

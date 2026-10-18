@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
-from pydantic_ai.messages import ModelResponse, ToolReturnPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
+from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
+from derp.agent.context import clip_tool_results
 from derp.agent.models import AgentRun, RunOutput
 from derp.agent.runs import load_messages
 from derp.inference.models import ProviderCall
@@ -16,7 +18,7 @@ from derp.money.wallets import balance
 from derp.tools import background, effects
 from derp.tools.workers import EffectError, WorkerPool
 from tests.e2e.harness import Conversation
-from tests.e2e.model import ScriptedModel, tool_call
+from tests.e2e.model import Responder, ScriptedModel, tool_call
 from tests.e2e.test_effects import results_of
 from tests.e2e.test_images import JO, FakeImages, fund
 
@@ -226,6 +228,7 @@ async def test_an_approved_image_finishes_the_chain_it_was_part_of(
         approved = await session.scalar(select(AgentRun).where(AgentRun.trigger == "callback"))
         assert asking is not None and approved is not None and approved.status == "completed"
         assert approved.charged_credits == IMAGE_CREDITS + fee  # charged once, after the result arrived
+        assert approved.context_tokens > 0  # what the resumed run read: the paused run's history
         [call] = await session.scalars(select(ProviderCall).where(ProviderCall.kind == "image"))
         assert (call.run_id, call.funding) == (approved.id, "paid")
         assert list(await session.scalars(select(RunFee.item))) == fees
@@ -234,6 +237,47 @@ async def test_an_approved_image_finishes_the_chain_it_was_part_of(
         stored = load_messages(approved.messages)
     called = {c.tool_call_id for m in stored if isinstance(m, ModelResponse) for c in m.tool_calls}
     answered = {p.tool_call_id for m in stored for p in m.parts if isinstance(p, ToolReturnPart)}
-    first = stored[0]
-    assert answered <= called and isinstance(first, ModelResponse)
-    assert first.tool_calls[0].tool_name == "generate_image"
+    asked_turn, paused_turn = stored[0], stored[1]
+    assert (
+        answered <= called and isinstance(asked_turn, ModelRequest) and isinstance(paused_turn, ModelResponse)
+    )
+    assert (
+        "finish it off" in str(asked_turn.parts) and paused_turn.tool_calls[0].tool_name == "generate_image"
+    )
+    replay = clip_tool_results(stored)  # the request is in the transcript already: replays leave it out
+    assert isinstance(replay[0], ModelResponse)
+
+
+async def test_a_second_priced_image_in_one_request_still_resumes_with_the_ask(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    """ "Draw a frog, then a cat": each image asks first; the second resume still carries the request."""
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 200)
+
+    def draw(prompt: str) -> Responder:
+        def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+            return ModelResponse(
+                parts=[ToolCallPart("generate_image", {"prompt": prompt}, tool_call_id=prompt)]
+            )
+
+        return respond
+
+    model.reply(draw("a frog"))
+    asked = await conversation.send(JO, text="draw a frog, then a cat")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    for expected, then in (("a frog", draw("a cat")), ("a cat", ".")):
+        prompt_id = max(mid for (cid, mid) in conversation.api.messages if cid == JO.id)
+        data = conversation.api.message(JO.id, prompt_id)["reply_markup"]["inline_keyboard"][0][0][
+            "callback_data"
+        ]
+        model.reply(then)
+        await conversation.press(JO, JO.id, prompt_id, data)
+        assert images.prompts[-1] == expected
+        sent = model.requests[-1]
+        assert isinstance(sent[0], ModelRequest) and "a frog, then a cat" in str(sent[0].parts)
+    assert images.prompts == ["a frog", "a cat"]
+    assert len(conversation.api.calls_of("sendPhoto", after=asked.after)) == 2

@@ -199,8 +199,9 @@ def finish_run(
 ) -> RunTotals:
     """Close a run: aggregate usage, ledger each provider response, keep the new history.
 
-    ``carried`` (a resumed run: the paused turn whose call it answered) heads the kept history, so a
-    replay pairs that call with its result; the run that made it already ledgered it.
+    ``carried`` (a resumed run: the paused run's request and the turn whose call it answered) heads the
+    kept history, so a replay pairs that call with its result and a second pause still resumes with
+    what was asked; the run that made them already ledgered them.
     """
     result = totals(messages)
     for response in (m for m in messages if isinstance(m, ModelResponse)):
