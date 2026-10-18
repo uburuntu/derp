@@ -40,11 +40,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.approvals import close_prompt
 from derp.agent.context import Window, build_window
+from derp.agent.decisions import Decider, Verdict
 from derp.agent.deps import RunDeps
 from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
 from derp.agent.images import ImageJob, make_image
 from derp.agent.lanes import Lanes
-from derp.agent.media import as_content, inspect, note_images, run_media
+from derp.agent.media import Referenced, as_content, inspect, note_images, run_media
 from derp.agent.models import AgentRun, Approval
 from derp.agent.outputs import absorb_kept, flush, hold_left
 from derp.agent.persona import PERSONA, situation
@@ -152,6 +153,7 @@ class Runtime:
         self.workers = workers
         self.transcriber = transcriber
         self.lanes = Lanes(settings.run_concurrency)
+        self.decider = Decider(db, api, pins, settings.decisions)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.in_flight: set[str] = set()  # operation ids of holds a live run still owns
         # Where each topic's last window started: kept while it fits, so consecutive runs share a cacheable prefix.
@@ -165,21 +167,35 @@ class Runtime:
             retries=2,  # a second chance at a bad tool call: two misses in a row would end the turn
         )
 
-    async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome | None:
-        """Answer an invocation, queued per chat topic.
+    async def answer(
+        self, message: TgMessage, chat: Chat, *, trigger: str = "message", named: bool = False
+    ) -> Outcome | None:
+        """Answer an invocation, queued per chat topic; ``named``: Derp's name was all that invoked it.
 
-        None when an owner blocked the chat or the asker, or the trigger was merged into a newer one or is a duplicate.
+        None when an owner blocked the chat or the asker, a name-only mention wasn't addressed to Derp, or the
+        trigger was merged into a newer one or is a duplicate.
         """
         if message.from_user is None:
             raise ValueError("an invocation needs a sender")
         async with self.db.session() as session:
             if await is_blocked(session, chat.id, message.from_user.id):
                 return None
+        verdict: Verdict | None = None
+        if (
+            named
+        ):  # decided before queueing, so a passing mention never supersedes a question waiting its turn
+            async with self.db.session() as session:
+                images = await run_media(session, chat.id, message.message_id, _replied_id(message))
+            verdict = await self.decider.decide(
+                message, bot_id=self.bot.id, tz=chat_time(chat), named=True, images=images
+            )
+            if not verdict.addressed:
+                return None
         key = (chat.id, Target.reply_to_message(message).thread_id)
         async with self.lanes.turn(key, message.from_user.id, message.message_id) as go:
             if not go or (message.message_id and await self._answered(chat.id, message.message_id)):
                 return None
-            return await self._answer(message, chat, trigger=trigger)
+            return await self._answer(message, chat, trigger=trigger, verdict=verdict)
 
     async def _answered(self, chat_id: int, message_id: int) -> bool:
         """A redelivered update (e.g. after a restart) must not be answered twice."""
@@ -191,7 +207,9 @@ class Runtime:
             )
         return found is not None
 
-    async def _answer(self, message: TgMessage, chat: Chat, *, trigger: str) -> Outcome:
+    async def _answer(
+        self, message: TgMessage, chat: Chat, *, trigger: str, verdict: Verdict | None
+    ) -> Outcome:
         asker = message.from_user
         if asker is None:
             raise ValueError("an invocation needs a sender")
@@ -226,6 +244,15 @@ class Runtime:
         spoke = False  # something was (or may have been) sent to the chat for this trigger
         self.in_flight.add(funds.operation_id)
         try:
+            reply_to = _replied_id(message)
+            async with self.db.session() as session:
+                images = await run_media(session, chat.id, message.message_id, reply_to)
+            if verdict is None:  # nothing was asked before queueing: ask what this turn needs, if anything
+                verdict = await self.decider.decide(
+                    message, bot_id=self.bot.id, tz=tz, images=images, paid=funding is Funding.PAID
+                )
+            if images.fallback and not verdict.images:
+                images = Referenced([])
             pin = await self.pins.get(funding.role)
             async with self.db.transaction() as session:
                 run = await start_run(
@@ -256,8 +283,6 @@ class Runtime:
                 if window.oldest_message_id is not None:
                     self.window_starts[topic_key] = window.oldest_message_id
                 prompt = await current_prompt(session, message, window, tz, self.bot.id)
-                reply_to = message.reply_to_message.message_id if message.reply_to_message else None
-                images = await run_media(session, chat.id, message.message_id, reply_to)
                 topic = (
                     await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
                 )
@@ -352,6 +377,7 @@ class Runtime:
                                     pin,
                                     max_tokens=caps.output_tokens,
                                     session=conversation_id(f"chat:{chat.id}:{target.thread_id or 0}"),
+                                    effort=verdict.effort if funding is Funding.PAID else None,
                                 ),
                                 usage_limits=UsageLimits(  # backstops: the guard wraps up before these
                                     request_limit=caps.tool_calls + 1 + BACKSTOP,
@@ -715,6 +741,10 @@ class _Stream:
                     self.capped = True
                     self.token.cancel()
                 await self.progress.stage(stage_for_tool(event.part.tool_name))
+
+
+def _replied_id(message: TgMessage) -> int | None:
+    return message.reply_to_message.message_id if message.reply_to_message else None
 
 
 async def current_prompt(

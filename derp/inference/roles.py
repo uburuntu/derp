@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 type Effort = Literal["none", "minimal", "low", "medium", "high"]
+EFFORTS: tuple[Effort, ...] = ("none", "minimal", "low", "medium", "high")  # shallow to deep
 
 
 class ModelRole(StrEnum):

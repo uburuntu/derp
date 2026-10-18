@@ -3,7 +3,8 @@
 When neither has one, two follow-ups still bring a photo along (``run_media``):
 the asker's own photo (or album) sent just before the question in the same topic,
 and, for a reply to one of Derp's answers, the image the run behind that answer
-looked at (one hop: its trigger's or the message that trigger replied to).
+looked at (one hop: its trigger's or the message that trigger replied to) —
+unless a decision (``agent.decisions``) says answering doesn't need them.
 
 Vision-capable pins get the pixels; every inspected image also gets a one-line
 description stored on ``message_media`` (and folded into search text), so later
@@ -100,6 +101,8 @@ class Referenced:
     rows: list[MessageMedia]
     # Messages whose images are shown but not described by this run (see ``run_media``).
     unnoted: frozenset[int] = field(default_factory=frozenset[int])
+    # The rows came from the fallback rules: attached only if answering needs them (``agent.decisions``).
+    fallback: bool = False
 
 
 async def preceding_media(session: AsyncSession, trigger: Message) -> list[MessageMedia]:
@@ -166,7 +169,8 @@ async def run_media(session: AsyncSession, chat_id: int, message_id: int, reply_
     recent = await preceding_media(session, trigger)
     shown = {(r.message_id, r.idx) for r in recent}
     rows = [*(r for r in answered if (r.message_id, r.idx) not in shown), *recent][-MAX_IMAGES:]
-    return Referenced(rows, frozenset(r.message_id for r in answered) - {r.message_id for r in recent})
+    unnoted = frozenset(r.message_id for r in answered) - {r.message_id for r in recent}
+    return Referenced(rows, unnoted, fallback=bool(rows))
 
 
 async def inspect(

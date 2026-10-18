@@ -16,13 +16,19 @@ async def invoked(message: Message, trigger: Trigger | None = None) -> bool:
 
 
 async def on_invocation(
-    message: Message, chat_row: Chat, runtime: Runtime, bot: Bot, db: Database, settings: Settings
+    message: Message,
+    trigger: Trigger,
+    chat_row: Chat,
+    runtime: Runtime,
+    bot: Bot,
+    db: Database,
+    settings: Settings,
 ) -> None:
     if chat_row.onboarded_at is None and chat_row.type in GROUP_TYPES:  # chats that predate the join notice
         await ensure_onboarded(
             bot, db, settings, chat_row.id, message.from_user.language_code if message.from_user else None
         )
-    await runtime.answer(message, chat_row)
+    await runtime.answer(message, chat_row, named=trigger.kind is TriggerKind.NAME)
 
 
 async def on_stop(update: MessageGenerationStopped, runtime: Runtime) -> None:
