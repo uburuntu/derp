@@ -119,25 +119,27 @@ async def test_lines_aimed_at_someone_are_replies_names_handles_and_tags(databas
     texts = {
         1: (ASKER, "I'm off", None, None),
         2: (OTHER, "ok bye", 1, None),  # a reply to them
-        3: (OTHER, "Маше напишите кто-нибудь?", None, None),  # their name, inflected
-        4: (OTHER, "@masha_k are you in?", None, None),
+        3: (OTHER, "Александре напишите кто-нибудь?", None, None),  # their name, inflected
+        4: (OTHER, "@sasha_k are you in?", None, None),
         5: (
             OTHER,
             "pinging you",
             None,
             [{"type": "text_mention", "offset": 0, "length": 7, "user": {"id": ASKER}}],
         ),
-        6: (OTHER, "машина сломалась", None, None),  # not her name
-        7: (ASKER, "Маша here, talking about myself", None, None),
-        8: (None, "Маша, Derp says hi", None, None),
+        6: (OTHER, "Саша, ты где?", None, None),  # a name she's had in the chat
+        7: (ASKER, "Саша here, talking about myself", None, None),
+        8: (None, "Саша, Derp says hi", None, None),
+        9: (OTHER, "@sasha_kk is someone else", None, None),
+        **dict.fromkeys(range(10, 30), (OTHER, "сашими или роллы?", None, None)),  # not her name
     }
     async with database.transaction() as session:
         session.add(Chat(id=CHAT, type="supergroup", title="D"))
         session.add_all(
-            [User(id=ASKER, first_name="Маша", username="masha_k"), User(id=OTHER, first_name="Lev")]
+            [User(id=ASKER, first_name="Александра", username="sasha_k"), User(id=OTHER, first_name="Lev")]
         )
         await session.flush()
-        session.add(ChatMember(chat_id=CHAT, user_id=ASKER, names=["Маша К"]))
+        session.add(ChatMember(chat_id=CHAT, user_id=ASKER, names=["Саша К"]))
         for n, (sender, text, reply, entities) in texts.items():
             row = msg(n, at + timedelta(minutes=n))
             row.user_id, row.text, row.reply_to_message_id, row.entities = sender, text, reply, entities
@@ -147,8 +149,8 @@ async def test_lines_aimed_at_someone_are_replies_names_handles_and_tags(databas
         found = await aimed_at(
             session, Scope(CHAT), ASKER, start=at, end=None, after_id=1, before_id=99, limit=10
         )
-        assert [r.message_id for r in found] == [2, 3, 4, 5]
-        newest = await aimed_at(
+        assert [r.message_id for r in found] == [2, 3, 4, 5, 6]
+        newest = await aimed_at(  # twenty newer near-misses push nothing out
             session, Scope(CHAT), ASKER, start=at, end=None, after_id=1, before_id=99, limit=2
         )
-        assert [r.message_id for r in newest] == [4, 5]
+        assert [r.message_id for r in newest] == [5, 6]

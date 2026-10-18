@@ -107,10 +107,22 @@ def test_matching_ranks_by_words_found_then_newest() -> None:
         ],
         [_note(4, "Ann's favourite film: Heat", user_id=1)],
     )
-    assert [n.id for n in matching(memory, "film heat")] == [4, 1, 3]
-    assert [n.id for n in matching(memory, "PIZZA")] == [2]
-    assert [n.id for n in matching(memory, "")] == [4, 3, 2, 1]
-    assert matching(memory, "sushi") == []
+    assert [n.id for n in matching(memory, ["film heat"])] == [4, 1, 3]
+    assert [n.id for n in matching(memory, ["PIZZA"])] == [2]
+    assert [n.id for n in matching(memory, [])] == [4, 3, 2, 1]
+    assert matching(memory, ["sushi"]) == []
+    assert [n.id for n in matching(memory, ["sushi", "pizza"])] == [2]  # any phrasing may match
+
+
+def test_matching_stems_like_history_search() -> None:
+    memory = Memory(
+        [_note(1, "Квартира на Ленина сдаётся с ноября"), _note(2, "Wi-Fi password: hunter2")],
+        [_note(3, "Recommended the dentist on Baker St")],
+    )
+    assert [n.id for n in matching(memory, ["квартиру"])] == [1]  # inflections meet
+    assert [n.id for n in matching(memory, ["recommends"])] == [3]
+    assert [n.id for n in matching(memory, ["fi password"])] == [2]
+    assert matching(memory, ["арт"]) == []  # no longer any substring: "квартира" isn't "арт"
 
 
 @pytest.mark.db

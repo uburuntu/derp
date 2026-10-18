@@ -15,14 +15,13 @@ took back may stay stored.
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
-from typing import Any
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from derp.history.models import ChatMember, Digest, Message, User
-from derp.history.queries import Scope
+from derp.history.queries import Scope, terms
 
 
 def scope_key(scope: Scope) -> int:
@@ -159,11 +158,17 @@ async def aimed_at(
     before_id: int,
     limit: int,
 ) -> list[Message]:
-    """Others' messages in a stretch that reply to this person or mention them (@username, name, tag), oldest first."""
+    """Others' messages in a stretch that reply to this person or mention them, the newest ``limit`` oldest first.
+
+    A mention is their first name or a name they've had in the chat (its first word, inflections met the way
+    ``search_history`` meets them: ``queries.terms`` against the indexed ``tsv``), their @username, or a tag.
+    """
     person = await session.get(User, user_id)
     member = await session.get(ChatMember, (scope.chat_id, user_id))
-    stems = _name_stems([person.first_name if person else None, *(member.names if member else [])])
-    handles = [f"@{person.username.lower()}"] if person and person.username else []
+    names = [person.first_name if person else None, *(member.names if member else [])]
+    words = list(
+        dict.fromkeys(term for name in names if name and name.split() for term in terms(name.split()[0]))
+    )
     parent = aliased(Message)
     replied = (
         select(parent.message_id)
@@ -174,44 +179,24 @@ async def aimed_at(
         )
         .exists()
     )
-    statement = select(Message, replied).where(
+    mentioned = [
+        replied,
+        Message.entities.contains([{"user": {"id": user_id}}]),
+    ]  # a tag, even without a username
+    if words:
+        mentioned.append(Message.tsv.op("@@")(func.to_tsquery("simple", " | ".join(words))))
+    if person is not None and person.username:
+        mentioned.append(Message.text.op("~*")(rf"@{re.escape(person.username)}\M"))
+    statement = select(Message).where(
         scope.messages(),
         Message.date >= start,
         Message.message_id > after_id,
         Message.message_id < before_id,
         Message.is_derp.is_(False),
         or_(Message.user_id != user_id, Message.user_id.is_(None)),
-        or_(
-            replied,
-            Message.entities.contains([{"user": {"id": user_id}}]),  # a tag of someone without a username
-            *(Message.text.ilike(f"%{word}%") for word in [*stems, *handles]),
-        ),
+        or_(*mentioned),
     )
     if end is not None:
         statement = statement.where(Message.date < end)
-    words = [rf"(?<!\w){re.escape(stem)}\w{{0,2}}(?!\w)" for stem in stems]
-    words += [rf"{re.escape(handle)}(?!\w)" for handle in handles]
-    named = re.compile("|".join(words), re.IGNORECASE) if words else None
-    rows = await session.execute(statement.order_by(Message.message_id.desc()).limit(limit * 4))
-    found = [
-        row
-        for row, is_reply in rows
-        if is_reply or _tags(row, user_id) or (named is not None and named.search(row.text or ""))
-    ]
-    return found[:limit][::-1]
-
-
-def _name_stems(names: list[str | None]) -> list[str]:
-    """First names as they're inflected: "Маша" → "маш" (Маше, Машу), "Ann" stays (Annie)."""
-    stems: set[str] = set()
-    for name in names:
-        word = name.split()[0].lower() if name and name.split() else ""
-        stem = word[:-1] if len(word) >= 4 and word[-1] in "aeiouyаеёиоуыэюя" else word
-        if len(stem) >= 3:
-            stems.add(stem)
-    return sorted(stems)
-
-
-def _tags(row: Message, user_id: int) -> bool:
-    entities: list[dict[str, Any]] = row.entities or []
-    return any(entity.get("user", {}).get("id") == user_id for entity in entities)
+    rows = await session.scalars(statement.order_by(Message.message_id.desc()).limit(limit))
+    return list(rows)[::-1]

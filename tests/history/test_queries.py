@@ -3,12 +3,14 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import func, select
 
 from derp.db.engine import Database
 from derp.history.models import Chat, ChatMember, MemberEvent, Message, Poll, Reaction, ReactionCount, User
 from derp.history.queries import (
     ChatQuery,
     Scope,
+    _ranked,
     around,
     conversations,
     resolve_members,
@@ -87,6 +89,19 @@ async def test_search_matches_any_word_by_stem_merges_phrasings_and_falls_back_t
         assert await ids("the", "") == []
         general = Scope(CHAT, None, whole_chat=False)
         assert await search(session, general, ["chatter"]) == []
+
+
+@pytest.mark.db
+async def test_trigrams_only_fill_in_when_the_terms_find_too_little(seeded: Database) -> None:
+    async with seeded.transaction() as session:
+        session.add(msg(6, 1, "piza time"))  # reachable only by trigrams
+    async with seeded.session() as session:
+        await session.execute(select(func.set_config("pg_trgm.word_similarity_threshold", "0.3", True)))
+        where = [Scope(CHAT).messages()]
+        assert set(await _ranked(session, where, "pizza", 2)) == {1, 3}  # the terms filled it
+        assert 6 in await _ranked(session, where, "pizza", 3)
+        assert await _ranked(session, where, "piz", 3) == []  # too short to misspell: no trigram scan
+        assert await _ranked(session, where, "what is this", 3) == []  # function words alone
 
 
 @pytest.mark.db

@@ -2,9 +2,10 @@
 
 /info's Report a problem files feedback about one answer: three new kinds
 (wrong_answer, missed_context, wrong_image; "bug" is the fourth category),
-so the kind column widens, and ``details_until`` marks the short window in
-which the author's next message becomes the report's text. Expand-only: old
-code writes the old kinds and never reads the new column.
+so the kind column widens, and ``details_until`` / ``details_chat_id`` mark
+the short window in which the author's next message in that chat becomes the
+report's text. Expand-only: old code writes the old kinds and never reads the
+new columns.
 
 Revision ID: 0037
 Revises: 0036
@@ -27,6 +28,7 @@ NEW_KINDS = "kind in ('bug', 'idea', 'praise', 'other', 'wrong_answer', 'missed_
 
 def upgrade() -> None:
     op.add_column("feedback", sa.Column("details_until", sa.DateTime(timezone=True), nullable=True))
+    op.add_column("feedback", sa.Column("details_chat_id", sa.BigInteger(), nullable=True))
     op.alter_column(
         "feedback",
         "kind",
@@ -39,7 +41,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_feedback_details",
         "feedback",
-        ["user_id"],
+        ["details_chat_id", "user_id"],
         unique=False,
         postgresql_where="details_until is not null",
     )
@@ -59,4 +61,5 @@ def downgrade() -> None:
         type_=sa.VARCHAR(length=8),
         existing_nullable=False,
     )
+    op.drop_column("feedback", "details_chat_id")
     op.drop_column("feedback", "details_until")

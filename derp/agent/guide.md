@@ -53,8 +53,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   AI providers that keep nothing (zero data retention).
 - /feedback (or asking Derp) passes words to Derp's developer, who may send a short thank-you in private once it's
   handled. To flag one answer, reply /info to it and press Report a problem: pick what went wrong (wrong answer,
-  missed context, wrong image, broken), then optionally send one message saying more, or skip. In a group that
-  message is visible like any other; Derp marks it with 👌 instead of replying.
+  missed context, wrong image, broken), then optionally send one message saying more in the chat where you pressed,
+  or skip. In a group that message is visible like any other; Derp marks it with 👌 instead of replying.
 
 ## groups
 

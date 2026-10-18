@@ -10,7 +10,7 @@ rest of a day after a message is summarized fresh each time (``brief``).
 
 from datetime import date
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, capture_run_messages
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 
@@ -64,44 +64,53 @@ def sample(parts: list[str]) -> list[str]:
     return [parts[round(i * step)] for i in range(MAX_CHUNKS)]
 
 
-async def _ask(model: Model, pin: RolePin, prompt: str, text: str) -> tuple[str, list[ModelMessage]]:
+async def _ask(model: Model, pin: RolePin, prompt: str, text: str, paid: list[ModelMessage]) -> str:
+    """One summarizing call; what it exchanged joins ``paid`` even when it fails."""
     agent = Agent(model, instructions=prompt, model_settings=chat_settings(pin, max_tokens=SUMMARY_TOKENS))
-    result = await agent.run(text)
-    return result.output.strip(), result.new_messages()
+    with capture_run_messages() as captured:
+        try:
+            result = await agent.run(text)
+        finally:
+            paid += captured
+    return result.output.strip()
 
 
-async def summarize(model: Model, pin: RolePin, transcript: str) -> tuple[str, list[ModelMessage]]:
+async def summarize(model: Model, pin: RolePin, transcript: str, paid: list[ModelMessage]) -> str:
+    """The stretch's summary; every call's messages are added to ``paid``, those before a failure too."""
     every = chunks(transcript)
     parts = sample(every)
     summaries: list[str] = []
-    paid: list[ModelMessage] = []
     for index, part in enumerate(parts, 1):
         label = f"Part {index} of {len(parts)}.\n" if len(parts) > 1 else ""
-        summary, responses = await _ask(
-            model, pin, DIGEST_PROMPT, f"{label}<chat_history>\n{part}\n</chat_history>"
+        summaries.append(
+            await _ask(model, pin, DIGEST_PROMPT, f"{label}<chat_history>\n{part}\n</chat_history>", paid)
         )
-        summaries.append(summary)
-        paid += responses
     text = summaries[0]
     if len(summaries) > 1:
-        text, responses = await _ask(model, pin, MERGE_PROMPT, "\n\n".join(summaries))
-        paid += responses
+        text = await _ask(model, pin, MERGE_PROMPT, "\n\n".join(summaries), paid)
     if len(parts) < len(every):
         text += "\n" + SAMPLED
-    return text, paid
+    return text
 
 
 async def brief(deps: RunDeps, chat_id: int, transcript: str) -> tuple[str, str]:
-    """Summarize a rendered stretch on the cheap pin, ledgered against the run: the text and the served model."""
+    """Summarize a rendered stretch on the cheap pin, ledgered against the run: the text and the served model.
+
+    Calls already made are ledgered even when a later one fails.
+    """
     role = ModelRole.CHAT_FREE if deps.funding is Funding.FREE else ModelRole.CHAT_SPONSORED
     pin = await deps.pins.get(role)
-    text, messages = await summarize(
-        deps.model if pin == deps.pin else deps.model_factory(pin), pin, transcript
-    )
-    paid = await ledger_side_call(
-        deps.db, messages, kind="digest", funding=deps.funding.value, role=role,
-        context_tokens=estimate_tokens(transcript), run_id=deps.run_id, chat_id=chat_id, user_id=deps.user_id,
-    )  # fmt: skip
+    messages: list[ModelMessage] = []
+    try:
+        text = await summarize(
+            deps.model if pin == deps.pin else deps.model_factory(pin), pin, transcript, messages
+        )
+    finally:
+        paid = await ledger_side_call(
+            deps.db, messages, kind="digest", funding=deps.funding.value, role=role,
+            context_tokens=estimate_tokens(transcript), run_id=deps.run_id, chat_id=chat_id,
+            user_id=deps.user_id,
+        )  # fmt: skip
     served = next((r.model_name for r in reversed(paid) if r.model_name), None) or pin.model
     return text, served
 

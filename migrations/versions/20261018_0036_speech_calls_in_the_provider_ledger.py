@@ -4,9 +4,10 @@ Voice messages Derp performs (the speech pin) are ledgered as
 ``kind='speech'``, with the characters spoken as ``units``. Expand-only: the
 check constraint allows one more kind, which old code never writes.
 Autogenerate does not compare check constraints, so this one is written out.
-The new constraint is added ``NOT VALID`` and then validated, so the table is
-never locked for a full scan. The downgrade keeps cost history: speech rows
-become ``image`` rows (media made for a run, ledgered on delivery).
+The new constraint is added ``NOT VALID`` and validated after that commits
+(an autocommit block), so the exclusive lock is never held through the full
+scan. The downgrade keeps cost history: speech rows become ``image`` rows
+(media made for a run, ledgered on delivery).
 
 Revision ID: 0036
 Revises: 0035
@@ -29,7 +30,8 @@ NAME = "ck_provider_calls_kind"
 def _replace_check(kinds: str) -> None:
     op.drop_constraint(op.f(NAME), "provider_calls", type_="check")
     op.execute(f"alter table provider_calls add constraint {NAME} check (kind in ({kinds})) not valid")
-    op.execute(f"alter table provider_calls validate constraint {NAME}")
+    with op.get_context().autocommit_block():  # the scan after the swap commits: no exclusive lock held
+        op.execute(f"alter table provider_calls validate constraint {NAME}")
 
 
 def upgrade() -> None:

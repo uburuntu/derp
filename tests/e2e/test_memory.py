@@ -365,7 +365,7 @@ async def test_notes_left_out_of_the_prompt_can_be_found(
     def search(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         situation = str(messages[-1])
         assert "older not shown; find_notes searches them" in situation and "hunter2" not in situation
-        return tool_call("find_notes", query="wifi")(messages, info)
+        return tool_call("find_notes", queries=["wifi"])(messages, info)
 
     model.reply(search, "it's hunter2")
     asked = await conversation.send(GINA, CLUB, "derp what's the wifi password?")
