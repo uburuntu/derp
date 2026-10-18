@@ -3,16 +3,19 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from pydantic_ai.messages import BinaryContent
 from sqlalchemy import select, update
 
 from derp.agent.models import AgentRun
 from derp.config import Settings
 from derp.history.models import ChatMember
+from derp.history.models import Message as StoredMessage
 from derp.money.wallets import balance, wallet
 from tests.e2e.fake_api import Call
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel
 from tests.e2e.test_billing import paid
+from tests.e2e.test_effects import jpeg
 from tests.e2e.test_money import exhaust_sponsorship
 
 CARL = Person(1601, "Carl")
@@ -83,6 +86,31 @@ async def test_buying_offers_to_continue_the_ask_and_a_double_tap_runs_it_once(
             12,
         )
         assert await balance(session, (await wallet(session, "user", CARL.id)).id) == 650 - 12
+
+
+async def test_a_continued_ask_still_sees_what_it_replied_to(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    """Telegram doesn't nest replies in the pressed message: the reply comes back from the stored ask."""
+    await exhaust_sponsorship(conversation, settings)
+    conversation.api.register_file("cat", jpeg("orange"))
+    photo = [{"file_id": "cat", "file_unique_id": "u-cat", "width": 64, "height": 64}]
+    posted = await conversation.send(CARL, photo=photo)
+    await conversation.settle(posted)
+    async with conversation.db.transaction() as session:  # long ago: only the reply ties it to the question
+        await session.execute(
+            update(StoredMessage)
+            .where(StoredMessage.message_id == posted.message_id)
+            .values(date=datetime.now(UTC) - timedelta(hours=2))
+        )
+    asked = await conversation.send(CARL, text="what breed is this?", reply_to=posted.message_id)
+    await conversation.settle(asked)
+    _after, [offer] = await buy(conversation, CARL, f"{PACK}:user:{CARL.id}", "ch-reply")
+    offer_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
+    model.reply("a ginger one")
+    await conversation.press(CARL, CARL.id, offer_id, button_data(offer))
+    run_request = next(r for r in model.requests if "what breed" in str(r[-1].parts))
+    assert any(isinstance(item, BinaryContent) for part in run_request[-1].parts for item in part.content)  # type: ignore[union-attr]
 
 
 async def test_a_stale_continue_says_so_and_runs_nothing(

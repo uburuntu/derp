@@ -210,9 +210,22 @@ async def resume(press: Press, db: Database, settings: Settings, runtime: Answer
     if taken:
         async with db.session() as session:
             chat = await session.get(Chat, press.chat_id)
+            trigger = await _with_reply(session, trigger)
         if chat is not None:
             await runtime.answer(trigger, chat, again=True)  # older than what the asker said since
     return taken
+
+
+async def _with_reply(session: AsyncSession, asked: Message) -> Message:
+    """The asked message with what it replied to: Telegram doesn't nest replies in the pressed message's
+    copy, but the reply of an invocation is stored with it, so the run sees the question as first asked."""
+    row = await session.get(StoredMessage, (asked.chat.id, asked.message_id))
+    replied_id = row.reply_to_message_id if row is not None else None
+    replied = await session.get(StoredMessage, (asked.chat.id, replied_id)) if replied_id else None
+    if asked.reply_to_message is not None or replied is None or replied.deleted_at is not None:
+        return asked
+    reply = Message(message_id=replied.message_id, date=replied.date, chat=asked.chat)
+    return asked.model_copy(update={"reply_to_message": reply})
 
 
 async def note_empty_wallet(
