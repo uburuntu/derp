@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from derp.scheduler.jobs import (
+    first_after,
     following,
     has_offset,
     keep_wall_time,
@@ -102,3 +103,14 @@ def test_resume_moves_a_missed_repeat_on_and_refuses_a_passed_one_off() -> None:
     assert daily.next_at == datetime(2026, 10, 18, 7, 0, tzinfo=UTC)
     once = Job(next_at=past, anchor_at=past, repeat=None, state="paused")
     assert not resume(once, now, BERLIN) and once.state == "paused"
+
+
+def test_a_new_repeat_alone_lands_on_its_first_occurrence_from_the_anchor() -> None:
+    saturday = datetime(2026, 10, 24, 7, 0, tzinfo=UTC)  # 09:00 Berlin
+    friday_noon = datetime(2026, 10, 23, 10, 0, tzinfo=UTC)
+    monday = datetime(2026, 10, 26, 8, 0, tzinfo=UTC)  # 09:00 CET after the clocks went back
+    assert first_after(friday_noon, "weekdays", BERLIN, saturday) == monday  # not the weekend anchor
+    assert first_after(friday_noon, "weekly", BERLIN, saturday) == saturday
+    later = datetime(2026, 11, 4, 10, 0, tzinfo=UTC)  # a Wednesday, the anchor long gone
+    assert first_after(later, "weekly", BERLIN, saturday) == datetime(2026, 11, 7, 8, 0, tzinfo=UTC)
+    assert first_after(later, "daily", BERLIN, saturday) == datetime(2026, 11, 5, 8, 0, tzinfo=UTC)

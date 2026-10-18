@@ -15,10 +15,13 @@ those instants too.
 
 Creators pause, resume, change and cancel their own jobs, admins any
 (``act_on_job``, behind the agent's tools, the /settings jobs page and the
-Resume button); a job that repeats after the change needs an admin in groups.
-Giving a job a new time schedules it there: a paused job or a finished one-off
-comes back on. A fired reminder's Snooze buttons do the same for a one-off; a
-repeating one keeps its series and gets one extra firing. The worker claims due
+Resume button), except that what a prompt is and how often it runs stays its
+creator's (``may_touch``): every firing is paid from the creator's wallet. A job
+that repeats after the change needs an admin in groups. Giving a job a new time
+schedules it there: a paused job or a finished one-off comes back on; a new
+repeat alone moves it to that rule's first occurrence. A fired reminder's Snooze
+buttons do the same for a one-off; a repeating one keeps its series and gets one
+extra firing, which pauses, resumes and is cancelled with it. The worker claims due
 rows with ``SKIP LOCKED`` and every action locks its row, so a change racing a
 firing lands either before the claim (the job fires on the new terms) or after
 it (on top of the moved-on row).
@@ -31,7 +34,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from aiogram.filters.callback_data import CallbackData
-from sqlalchemy import func, select, update
+from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.history.models import Chat, User
@@ -46,7 +49,7 @@ MISS_LIMIT = 3  # unfunded firings in a row before a job pauses
 LIVE = ("active", "paused")  # jobs still scheduled; done and cancelled ones only await deletion
 
 type JobAction = Literal["pause", "resume", "cancel"]
-type Refusal = Literal["gone", "not_yours", "passed", "admins", "full", "fired"]
+type Refusal = Literal["gone", "not_yours", "creators", "passed", "admins", "full", "fired"]
 SNOOZES = ("10m", "1h", "1d")  # the Snooze buttons on a fired reminder: +10 minutes, +1 hour, tomorrow
 
 
@@ -119,6 +122,15 @@ def following(at: datetime, repeat: str, tz: tzinfo, anchor: datetime | None = N
     return datetime.combine(day, first.time(), tz).astimezone(UTC)
 
 
+def first_after(now: datetime, repeat: str, tz: tzinfo, anchor: datetime) -> datetime:
+    """The first occurrence of a repeat rule after ``now``, counted from the anchor (a weekday rule skips a
+    weekend anchor): where a job lands when only its repeat changes."""
+    upcoming = anchor
+    while upcoming <= now or (repeat == "weekdays" and upcoming.astimezone(tz).weekday() >= 5):
+        upcoming = following(upcoming, repeat, tz, anchor)
+    return upcoming
+
+
 def next_after(job: Job, now: datetime, tz: tzinfo) -> datetime | None:
     """When a job fires after its current firing; None once a one-off has fired."""
     if job.repeat is None:
@@ -178,9 +190,14 @@ async def live_jobs(session: AsyncSession, chat_id: int) -> list[tuple[Job, str 
     return [(job, name) for job, name in rows]
 
 
-def may_touch(job: Job, user_id: int | None, admin: bool) -> bool:
-    """Its creator or an admin may pause, resume, change or cancel a job."""
-    return admin or job.creator_id == user_id
+def may_touch(
+    job: Job, user_id: int | None, admin: bool, action: JobAction | Change | Snooze | None = None
+) -> bool:
+    """Its creator or an admin may pause, resume, change, snooze or cancel a job, except that a change to
+    what a prompt costs its creator (``_costs_creator``) is the creator's alone."""
+    if job.creator_id == user_id:
+        return True
+    return admin and not (isinstance(action, Change) and _costs_creator(job, action))
 
 
 async def act_on_job(
@@ -199,8 +216,8 @@ async def act_on_job(
     job = await session.get(Job, job_id, with_for_update=True)
     if job is None or job.chat_id != chat.id or job.state == "cancelled":
         return "gone"
-    if not may_touch(job, user_id, admin):
-        return "not_yours"
+    if not may_touch(job, user_id, admin, action):
+        return "creators" if admin else "not_yours"
     if isinstance(action, Snooze):
         if job.runs != action.run:
             return "fired"
@@ -209,25 +226,53 @@ async def act_on_job(
         action = Change(at=action.until)
     if job.state == "done" and not isinstance(action, Change):
         return "gone"
+    now, tz = datetime.now(UTC), chat_time(chat)
     match action:
         case "pause":
             job.state = "paused"
+            await session.execute(update(Job).where(_extras(job, "active")).values(state="paused"))
         case "resume" if job.state == "paused":
-            if not resume(job, datetime.now(UTC), chat_time(chat)):
+            if not resume(job, now, tz):
                 return "passed"
+            for extra in await session.scalars(select(Job).where(_extras(job, "paused")).with_for_update()):
+                if not resume(extra, now, tz):  # its moment passed while paused
+                    extra.state = "cancelled"
         case "cancel":
             job.state = "cancelled"
-            extra = (Job.snooze_of == job.id) & Job.state.in_(LIVE)
-            await session.execute(update(Job).where(extra).values(state="cancelled"))
+            await session.execute(update(Job).where(_extras(job, *LIVE)).values(state="cancelled"))
         case Change():
-            return await _change(session, job, action, admin)
+            return await _change(session, job, action, admin, now, tz)
         case _:
             pass
     return job
 
 
-async def _change(session: AsyncSession, job: Job, change: Change, admin: bool) -> Job | Refusal:
-    repeat = job.repeat if change.repeat is None else None if change.repeat == "once" else change.repeat
+def _extras(job: Job, *states: str) -> ColumnElement[bool]:
+    """A repeating job's snoozed extra firing in one of ``states``: it pauses, resumes and goes with its series."""
+    return (Job.snooze_of == job.id) & Job.state.in_(states)
+
+
+def _repeat(job: Job, change: Change) -> str | None:
+    """The job's repeat rule after ``change``."""
+    return job.repeat if change.repeat is None else None if change.repeat == "once" else change.repeat
+
+
+def _costs_creator(job: Job, change: Change) -> bool:
+    """The change makes, rewords or re-repeats a prompt, or turns one into a reminder: a prompt fires on its
+    creator's Derpcoins, so what it is and how often it runs is theirs to decide."""
+    if "prompt" not in (job.kind, change.kind):
+        return False
+    return (
+        change.kind not in (None, job.kind)
+        or change.text not in (None, job.text)
+        or _repeat(job, change) != job.repeat
+    )
+
+
+async def _change(
+    session: AsyncSession, job: Job, change: Change, admin: bool, now: datetime, tz: tzinfo
+) -> Job | Refusal:
+    repeat = _repeat(job, change)
     if repeat and not admin:
         return "admins"
     if job.state == "done":  # a one-off that fired: only a new time brings it back
@@ -235,12 +280,14 @@ async def _change(session: AsyncSession, job: Job, change: Change, admin: bool) 
             return "passed"
         if not await has_room(session, job.chat_id, job.creator_id):
             return "full"
-    job.repeat = repeat
-    job.text = change.text or job.text
-    job.kind = change.kind or job.kind
     if change.at is not None:
         job.next_at = job.anchor_at = change.at
         job.state, job.misses = "active", 0
+    elif repeat is not None and repeat != job.repeat:
+        job.next_at = first_after(now, repeat, tz, job.anchor_at)
+    job.repeat = repeat
+    job.text = change.text or job.text
+    job.kind = change.kind or job.kind
     return job
 
 

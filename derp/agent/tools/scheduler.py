@@ -4,7 +4,9 @@ Anyone may schedule a one-off; in groups only admins may schedule repeating
 jobs, members change and cancel their own jobs and admins any (an edit that
 leaves a job repeating needs an admin too). A reminder just posts its
 text; a scheduled prompt is answered by Derp when it fires, paid by its
-creator's funding at that moment.
+creator's funding at that moment, so what it asks and how often stays the
+creator's (``scheduler.jobs.may_touch``). A firing prompt neither schedules
+nor edits jobs.
 
 Wall-clock times are read in the chat's time zone. While a chat has none, a
 wall-clock time is refused with a nudge to ask where they are and set it, since
@@ -59,6 +61,13 @@ def _when(deps: RunDeps, at: str | None, in_minutes: int | None) -> datetime | s
     return when
 
 
+def _firing(deps: RunDeps) -> str | None:
+    """A scheduled prompt answering now (an id-0 invocation) carries the request out; it doesn't reschedule."""
+    if deps.trigger_message_id == 0:
+        return "This is a scheduled task firing now; carry out the request instead of scheduling or changing jobs."
+    return None
+
+
 def _text(text: str) -> str:
     return text.strip()[:1000] or "⏰"
 
@@ -87,8 +96,8 @@ async def schedule(
         answer_it: True for "every morning, tell us the weather"-style requests.
     """
     deps = ctx.deps
-    if deps.trigger_message_id == 0:
-        return "This is a scheduled task firing now; carry out the request instead of scheduling a new one."
+    if refusal := _firing(deps):
+        return refusal
     when = _when(deps, at, in_minutes)
     if when is None:
         return "Give `at` (ISO local date-time) or `in_minutes`."
@@ -145,6 +154,11 @@ async def _act(deps: RunDeps, job_id: int, action: JobAction | Change) -> Job | 
             return "No such scheduled job here."
         case "not_yours":
             return "Only its creator or an admin can change that one."
+        case "creators":
+            return (
+                "A scheduled prompt runs on its creator's Derpcoins, so only they can make one, reword it or "
+                "change how often it runs; admins can still move, pause or cancel it."
+            )
         case "passed":
             return "That one-off's time has passed; give it a new time with edit_job."
         case "admins":
@@ -200,11 +214,15 @@ async def edit_job(
         answer_it: True to make it a prompt Derp answers, false a plain reminder; leave out to keep it.
     """
     deps = ctx.deps
+    if refusal := _firing(deps):
+        return refusal
     when = _when(deps, at, in_minutes)
     if isinstance(when, str):
         return when
     kind = None if answer_it is None else "prompt" if answer_it else "message"
     change = Change(at=when, text=_text(text) if text else None, kind=kind, repeat=repeat)
+    if change == Change():
+        return "Nothing to change: give a new time, text, repeat or answer_it."
     outcome = await _act(deps, job_id, change)
     if isinstance(outcome, str):
         return outcome
