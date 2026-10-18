@@ -112,16 +112,20 @@ def _service_data(message: TgMessage, event: str) -> Any:
     return _dump(value)
 
 
-FILE_KINDS = ("video", "voice", "video_note", "audio", "document", "sticker", "animation")
+FILE_KINDS = ("animation", "video", "voice", "video_note", "audio", "sticker", "document")
 
 
-def _attachments(source: Any) -> Iterator[tuple[str, Any]]:
-    """The files a message, a quoted message or a rich block carries, by kind; a photo as its largest size."""
+def _attachment(source: Any) -> tuple[str, Any] | None:
+    """The one file a message, a quoted message or a rich block carries, by kind; a photo as its largest size.
+
+    Telegram sets ``document`` alongside ``animation`` for the same GIF, so the first kind present wins.
+    """
     if sizes := getattr(source, "photo", None):
-        yield "photo", max(sizes, key=lambda size: size.width * size.height)
+        return "photo", max(sizes, key=lambda size: size.width * size.height)
     for kind in FILE_KINDS:
         if (item := getattr(source, kind, None)) is not None:
-            yield kind, item
+            return kind, item
+    return None
 
 
 def _sticker_mime(sticker: Any) -> str:
@@ -202,7 +206,7 @@ def media_rows(message: TgMessage, bot_id: int) -> list[dict[str, Any]]:
     another chat (``external_reply``), so each can be looked at like any attachment.
     """
     sources = [message, *_rich_blocks(message), *([message.external_reply] if message.external_reply else [])]
-    found = [file for source in sources for file in _attachments(source)]
+    found = [file for source in sources if (file := _attachment(source)) is not None]
     base = {"chat_id": message.chat.id, "message_id": message.message_id, "bot_id": bot_id}
     return [base | {"idx": idx} | _file(kind, item) for idx, (kind, item) in enumerate(found)]
 

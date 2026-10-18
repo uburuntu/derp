@@ -107,7 +107,11 @@ CLIP = {"width": 640, "height": 360, "duration": 3}
 def test_media_keeps_the_preview_picture_of_what_isnt_one(
     kind: str, item: dict[str, Any], mime: str | None
 ) -> None:
-    (row,) = media_rows(tg(**{kind: item | {"thumbnail": thumb(kind)}}), BOT_ID)
+    fields = {kind: item | {"thumbnail": thumb(kind)}}
+    if kind == "animation":  # Telegram sends a GIF's file as a document too: one row, the animation
+        fields["document"] = {"file_id": item["file_id"], "file_unique_id": item["file_unique_id"],
+                              "mime_type": item["mime_type"], "file_name": "funny.gif.mp4"}  # fmt: skip
+    (row,) = media_rows(tg(**fields), BOT_ID)
     assert row["type"] == kind and row["mime_type"] == mime and row["bot_id"] == BOT_ID
     assert (row["thumb_file_id"], row["thumb_unique_id"]) == (f"t-{kind}", f"ut-{kind}")
 
