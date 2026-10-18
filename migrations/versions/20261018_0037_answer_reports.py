@@ -6,8 +6,8 @@ so the kind column widens, and ``details_until`` marks the short window in
 which the author's next message becomes the report's text. Expand-only: old
 code writes the old kinds and never reads the new column.
 
-Revision ID: 0041
-Revises: 0035
+Revision ID: 0037
+Revises: 0036
 Create Date: 2026-10-18 13:08:42.642364
 """
 
@@ -16,8 +16,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0041"
-down_revision: str | None = "0035"
+revision: str = "0037"
+down_revision: str | None = "0036"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
