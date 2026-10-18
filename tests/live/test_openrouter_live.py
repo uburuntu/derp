@@ -131,3 +131,30 @@ async def test_the_decision_pin_tells_addresses_from_passing_mentions() -> None:
     )
     print(f"{right}/{len(cases)}", sorted(zip(chances, labels, strict=True)))
     assert right / len(cases) >= 0.9
+
+
+async def test_the_media_pin_hears_a_clip_on_vertex_with_timestamps() -> None:
+    """A synthetic clip (a test pattern with a tone) goes whole to the media pin; served by Vertex, priced."""
+    import shutil
+
+    from pydantic_ai import BinaryContent
+
+    from derp.agent.watch import HOW, INSTRUCTIONS
+    from tests.e2e.test_effects import clip
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not installed")
+    settings = Settings()
+    pin = settings.model_pins[ModelRole.MEDIA]
+    agent = Agent(
+        chat_model(pin, build_provider(settings)),
+        instructions=INSTRUCTIONS + HOW["clip"],
+        model_settings=chat_settings(pin, max_tokens=settings.watching.output_tokens),
+    )
+    result = await agent.run(
+        ["The question: what do you hear?", BinaryContent(clip("video"), media_type="video/mp4")]
+    )
+    usage = response_usage(result.response)
+    print(result.output, usage)
+    assert usage.downstream_provider == "Google"  # Vertex; AI Studio reports itself as "Google AI Studio"
+    assert usage.cost_usd > 0 and "0:0" in result.output

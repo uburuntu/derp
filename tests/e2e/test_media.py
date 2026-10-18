@@ -16,6 +16,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import insert, select, update
 
+from derp.agent.watch import NO_QUESTION
 from derp.history.models import Chat, Message, MessageMedia, Sticker
 from derp.inference.models import ModelPin, ProviderCall
 from derp.inference.roles import DEFAULT_PINS, ModelRole
@@ -358,3 +359,39 @@ async def test_a_pdf_past_the_free_allowance_pages_or_a_pricey_look_says_why_and
     await conversation.settle(asked)
     async with conversation.db.session() as session:
         assert await session.scalar(select(ProviderCall.id).where(ProviderCall.role == "media")) is None
+
+
+async def test_a_failed_listen_says_so_instead_of_guessing(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    group = Room(-1033, title="Tunes")
+    conversation.meet(DORA, group)
+    conversation.api.register_file("song", b"synthetic mp3 bytes")
+    song = {
+        "file_id": "song",
+        "file_unique_id": "u-song",
+        "duration": 5,
+        "mime_type": "audio/mpeg",
+        "file_size": 19,
+    }
+    posted = await conversation.send(DORA, group, audio=song)
+    await conversation.settle(posted)
+
+    def deaf(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        (sound,) = images_in(messages[-1:])
+        assert sound.media_type == "audio/mpeg" and NO_QUESTION in str(messages[-1])
+        raise RuntimeError("provider exploded")
+
+    def answer(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        (result,) = inspect_results(messages)
+        assert result == f"#{posted.message_id} (audio 0:05): not listened to — the viewer failed."
+        return ModelResponse(parts=[TextPart("couldn't hear it")])
+
+    model.reply(tool_call("inspect_media", message_id=posted.message_id), deaf, answer)
+    asked = await conversation.send(DORA, group, f"derp what's playing in #{posted.message_id}?")
+    reply = await conversation.expect_reply(asked)
+    assert reply["rich_message"]["markdown"] == "couldn't hear it"
+    await conversation.settle(asked)
+    async with conversation.db.session() as session:
+        media = await session.scalar(select(MessageMedia).where(MessageMedia.message_id == posted.message_id))
+        assert media is not None and media.description is None  # nothing heard, nothing stored

@@ -7,7 +7,8 @@ numbers for PDFs, speech quoted. A look is for paid and sponsored answers within
 the run's hold can't cover it and one more turn. Whatever isn't watched says why (``Look.why``), so the
 chat model doesn't guess, and falls back to a still frame or preview picture (``media.inspect``).
 
-Every response is ledgered against the run as ``kind='media'``; the notes' first line, a one-line
+Every response is ledgered against the run as ``kind='media'`` (a look that timed out without one at
+its estimate, on Derp, since the provider may still bill it); the notes' first line, a one-line
 description, is stored on the media row like an image note (``media.store_description``), so later
 windows and search see it; the notes themselves stay in the tool result.
 """
@@ -29,9 +30,9 @@ from derp.agent.runs import ledger_side_call
 from derp.config import WatchLimits
 from derp.history.models import MessageMedia
 from derp.history.render import duration_label, kind_label
-from derp.inference.ledger import estimate_cost
+from derp.inference.ledger import estimate_cost, record_usage, simple_usage
 from derp.inference.models import ModelPin
-from derp.inference.openrouter import AUDIO_FORMATS, chat_settings
+from derp.inference.openrouter import AUDIO_FORMATS, chat_settings, responses
 from derp.inference.roles import ModelRole
 from derp.money.funding import Funding
 from derp.telegram.media import BOT_API_DOWNLOAD_LIMIT, MediaUnavailableError, TooLargeError, known_type
@@ -213,7 +214,8 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
         rate = watching.video_tokens_per_second if kind == "clip" else watching.audio_tokens_per_second
         units = (seconds or 0) * rate
     input_tokens = watching.prompt_tokens + units
-    price = deps.settings.credits_for_usd(float(await _price(deps, input_tokens)))
+    usd = await _price(deps, input_tokens)
+    price = deps.settings.credits_for_usd(float(usd))
     if (left := await hold_left(ctx, next_turn=True)) is not None and price > left:
         look.why = f"it would cost about {price} Derpcoins, more than this answer has left"
         return look
@@ -223,7 +225,7 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
         instructions=INSTRUCTIONS + HOW[kind],
         model_settings=chat_settings(pin, max_tokens=watching.output_tokens, documents=kind == "pdf"),
     )
-    text = ""
+    text, failure = "", "gave no answer"
     with capture_run_messages() as captured:
         try:
             async with asyncio.timeout(watching.timeout_seconds):
@@ -236,6 +238,14 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
             text = result.output.strip()
         except Exception as error:  # noqa: BLE001 - a failed look falls back to a still frame
             log.info("media look failed: %s", type(error).__name__)
+            failure = "timed out" if isinstance(error, TimeoutError) else "failed"
+            if isinstance(error, TimeoutError) and not responses(captured):
+                # The provider may well finish (and bill) after we stopped waiting: the estimate, on Derp.
+                async with deps.db.transaction() as session:
+                    record_usage(
+                        session, simple_usage(pin.model, usd, input_tokens=input_tokens), kind="media",
+                        funding="creator", role=ModelRole.MEDIA.value, chat_id=deps.chat.id, user_id=deps.user_id,
+                    )  # fmt: skip
     await ledger_side_call(
         deps.db, captured, kind="media", funding=deps.funding.value, role=ModelRole.MEDIA,
         context_tokens=input_tokens, run_id=deps.run_id, chat_id=deps.chat.id, user_id=deps.user_id,
@@ -244,7 +254,7 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
     first, _, rest = text.partition("\n")
     summary = " ".join(first.split())[:300]
     if not summary:
-        look.why = "the viewer gave no answer"
+        look.why = f"the viewer {failure}"
         return look
     look.notes = "\n".join(part for part in (summary, rest.strip()) if part)
     if row.description is None:
