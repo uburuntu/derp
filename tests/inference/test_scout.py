@@ -100,6 +100,16 @@ def test_the_decision_pin_lives_on_a_zdr_route_without_tools_and_gets_no_challen
     assert plan(pins, catalog, allowlist=ALLOW, windows=WINDOWS) == []
 
 
+def test_the_speech_pin_lives_on_a_zdr_route_without_tools_and_falls_back_when_dead() -> None:
+    pin = RolePin(model="elevenlabs/turbo", fallbacks=("elevenlabs/full",), reasoning=None, vision=False)
+    turbo = route("elevenlabs/turbo", "0.00002", "0") | {"supported_parameters": []}
+    full = route("elevenlabs/full", "0.00004", "0") | {"supported_parameters": []}
+    pins = {ModelRole.SPEECH: pin}
+    assert plan(pins, build_catalog([], [turbo, full], []), allowlist=ALLOW, windows=WINDOWS) == []
+    [change] = plan(pins, build_catalog([], [full], []), allowlist=ALLOW, windows=WINDOWS)
+    assert change.safe and change.pin.model == "elevenlabs/full"
+
+
 def scripted(*, russian: str, call_tool: bool) -> FunctionModel:
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         last = str(messages[-1].parts[-1])
