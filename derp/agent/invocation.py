@@ -5,8 +5,9 @@ a reply to one of Derp's messages, or Derp's name in English or Russian
 (case endings and diminutives, but not compounds like «антидерп» or
 "derpish"). Messages from bots never trigger (bot-to-bot loop guard);
 anonymous admins posting as the group itself do. A name-only trigger is then
-screened (``agent.decisions``): the name used as a word, or Derp talked about,
-doesn't run.
+screened by capture before anything is stored (``history.middleware`` asks
+``agent.decisions``): the name used as a word, or Derp talked about, is no
+invocation.
 """
 
 import re
