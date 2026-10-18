@@ -5,7 +5,7 @@ edits are idempotent. Ephemeral messages (``message_id == 0``) and guest-mode
 messages are never stored.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -110,39 +110,59 @@ def _service_data(message: TgMessage, event: str) -> Any:
     return _dump(value)
 
 
+FILE_KINDS = ("video", "voice", "video_note", "audio", "document", "sticker", "animation")
+STICKER_MIME = {
+    "animated": "application/x-tgsticker",
+    "video": "video/webm",
+}  # Telegram's types for these files
+
+
+def _attachments(source: Any) -> Iterator[tuple[str, Any]]:
+    """The files a message carries, by kind; a photo as its largest size."""
+    if source.photo:
+        yield "photo", max(source.photo, key=lambda size: size.width * size.height)
+    for kind in FILE_KINDS:
+        if (item := getattr(source, kind, None)) is not None:
+            yield kind, item
+
+
+def _sticker_mime(sticker: Any) -> str:
+    """A sticker file's type as Telegram gives it for documents: TGS (Lottie), WebM or WebP."""
+    return (
+        "application/x-tgsticker"
+        if sticker.is_animated
+        else "video/webm"
+        if sticker.is_video
+        else "image/webp"
+    )
+
+
+def _file(kind: str, item: Any) -> dict[str, Any]:
+    """A media row's columns for one Telegram file, with its preview picture when Telegram made one."""
+    sticker = kind == "sticker"
+    side = getattr(item, "length", None)  # video notes are square
+    thumb = getattr(item, "thumbnail", None)
+    return {
+        "type": kind,
+        "file_id": item.file_id,
+        "file_unique_id": item.file_unique_id,
+        "file_size": getattr(item, "file_size", None),
+        "mime_type": _sticker_mime(item) if sticker else getattr(item, "mime_type", None),
+        "width": getattr(item, "width", None) or side,
+        "height": getattr(item, "height", None) or side,
+        "duration": getattr(item, "duration", None),
+        "file_name": getattr(item, "file_name", None),
+        "sticker_emoji": item.emoji if sticker else None,
+        "sticker_set": item.set_name if sticker else None,
+        "thumb_file_id": thumb.file_id if thumb else None,
+        "thumb_unique_id": thumb.file_unique_id if thumb else None,
+    }
+
+
 def media_rows(message: TgMessage, bot_id: int) -> list[dict[str, Any]]:
-    """Media attached to a message, with the bot whose file_ids they are; a photo keeps only its largest size."""
-    rows: list[dict[str, Any]] = []
+    """Media attached to a message, with the bot whose file_ids (previews included) they are."""
     base = {"chat_id": message.chat.id, "message_id": message.message_id, "bot_id": bot_id}
-    if message.photo:
-        photo = max(message.photo, key=lambda size: size.width * size.height)
-        rows.append(
-            base | {"type": "photo", "file_id": photo.file_id, "file_unique_id": photo.file_unique_id,
-                    "file_size": photo.file_size, "width": photo.width, "height": photo.height}
-        )  # fmt: skip
-    for kind in ("video", "voice", "video_note", "audio", "document", "sticker", "animation"):
-        item = getattr(message, kind)
-        if item is None:
-            continue
-        row: dict[str, Any] = base | {
-            "type": kind,
-            "file_id": item.file_id,
-            "file_unique_id": item.file_unique_id,
-            "file_size": getattr(item, "file_size", None),
-            "mime_type": getattr(item, "mime_type", None),
-            "duration": getattr(item, "duration", None),
-            "file_name": getattr(item, "file_name", None),
-        }
-        width = getattr(item, "width", None) or getattr(item, "length", None)
-        height = getattr(item, "height", None) or getattr(item, "length", None)
-        row |= {"width": width, "height": height}
-        if kind == "sticker":
-            row |= {"sticker_emoji": item.emoji, "sticker_set": item.set_name}
-        rows.append(row)
-        break
-    for idx, row in enumerate(rows):
-        row["idx"] = idx
-    return rows
+    return [base | {"idx": idx} | _file(kind, item) for idx, (kind, item) in enumerate(_attachments(message))]
 
 
 async def upsert_user(session: AsyncSession, user: TgUser) -> None:

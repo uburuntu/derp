@@ -110,7 +110,7 @@ class MediaGateway:
         self._cached_bytes = 0
 
     async def fetch(
-        self, file_id: str, *, bot_id: int, key: str | None = None, size_hint: int | None = None
+        self, file_id: str, bot_id: int, key: str | None = None, size_hint: int | None = None
     ) -> bytes:
         """Bytes of a file owned by ``bot_id``; ``key`` (the file_unique_id) makes repeated fetches free for a while."""
         if bot_id != self.bot.id:
@@ -145,10 +145,10 @@ class MediaGateway:
     async def image(
         self,
         file_id: str,
-        *,
         bot_id: int,
         key: str | None = None,
         size_hint: int | None = None,
+        *,
         mime_type: str | None = None,
     ) -> Media:
         """A file as a picture for a model (``normalize``); one whose ``mime_type`` isn't an image is never fetched."""

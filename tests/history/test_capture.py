@@ -81,6 +81,34 @@ def test_media_keeps_largest_photo_and_sticker_fields() -> None:
     )  # fmt: skip
     (row,) = media_rows(sticker, BOT_ID)
     assert (row["sticker_emoji"], row["sticker_set"]) == ("😂", "memes")
+    assert row["mime_type"] == "image/webp" and row["thumb_file_id"] is None
+
+
+def thumb(name: str) -> dict[str, Any]:
+    return {"file_id": f"t-{name}", "file_unique_id": f"ut-{name}", "width": 320, "height": 180}
+
+
+STICKER = {"file_unique_id": "us", "type": "regular", "width": 512, "height": 512, "emoji": "🐸"}
+CLIP = {"width": 640, "height": 360, "duration": 3}
+
+
+@pytest.mark.parametrize(
+    ("kind", "item", "mime"),
+    [
+        ("sticker", STICKER | {"file_id": "tgs", "is_animated": True, "is_video": False}, "application/x-tgsticker"),
+        ("sticker", STICKER | {"file_id": "webm", "is_animated": False, "is_video": True}, "video/webm"),
+        ("animation", CLIP | {"file_id": "gif", "file_unique_id": "ug", "mime_type": "video/mp4"}, "video/mp4"),
+        ("video", CLIP | {"file_id": "vid", "file_unique_id": "uv", "mime_type": "video/mp4"}, "video/mp4"),
+        ("video_note", {"file_id": "vn", "file_unique_id": "un", "length": 240, "duration": 5}, None),
+        ("document", {"file_id": "pdf", "file_unique_id": "ud", "mime_type": "application/pdf"}, "application/pdf"),
+    ],
+)  # fmt: skip
+def test_media_keeps_the_preview_picture_of_what_isnt_one(
+    kind: str, item: dict[str, Any], mime: str | None
+) -> None:
+    (row,) = media_rows(tg(**{kind: item | {"thumbnail": thumb(kind)}}), BOT_ID)
+    assert row["type"] == kind and row["mime_type"] == mime and row["bot_id"] == BOT_ID
+    assert (row["thumb_file_id"], row["thumb_unique_id"]) == (f"t-{kind}", f"ut-{kind}")
 
 
 pytestmark = pytest.mark.db
