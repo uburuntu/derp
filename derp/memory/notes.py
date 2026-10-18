@@ -7,6 +7,7 @@ are always on and only that member can change them. Notes are untrusted data
 in the prompt; chat rules (admin-written) are the only trusted chat text.
 """
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -17,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.history.models import Chat
+from derp.history.queries import terms
 from derp.history.render import neutralize, one_line
 from derp.memory.models import Note
 
@@ -163,16 +165,22 @@ async def load_memory(
     return Memory([n for n in rows if n.user_id is None], [n for n in rows if n.user_id == user_id])
 
 
-def matching(memory: Memory, query: str) -> list[Note]:
-    """Active notes holding the most of the query's words (any case, word parts too), newest first among
-    equals; an empty query finds them all."""
-    words = query.casefold().split()
+def matching(memory: Memory, queries: Sequence[str]) -> list[Note]:
+    """Active notes holding the most of the phrasings' words, stemmed as ``search_history`` stems them
+    (``history.queries.terms``), newest first among equals; no words to look for finds them all."""
+    wanted = list(dict.fromkeys(term for query in queries for term in terms(query)))
+
+    def found(note: Note) -> int:
+        words = set(re.findall(r"\w+", note.text.lower()))
+        return sum(
+            any(word.startswith(term[:-2]) for word in words) if term.endswith(":*") else term in words
+            for term in wanted
+        )
+
     scored = [
-        (sum(word in note.text.casefold() for word in words), note)
-        for note in (*memory.chat_notes, *memory.my_notes)
-        if note.state == "active"
+        (found(note), note) for note in (*memory.chat_notes, *memory.my_notes) if note.state == "active"
     ]
-    scored = [(score, note) for score, note in scored if score or not words]
+    scored = [(score, note) for score, note in scored if score or not wanted]
     return [note for _, note in sorted(scored, key=lambda pair: (-pair[0], -pair[1].id))]
 
 

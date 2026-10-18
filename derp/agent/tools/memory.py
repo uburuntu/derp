@@ -70,16 +70,19 @@ async def remember(ctx: RunContext[RunDeps], text: str, about: Literal["chat", "
 
 
 @toolset.tool
-async def find_notes(ctx: RunContext[RunDeps], query: str = "") -> str:
+async def find_notes(ctx: RunContext[RunDeps], queries: list[str] | None = None) -> str:
     """Search this chat's notes and the current person's own notes, older ones the situation left out too.
 
+    Send a few short phrasings in one call, as for search_history: synonyms, the Russian and English
+    versions. Any word may match (inflected forms too); notes matching more words rank higher.
+
     Args:
-        query: Words to look for (parts of words match too); empty lists every note, newest first.
+        queries: Keywords or short phrases, one phrasing each; none lists every note, newest first.
     """
     deps = ctx.deps
     async with deps.db.session() as session:
         memory = await load_memory(session, deps.chat.id, deps.user_id)
-    found = matching(memory, query)
+    found = matching(memory, (queries or [])[:5])
     if not found:
         return "No notes match."
     lines = [
