@@ -25,6 +25,8 @@ from derp.history.titles import crown, leaderboard, normalize
 toolset = FunctionToolset[RunDeps]()
 MAX_POLLS = 5
 ACTIVE_DAYS = 30
+DAY_MINUTES = 24 * 60
+MAX_MINUTES_OPEN = 30 * DAY_MINUTES  # Telegram closes a poll at most 2628000 s (about a month) out
 
 
 class SeriesPoll(BaseModel):
@@ -41,7 +43,7 @@ class SeriesPoll(BaseModel):
 
 @toolset.tool(sequential=True)
 async def post_polls(
-    ctx: RunContext[RunDeps], polls: list[SeriesPoll], seconds_per_poll: int | None = None
+    ctx: RunContext[RunDeps], polls: list[SeriesPoll], minutes_open: int = DAY_MINUTES
 ) -> str:
     """Post a series of up to 5 polls: quizzes (with `correct`) and/or regular polls, all non-anonymous.
 
@@ -51,7 +53,9 @@ async def post_polls(
 
     Args:
         polls: 1–5 polls.
-        seconds_per_poll: Close each poll after 5–600 seconds (default: stays open).
+        minutes_open: How long each poll stays open, 1–43200 minutes. Chats are asynchronous and most people
+            are offline at any moment, so a day (the default) is the right start; go shorter only for a live
+            game everyone is playing right now, or when asked.
     """
     deps = ctx.deps
     try:
@@ -63,7 +67,7 @@ async def post_polls(
                 raise Refused(f"Not posted: poll {number}: correct must point at one of its options.")
     except Refused as refused:
         return str(refused)
-    period = max(5, min(seconds_per_poll, 600)) if seconds_per_poll else None
+    period = max(1, min(minutes_open, MAX_MINUTES_OPEN)) * 60
     posted: list[int] = []
     unsure = False
     for item in polls:

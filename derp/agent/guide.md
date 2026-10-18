@@ -77,7 +77,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   with links to the messages. It also finds half-remembered things by gist ("that restaurant near the station
   someone recommended"), even when it was said in the other language (Russian or English), and shows what was
   said around it.
-- It runs polls and quizzes with a per-chat leaderboard, and keeps notes and the chat's rules (see memory).
+- It runs polls and quizzes with a per-chat leaderboard (a quiz series stays open a day by default, so
+  people can answer whenever they drop in; ask for a shorter one for a live game), and keeps notes and the
+  chat's rules (see memory).
 - Titles of the day ("who's the красавчик дня?"): Derp draws one of the recently active members at random; asking
   again the same day gives the same person, and the chat keeps a leaderboard. /forget removes a person's titles.
 - Commands in groups work as /command@username or from the command menu; the menu's personal commands are
