@@ -4,3 +4,4 @@
 - Tests build the schema only from these files; `tests/test_migrations.py` enforces a single head and zero drift from `derp.db.metadata`.
 - Until the v2 cutover revisions may be reshaped freely. After cutover they are expand-only: add nullable columns/tables first, deploy writers, backfill, and only drop in a later release once no running code reads the old shape.
 - `alembic upgrade head` runs in the deploy before the new container starts.
+- `env.py` commits each revision on its own and sets a session `lock_timeout`. Work that would hold a lock through a scan steps out of the transaction with `op.get_context().autocommit_block()`: `VALIDATE CONSTRAINT` after a `NOT VALID` add, `CREATE INDEX CONCURRENTLY`.

@@ -12,10 +12,19 @@ config = context.config
 
 
 def run(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=metadata, compare_server_default=True)
+    """Each revision commits on its own, so one can step out of its transaction for slow work
+    (``op.get_context().autocommit_block()``: validating a constraint, building an index concurrently)."""
+    # A migration queued behind a lock would block the running release's queries: give up instead.
+    # Set for the session, so autocommit blocks keep it; committed before Alembic takes over transactions.
+    connection.exec_driver_sql("set lock_timeout = '15s'")
+    connection.commit()
+    context.configure(
+        connection=connection,
+        target_metadata=metadata,
+        compare_server_default=True,
+        transaction_per_migration=True,
+    )
     with context.begin_transaction():
-        # A migration queued behind a lock would block the running release's queries: give up instead.
-        connection.exec_driver_sql("set local lock_timeout = '15s'")
         context.run_migrations()
 
 

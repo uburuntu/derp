@@ -34,9 +34,10 @@ async def migrated_database() -> AsyncIterator[str]:
     if not TEST_DATABASE_URL:
         pytest.skip("TEST_DATABASE_URL is not set (run `make db-test-up`)")
     engine = create_async_engine(TEST_DATABASE_URL)
-    async with engine.begin() as connection:
+    async with engine.connect() as connection:  # Alembic runs each revision in its own transaction
         await connection.execute(text("drop schema if exists public cascade"))
         await connection.execute(text("create schema public"))
+        await connection.commit()
         await connection.run_sync(_upgrade)
     await engine.dispose()
     yield TEST_DATABASE_URL

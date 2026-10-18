@@ -2,10 +2,11 @@
 
 Calls to the decision pin (typed questions before a run) are ledgered as
 ``kind='decision'``. Expand-only: the check constraint allows one more kind,
-which old code never writes. Autogenerate does not compare check constraints,
-so this one is written out. The new constraint is added ``NOT VALID`` and then
-validated, so the table is never locked for a full scan. The downgrade keeps
-cost history: decision rows become ``scout`` rows (creator-funded side calls).
+which old code never writes. Autogenerate does not compare check
+constraints, so this one is written out. The new constraint is added ``NOT
+VALID`` and validated after that commits (an autocommit block), so the
+exclusive lock is never held through the full scan. The downgrade keeps cost
+history: decision rows become ``scout`` rows (creator-funded side calls).
 
 Revision ID: 0033
 Revises: 0032
@@ -28,7 +29,8 @@ NAME = "ck_provider_calls_kind"
 def _replace_check(kinds: str) -> None:
     op.drop_constraint(op.f(NAME), "provider_calls", type_="check")
     op.execute(f"alter table provider_calls add constraint {NAME} check (kind in ({kinds})) not valid")
-    op.execute(f"alter table provider_calls validate constraint {NAME}")
+    with op.get_context().autocommit_block():  # the scan after the swap commits: no exclusive lock held
+        op.execute(f"alter table provider_calls validate constraint {NAME}")
 
 
 def upgrade() -> None:

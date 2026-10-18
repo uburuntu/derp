@@ -131,7 +131,7 @@ async def test_lines_aimed_at_someone_are_replies_names_handles_and_tags(databas
         7: (ASKER, "Саша here, talking about myself", None, None),
         8: (None, "Саша, Derp says hi", None, None),
         9: (OTHER, "@sasha_kk is someone else", None, None),
-        **{n: (OTHER, "сашими или роллы?", None, None) for n in range(10, 30)},  # not her name
+        **dict.fromkeys(range(10, 30), (OTHER, "сашими или роллы?", None, None)),  # not her name
     }
     async with database.transaction() as session:
         session.add(Chat(id=CHAT, type="supergroup", title="D"))
