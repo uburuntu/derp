@@ -19,7 +19,7 @@ unreadable answer decides as if nothing was asked: run, attach, the pin's effort
 import asyncio
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import tzinfo
 from typing import Any
 
@@ -145,10 +145,10 @@ class Decider:
         verdict = Verdict()
         if "addressed" in answers:
             seen["addressed"] = yes = float(answers["addressed"]["noul"])
-            verdict = Verdict(addressed=yes >= self.settings.addressed)
+            verdict = replace(verdict, addressed=yes >= self.settings.addressed)
         if "images" in answers:
             seen["images"] = yes = float(answers["images"]["noul"])
-            verdict = Verdict(verdict.addressed, images=yes >= self.settings.images)
+            verdict = replace(verdict, images=yes >= self.settings.images)
         if "effort" in answers:
             levels = {int(level): float(p) for level, p in answers["effort"]["probabilities"].items()}
             deep = levels.get(2, 0.0)
@@ -157,7 +157,7 @@ class Decider:
                 "high" if deep >= self.settings.effort else "medium" if some >= self.settings.effort else None
             )
             seen |= {"effort_some": round(some, 2), "effort_deep": round(deep, 2), "effort": effort or "pin"}
-            verdict = Verdict(verdict.addressed, verdict.images, effort)
+            verdict = replace(verdict, effort=effort)
         return verdict, seen
 
 
