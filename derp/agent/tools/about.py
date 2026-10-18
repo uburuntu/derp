@@ -21,6 +21,7 @@ from derp.agent.deps import RunDeps
 from derp.agent.toolsets import ALL_TIERS, Family
 from derp.config import Settings
 from derp.inference.openrouter import REASONING_ROOM
+from derp.inference.roles import ModelRole
 from derp.locales import t
 from derp.memory import notes
 from derp.money.funding import Funding
@@ -68,6 +69,10 @@ def facts(topic: Topic, settings: Settings, username: str, families: Sequence[Fa
             return [f"- This bot: @{username}."]
         case "money":
             plan = settings.plan
+            speech = settings.speech
+            voice_credits = settings.credits_for_usd(
+                speech.price_usd(settings.model_pins[ModelRole.SPEECH].model, speech.max_chars)
+            )
             return [
                 (
                     f"- 1 Derpcoin = ${settings.usd_per_credit:g} of provider cost; answers are charged at cost × "
@@ -90,7 +95,11 @@ def facts(topic: Topic, settings: Settings, username: str, families: Sequence[Fa
                 (
                     f"- Heavy media effects (video memes, reversed clips, cutouts): +{settings.effect_credits} "
                     f"Derpcoins on paid answers; {settings.sponsored_effects_per_day} per person per day on the "
-                    "free allowance."
+                    "free allowance, voice messages included."
+                ),
+                (
+                    f"- A voice message: up to {settings.speech.max_chars} characters; the longest costs about "
+                    f"{voice_credits} Derpcoins."
                 ),
             ]
         case "memory":

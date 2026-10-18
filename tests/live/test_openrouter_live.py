@@ -64,6 +64,21 @@ async def test_image_pin_generates_on_its_zdr_host() -> None:
     assert image.cost_usd <= settings.image_price_usd
 
 
+async def test_speech_pin_speaks_mp3_under_zdr() -> None:
+    from derp.inference.api import OpenRouterAPI
+
+    settings = Settings()
+    pin = settings.model_pins[ModelRole.SPEECH]
+    api = OpenRouterAPI(settings)
+    try:
+        speech = await api.speak(pin.model, "[laughs] Okay.", "callum", zdr=pin.zdr)
+    finally:
+        await api.close()
+    print(speech.model, len(speech.data), speech.cost_usd, speech.generation_id)
+    assert speech.data[:3] == b"ID3" or speech.data[:2] in (b"\xff\xfb", b"\xff\xf3")
+    assert speech.cost_usd > 0 and speech.generation_id
+
+
 @pytest.mark.parametrize("role", [ModelRole.CHAT, ModelRole.CHAT_SPONSORED])
 async def test_chat_roles_compute_in_the_sandbox(role: ModelRole) -> None:
     from pydantic_ai.messages import ToolCallPart

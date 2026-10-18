@@ -3,8 +3,8 @@
 Private chats stream the answer into a rich-message draft (throttled well
 under Telegram's 20 drafts / 5 s), with a thinking block naming the current
 step and a stop button. Groups get a chat action matching the stage ("typing",
-"sending a photo" while drawing): unlike a reaction on the trigger, it notifies
-nobody. When drafts are unavailable, the chat action stands in for them too.
+"sending a photo" while drawing, "recording a voice message" while speaking):
+unlike a reaction on the trigger, it notifies nobody. When drafts are unavailable, the chat action stands in for them too.
 Progress never fails a run: every Telegram error here is swallowed.
 """
 
@@ -29,11 +29,14 @@ DRAFT_TAIL = 3000  # characters of a long partial answer shown in the draft
 SEARCH_TOOLS = ("search", "read_messages", "chat_query", "chat_info", "inspect_media", "fetch", "digest")
 DRAW_TOOLS = ("image", "meme", "sticker", "background", "reverse")
 
-THINKING, SEARCHING, DRAWING, WORKING = "thinking", "searching", "drawing", "working"
-STAGES = frozenset({THINKING, SEARCHING, DRAWING, WORKING})
+THINKING, SEARCHING, DRAWING, RECORDING, WORKING = "thinking", "searching", "drawing", "recording", "working"
+STAGES = frozenset({THINKING, SEARCHING, DRAWING, RECORDING, WORKING})
+ACTIONS = {DRAWING: "upload_photo", RECORDING: "record_voice"}
 
 
 def stage_for_tool(tool_name: str) -> str:
+    if tool_name == "speak":
+        return RECORDING
     if any(key in tool_name for key in DRAW_TOOLS):
         return DRAWING
     if any(key in tool_name for key in SEARCH_TOOLS):
@@ -42,7 +45,7 @@ def stage_for_tool(tool_name: str) -> str:
 
 
 def action_for(stage: str) -> str:
-    return "upload_photo" if stage == DRAWING else "typing"
+    return ACTIONS.get(stage, "typing")
 
 
 class Progress(Protocol):

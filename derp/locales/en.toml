@@ -90,6 +90,7 @@ free_busy = "The free models are busy right now. Try again in a bit, or /buy Der
 thinking = "Thinking…"
 searching = "Looking things up…"
 drawing = "Drawing…"
+recording = "Recording a voice message…"
 working = "Working…"
 
 [money]

@@ -25,5 +25,7 @@ async def test_group_action_follows_the_stage_at_once() -> None:
     await asyncio.sleep(0.01)  # well under the refresh interval: the change is shown immediately
     await progress.stage(stage_for_tool("search_history"))
     await asyncio.sleep(0.01)
+    await progress.stage(stage_for_tool("speak"))
+    await asyncio.sleep(0.01)
     await progress.close()
-    assert bot.actions == ["typing", "upload_photo", "typing"]
+    assert bot.actions == ["typing", "upload_photo", "typing", "record_voice"]

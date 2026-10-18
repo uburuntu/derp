@@ -21,11 +21,11 @@ and never used is posted when the run ends (``flush``, before the text
 answer), so nothing asked for is lost; a used result is never posted. A kept
 result holds an output slot until a tool uses it, then hands it on.
 
-Money travels with the result (``Pending``): the image's provider call and
-heavy-effect fees are ledgered against the run only when a result carrying
-them reaches Telegram — the result itself or one derived from it. A result
-that never arrives has its images ledgered as ``creator`` (absorbed) and its
-fees dropped; an unconfirmed send counts as never arrived, and uses up its
+Money travels with the result (``Pending``): its provider calls (an image, a
+voice line) and heavy-effect fees are ledgered against the run only when a
+result carrying them reaches Telegram — the result itself or one derived from
+it. A result that never arrives has its calls ledgered as ``creator``
+(absorbed) and its fees dropped; an unconfirmed send counts as never arrived, and uses up its
 source. When a derived result fails to send, its source stays kept and is
 posted at the end. An image needing approval pauses the run instead; Make
 it resumes the run from that call, so the chain carries on there.
@@ -44,10 +44,10 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelResponse
 
 from derp.agent.deps import RunDeps
-from derp.agent.images import record_image
 from derp.agent.runs import totals
-from derp.history.capture import record_outgoing
-from derp.inference.api import GeneratedImage
+from derp.history.capture import Spoken, record_outgoing
+from derp.inference.ledger import Made as Billed
+from derp.inference.ledger import record_made
 from derp.money.funding import Funding, run_cost, run_fees
 from derp.money.models import RunFee
 from derp.telegram.policy import AMBIGUOUS
@@ -78,12 +78,22 @@ def check_budget(deps: RunDeps, *, using: str | None = None) -> None:
         raise Refused(LIMIT)
 
 
-async def record(deps: RunDeps, sent: Sequence[TgMessage], kind: Kind, *, history: bool = True) -> None:
-    """Count accepted messages as the run's outputs; ``history`` also stores them as Derp's messages."""
+async def record(
+    deps: RunDeps,
+    sent: Sequence[TgMessage],
+    kind: Kind,
+    *,
+    history: bool = True,
+    spoken: Spoken | None = None,
+) -> None:
+    """Count accepted messages as the run's outputs; ``history`` also stores them as Derp's messages.
+
+    ``spoken`` is the script of a voice message Derp performed: stored as its transcript.
+    """
     deps.delivered.extend((message.message_id, kind) for message in sent)
     if history and sent:
         async with deps.db.transaction() as session:
-            await record_outgoing(session, sent, deps.bot.id)
+            await record_outgoing(session, sent, deps.bot.id, spoken=spoken)
 
 
 async def deliver(
@@ -94,6 +104,7 @@ async def deliver(
     *,
     history: bool = True,
     budget: bool = True,
+    spoken: Spoken | None = None,
 ) -> list[TgMessage]:
     """Send one output and record it; raises ``Refused`` / ``Unconfirmed`` with the model's text.
 
@@ -107,12 +118,12 @@ async def deliver(
     except AMBIGUOUS:
         raise Unconfirmed(unconfirmed(what)) from None
     except PartialDeliveryError as partial:  # what Telegram accepted still counts
-        await record(deps, partial.sent, kind, history=history)
+        await record(deps, partial.sent, kind, history=history, spoken=spoken)
         raise Unconfirmed(f"Telegram took only part of the {what}. Don't send it again.") from None
     except TelegramAPIError as error:
         raise Refused(f"Telegram refused the {what} ({type(error).__name__}).") from None
     sent = [result] if isinstance(result, TgMessage) else result
-    await record(deps, sent, kind, history=history)
+    await record(deps, sent, kind, history=history, spoken=spoken)
     return sent
 
 
@@ -147,14 +158,14 @@ async def send_media(bot: Bot, target: Target, kind: Sendable, data: bytes, file
 class Pending:
     """Money a result carries until it reaches Telegram."""
 
-    images: list[GeneratedImage] = field(default_factory=list[GeneratedImage])  # provider calls
+    calls: list[Billed] = field(default_factory=list[Billed])  # provider calls: images, voice lines
     fees: list[str] = field(default_factory=list[str])  # heavy effects, as ``run_fees`` items
 
     def take(self, other: Pending) -> None:
         """Carry ``other``'s money from now on (it is moved, never counted twice)."""
-        self.images += other.images
+        self.calls += other.calls
         self.fees += other.fees
-        other.images, other.fees = [], []
+        other.calls, other.fees = [], []
 
 
 @dataclass(slots=True)
@@ -166,6 +177,7 @@ class Made:
     filename: str
     what: str  # for the model: "meme", "sticker", "image"…
     pending: Pending = field(default_factory=Pending)
+    spoken: Spoken | None = None  # a voice message's script, kept as its transcript
 
 
 @dataclass(slots=True)
@@ -179,14 +191,14 @@ class Kept:
 
 def pending_cost(deps: RunDeps) -> tuple[Decimal, int]:
     """Provider USD and fees (count) carried by the run's kept results, not yet ledgered."""
-    usd = sum((i.cost_usd for k in deps.kept.values() for i in k.made.pending.images), Decimal(0))
+    usd = sum((c.cost_usd for k in deps.kept.values() for c in k.made.pending.calls), Decimal(0))
     return usd, sum(len(k.made.pending.fees) for k in deps.kept.values())
 
 
 async def hold_left(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> int | None:
     """Credits of the run's hold not yet used; None when the run holds nothing (free models: no money cap).
 
-    Used: side calls in the ledger (images, media notes, digests), the run's own model turns, its fees,
+    Used: side calls in the ledger (images, voice, media notes, digests), the run's own model turns, its fees,
     and what its kept results carry. ``next_turn`` also sets aside one more request like the latest (at
     least a credit). The one measure of the money cap: the guard wraps up, the stream stops the run and
     web search is sized by it.
@@ -207,13 +219,13 @@ async def hold_left(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> int
 
 
 async def settle(deps: RunDeps, pending: Pending, *, delivered: bool) -> None:
-    """Ledger a result's money: against the run once delivered, else images absorbed and fees dropped."""
-    if not pending.images and not pending.fees:
+    """Ledger a result's money: against the run once delivered, else its calls absorbed and fees dropped."""
+    if not pending.calls and not pending.fees:
         return
     async with deps.db.transaction() as session:
-        for image in pending.images:
-            record_image(
-                session, image, deps.chat.id, deps.user_id,
+        for call in pending.calls:
+            record_made(
+                session, call, chat_id=deps.chat.id, user_id=deps.user_id,
                 funding=deps.funding.value if delivered else "creator", run_id=deps.run_id if delivered else None,
             )  # fmt: skip
         for item in pending.fees if delivered else ():
@@ -227,7 +239,7 @@ async def settle(deps: RunDeps, pending: Pending, *, delivered: bool) -> None:
                     credits=deps.settings.effect_credits if deps.funding is Funding.PAID else 0,
                 )
             )
-    pending.images, pending.fees = [], []
+    pending.calls, pending.fees = [], []
 
 
 def _send(deps: RunDeps, made: Made) -> Callable[[], Awaitable[TgMessage]]:
@@ -252,7 +264,9 @@ async def emit(deps: RunDeps, made: Made, *, final: bool, source: Kept | None = 
             "Anything kept and not used is posted when you finish."
         )
     try:
-        [sent] = await deliver(deps, output_kind(made.sendable), made.what, _send(deps, made), budget=False)
+        [sent] = await deliver(
+            deps, output_kind(made.sendable), made.what, _send(deps, made), budget=False, spoken=made.spoken
+        )
     except Unconfirmed as unsure:  # it may have arrived: never posted again, its money absorbed
         if source is not None:
             source.used = True
@@ -281,7 +295,14 @@ async def flush(deps: RunDeps) -> None:
         kept.used = True
         made = kept.made
         try:
-            await deliver(deps, output_kind(made.sendable), made.what, _send(deps, made), budget=False)
+            await deliver(
+                deps,
+                output_kind(made.sendable),
+                made.what,
+                _send(deps, made),
+                budget=False,
+                spoken=made.spoken,
+            )
         except Refused:
             await settle(deps, made.pending, delivered=False)
         else:

@@ -93,6 +93,21 @@ class Decisions(BaseModel, frozen=True):
     price_usd_per_m_input: float = 0.042  # estimate for a call without a reported cost
 
 
+class VoiceMessages(BaseModel, frozen=True):
+    """Voice messages on the speech pin (``agent.tools.voice``): stock voices acting out inline audio tags."""
+
+    max_chars: int = 400  # of one performance, audio tags included (they are billed as characters)
+    # USD per 1M characters by model (list prices): the speech endpoint returns audio only, never a cost.
+    # A pinned model missing here is priced at the dearest one, never as free.
+    prices: dict[str, float] = Field(
+        default_factory=lambda: {"elevenlabs/eleven-v4-turbo": 20.0, "elevenlabs/eleven-v4": 40.0}
+    )
+
+    def price_usd(self, model: str, characters: int) -> float:
+        per_million = self.prices.get(model, max(self.prices.values(), default=40.0))
+        return characters * per_million / 1_000_000
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -170,7 +185,7 @@ class Settings(BaseSettings):
     effect_credits: int = (
         2  # flat fee on paid runs for heavy local effects (video memes, reversed clips, cutouts)
     )
-    sponsored_effects_per_day: int = 3  # heavy local effects per person per day on sponsored runs
+    sponsored_effects_per_day: int = 3  # heavy effects (video, cutouts, voice) per person per day, sponsored
     background_model: Path = Path.home() / ".cache" / "derp" / "u2netp.onnx"  # fetched at image build
     run_caps: RunCaps = RunCaps()
     run_concurrency: int = 12  # agent runs in flight at once, across all chats
@@ -178,6 +193,7 @@ class Settings(BaseSettings):
     retention: Retention = Retention()
     media: MediaLimits = MediaLimits()
     decisions: Decisions = Decisions()
+    speech: VoiceMessages = VoiceMessages()
 
     # Telemetry — optional, fails soft
     logfire_token: str = Field(default="", repr=False)

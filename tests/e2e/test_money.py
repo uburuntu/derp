@@ -308,6 +308,7 @@ async def test_free_model_runs_keep_the_long_tail_in_the_toolbox(
     await conversation.expect_reply(asked)
     names = {tool.name for tool in model.infos[-1].function_tools}
     assert "search_tools" in names and "search_history" in names and "inspect_media" not in names
+    assert "speak" not in names  # free models never get voice messages
 
 
 async def test_a_group_offer_comes_once_a_day_per_person_then_a_quiet_reaction(

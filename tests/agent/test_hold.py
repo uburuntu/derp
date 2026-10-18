@@ -40,7 +40,7 @@ async def context(
         )
         session.add(RunFee(run_id=run.id, chat_id=-1, user_id=1, item="cutout", funding="paid", credits=2))
     image = GeneratedImage(b"", "image/png", "img", Decimal("0.01"))
-    kept = Kept("r1", Made("photo", b"", "derp.png", "image", Pending(images=[image], fees=["cutout"])))
+    kept = Kept("r1", Made("photo", b"", "derp.png", "image", Pending(calls=[image], fees=["cutout"])))
     deps = SimpleNamespace(
         db=database, run_id=run.id, settings=settings, history_start=1, kept={"r1": kept},
         funds=Funds(Funding.FREE, "turn:1", None, None, 0) if free else Funds(Funding.PAID, "turn:1", 1, 1, held),

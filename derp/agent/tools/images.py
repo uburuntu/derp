@@ -105,7 +105,7 @@ async def generate_image(
         return f"The image failed ({error.status}); nothing was charged for it."
     except MediaUnavailableError as unavailable:
         return f"A reference picture can't be used ({unavailable.reason}); nothing was charged."
-    made = Made("photo", image.data, filename(image), "image", Pending(images=[image]))
+    made = Made("photo", image.data, filename(image), "image", Pending(calls=[image]))
     try:  # the image is charged with the run only once it (or a result made from it) reached Telegram
         return await emit(deps, made, final=final, source=source.kept if source else None)
     except Refused as refused:

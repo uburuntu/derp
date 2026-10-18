@@ -18,6 +18,7 @@ from derp.agent.tools import (
     self_service,
     telegram,
     utilities,
+    voice,
 )
 from derp.agent.tools.code import CODE_MODE
 from derp.agent.tools.web import WEB_CAPABILITIES
@@ -42,6 +43,7 @@ FAMILIES: tuple[Family, ...] = (
     effects.song_family,
     effects.profile_family,
     quotes.family,
+    voice.family,
 )
 
 

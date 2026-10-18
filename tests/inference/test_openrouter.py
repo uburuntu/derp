@@ -132,6 +132,39 @@ async def test_missing_cost_falls_back_to_the_configured_estimate() -> None:
     assert transcript.cost_usd == Decimal(str(defaults.stt_price_usd_per_minute)) * Decimal("1.5")
 
 
+async def test_speak_returns_mp3_priced_per_character_under_zdr() -> None:
+    seen: dict[str, Any] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["voice"] == "nobody":
+            return httpx.Response(400, json={"error": {"message": 'Unknown voice "nobody".'}})
+        if body["voice"] == "mute":
+            return httpx.Response(200, content=b"", headers={"content-type": "audio/mpeg"})
+        seen["path"] = request.url.path
+        seen.update(body)
+        return httpx.Response(
+            200, content=b"ID3mp3", headers={"content-type": "audio/mpeg", "x-generation-id": "gen-tts-1"}
+        )
+
+    api = api_with(httpx.MockTransport(handle))
+    script = "[shouting] ОПЯТЬ?! [laughs]"
+    speech = await api.speak("elevenlabs/eleven-v4-turbo", script, "callum")
+    assert seen["path"] == "/api/v1/audio/speech"
+    assert seen["response_format"] == "mp3" and seen["input"] == script and seen["voice"] == "callum"
+    assert seen["provider"] == {"zdr": True, "data_collection": "deny"}
+    assert speech.data == b"ID3mp3" and speech.generation_id == "gen-tts-1"
+    assert speech.characters == len(script)
+    assert speech.cost_usd == Decimal("0.00002") * len(script)  # $20 per 1M characters, the list price
+    unlisted = await api.speak("someone/new-tts", "hi", "callum")
+    assert unlisted.cost_usd == Decimal("0.00008")  # priced as the dearest listed model, never free
+    with pytest.raises(OpenRouterError) as caught:
+        await api.speak("elevenlabs/eleven-v4-turbo", "x", "nobody")
+    assert caught.value.status == 400 and not caught.value.retryable
+    with pytest.raises(OpenRouterError, match="no audio"):
+        await api.speak("elevenlabs/eleven-v4-turbo", "x", "mute")
+
+
 async def test_decide_asks_the_systemone_endpoint_under_zdr() -> None:
     seen: dict[str, Any] = {}
 

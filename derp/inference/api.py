@@ -1,5 +1,5 @@
 """Small OpenRouter REST client for what Pydantic AI does not cover:
-image generation, speech-to-text, decisions, the model catalog and generation lookups.
+image generation, speech-to-text, text-to-speech, decisions, the model catalog and generation lookups.
 """
 
 import base64
@@ -43,6 +43,17 @@ class Transcript:
 
 
 @dataclass(frozen=True, slots=True)
+class Speech:
+    """A voice performance as MP3, priced per character (the endpoint reports no cost)."""
+
+    data: bytes
+    model: str
+    cost_usd: Decimal
+    characters: int
+    generation_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Decided:
     """Answers to typed questions, keyed like the questions (``{"type": "noul", "noul": 0.93}``, …)."""
 
@@ -67,11 +78,12 @@ class OpenRouterAPI:
         self._image_price = Decimal(str(settings.image_price_usd))
         self._stt_minute_price = Decimal(str(settings.stt_price_usd_per_minute))
         self._decision_token_price = Decimal(str(settings.decisions.price_usd_per_m_input)) / 1_000_000
+        self._speech = settings.speech
 
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> Json:
+    async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         try:
             response = await self._client.request(method, path, **kwargs)
         except httpx.HTTPError as error:  # timeouts and connection failures: status 0
@@ -82,7 +94,10 @@ class OpenRouterAPI:
             except ValueError:
                 message = ""
             raise OpenRouterError(response.status_code, message or response.reason_phrase)
-        return response.json()
+        return response
+
+    async def _request(self, method: str, path: str, **kwargs: Any) -> Json:
+        return (await self._send(method, path, **kwargs)).json()
 
     # Catalog
 
@@ -168,6 +183,23 @@ class OpenRouterAPI:
             model=model,
             cost_usd=_reported_cost(result, self._stt_minute_price * max(seconds, 1) / 60),
             language=result.get("language"),
+        )
+
+    # Text-to-speech (raw MP3 back, no usage: priced per character from ``settings.speech``)
+
+    async def speak(self, model: str, text: str, voice: str, *, zdr: bool = True) -> Speech:
+        body: Json = {"model": model, "input": text, "voice": voice, "response_format": "mp3"}
+        if zdr:
+            body["provider"] = {"zdr": True, "data_collection": "deny"}
+        response = await self._send("POST", "audio/speech", json=body)
+        if not response.content:
+            raise OpenRouterError(502, "no audio returned")
+        return Speech(
+            data=response.content,
+            model=model,
+            cost_usd=Decimal(str(self._speech.price_usd(model, len(text)))).quantize(Decimal("0.00000001")),
+            characters=len(text),
+            generation_id=response.headers.get("x-generation-id"),
         )
 
     # Decisions (System One API: Jev; output tokens are free)
