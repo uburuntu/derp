@@ -10,7 +10,9 @@ removal) cost a small flat fee on paid runs and are counted per person per day
 on sponsored ones (voice messages share that count: ``voice.py``). The fee is
 a ``run_fees`` row added to the run's charge, written only after Telegram
 accepted the result (or one made from it, see ``derp.agent.outputs`` for
-chains), so a failed send costs nothing.
+chains), so a failed send costs nothing. Quote stickers (``quotes.py``) and
+voice lines (``voice.py``) are effects tools too, added to ``toolset`` by the
+registry (``derp.agent.tools``).
 """
 
 from datetime import UTC, datetime, time

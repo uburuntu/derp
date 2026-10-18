@@ -52,7 +52,7 @@ class ModelPin(Base):
     previous: Mapped[dict[str, Any] | None]  # rollback target
     price_prompt: Mapped[Decimal | None] = mapped_column(
         Numeric(14, 6)
-    )  # USD per 1M tokens, cheapest ZDR route
+    )  # USD per 1M tokens (characters for speech), cheapest ZDR route
     price_completion: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     source: Mapped[str] = mapped_column(String(8), default="seed")  # seed | scout | owner
     checked_at: Mapped[datetime | None]
