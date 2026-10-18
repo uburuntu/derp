@@ -1,11 +1,20 @@
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from derp.db.engine import Database
 from derp.history.models import Chat, ChatMember, MemberEvent, Message, Poll, Reaction, ReactionCount, User
-from derp.history.queries import ChatQuery, Scope, around, resolve_members, run_query, search
+from derp.history.queries import (
+    ChatQuery,
+    Scope,
+    around,
+    conversations,
+    resolve_members,
+    run_query,
+    search,
+)
 
 CHAT = -700
 NOW = datetime.now(UTC)
@@ -59,17 +68,33 @@ async def seeded(database: Database) -> Database:
 
 
 @pytest.mark.db
-async def test_search_ranks_full_text_keeps_stop_words_and_falls_back_to_fuzzy(seeded: Database) -> None:
+async def test_search_matches_any_word_by_stem_merges_phrasings_and_falls_back_to_fuzzy(
+    seeded: Database,
+) -> None:
     async with seeded.session() as session:
         whole = Scope(CHAT)
-        assert [m.message_id for m in await search(session, whole, "again")] == [1]
-        assert {m.message_id for m in await search(session, whole, "pizza")} == {1, 3}
-        assert [m.message_id for m in await search(session, whole, "пиццу")] == [2]
-        assert 3 in {m.message_id for m in await search(session, whole, "pizzza")}  # typo → trigram
-        recent = await search(session, whole, "pizza", since=NOW - timedelta(days=5))
-        assert [m.message_id for m in recent] == [3]
+
+        async def ids(*queries: str, **filters: Any) -> list[int]:
+            return [m.message_id for m in await search(session, whole, queries, **filters)]
+
+        assert await ids("again") == [1]
+        assert set(await ids("pizza")) == {1, 3}
+        assert await ids("what about the pizzas") == [3, 1]  # function words dropped, plural by stem
+        assert await ids("пицца") == [2]  # inflections meet by stem
+        assert (await ids("pizza", "пицца"))[:3] == [3, 2, 1]  # every phrasing's hits, merged
+        assert 3 in await ids("pizzza")  # typo → trigram
+        assert await ids("pizza", since=NOW - timedelta(days=5)) == [3]
+        assert await ids("the", "") == []
         general = Scope(CHAT, None, whole_chat=False)
-        assert await search(session, general, "chatter") == []
+        assert await search(session, general, ["chatter"]) == []
+
+
+@pytest.mark.db
+async def test_conversations_add_context_and_merge_overlaps(seeded: Database) -> None:
+    async with seeded.session() as session:
+        hits = await search(session, Scope(CHAT), ["love", "закажем"])
+        windows = await conversations(session, hits, before=1, after=1)
+    assert [[m.message_id for m in w] for w in windows] == [[1, 2, 3, 5]]
 
 
 @pytest.mark.db

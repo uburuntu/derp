@@ -117,20 +117,25 @@ async def test_model_searches_history_with_a_tool(conversation: Conversation, mo
     food = Room(-1006, title="Food")
     old = await conversation.send(BOB, food, "best shawarma is at Joe's")
     await conversation.settle(old)
+    where = await conversation.send(BOB, food, "right by the station")
+    await conversation.settle(where)
 
     def call(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         names = {t.name for t in info.function_tools}
         assert names >= {"search_history", "read_messages", "chat_query", "chat_info", "make_meme"}
         assert "search_tools" not in names  # sponsored runs load every tool: a stable, cacheable tool list
-        return ModelResponse(parts=[ToolCallPart("search_history", {"query": "shawarma"}, tool_call_id="c1")])
+        return ModelResponse(
+            parts=[ToolCallPart("search_history", {"queries": ["шаурма", "shawarma"]}, tool_call_id="c1")]
+        )
 
     def answer(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         result = next(p for m in messages for p in m.parts if isinstance(p, ToolReturnPart))
-        assert "Bob: best shawarma is at Joe's" in result.model_response_str()
+        found = result.model_response_str()  # a match in either language, with what was said next
+        assert "Bob: best shawarma is at Joe's" in found and "right by the station" in found
         return ModelResponse(parts=[TextPart("Joe's, says Bob")])
 
     model.reply(call, answer)
-    asked = await conversation.send(BOB, food, "derp where's the shawarma?")
+    asked = await conversation.send(BOB, food, "derp где была та шаурма?")
     reply = await conversation.expect_reply(asked)
     assert reply["rich_message"]["markdown"] == "Joe's, says Bob"
 

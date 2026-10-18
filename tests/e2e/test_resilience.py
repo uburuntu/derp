@@ -35,7 +35,9 @@ OWNER = Person(1000, "Owner")  # gets the sponsored-cap ping
 
 def search(n: int) -> Responder:
     def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
-        return ModelResponse(parts=[ToolCallPart("search_history", {"query": f"q{n}"}, tool_call_id=f"s{n}")])
+        return ModelResponse(
+            parts=[ToolCallPart("search_history", {"queries": [f"q{n}"]}, tool_call_id=f"s{n}")]
+        )
 
     return respond
 
