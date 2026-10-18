@@ -14,8 +14,12 @@ from decimal import Decimal
 from typing import Any, cast, override
 
 from openai.types import chat
-from openai.types.chat import ChatCompletionToolChoiceOptionParam
-from pydantic_ai.messages import ModelMessage, ModelResponse
+from openai.types.chat import (
+    ChatCompletionContentPartInputAudioParam,
+    ChatCompletionContentPartParam,
+    ChatCompletionToolChoiceOptionParam,
+)
+from pydantic_ai.messages import BinaryContent, ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings, OpenRouterProviderConfig
@@ -44,6 +48,8 @@ def provider_config(pin: RolePin) -> OpenRouterProviderConfig:
     if pin.zdr:
         config["zdr"] = True
         config["data_collection"] = "deny"
+    if only := sorted({host for model in pin.models for host in pin.only.get(model, ())}):
+        config["only"] = cast(Any, only)  # one list for the whole request, fallbacks included
     if pin.fast:  # documented provider fields Pydantic AI's TypedDict doesn't list yet; passed through as is
         extra = cast(dict[str, Any], config)
         extra["preferred_min_throughput"] = MIN_THROUGHPUT
@@ -68,7 +74,8 @@ class DerpOpenRouterModel(OpenRouterModel):
 
     Pydantic AI maps ``WebSearchTool`` but can't choose its engine, and doesn't map web fetch yet.
     Fetches use the plain ``openrouter`` engine (direct HTTP fetch + extraction, no third-party
-    backend); nothing is fetched from Derp's own host.
+    backend); nothing is fetched from Derp's own host. Audio goes out in its own format (``AUDIO_FORMATS``);
+    video (``video_url`` data URI) and PDFs (``file``) are Pydantic AI's own mapping.
     """
 
     @classmethod
@@ -98,6 +105,34 @@ class DerpOpenRouterModel(OpenRouterModel):
             )
         return tools, choice
 
+    @override
+    async def _map_binary_content_item(self, item: BinaryContent) -> ChatCompletionContentPartParam:
+        """Audio in any format OpenRouter takes; Pydantic AI's OpenAI mapping allows only WAV and MP3."""
+        if item.is_audio and (audio_format := AUDIO_FORMATS.get(item.media_type)):
+            return ChatCompletionContentPartInputAudioParam(
+                input_audio={"data": item.base64, "format": cast(Any, audio_format)}, type="input_audio"
+            )
+        return await super()._map_binary_content_item(item)
+
+
+# Audio formats ``input_audio`` takes (OpenRouter's audio input guide), by MIME type.
+AUDIO_FORMATS = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/ogg": "ogg",
+    "audio/opus": "ogg",
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+    "audio/aac": "aac",
+    "audio/mp4": "m4a",
+    "audio/x-m4a": "m4a",
+    "audio/m4a": "m4a",
+    "audio/aiff": "aiff",
+    "audio/x-aiff": "aiff",
+}
+
 
 # Keys conversation ids so OpenRouter never sees Telegram ids; per process, so a restart only resets stickiness.
 _SESSION_KEY = secrets.token_bytes(16)
@@ -119,14 +154,25 @@ def chat_model(pin: RolePin, provider: OpenRouterProvider) -> OpenRouterModel:
 REASONING_ROOM: dict[Effort, int] = {"medium": 2, "high": 4}
 
 
+# A PDF goes to the model's own file input: OpenRouter's parsers (Cloudflare, Mistral OCR) are plugins,
+# which ZDR routing doesn't cover.
+NATIVE_PDF = [{"id": "file-parser", "pdf": {"engine": "native"}}]
+
+
 def chat_settings(
-    pin: RolePin, *, max_tokens: int, session: str | None = None, effort: Effort | None = None
+    pin: RolePin,
+    *,
+    max_tokens: int,
+    session: str | None = None,
+    effort: Effort | None = None,
+    documents: bool = False,
 ) -> OpenRouterModelSettings:
     """Per-request settings: fallbacks, per-request ZDR, usage accounting, prompt caching.
 
     ``session`` (a ``conversation_id``) makes OpenRouter's provider routing sticky for that conversation;
     without it the conversation is keyed by the first system and user messages. ``effort`` deepens the
-    pin's reasoning for one run (same model and prefix, so the prompt cache stays warm).
+    pin's reasoning for one run (same model and prefix, so the prompt cache stays warm). ``documents``:
+    the request carries a PDF, read natively (``NATIVE_PDF``).
 
     No ``sort: price`` or ``:floor`` on chat roles: OpenRouter's default routing
     keeps tool-calling quality (Exacto) which matters more than the last cent.
@@ -143,8 +189,13 @@ def chat_settings(
     )
     if pin.fallbacks:
         settings["openrouter_models"] = list(pin.fallbacks)
+    extra: dict[str, Any] = {}
     if session is not None:
-        settings["extra_body"] = {"session_id": session}
+        extra["session_id"] = session
+    if documents:
+        extra["plugins"] = NATIVE_PDF
+    if extra:
+        settings["extra_body"] = extra
     if reasoning == "none":
         # Some providers ignore effort "none"; only an explicit disable stops hidden reasoning.
         settings["openrouter_reasoning"] = {"enabled": False}

@@ -32,6 +32,9 @@ from derp.inference.roles import ModelRole, RolePin
 log = logging.getLogger("derp.scout")
 MIN_UPTIME = 95.0
 CHAT_ROLES = (ModelRole.CHAT, ModelRole.CHAT_SPONSORED)
+UNTOOLED_ROLES = (ModelRole.STT, ModelRole.DECISION, ModelRole.MEDIA)  # live: a ZDR route, tools or not
+# Roles whose price snapshot estimates calls before they are made (turn minimums, media looks).
+PRICED_ROLES = (*CHAT_ROLES, ModelRole.STT, ModelRole.MEDIA)
 OUTPUT_TOKENS_PER_TURN = 400
 INTELLIGENCE_MARGIN = 2.0
 
@@ -108,6 +111,8 @@ def build_catalog(
         pricing = endpoint.get("pricing") or {}
         if pricing.get("prompt") is None or pricing.get("completion") is None:
             continue
+        if endpoint.get("service_tier"):  # flex/priority routes take an explicit opt-in Derp never sends
+            continue
         catalog.zdr.setdefault(str(endpoint["model_id"]), []).append(
             Route(
                 tag=str(endpoint.get("tag") or ""),
@@ -128,7 +133,7 @@ def build_catalog(
 def available(role: ModelRole, model: str, catalog: Catalog) -> bool:
     if role is ModelRole.IMAGE:
         return model in catalog.images
-    if role in (ModelRole.STT, ModelRole.DECISION):
+    if role in UNTOOLED_ROLES:
         return bool(catalog.live_routes(model, tools=False))
     if role is ModelRole.CHAT_FREE:
         candidate = catalog.models.get(model)
@@ -171,8 +176,8 @@ def plan(
             changes.append(
                 Change(role, current, f"{pin.model} is unavailable; promoted {live[0]}", safe=True)
             )
-        if role in CHAT_ROLES or role is ModelRole.STT:
-            route = catalog.cheapest(current.model, tools=role is not ModelRole.STT)
+        if role in PRICED_ROLES:
+            route = catalog.cheapest(current.model, tools=role in CHAT_ROLES)
             if route is not None:
                 changes.append(
                     Change(role, current, "price snapshot", safe=True, price=(route.prompt, route.completion))

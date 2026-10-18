@@ -16,6 +16,7 @@ class ModelRole(StrEnum):
     IMAGE = "image"
     STT = "stt"
     DECISION = "decision"
+    MEDIA = "media"
 
 
 class RolePin(BaseModel, frozen=True):
@@ -35,7 +36,8 @@ class RolePin(BaseModel, frozen=True):
     max_price_completion: float | None = None
     # The max_price came from the primary's price snapshot (``pins.with_ceiling``): routing only, never stored.
     derived_ceiling: bool = Field(default=False, exclude=True)
-    # Provider allowlist per model for APIs without a ``zdr`` routing flag (Images API).
+    # Provider allowlist per model: the Images API's only routing (it has no ``zdr`` flag); on chat completions
+    # it narrows the ZDR routes further (``openrouter.provider_config``).
     only: dict[str, tuple[str, ...]] = Field(default_factory=dict[str, tuple[str, ...]])
 
     @property
@@ -87,4 +89,11 @@ DEFAULT_PINS: dict[ModelRole, RolePin] = {
     # Typed questions answered with probabilities, no text (``agent.decisions``). A versioned id, not
     # ``-latest``: the thresholds in ``settings.decisions`` were tuned against it; a new model needs re-tuning.
     ModelRole.DECISION: RolePin(model="typesafe/jev-1.14", reasoning=None, vision=False),
+    # Whole clips with sound, audio and PDFs for ``inspect_media`` (``agent.watch``). Vertex only: its routes are
+    # this model's ZDR ones (Google AI Studio retains prompts); the base slug leaves out the flex/priority tiers.
+    ModelRole.MEDIA: RolePin(
+        model="google/gemini-3.5-flash-lite",
+        reasoning="minimal",
+        only={"google/gemini-3.5-flash-lite": ("google-vertex",)},
+    ),
 }
