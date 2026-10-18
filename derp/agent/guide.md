@@ -13,19 +13,21 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   history and nothing from them is stored except accounting. They can still look things up (weather, exchange
   rates, time zones, Wikipedia and the like), calculate, answer about Derp itself and, beyond free models, search
   the web; they can't draw, post polls or stickers, or set reminders.
-- It looks at photos (iPhone HEIC files and other image files too), stickers and albums, listens to voice
-  messages and video notes (transcribed), and opens links. Animated and video stickers, GIFs and files that
-  aren't pictures are seen through Telegram's preview picture of them. Photos inside rich messages and in
-  messages quoted from another chat count like any photo. A photo someone sent just before calling Derp comes
-  along with the question ("make it a cat" edits it), and a reply to Derp's answer about a photo still sees
-  that photo, unless the question is clearly about something else. Asked about a video, GIF or video note, it looks at a still frame of it. Media tools also take
-  videos, GIFs and audio (memes, reversing, song recognition). Group voice messages nobody asked about are transcribed
-  in the background up to a daily limit; past it, a voice message is transcribed when someone calls Derp in
-  reply to it. Short audio files (forwarded memos, recordings) and the speech in videos are transcribed when
-  someone calls Derp with one or in reply to one. Recordings over the length limit aren't transcribed, and Derp says so instead of guessing.
+- It looks at photos (iPhone HEIC files and other image files too), stickers and albums, listens to voice messages
+  and video notes (transcribed), and opens links. Animated and video stickers, GIFs and files that aren't pictures
+  are seen through Telegram's preview picture of them. Photos inside rich messages and in messages quoted from
+  another chat count like any photo. A photo someone sent just before calling Derp comes along with the question
+  ("make it a cat" edits it), and a reply to Derp's answer about a photo still sees that photo, unless the question
+  is clearly about something else. Asked about a video, GIF or video note, it looks at a still frame of it. Media
+  tools also take videos, GIFs and audio (memes, reversing, song recognition). Group voice messages nobody asked
+  about are transcribed in the background up to a daily limit; past it, a voice message is transcribed when someone
+  calls Derp in reply to it. Short audio files (forwarded memos, recordings) and the speech in videos are
+  transcribed when someone calls Derp with one or in reply to one. Recordings over the length limit aren't
+  transcribed, and Derp says so instead of guessing.
 - Profile pictures and the chat photo work as sources: "add me a hat on my profile picture", "draw Vasya as a
-  knight", "meme @vasya's avatar" or "meme our chat photo". People are found by name or @username among those
-  seen in this chat; in reply to a forward, it's the person it was forwarded from when Telegram shows them. Derp sends the result; bots can't change anyone's profile photo, so people set it themselves.
+  knight", "meme @vasya's avatar" or "meme our chat photo". People are found by name or @username among those seen
+  in this chat; in reply to a forward, it's the person it was forwarded from when Telegram shows them. Derp sends
+  the result; bots can't change anyone's profile photo, so people set it themselves.
 - One tool's result feeds the next: draw a picture, then meme it, cut it out or make it a sticker, in one answer.
   Only the end result is posted (no trail of in-between pictures), and the drawing and the cutout are paid for
   only if something made from them arrives.
@@ -37,10 +39,11 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 
 ## groups
 
-- Call Derp by @mention, by name (derp, дерп and their inflections) or by replying to one of its messages. It
-  stays quiet otherwise and never joins in on its own. A message with just the name answers only when it talks to
-  Derp ("derp, settle this for us"); the word used as slang ("classic derp moment") or Derp talked about to others ("derp
-  drew a horse yesterday") gets nothing. If that check is unavailable, Derp answers as usual.
+- Call Derp by @mention, by name (derp, дерп and their inflections) or by replying to one of its messages. It stays
+  quiet otherwise and never joins in on its own. A message with just the name answers only when it talks to Derp
+  ("derp, settle this for us"); the word used as slang ("classic derp moment") or Derp talked about to others
+  ("derp drew a horse yesterday") gets nothing and counts as an ordinary message (in a mentions-only group it isn't
+  kept). If that check is unavailable, Derp answers as usual.
 - Context: while the group allows it, Derp reads the chat to keep up and remembers it for the retention period.
   Admins can switch to mentions only in /settings (that deletes the stored context). With Telegram's privacy mode
   on and Derp not an admin, it only sees messages addressed to it anyway.
@@ -73,12 +76,13 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   whose wallet first — the group's (its balance is shown to everyone) or the presser's own — and the pack menu then
   opens only for the presser, with payment links; the payment happens in their private chat with Derp, where the
   receipt goes too. A personal purchase never shows anyone's balance in the group.
-- Buying for a group posts one quiet thank-you in that group (in the topic it was bought from): the buyer's name, the
-  exact amount and roughly how long the wallet lasts at the group's recent pace (early on, about how many answers).
-  More purchases soon after update that post instead of adding new ones. Only the buyer can hide their name, with
-  the post's button for a few minutes; that also keeps them "a mysterious patron" in later group purchases. Asking
-  Derp ("don't name me when I chip in", or the opposite) switches it either way. /help and /credits in a group list
-  who chipped in lately (named buyers only, refunds excluded); Derp mentions patrons only when asked.
+- Buying for a group posts one quiet thank-you in that group (in the topic it was bought from): the buyer's name,
+  the exact amount and roughly how long the wallet lasts at the group's recent pace (early on, about how many
+  answers). More purchases soon after update that post instead of adding new ones. Only the buyer can hide their
+  name, with the post's button for a few minutes; that also keeps them "a mysterious patron" in later group
+  purchases. Asking Derp ("don't name me when I chip in", or the opposite) switches it either way. /help and
+  /credits in a group list who chipped in lately (named buyers only, refunds excluded); Derp mentions patrons only
+  when asked.
 - When a group's wallet can no longer pay for an answer, Derp says so once, quietly, with a top-up button, and not
   again until someone tops it up; from then on each asker's own Derpcoins pay, as below.
 - Who pays — private chat: the person's paid Derpcoins (Derp+ first, as it expires, then bought packs), then
