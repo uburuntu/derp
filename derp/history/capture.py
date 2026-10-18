@@ -113,16 +113,12 @@ def _service_data(message: TgMessage, event: str) -> Any:
 
 
 FILE_KINDS = ("video", "voice", "video_note", "audio", "document", "sticker", "animation")
-STICKER_MIME = {
-    "animated": "application/x-tgsticker",
-    "video": "video/webm",
-}  # Telegram's types for these files
 
 
 def _attachments(source: Any) -> Iterator[tuple[str, Any]]:
-    """The files a message carries, by kind; a photo as its largest size."""
-    if source.photo:
-        yield "photo", max(source.photo, key=lambda size: size.width * size.height)
+    """The files a message, a quoted message or a rich block carries, by kind; a photo as its largest size."""
+    if sizes := getattr(source, "photo", None):
+        yield "photo", max(sizes, key=lambda size: size.width * size.height)
     for kind in FILE_KINDS:
         if (item := getattr(source, kind, None)) is not None:
             yield kind, item
@@ -199,22 +195,14 @@ def _rich_text(message: TgMessage) -> str | None:
     return "\n".join(line for line in lines if line) or None
 
 
-def _rich_media(message: TgMessage) -> Iterator[tuple[str, Any]]:
-    for block in _rich_blocks(message):
-        if block.type == "photo" and block.photo:
-            yield "photo", max(block.photo, key=lambda size: size.width * size.height)
-        elif block.type in ("video", "animation", "document"):
-            yield block.type, getattr(block, block.type)
-
-
 def media_rows(message: TgMessage, bot_id: int) -> list[dict[str, Any]]:
     """Media of a message, with the bot whose file_ids (previews included) they are.
 
     Its own file, then the media blocks of a rich message, then the media of the message it quotes from
     another chat (``external_reply``), so each can be looked at like any attachment.
     """
-    quoted = _attachments(message.external_reply) if message.external_reply is not None else ()
-    found = [*_attachments(message), *_rich_media(message), *quoted]
+    sources = [message, *_rich_blocks(message), *([message.external_reply] if message.external_reply else [])]
+    found = [file for source in sources for file in _attachments(source)]
     base = {"chat_id": message.chat.id, "message_id": message.message_id, "bot_id": bot_id}
     return [base | {"idx": idx} | _file(kind, item) for idx, (kind, item) in enumerate(found)]
 

@@ -7,8 +7,8 @@ unavailable rather than a Telegram error. File URLs embed the bot token: they ar
 only the exception type.
 
 Pictures a model sees go through one step, ``normalize``: decoded once (JPEG,
-PNG, GIF, WebP, TIFF, BMP, HEIC/HEIF, AVIF; at most ``MAX_DECODE_PIXELS`` and
-``MAX_DECODE_SIDE``), turned upright by EXIF, scaled down to ``VISION_SIDE``,
+PNG, GIF, WebP, TIFF, BMP, HEIC/HEIF, AVIF; within the media workers' pixel
+and side caps, ``check_dimensions``), turned upright by EXIF, scaled down to ``VISION_SIDE``,
 transparency put on white, encoded as JPEG. ``MediaGateway.image`` fetches and
 normalizes; a file whose MIME type says it isn't a picture is never downloaded.
 """
@@ -25,6 +25,8 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from PIL import Image, ImageOps
 
+from derp.tools.workers import DEFAULTS, EffectError, check_dimensions
+
 BOT_API_DOWNLOAD_LIMIT = 20 * 1024 * 1024  # getFile refuses larger files
 CACHE_SECONDS = 600
 CACHE_BYTES = 64 * 1024 * 1024
@@ -39,8 +41,6 @@ IMAGE_SIGNATURES: tuple[tuple[bytes, str], ...] = (
 )
 HEIF_BRANDS = {b"heic": "image/heic", b"heix": "image/heic", b"mif1": "image/heif", b"avif": "image/avif"}
 DECODABLE = ("JPEG", "PNG", "GIF", "WEBP", "TIFF", "BMP", "HEIF", "AVIF")  # never EPS, PSD & co
-MAX_DECODE_PIXELS = 16_000_000
-MAX_DECODE_SIDE = 8192
 VISION_SIDE = 1568  # the longer side of a picture sent to a model: past this, providers scale down anyway
 VISION_QUALITY = 88
 
@@ -72,7 +72,7 @@ def sniff_image(data: bytes) -> str | None:
     return None
 
 
-def normalize(data: bytes) -> Media:
+def normalize(data: bytes, max_pixels: int = DEFAULTS.max_pixels) -> Media:
     """A picture as a model should get it: upright, at most ``VISION_SIDE``, opaque, JPEG (an animation's first frame).
 
     Raises ``MediaUnavailableError`` for anything that isn't a picture or would decode past the caps. Pillow
@@ -80,9 +80,7 @@ def normalize(data: bytes) -> Media:
     """
     try:
         with Image.open(io.BytesIO(data), formats=DECODABLE) as source:
-            width, height = source.size
-            if max(width, height) > MAX_DECODE_SIDE or width * height > MAX_DECODE_PIXELS:
-                raise MediaUnavailableError("too large to decode")
+            check_dimensions(*source.size, max_pixels)
             source.draft("RGB", (VISION_SIDE, VISION_SIDE))  # a big JPEG decodes at a fraction of its size
             upright = ImageOps.exif_transpose(source)
             clear = upright.mode in ("RGBA", "LA", "PA") or "transparency" in upright.info
@@ -94,18 +92,26 @@ def normalize(data: bytes) -> Media:
                 image = flat
             buffer = io.BytesIO()
             image.save(buffer, format="JPEG", quality=VISION_QUALITY, optimize=True)
-    except MediaUnavailableError:
-        raise
+    except EffectError as refused:
+        raise MediaUnavailableError(refused.reason) from None
     except OSError, ValueError, EOFError, SyntaxError, Image.DecompressionBombError:
         raise MediaUnavailableError("not an image") from None
     return Media(buffer.getvalue(), "image/jpeg")
 
 
 class MediaGateway:
-    def __init__(self, bot: Bot, *, max_bytes: int = BOT_API_DOWNLOAD_LIMIT, timeout: float = 30) -> None:
+    def __init__(
+        self,
+        bot: Bot,
+        *,
+        max_bytes: int = BOT_API_DOWNLOAD_LIMIT,
+        timeout: float = 30,
+        max_pixels: int = DEFAULTS.max_pixels,
+    ) -> None:
         self.bot = bot
         self.max_bytes = min(max_bytes, BOT_API_DOWNLOAD_LIMIT)
         self.timeout = timeout
+        self.max_pixels = max_pixels
         self._cache: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
         self._cached_bytes = 0
 
@@ -158,7 +164,7 @@ class MediaGateway:
 
     async def normalize(self, data: bytes) -> Media:
         """``normalize`` off the event loop: for pictures that didn't come from a file (avatars, kept results)."""
-        return await asyncio.to_thread(normalize, data)
+        return await asyncio.to_thread(normalize, data, self.max_pixels)
 
     def _remember(self, key: str, data: bytes) -> None:
         if len(data) > CACHE_BYTES // 4:

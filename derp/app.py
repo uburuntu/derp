@@ -71,7 +71,7 @@ class Services:
     def create(cls, settings: Settings, db: Database, bot: Bot) -> Services:
         api = OpenRouterAPI(settings)
         pins = PinStore(db, settings)
-        media = MediaGateway(bot)
+        media = MediaGateway(bot, max_pixels=settings.media.max_pixels)
         return cls(
             settings=settings,
             db=db,
