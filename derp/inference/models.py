@@ -16,7 +16,7 @@ class ProviderCall(Base):
     __tablename__ = "provider_calls"
     __table_args__ = (
         CheckConstraint(
-            "kind in ('chat', 'stt', 'image', 'digest', 'scout', 'media', 'decision')", name="kind"
+            "kind in ('chat', 'stt', 'image', 'digest', 'scout', 'media', 'decision', 'speech')", name="kind"
         ),
         CheckConstraint("cost_usd >= 0", name="cost_nonnegative"),
         Index("ix_provider_calls_created_at", "created_at"),
@@ -37,7 +37,7 @@ class ProviderCall(Base):
     cache_read_tokens: Mapped[int] = mapped_column(default=0)
     reasoning_tokens: Mapped[int] = mapped_column(default=0)
     web_search_requests: Mapped[int] = mapped_column(default=0)
-    units: Mapped[int] = mapped_column(default=0)  # images generated / audio seconds
+    units: Mapped[int] = mapped_column(default=0)  # images generated / audio seconds / characters spoken
     cost_usd: Mapped[Decimal] = mapped_column(COST, default=Decimal(0))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 

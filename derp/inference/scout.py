@@ -128,7 +128,7 @@ def build_catalog(
 def available(role: ModelRole, model: str, catalog: Catalog) -> bool:
     if role is ModelRole.IMAGE:
         return model in catalog.images
-    if role in (ModelRole.STT, ModelRole.DECISION):
+    if role in (ModelRole.STT, ModelRole.DECISION, ModelRole.SPEECH):
         return bool(catalog.live_routes(model, tools=False))
     if role is ModelRole.CHAT_FREE:
         candidate = catalog.models.get(model)

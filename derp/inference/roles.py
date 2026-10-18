@@ -16,6 +16,7 @@ class ModelRole(StrEnum):
     IMAGE = "image"
     STT = "stt"
     DECISION = "decision"
+    SPEECH = "speech"
 
 
 class RolePin(BaseModel, frozen=True):
@@ -87,4 +88,9 @@ DEFAULT_PINS: dict[ModelRole, RolePin] = {
     # Typed questions answered with probabilities, no text (``agent.decisions``). A versioned id, not
     # ``-latest``: the thresholds in ``settings.decisions`` were tuned against it; a new model needs re-tuning.
     ModelRole.DECISION: RolePin(model="typesafe/jev-1.14", reasoning=None, vision=False),
+    # Voice messages: stock voices acting out inline audio tags (``[shouting]``, ``[sings]``, ``[applause]``).
+    # Turbo costs half of v4 per character and still follows the tags; v4 is the fallback.
+    ModelRole.SPEECH: RolePin(
+        model="elevenlabs/eleven-v4-turbo", fallbacks=("elevenlabs/eleven-v4",), reasoning=None, vision=False
+    ),
 }

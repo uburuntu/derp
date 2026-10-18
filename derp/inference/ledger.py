@@ -4,9 +4,12 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from derp.inference.api import OpenRouterAPI, OpenRouterError
+from derp.inference.api import GeneratedImage, OpenRouterAPI, OpenRouterError, Speech
 from derp.inference.models import ProviderCall
 from derp.inference.openrouter import CallUsage
+from derp.inference.roles import ModelRole
+
+type Made = GeneratedImage | Speech  # provider results that wait for delivery before they are ledgered
 
 
 def record_usage(
@@ -44,19 +47,37 @@ def record_usage(
     return call
 
 
-def simple_usage(model: str, cost_usd: Decimal, **counts: int) -> CallUsage:
-    """Usage for non-chat calls (images, STT) that only report a cost."""
+def simple_usage(
+    model: str, cost_usd: Decimal, *, generation_id: str | None = None, **counts: int
+) -> CallUsage:
+    """Usage for non-chat calls (images, STT, speech) that only report a cost."""
     return CallUsage(
         cost_usd=cost_usd,
         model=model,
         downstream_provider=None,
-        generation_id=None,
+        generation_id=generation_id,
         input_tokens=counts.get("input_tokens", 0),
         output_tokens=counts.get("output_tokens", 0),
         cache_read_tokens=0,
         reasoning_tokens=0,
         web_search_requests=0,
     )
+
+
+def record_made(
+    session: AsyncSession, made: Made, *, funding: str, run_id: int | None, chat_id: int, user_id: int
+) -> ProviderCall:
+    """An image or a voice line: against the run once delivered, else ``creator`` without a run (absorbed)."""
+    match made:
+        case GeneratedImage():
+            usage, kind, role, units = simple_usage(made.model, made.cost_usd), "image", ModelRole.IMAGE, 1
+        case Speech():
+            usage = simple_usage(made.model, made.cost_usd, generation_id=made.generation_id)
+            kind, role, units = "speech", ModelRole.SPEECH, made.characters
+    return record_usage(
+        session, usage, kind=kind, funding=funding, role=role.value, run_id=run_id, chat_id=chat_id,
+        user_id=user_id, units=units,
+    )  # fmt: skip
 
 
 async def cancelled_cost(api: OpenRouterAPI, generation_id: str) -> Decimal | None:
