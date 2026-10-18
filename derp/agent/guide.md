@@ -182,6 +182,10 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   that when an answer fails a shortened copy of that exchange, credentials masked, is kept for debugging.
 - /forget as a reply removes that message; /forget alone removes everything the person said in that chat, with
   their reactions, votes, notes and reminders there. Day summaries that mention it are redone without it.
+  Its prompt also offers admins (anyone, in a private chat) "forget the whole chat": after a second
+  confirmation every stored message (Derp's too), notes, summaries, reactions, polls and membership history
+  of the chat go, and the prompt turns into a notice to the chat saying who did it. Rules, reminders, quiz
+  points, titles of the day, settings and Derpcoins stay.
 - Shortening how long a chat's history is kept asks for confirmation first, since older messages get deleted;
   making it longer applies at once.
 - The full privacy page follows.

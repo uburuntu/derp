@@ -15,7 +15,7 @@ from derp.history.models import (
     MessageMedia,
     Reaction,
 )
-from derp.history.retention import forget_member, forget_message, purge_ambient, purge_expired
+from derp.history.retention import forget_chat, forget_member, forget_message, purge_ambient, purge_expired
 
 NOW = datetime.now(UTC)
 GROUP, PRIVATE, SHORT = -720, 72, -721
@@ -117,6 +117,27 @@ async def test_forgetting_a_member_scrubs_their_rows_in_that_chat(seeded: Databa
         assert titles == {(GROUP, 2), (SHORT, 1)}
         left = {(d.first_message_id, d.last_message_id) for d in await session.scalars(select(Digest))}
     assert left == {(100, 110), (2, 2)}  # days that held their messages are gone, to be rebuilt without them
+
+
+@pytest.mark.db
+async def test_forgetting_a_chat_scrubs_everyone_in_it_and_keeps_members_and_games(seeded: Database) -> None:
+    async with seeded.transaction() as session:
+        session.add(DailyTitle(chat_id=GROUP, title="king", day=NOW.date(), user_id=1))
+    async with seeded.transaction() as session:
+        assert await forget_chat(session, GROUP, NOW) == 3
+    async with seeded.transaction() as session:
+        assert await forget_chat(session, GROUP, NOW) == 0  # a second time finds nothing left
+    async with seeded.session() as session:
+        group = list(await session.scalars(select(Message).where(Message.chat_id == GROUP)))
+        assert all(r.text is None and r.deleted_at is not None for r in group)
+        others = {
+            r.chat_id: r.text for r in await session.scalars(select(Message).where(Message.chat_id != GROUP))
+        }
+        assert others == {PRIVATE: "m1", SHORT: "m1"}
+        for table in (MessageMedia, Reaction, MemberEvent, Digest):
+            assert await session.scalar(select(func.count()).select_from(table)) == 0
+        assert await session.scalar(select(func.count()).select_from(ChatMember)) == 1
+        assert await session.scalar(select(func.count()).select_from(DailyTitle)) == 1
 
 
 @pytest.mark.db

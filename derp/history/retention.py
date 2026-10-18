@@ -10,6 +10,9 @@
   files, reactions, polls; quiz points and titles of the day go too), and every
   digest whose day range covers them is deleted, to be rebuilt on demand
   without them.
+- ``forget_chat``: an admin's reset — the same for everyone in the chat, Derp
+  included, plus every digest and the membership history. Members, quiz points
+  and titles of the day stay (games, not memory).
 - ``purge_ambient``: the chat's context was switched off — every ambient row
   goes, and with it every digest of the chat.
 """
@@ -162,6 +165,20 @@ async def forget_member(session: AsyncSession, chat_id: int, user_id: int, now: 
         delete(DailyTitle).where(DailyTitle.chat_id == chat_id, DailyTitle.user_id == user_id)
     )
     await session.execute(delete(Feedback).where(Feedback.chat_id == chat_id, Feedback.user_id == user_id))
+    return count
+
+
+async def forget_chat(session: AsyncSession, chat_id: int, now: datetime) -> int:
+    """Everything said in one chat, Derp's own words too; returns the number of messages forgotten."""
+    count = await _scrub(session, chat_id, Message.deleted_at.is_(None), now)
+    polls = select(Poll.id).where(Poll.chat_id == chat_id)  # and what hangs off messages never stored
+    await session.execute(delete(PollVote).where(PollVote.poll_id.in_(polls)))
+    await session.execute(delete(Poll).where(Poll.chat_id == chat_id))
+    await session.execute(delete(Reaction).where(Reaction.chat_id == chat_id))
+    await session.execute(delete(ReactionCount).where(ReactionCount.chat_id == chat_id))
+    await session.execute(delete(MemberEvent).where(MemberEvent.chat_id == chat_id))
+    await session.execute(delete(Digest).where(Digest.chat_id == chat_id))
+    await session.execute(delete(Feedback).where(Feedback.chat_id == chat_id))
     return count
 
 

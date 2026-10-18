@@ -54,7 +54,7 @@ commands = """**Commands**
 /buy — buy Derpcoins
 /memory — what I remember here
 /info — reply to my answer: model and cost
-/forget — erase what you said from my memory
+/forget — erase what you said (admins: the whole chat)
 /privacy · /terms · /feedback"""
 more_private = "_Everything I can do: /start_"
 more_group = "_Everything I can do: [open me in private](https://t.me/{username}?start=help)_"
@@ -71,7 +71,7 @@ credits = "Your Derpcoins"
 settings = "Settings"
 memory = "What I remember here"
 info = "Reply to my answer: model, cost, report a problem"
-forget = "Erase what you said from my memory"
+forget = "Erase what you said, or (admins) the whole chat"
 feedback = "Tell the developer something"
 privacy = "What I store and for how long"
 terms = "Terms"
@@ -263,7 +263,7 @@ To answer, messages go to AI providers through OpenRouter. Paid answers and the 
 
 <details><summary>Your controls</summary>
 
-Reply /forget to remove a message from my memory, or send /forget alone to remove everything you've said in a chat (summaries that mention it are redone without it). Ask me to forget notes or cancel reminders anytime; group admins can turn context off in /settings, which deletes the stored context.
+Reply /forget to remove a message from my memory, or send /forget alone to remove everything you've said in a chat (summaries that mention it are redone without it). From the same /forget, group admins can wipe everything I know about the chat: its messages, notes and summaries. Ask me to forget notes or cancel reminders anytime; group admins can turn context off in /settings, which deletes the stored context.
 </details>
 
 <details><summary>Payments</summary>
@@ -281,6 +281,13 @@ confirm = "Forget everything you've said in this chat? Stored messages: **{count
 confirm_button = "Forget it all"
 not_yours = "This button is for the person who asked."
 forgot_all = "Done — your messages here ({count}) and everything attached to them are forgotten."
+chat_button = "Forget the whole chat"
+chat_confirm = "Forget everything I know about this chat? All stored messages (**{messages}**), mine included, **{notes}** notes, the summaries, reactions, polls and membership history. Rules, reminders, quiz points, titles of the day, settings and Derpcoins stay. This can't be undone."
+chat_confirm_button = "Forget the chat"
+admins_only = "Only admins can do this."
+chat_forgotten = "🧹 {name} wiped my memory of this chat: {messages} messages and {notes} notes are forgotten. Rules, reminders, games, settings and Derpcoins are untouched."
+chat_forgotten_private = "🧹 Done — I've forgotten this chat: {messages} messages and {notes} notes. Reminders, settings and Derpcoins are untouched."
+chat_forgotten_toast = "Already forgotten."
 
 [approvals]
 image = "🖼 This image costs about **{credits}** Derpcoins. Make it?"

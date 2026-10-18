@@ -12,7 +12,7 @@ To answer, messages go to AI providers through OpenRouter. Paid answers and the 
 
 ### Your controls
 
-Reply /forget to remove a message from my memory, or send /forget alone to remove everything you've said in a chat (summaries that mention it are redone without it). Ask me to forget notes or cancel reminders anytime; group admins can turn context off in /settings, which deletes the stored context.
+Reply /forget to remove a message from my memory, or send /forget alone to remove everything you've said in a chat (summaries that mention it are redone without it). From the same /forget, group admins can wipe everything I know about the chat: its messages, notes and summaries. Ask me to forget notes or cancel reminders anytime; group admins can turn context off in /settings, which deletes the stored context.
 
 ### Payments
 
@@ -30,7 +30,7 @@ Telegram handles payments; I only see the amount and a charge id. Buying Derpcoi
 
 ### Что можно сделать
 
-Команда /forget ответом на сообщение убирает его из моей памяти, а /forget отдельно стирает все сообщения автора в этом чате (дневные сводки пересоберутся уже без них). Забыть заметки или отменить напоминания можно попросить когда угодно; админы групп могут отключить контекст в /settings — сохранённый контекст при этом удаляется.
+Команда /forget ответом на сообщение убирает его из моей памяти, а /forget отдельно стирает все сообщения автора в этом чате (дневные сводки пересоберутся уже без них). Там же админы группы могут стереть всё, что я знаю о чате: сообщения, заметки и сводки. Забыть заметки или отменить напоминания можно попросить когда угодно; админы групп могут отключить контекст в /settings — сохранённый контекст при этом удаляется.
 
 ### Платежи
 
