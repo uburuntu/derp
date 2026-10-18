@@ -18,8 +18,12 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   are seen through Telegram's preview picture of them. Photos inside rich messages and in messages quoted from
   another chat count like any photo. A photo someone sent just before calling Derp comes along with the question
   ("make it a cat" edits it), and a reply to Derp's answer about a photo still sees that photo, unless the question
-  is clearly about something else. Asked about a video, GIF or video note, it looks at a still frame of it. Media
-  tools also take videos, GIFs and audio (memes, reversing, song recognition). Group voice messages nobody asked
+  is clearly about something else. Asked about a video, GIF, video note, audio file, voice message or PDF, it opens
+  the whole thing: watches clips with their sound, listens to audio and reads PDFs, and answers with what happens
+  when (timestamps, page numbers, quoted speech), on a separate model that keeps nothing. That costs a little extra
+  and has per-tier length and page limits; free models, files past the limits and asks the answer can't afford get
+  a still frame or preview picture instead, and Derp says why. Media tools also take videos, GIFs and audio
+  (memes, reversing, song recognition). Group voice messages nobody asked
   about are transcribed in the background up to a daily limit; past it, a voice message is transcribed when someone
   calls Derp in reply to it. Short audio files (forwarded memos, recordings) and the speech in videos are
   transcribed when someone calls Derp with one or in reply to one. Recordings over the length limit, files too big for

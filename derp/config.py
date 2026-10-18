@@ -78,6 +78,35 @@ class MediaLimits(BaseModel, frozen=True):
     voice_max_seconds: int = 600
 
 
+class WatchLimits(BaseModel, frozen=True):
+    """How much of a file one funding tier's ``inspect_media`` sends to the media pin."""
+
+    clip_seconds: int  # videos, GIFs, video messages and video stickers, watched with sound
+    audio_seconds: int  # audio files and voice messages
+    pdf_pages: int
+
+
+class Watching(BaseModel, frozen=True):
+    """Whole-file looks on the media pin (``agent.watch``). Free models, and files past a tier's limits or the
+    Bot API's download cap, get a still frame or preview picture instead.
+
+    A look is priced before it is made from these token rates at the pin's price snapshot (these prices
+    until the scout took one) and refused when the run's hold can't cover it and one more turn.
+    """
+
+    paid: WatchLimits = WatchLimits(clip_seconds=180, audio_seconds=600, pdf_pages=50)
+    sponsored: WatchLimits = WatchLimits(clip_seconds=60, audio_seconds=180, pdf_pages=10)
+    # Frames plus the sound track: measured about 90 on the pinned model at 720p (Gemini 2 counted ~300).
+    video_tokens_per_second: int = 120
+    audio_tokens_per_second: int = 32
+    pdf_tokens_per_page: int = 560  # the dense end of 260–560
+    prompt_tokens: int = 300  # instructions and the question
+    output_tokens: int = 1_000  # the notes' cap, which the estimate assumes is used up
+    timeout_seconds: float = 60
+    price_usd_per_m_input: float = 0.33
+    price_usd_per_m_output: float = 2.75
+
+
 class Decisions(BaseModel, frozen=True):
     """Typed questions to the decision pin before a run (``agent.decisions``); any failure answers as if unasked.
 
@@ -192,6 +221,7 @@ class Settings(BaseSettings):
     context_windows: ContextWindows = ContextWindows()
     retention: Retention = Retention()
     media: MediaLimits = MediaLimits()
+    watching: Watching = Watching()
     decisions: Decisions = Decisions()
     speech: VoiceMessages = VoiceMessages()
 

@@ -15,7 +15,7 @@ from derp.agent.tools.about import (
     read_source,
     search_source,
 )
-from derp.config import Settings
+from derp.config import Settings, WatchLimits
 from derp.settings.start import GROUP_COMMANDS, PRIVATE_COMMANDS
 
 SETTINGS = Settings(_env_file=None, source_revision="abc123")  # pyright: ignore[reportCallIssue]
@@ -42,6 +42,14 @@ def test_facts_follow_the_running_configuration() -> None:
     money = render("money")
     assert all(f"{pack.stars}⭐ → {pack.credits:,}" in money for pack in SETTINGS.packs)
     assert f"{SETTINGS.plan.stars}⭐" in money
+    watching = SETTINGS.watching.model_copy(
+        update={"paid": WatchLimits(clip_seconds=90, audio_seconds=60, pdf_pages=7)}
+    )
+    limits = render("limits", settings=SETTINGS.model_copy(update={"watching": watching}))
+    assert (
+        "paid answers take clips with sound up to 1.5 minutes, audio up to 1 minute and PDFs up to 7 pages"
+        in limits
+    )
 
 
 def test_commands_and_every_registered_tool_are_listed() -> None:

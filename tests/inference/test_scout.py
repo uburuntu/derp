@@ -10,7 +10,7 @@ from derp.config import Settings
 from derp.db.engine import Database
 from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
 from derp.inference.pins import PinStore, rollback_pin
-from derp.inference.roles import ModelRole, RolePin
+from derp.inference.roles import DEFAULT_PINS, ModelRole, RolePin
 from derp.inference.scout import build_catalog, passes_smoke, plan, run_scout
 
 ALLOW = ("openai/", "deepseek/", "acme/")
@@ -108,6 +108,18 @@ def test_the_speech_pin_lives_on_a_zdr_route_without_tools_and_falls_back_when_d
     assert plan(pins, build_catalog([], [turbo, full], []), allowlist=ALLOW, windows=WINDOWS) == []
     [change] = plan(pins, build_catalog([], [full], []), allowlist=ALLOW, windows=WINDOWS)
     assert change.safe and change.pin.model == "elevenlabs/full"
+
+
+def test_the_media_pin_is_priced_from_its_standard_routes_only() -> None:
+    """Flex and priority endpoints need an opt-in Derp never sends: their prices aren't what a look costs."""
+    pins = {ModelRole.MEDIA: DEFAULT_PINS[ModelRole.MEDIA]}
+    lite = DEFAULT_PINS[ModelRole.MEDIA].model
+    standard = route(lite, "0.0000003", "0.0000025") | {"supported_parameters": []}
+    flex = standard | {"tag": "google-vertex/global/flex", "service_tier": "flex", "pricing": {
+        "prompt": "0.00000015", "completion": "0.00000125"}}  # fmt: skip
+    (change,) = plan(pins, build_catalog([], [standard, flex], []), allowlist=ALLOW, windows=WINDOWS)
+    assert change.reason == "price snapshot" and change.price == (Decimal("0.3"), Decimal("2.5"))
+    assert not plan(pins, build_catalog([], [flex], []), allowlist=ALLOW, windows=WINDOWS)  # no live route
 
 
 def scripted(*, russian: str, call_tool: bool) -> FunctionModel:

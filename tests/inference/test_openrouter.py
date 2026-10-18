@@ -4,13 +4,17 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
+import httpx2
 import pytest
+from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.usage import RequestUsage
 
 from derp.config import Settings
 from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.openrouter import (
+    chat_model,
     chat_settings,
     conversation_id,
     provider_config,
@@ -23,6 +27,66 @@ from derp.inference.roles import DEFAULT_PINS, ModelRole, RolePin
 def test_zdr_is_per_request_except_free() -> None:
     assert provider_config(DEFAULT_PINS[ModelRole.CHAT_SPONSORED]) == {"zdr": True, "data_collection": "deny"}
     assert provider_config(DEFAULT_PINS[ModelRole.CHAT_FREE]) == {}
+
+
+def test_a_pins_provider_allowlist_narrows_its_zdr_routes() -> None:
+    assert provider_config(DEFAULT_PINS[ModelRole.MEDIA]) == {
+        "zdr": True,
+        "data_collection": "deny",
+        "only": ["google-vertex"],
+    }
+
+
+def completion(text: str) -> dict[str, Any]:
+    return {
+        "id": "gen-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "google/gemini-3.5-flash-lite",
+        "provider": "Google",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": text}}],
+        "usage": {"prompt_tokens": 700, "completion_tokens": 50, "total_tokens": 750, "cost": 0.0003},
+    }
+
+
+@pytest.mark.parametrize(
+    ("media_type", "part"),
+    [
+        ("video/webm", {"type": "video_url", "video_url": {"url": "data:video/webm;base64,AAEC"}}),
+        ("audio/ogg", {"type": "input_audio", "input_audio": {"data": "AAEC", "format": "ogg"}}),
+        ("audio/mp4", {"type": "input_audio", "input_audio": {"data": "AAEC", "format": "m4a"}}),
+        (
+            "application/pdf",
+            {
+                "type": "file",
+                "file": {"file_data": "data:application/pdf;base64,AAEC", "filename": "filename.pdf"},
+            },
+        ),
+    ],
+)
+async def test_media_pin_requests_carry_the_file_in_openrouters_shapes(
+    media_type: str, part: dict[str, Any]
+) -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(200, json=completion("a clip\n\n0:01 hi"))
+
+    pin = DEFAULT_PINS[ModelRole.MEDIA]
+    pdf = media_type == "application/pdf"
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle)) as client:
+        agent = Agent(
+            chat_model(pin, OpenRouterProvider(api_key="test", http_client=client)),
+            model_settings=chat_settings(pin, max_tokens=100, documents=pdf),
+        )
+        result = await agent.run(["what happens?", BinaryContent(b"\x00\x01\x02", media_type=media_type)])
+    assert result.output == "a clip\n\n0:01 hi"
+    (body,) = bodies
+    assert body["messages"][-1]["content"][-1] == part
+    assert body["provider"]["only"] == ["google-vertex"] and body["provider"]["zdr"] is True
+    assert body.get("plugins") == ([{"id": "file-parser", "pdf": {"engine": "native"}}] if pdf else None)
+    assert response_usage(result.response).downstream_provider == "Google"
 
 
 def test_fast_pins_prefer_fast_providers_softly() -> None:

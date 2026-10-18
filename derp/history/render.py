@@ -74,7 +74,7 @@ def _clip(text: str, limit: int = TEXT_LIMIT) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _duration(seconds: int | None) -> str:
+def duration_label(seconds: int | None) -> str:
     if not seconds:
         return ""
     minutes, secs = divmod(seconds, 60)
@@ -109,7 +109,7 @@ def render_media(media: MessageMedia) -> str:
         case "sticker":
             label = f"sticker {media.sticker_emoji or ''}".rstrip()
         case "voice" | "video_note" | "video" | "audio":
-            label = kind_label(media.type) + _duration(media.duration)
+            label = kind_label(media.type) + duration_label(media.duration)
             if media.transcript == "" and (why := UNTRANSCRIBED.get(media.transcript_model or "")):
                 label += f" — {why}"  # stored, so the line stays the same run after run
         case "document":
