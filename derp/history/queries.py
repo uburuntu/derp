@@ -116,6 +116,36 @@ def terms(query: str) -> list[str]:
     return found
 
 
+def name_forms(name: str) -> list[str]:
+    """A first name as exact ``simple`` tsquery terms: a Russian name in each of its case forms
+    ("Маша" → маша, маши, маше, машу, машей, машею; "Олег" → олег, олега, олегу, олегом, олеге), so no
+    prefix ever meets another word ("машина"); any other name as ``terms`` reads it."""
+    word = next(iter(re.findall(r"\w+", name.lower())), "")
+    if not re.fullmatch(r"[а-яё]{2,}", word):
+        return terms(word)
+    stem, last = word[:-1], word[-1]
+    hush = stem[-1:] in set("жшщчц")  # spelling: Маши, Машей (never "машы", "машой")
+    if last == "а":
+        endings = [
+            "а",
+            "и" if hush or stem[-1:] in set("гкх") else "ы",
+            "е",
+            "у",
+            *(["ей", "ею"] if hush else ["ой", "ою"]),
+        ]
+    elif last == "я":
+        endings = ["я", "и", "е", "ю", "ей", "ею"]
+    elif last == "ь":
+        endings = ["ь", "я", "ю", "ем", "е", "и", "ью"]  # Игорь, Игоря…; Любовь, Любови, Любовью
+    elif last == "й":
+        endings = ["й", "я", "ю", "ем", "е", "и"]  # Андрей, Андрея…; Дмитрий, Дмитрии
+    elif last in "еёиоуыэю":
+        return [word]  # indeclinable: Мари, Нино
+    else:
+        stem, endings = word, ["", "а", "у", "ом", "е"]
+    return list(dict.fromkeys(stem + ending for ending in endings))
+
+
 async def _ranked(
     session: AsyncSession, filters: list[ColumnElement[bool]], query: str, limit: int
 ) -> list[int]:
