@@ -7,9 +7,10 @@ photo. Work runs in the capped local worker pool (``derp.tools.workers``).
 Image memes, mirrored pictures and reversed voice are free on paid and
 sponsored runs. Heavy effects (anything that encodes video, and background
 removal) cost a small flat fee on paid runs and are counted per person per day
-on sponsored ones. The fee is a ``run_fees`` row added to the run's charge,
-written only after Telegram accepted the result (or one made from it, see
-``derp.agent.outputs`` for chains), so a failed send costs nothing.
+on sponsored ones (voice messages share that count: ``voice.py``). The fee is
+a ``run_fees`` row added to the run's charge, written only after Telegram
+accepted the result (or one made from it, see ``derp.agent.outputs`` for
+chains), so a failed send costs nothing.
 """
 
 from datetime import UTC, datetime, time
@@ -63,13 +64,18 @@ async def _visual(
     return await message_media(deps, message_id, types)
 
 
-async def _heavy_allowed(ctx: RunContext[RunDeps]) -> None:
+async def heavy_allowed(ctx: RunContext[RunDeps], *, price: int | None = None) -> None:
+    """Refuse a heavy effect the answer can't cover; ``Refused`` says why.
+
+    ``price`` (Derpcoins) is what it costs in this answer (default: the flat fee on paid runs, nothing on
+    sponsored ones) and must fit what the hold has left; sponsored runs also count it against today's effects.
+    """
     deps = ctx.deps
-    if deps.funding is Funding.PAID:
-        if (left := await hold_left(ctx)) is not None and deps.settings.effect_credits > left:
-            raise Refused(
-                "Not enough Derpcoins left in this answer for that effect. Tell them /buy gets more."
-            )
+    paid = deps.funding is Funding.PAID
+    cost = price if price is not None else deps.settings.effect_credits if paid else 0
+    if cost and (left := await hold_left(ctx)) is not None and cost > left:
+        raise Refused("Not enough Derpcoins left in this answer for that. Tell them /buy gets more.")
+    if paid:
         return
     async with deps.db.session() as session:
         used = await session.scalar(
@@ -81,8 +87,8 @@ async def _heavy_allowed(ctx: RunContext[RunDeps]) -> None:
         )
     if (used or 0) + pending_cost(deps)[1] >= deps.settings.sponsored_effects_per_day:
         raise Refused(
-            "Today's free video effects and cutouts are used up for them; image memes still work, "
-            "and Derpcoins (/buy) lift the limit."
+            "Today's free heavy effects (video effects, cutouts, voice messages) are used up for them; "
+            "image memes still work, and Derpcoins (/buy) lift the limit."
         )
 
 
@@ -122,7 +128,7 @@ async def make_meme(
                 "photo", await effects.meme_image(deps.workers, source.data, text, style), "meme.jpg", "meme"
             )
         else:
-            await _heavy_allowed(ctx)
+            await heavy_allowed(ctx)
             clip = await effects.meme_video(
                 deps.workers, source.data, text, _style(style), sound=source.type in ("video", "video_note")
             )
@@ -175,7 +181,7 @@ async def reverse_media(
                 "result",
             )
         else:
-            await _heavy_allowed(ctx)
+            await heavy_allowed(ctx)
             clip = await effects.reverse(deps.workers, source.data)
             kind: Sendable = (
                 "video_note"
@@ -290,7 +296,7 @@ async def remove_background(
         source = await _visual(deps, message_id, profile_photo, chat_photo, person, from_result)
         if not source.image:
             raise Refused("That isn't a still picture.")
-        await _heavy_allowed(ctx)
+        await heavy_allowed(ctx)
         cutout = await effects.remove_background(deps.workers, source.data, deps.settings.background_model)
         made = Made("document", cutout, "cutout.png", "file", Pending(fees=["cutout"]))
         return await emit(deps, made, final=final, source=source.kept)

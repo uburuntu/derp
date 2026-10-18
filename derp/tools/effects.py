@@ -1,4 +1,4 @@
-"""Media effects on bytes: captioned memes (images and video), reversing, background removal, samples.
+"""Media effects on bytes: captioned memes (images and video), reversing, background removal, samples, OGG/Opus.
 
 Each public function takes a slot of the given worker pool (whose limits it
 follows), works in a throwaway directory and returns the result's bytes. ffmpeg only ever reads local files of whitelisted
@@ -232,12 +232,12 @@ async def audio_sample(pool: WorkerPool, data: bytes) -> bytes:
         return await _render(pool, source, "sample.wav", args, what="sample")
 
 
-async def speech(pool: WorkerPool, data: bytes) -> bytes:
-    """The sound of a video, video note or audio file as OGG/Opus, for speech-to-text (which takes no video)."""
+async def speech(pool: WorkerPool, data: bytes, *, bitrate: str = "32k") -> bytes:
+    """The sound of a file as OGG/Opus: for speech-to-text (which takes no video), or a voice message at 48k."""
     async with _workspace(pool, data) as source:
         if not (await probe(pool, source)).audio:
             raise SilentError
-        args = ["-vn", "-c:a", "libopus", "-b:a", "32k", "-f", "ogg"]
+        args = ["-vn", "-c:a", "libopus", "-b:a", bitrate, "-f", "ogg"]
         return await _render(pool, source, "speech.ogg", args, what="audio")
 
 

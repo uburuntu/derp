@@ -90,6 +90,7 @@ free_busy = "Бесплатные модели сейчас перегружен
 thinking = "Думаю…"
 searching = "Ищу…"
 drawing = "Рисую…"
+recording = "Записываю голосовое…"
 working = "Работаю…"
 
 [money]
