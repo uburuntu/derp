@@ -1,4 +1,4 @@
-"""Owner console, unlisted and private-chat only: /stats, /grant, /block, /unblock.
+"""Owner console, unlisted: /stats, /grant, /block, /unblock in private, /context in any chat.
 
 /stats shows provider spend (the provider-call ledger only; Derp's own fees are
 counted apart), Stars revenue, runs, the busiest chats, the OpenRouter key's
@@ -6,6 +6,12 @@ remaining limit, the live model pins (with Roll back) and the model scout's
 open proposals (Apply / Ignore). Anyone else's command falls through to the
 unknown-command reply, so the console doesn't announce itself. Owner copy is
 plain English, not localized.
+
+/context [text] sends a web page of what the model would be sent if this
+message (or one saying ``text``) invoked Derp here now (``ops.context``). It
+only ever shows a chat an owner is in, and never to the chat: in groups it
+answers ephemerally, and a typed-out /context@Derp there goes to the owner's
+private chat.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -14,15 +20,16 @@ from decimal import Decimal
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import distinct, func, select
 
 from derp.agent.models import AgentRun
+from derp.agent.runtime import Runtime
 from derp.billing.models import Purchase
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat, User
-from derp.history.render import one_line
+from derp.history.render import chat_time, one_line
 from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
 from derp.inference.pins import PinStore, apply_pin, rollback_pin
@@ -30,9 +37,10 @@ from derp.inference.roles import ModelRole, RolePin
 from derp.locales import resolve, t
 from derp.money.models import CreditLot, RunFee
 from derp.money.wallets import balance, credit, wallet
-from derp.ops.owner import from_owner
+from derp.ops.context import render
+from derp.ops.owner import from_owner, owner_here
 from derp.telegram.buttons import Press, button, markup, on_press
-from derp.telegram.sender import Target, send_markdown, send_privately
+from derp.telegram.sender import Target, send_document, send_markdown, send_privately
 from derp.telegram.text import literal
 
 WINDOWS = ((1, "24 h"), (7, "7 d"), (30, "30 d"))
@@ -293,8 +301,32 @@ async def block(message: Message, command: CommandObject, db: Database, bot: Bot
     await send_markdown(bot, target, f"{'Blocked' if on else 'Unblocked'} `{key}`.")
 
 
+async def show_context(
+    message: Message, command: CommandObject, bot: Bot, runtime: Runtime, chat_row: Chat
+) -> None:
+    if message.from_user is None:
+        return
+    asked = message.model_copy(update={"text": command.args, "entities": None}) if command.args else message
+    target = Target.reply_to_message(message)
+    if message.chat.type != "private" and not message.ephemeral_message_id:
+        target = Target(message.from_user.id)  # the page holds the chat's context: never posted there
+    preview = await runtime.preview(asked, chat_row)
+    if preview is None:
+        await send_markdown(
+            bot, target, "Nobody can pay for a turn here: a message would get the Derpcoins offer."
+        )
+        return
+    now = datetime.now(chat_time(chat_row))
+    title = one_line(chat_row.title or message.from_user.full_name)
+    page = render(preview, chat=title, asker=message.from_user.full_name, when=now)
+    name = f"context-{chat_row.id}-{now:%Y%m%d-%H%M}.html"
+    caption = f"{title} · {preview.funding.value} · {preview.pin.model}"
+    await send_document(bot, target, BufferedInputFile(page.encode(), filename=name), caption=caption)
+
+
 def build_router() -> Router:
     router = Router(name="console")
+    router.message.register(show_context, Command("context"), owner_here)
     router.message.register(show_stats, Command("stats"), from_owner)
     router.message.register(grant, Command("grant"), from_owner)
     router.message.register(block, Command("block", "unblock"), from_owner)

@@ -20,6 +20,7 @@ from aiogram.types import (
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
     BotCommandScopeChat,
+    BotCommandScopeChatMember,
     InlineKeyboardMarkup,
     Message,
 )
@@ -77,6 +78,7 @@ OWNER_COMMANDS = {
     "block": "<user or chat id> — Derp stays silent there",
     "unblock": "<user or chat id> — undo /block",
     "refund": "<charge id> — refund a Stars payment",
+    "context": "[text] — what the model would be sent here now, as a web page",
 }
 
 
@@ -190,8 +192,13 @@ async def is_command(message: Message, trigger: Trigger | None = None) -> bool:
     return trigger is not None and trigger.kind is TriggerKind.COMMAND
 
 
-async def publish_commands(bot: Bot, owner_ids: Sequence[int] = ()) -> None:
-    """Set the command menus for private chats and groups in every locale, plus the owners' own; best effort."""
+async def publish_commands(
+    bot: Bot, owner_ids: Sequence[int] = (), owner_groups: Sequence[tuple[int, int]] = ()
+) -> None:
+    """Set the command menus for private chats and groups in every locale, plus the owners' own; best effort.
+
+    ``owner_groups`` (group, owner): there the owner's menu adds an ephemeral /context, so the page is theirs alone.
+    """
     scopes = (
         (BotCommandScopeAllPrivateChats(), PRIVATE_COMMANDS, set[str]()),
         (BotCommandScopeAllGroupChats(), GROUP_COMMANDS, EPHEMERAL_IN_GROUPS),
@@ -199,14 +206,7 @@ async def publish_commands(bot: Bot, owner_ids: Sequence[int] = ()) -> None:
     try:
         for locale in LOCALES:
             for scope, names, ephemeral in scopes:
-                commands = [
-                    BotCommand(
-                        command=name,
-                        description=t(locale, f"commands.{name}"),
-                        is_ephemeral=True if name in ephemeral else None,
-                    )
-                    for name in names
-                ]
+                commands = [_command(locale, name, ephemeral=name in ephemeral) for name in names]
                 await bot.set_my_commands(
                     commands, scope=scope, language_code=None if locale == DEFAULT else locale
                 )
@@ -220,6 +220,23 @@ async def publish_commands(bot: Bot, owner_ids: Sequence[int] = ()) -> None:
             await bot.set_my_commands(owner_menu, scope=BotCommandScopeChat(chat_id=owner_id))
     except TelegramAPIError as error:
         log.warning("command menus not published: %s", type(error).__name__)
+    for chat_id, owner_id in owner_groups:  # a member scope replaces the group menu for that owner there
+        menu = [
+            *(_command(DEFAULT, name, ephemeral=name in EPHEMERAL_IN_GROUPS) for name in GROUP_COMMANDS),
+            BotCommand(command="context", description=OWNER_COMMANDS["context"], is_ephemeral=True),
+        ]
+        try:
+            await bot.set_my_commands(
+                menu, scope=BotCommandScopeChatMember(chat_id=chat_id, user_id=owner_id)
+            )
+        except TelegramAPIError as error:  # Derp may have left that group unnoticed
+            log.info("owner menu not published: %s", type(error).__name__)
+
+
+def _command(locale: str, name: str, *, ephemeral: bool = False) -> BotCommand:
+    return BotCommand(
+        command=name, description=t(locale, f"commands.{name}"), is_ephemeral=True if ephemeral else None
+    )
 
 
 def build_router() -> Router:

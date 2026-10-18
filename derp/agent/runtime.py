@@ -16,7 +16,9 @@ import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
+from typing import Any
 
+import httpx2
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import InlineKeyboardMarkup
@@ -43,13 +45,15 @@ from pydantic_ai.messages import (
     TextPartDelta,
     repair_messages,
 )
+from pydantic_ai.models import Model
+from pydantic_ai.models.openrouter import OpenRouterModelSettings
 from pydantic_ai.usage import UsageLimits
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.approvals import close_prompt, resumption
 from derp.agent.context import Window, build_window, messages_tokens
-from derp.agent.decisions import Decider
+from derp.agent.decisions import Decider, Verdict
 from derp.agent.deps import RunDeps
 from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
 from derp.agent.lanes import Lanes
@@ -82,7 +86,14 @@ from derp.history.render import (
 )
 from derp.history.transcription import Transcriber
 from derp.inference.api import OpenRouterAPI
-from derp.inference.openrouter import ModelFactory, chat_settings, conversation_id
+from derp.inference.openrouter import (
+    Captured,
+    ModelFactory,
+    build_provider,
+    chat_model,
+    chat_settings,
+    conversation_id,
+)
 from derp.inference.pins import PinStore
 from derp.inference.roles import Effort, RolePin
 from derp.locales import resolve, t
@@ -134,6 +145,17 @@ class Ask:
     effort: Effort | None = None  # a deeper reasoning effort the decision asked for (paid runs)
     approved: DeferredToolResults | None = None
     carried: list[ModelMessage] = field(default_factory=list[ModelMessage])
+
+
+@dataclass(frozen=True, slots=True)
+class Preview:
+    """A request as it would go to OpenRouter (``Runtime.preview``), with who'd pay and the estimates."""
+
+    body: dict[str, Any]  # the chat completion request: messages, tools, routing and settings
+    funding: Funding
+    pin: RolePin
+    window_tokens: int  # estimated, as funding prices it
+    prefix_tokens: int  # persona and tool schemas, the same
 
 
 @dataclass(slots=True)
@@ -235,104 +257,18 @@ class Runtime:
         locale = resolve(asker.language_code)
         if message.media_group_id:
             await asyncio.sleep(ALBUM_SETTLE)
-        tz = chat_time(chat)
         target = Target.reply_to_message(message)
         if self.transcriber is not None:  # a voice note sent just before may still be transcribing
             await self.transcriber.settle(chat.id, target.thread_id, message.message_id or 2**62)
         operation_id = (
             f"turn:{chat.id}:{message.message_id}" if message.message_id else f"turn:{uuid.uuid4().hex}"
         )
-        private = chat.type == "private"
-        async with self.db.session() as session:
-            free_allowed = consented(await session.get(User, asker.id)) if private else chat.free_models
-        funds = await self.funder.reserve(
-            chat_id=chat.id,
-            private=private,
-            user_id=asker.id,
-            operation_id=operation_id,
-            free_allowed=free_allowed,
-        )
+        funds = await self._reserve(chat, asker.id, operation_id)
         if funds is None and trigger == "job":  # the scheduler posts its own note
             return Outcome(None, "unfunded", ())
         if funds is None:  # nobody can pay: offer Derpcoins or free models (consent / admin opt-in)
             await answer_unfunded(self.db, self.bot, message, chat, target, locale)
             return Outcome(None, "unfunded", ())
-        funding = funds.funding
-
-        async def compose(pin: RolePin) -> Ask:
-            async with self.db.session() as session:
-                images = await run_media(session, chat.id, message.message_id, _replied_id(message))
-                deeper = await self.funder.affords_deeper(session, funds)
-            # Asked while the window is built; awaited before images are inspected and the request is built.
-            deciding = asyncio.create_task(
-                self.decider.decide(message, bot_id=self.bot.id, tz=tz, images=images, effort=deeper)
-            )
-            try:
-                async with self.db.session() as session:
-                    topic_key = (chat.id, target.thread_id, funding.value)
-                    window = await build_window(
-                        session,
-                        chat_id=chat.id,
-                        thread_id=target.thread_id,
-                        before_message_id=message.message_id or 2**62,
-                        budget=self.funder.window(funding),
-                        tz=tz,
-                        start_at=self.window_starts.get(topic_key),
-                    )
-                    if len(self.window_starts) > WINDOW_STARTS_KEPT:
-                        self.window_starts.clear()
-                    if window.oldest_message_id is not None:
-                        self.window_starts[topic_key] = window.oldest_message_id
-                    prompt = await current_prompt(session, message, window, tz, self.bot.id)
-                    topic = (
-                        await session.get(ForumTopic, (chat.id, target.thread_id))
-                        if target.thread_id
-                        else None
-                    )
-                    memory = await load_memory(session, chat.id, asker.id)
-                    earlier = await latest_before(
-                        session,
-                        chat.id,
-                        target.thread_id or 0,
-                        window.oldest_message_id or message.message_id or 2**62,
-                    )
-                    if earlier is not None and earlier.day < datetime.now(tz).date() - timedelta(
-                        days=EARLIER_DAYS
-                    ):
-                        earlier = None
-                decided = await deciding
-                if images.fallback and not decided.images:
-                    images = Referenced([])
-                inspected = await inspect(self.gateway, images.rows)
-                brief = situation(
-                    chat=chat,
-                    asker=asker.full_name,
-                    now=datetime.now(UTC),
-                    tz=tz,
-                    topic=topic.name if topic else None,
-                    rules=chat.rules,
-                    notes=notes_block(
-                        memory, asker.full_name, chat.notes_mode if funding in memory_family.tiers else None
-                    ),
-                    earlier=earlier,
-                    blind=bool(inspected) and not pin.vision,
-                )
-                request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
-                return Ask(
-                    # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing
-                    # here keeps the captured list aligned so the run's own messages slice out exactly.
-                    history=repair_messages(window.messages),
-                    request=[request, *as_content(inspected)] if pin.vision and inspected else request,
-                    prompt=prompt,
-                    tokens=window.tokens,
-                    trigger_message_id=message.message_id,
-                    seen=tuple(dict.fromkeys(row.message_id for row in images.rows)),
-                    unnoted=[item for item in inspected if item.row.message_id not in images.unnoted],
-                    effort=decided.effort,
-                )
-            finally:
-                deciding.cancel()  # a no-op once awaited; stops the call when composing failed
-
         return await self._run(
             chat=chat,
             user_id=asker.id,
@@ -341,9 +277,210 @@ class Runtime:
             funds=funds,
             trigger=trigger,
             trigger_message_id=message.message_id or None,
-            compose=compose,
+            compose=lambda pin: self._compose(message, chat, funds, pin),
             say=lambda text: self._say(target, text),
         )
+
+    def _deps(
+        self,
+        chat: Chat,
+        user_id: int,
+        locale: str,
+        target: Target,
+        funds: Funds,
+        pin: RolePin,
+        model: Model,
+        ask: Ask,
+        *,
+        run_id: int,
+    ) -> RunDeps:
+        return RunDeps(
+            db=self.db,
+            bot=self.bot,
+            settings=self.settings,
+            chat=chat,
+            user_id=user_id,
+            locale=locale,
+            trigger_message_id=ask.trigger_message_id,
+            run_id=run_id,
+            funds=funds,
+            target=target,
+            tz=chat_time(chat),
+            gateway=self.gateway,
+            pin=pin,
+            model=model,
+            model_factory=self.model_factory,
+            api=self.api,
+            pins=self.pins,
+            lookups=self.lookups,
+            workers=self.workers,
+            seen=ask.seen,
+            history_start=len(ask.history),
+        )
+
+    def _guard(self, run_id: int, pin: RolePin, model_factory: ModelFactory) -> Guard:
+        caps = self.settings.run_caps
+        return Guard(
+            run_id=run_id,
+            pin=pin,
+            model_factory=model_factory,
+            tool_calls=caps.tool_calls,
+            requests=caps.tool_calls + 1,
+            deadline=asyncio.get_running_loop().time() + caps.timeout_seconds * WRAP_UP_AT,
+        )
+
+    def _settings(self, pin: RolePin, chat: Chat, target: Target, ask: Ask) -> OpenRouterModelSettings:
+        return chat_settings(
+            pin,
+            max_tokens=self.settings.run_caps.output_tokens,
+            session=conversation_id(f"chat:{chat.id}:{target.thread_id or 0}"),
+            effort=ask.effort,
+        )
+
+    async def preview(self, message: TgMessage, chat: Chat) -> Preview | None:
+        """What the model would be sent if ``message`` invoked Derp now; None when nobody could pay a turn.
+
+        Built the way a run builds it (the funding a reservation would pick, the window, the request, the
+        tier's tools and settings) and sent to a transport that keeps the request: no model is called and
+        nothing is held, decided or stored.
+        """
+        asker = message.from_user
+        if asker is None:
+            raise ValueError("a preview needs a sender")
+        funds = await self._reserve(chat, asker.id, "preview", dry=True)
+        if funds is None:
+            return None
+        pin = await self.pins.get(funds.funding.role)
+        ask = await self._compose(message, chat, funds, pin, preview=True)
+        captured = Captured()
+        async with httpx2.AsyncClient(transport=captured) as client:
+            provider = build_provider(self.settings, client)
+
+            def factory(other: RolePin) -> Model:  # the guard's retry pin is captured too
+                return chat_model(other, provider)
+
+            model = factory(pin)
+            target = Target.reply_to_message(message)
+            deps = self._deps(
+                chat, asker.id, resolve(asker.language_code), target, funds, pin, model, ask, run_id=0
+            )
+            guard = self._guard(0, pin, factory)
+            await self.agent.run(
+                ask.request,
+                message_history=ask.history,
+                deps=deps,
+                model=guard.model(model),
+                model_settings=self._settings(pin, chat, target, ask),
+                toolsets=toolsets_for(deps, offered(deps, FAMILIES)),
+                capabilities=[guard],
+                event_stream_handler=_drain,  # runs stream, so the captured request does too
+            )
+        return Preview(captured.bodies[0], funds.funding, pin, ask.tokens, self.prefix[funds.funding])
+
+    async def _reserve(
+        self, chat: Chat, user_id: int, operation_id: str, *, dry: bool = False
+    ) -> Funds | None:
+        """The first payer that covers a turn (``dry``: decided, nothing held); free models when allowed."""
+        private = chat.type == "private"
+        async with self.db.session() as session:
+            free_allowed = consented(await session.get(User, user_id)) if private else chat.free_models
+        return await self.funder.reserve(
+            chat_id=chat.id,
+            private=private,
+            user_id=user_id,
+            operation_id=operation_id,
+            free_allowed=free_allowed,
+            dry=dry,
+        )
+
+    async def _compose(
+        self, message: TgMessage, chat: Chat, funds: Funds, pin: RolePin, *, preview: bool = False
+    ) -> Ask:
+        """What a fresh run puts to the model for ``message``: the window before it and the request.
+
+        A ``preview`` builds the same without the decision call (as if unasked: images attached, the pin's
+        effort) and leaves the topic's remembered window start as it is.
+        """
+        asker = message.from_user
+        if asker is None:
+            raise ValueError("an invocation needs a sender")
+        tz, target, funding = chat_time(chat), Target.reply_to_message(message), funds.funding
+        async with self.db.session() as session:
+            images = await run_media(session, chat.id, message.message_id, _replied_id(message))
+            deeper = await self.funder.affords_deeper(session, funds)
+        # Asked while the window is built; awaited before images are inspected and the request is built.
+        deciding = (
+            None
+            if preview
+            else asyncio.create_task(
+                self.decider.decide(message, bot_id=self.bot.id, tz=tz, images=images, effort=deeper)
+            )
+        )
+        try:
+            async with self.db.session() as session:
+                topic_key = (chat.id, target.thread_id, funding.value)
+                window = await build_window(
+                    session,
+                    chat_id=chat.id,
+                    thread_id=target.thread_id,
+                    before_message_id=message.message_id or 2**62,
+                    budget=self.funder.window(funding),
+                    tz=tz,
+                    start_at=self.window_starts.get(topic_key),
+                )
+                if not preview:
+                    if len(self.window_starts) > WINDOW_STARTS_KEPT:
+                        self.window_starts.clear()
+                    if window.oldest_message_id is not None:
+                        self.window_starts[topic_key] = window.oldest_message_id
+                prompt = await current_prompt(session, message, window, tz, self.bot.id)
+                topic = (
+                    await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
+                )
+                memory = await load_memory(session, chat.id, asker.id)
+                earlier = await latest_before(
+                    session,
+                    chat.id,
+                    target.thread_id or 0,
+                    window.oldest_message_id or message.message_id or 2**62,
+                )
+                if earlier is not None and earlier.day < datetime.now(tz).date() - timedelta(
+                    days=EARLIER_DAYS
+                ):
+                    earlier = None
+            decided = await deciding if deciding is not None else Verdict()
+            if images.fallback and not decided.images:
+                images = Referenced([])
+            inspected = await inspect(self.gateway, images.rows)
+            brief = situation(
+                chat=chat,
+                asker=asker.full_name,
+                now=datetime.now(UTC),
+                tz=tz,
+                topic=topic.name if topic else None,
+                rules=chat.rules,
+                notes=notes_block(
+                    memory, asker.full_name, chat.notes_mode if funding in memory_family.tiers else None
+                ),
+                earlier=earlier,
+                blind=bool(inspected) and not pin.vision,
+            )
+            request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
+            return Ask(
+                # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing
+                # here keeps the captured list aligned so the run's own messages slice out exactly.
+                history=repair_messages(window.messages),
+                request=[request, *as_content(inspected)] if pin.vision and inspected else request,
+                prompt=prompt,
+                tokens=window.tokens,
+                trigger_message_id=message.message_id,
+                seen=tuple(dict.fromkeys(row.message_id for row in images.rows)),
+                unnoted=[item for item in inspected if item.row.message_id not in images.unnoted],
+                effort=decided.effort,
+            )
+        finally:
+            if deciding is not None:
+                deciding.cancel()  # a no-op once awaited; stops the call when composing failed
 
     async def _run(
         self,
@@ -382,29 +519,7 @@ class Runtime:
                 run_id = run.id
             ask = await compose(pin)
             model = self.model_factory(pin)
-            deps = RunDeps(
-                db=self.db,
-                bot=self.bot,
-                settings=self.settings,
-                chat=chat,
-                user_id=user_id,
-                locale=locale,
-                trigger_message_id=ask.trigger_message_id,
-                run_id=run.id,
-                funds=funds,
-                target=target,
-                tz=chat_time(chat),
-                gateway=self.gateway,
-                pin=pin,
-                model=model,
-                model_factory=self.model_factory,
-                api=self.api,
-                pins=self.pins,
-                lookups=self.lookups,
-                workers=self.workers,
-                seen=ask.seen,
-                history_start=len(ask.history),
-            )
+            deps = self._deps(chat, user_id, locale, target, funds, pin, model, ask, run_id=run.id)
             caps = self.settings.run_caps
             progress: Progress = (
                 DraftProgress(self.bot, target, locale=locale)
@@ -417,14 +532,7 @@ class Runtime:
             stopped = False
             new_messages: list[ModelMessage] = []
             stream = _Stream(progress, token)
-            guard = Guard(
-                run_id=run.id,
-                pin=pin,
-                model_factory=self.model_factory,
-                tool_calls=caps.tool_calls,
-                requests=caps.tool_calls + 1,
-                deadline=asyncio.get_running_loop().time() + caps.timeout_seconds * WRAP_UP_AT,
-            )
+            guard = self._guard(run.id, pin, self.model_factory)
             await progress.start()
             # Kept locally: the draft id is cleared if drafts fail mid-run.
             draft_key = (chat.id, progress.draft_id) if progress.draft_id is not None else None
@@ -440,12 +548,7 @@ class Runtime:
                                 deferred_tool_results=ask.approved,
                                 deps=deps,
                                 model=guard.model(model),
-                                model_settings=chat_settings(
-                                    pin,
-                                    max_tokens=caps.output_tokens,
-                                    session=conversation_id(f"chat:{chat.id}:{target.thread_id or 0}"),
-                                    effort=ask.effort,
-                                ),
+                                model_settings=self._settings(pin, chat, target, ask),
                                 usage_limits=UsageLimits(  # backstops: the guard wraps up before these
                                     request_limit=caps.tool_calls + 1 + BACKSTOP,
                                     tool_calls_limit=caps.tool_calls + BACKSTOP,
@@ -801,6 +904,11 @@ class _Stream:
                     self.capped = True
                     self.token.cancel()
                 await self.progress.stage(stage_for_tool(event.part.tool_name))
+
+
+async def _drain(_ctx: RunContext[RunDeps], events: AsyncIterable[AgentStreamEvent]) -> None:
+    async for _ in events:
+        pass
 
 
 def apology(locale: str, error: BaseException, funds: Funds, *, charged: bool) -> str:

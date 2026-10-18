@@ -3,16 +3,18 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
+from derp.agent.models import AgentRun
 from derp.billing.models import Purchase
 from derp.history.models import Chat, Message
 from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
 from derp.money.wallets import balance, wallet
 from derp.ops.console import ConsoleAction, proposal_buttons
-from derp.ops.owner import notify_owners
+from derp.ops.owner import notify_owners, owner_groups
 from derp.scheduler.models import Job
 from derp.scheduler.worker import run_due
+from derp.settings.start import publish_commands
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
@@ -201,3 +203,64 @@ async def test_blocking_pauses_jobs_and_stops_storing(
     async with conversation.db.session() as session:
         assert await session.scalar(select(Job.state)) == "paused"
         assert await session.get(Message, (PAT.id, ignored.message_id)) is None
+
+
+async def test_context_shows_an_owner_what_the_model_would_be_sent_and_nobody_else(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(OWNER)
+    conversation.meet(OWNER, YARD)
+    conversation.meet(PAT, YARD)
+    model.reply("noted")
+    first = await conversation.send(PAT, YARD, "derp the <b>wifi</b> password is hunter2")
+    await conversation.expect_reply(first)
+    await conversation.settle(first)
+    requests = len(model.requests)
+    async with conversation.db.session() as session:
+        runs = await session.scalar(select(func.count()).select_from(AgentRun))
+
+    after = conversation.seq
+    await conversation.settle(await conversation.ephemeral_command(OWNER, YARD, "/context what's up?", 501))
+    (shown,) = conversation.api.calls_of("sendDocument", after=after)
+    assert (
+        int(shown["ephemeral_message_parameters"]["receiver_user_id"]) == OWNER.id
+    )  # only the owner sees it
+    page = shown.attachments[0].data.decode()
+    assert "<script" not in page and "&lt;b&gt;wifi&lt;/b&gt;" in page  # chat text is shown, never run
+    assert (
+        "what&#x27;s up?" in page and "&lt;current_message&gt;" in page
+    )  # the message as if it invoked Derp
+    assert "post_polls" in page and "&lt;situation&gt;" in page  # the tier's tools and the situation block
+    assert len(model.requests) == requests  # captured before it left: no model was called
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(func.count()).select_from(AgentRun)) == runs  # nor a run stored
+
+    after = conversation.seq
+    await conversation.settle(await conversation.send(OWNER, YARD, "/context@DerpRobot"))
+    (private,) = conversation.api.calls_of("sendDocument", after=after)
+    assert int(private["chat_id"]) == OWNER.id  # typed out in the group: never posted there
+
+    after = conversation.seq
+    await conversation.settle(await conversation.send(PAT, YARD, "/context@DerpRobot"))
+    assert not conversation.api.calls_of("sendDocument", after=after)
+
+
+async def test_owners_get_an_ephemeral_context_command_in_their_groups(conversation: Conversation) -> None:
+    conversation.meet(OWNER, YARD)
+    conversation.meet(PAT, YARD)
+    await conversation.settle(await conversation.send(OWNER, YARD, "hi"))
+    await conversation.settle(await conversation.send(PAT, YARD, "hey"))
+    async with conversation.db.session() as session:
+        groups = await owner_groups(session, [OWNER.id])
+    assert groups == [(YARD.id, OWNER.id)]
+    after = conversation.seq
+    assert conversation.services is not None
+    await publish_commands(conversation.services.bot, [OWNER.id], groups)
+    (menu,) = [
+        c
+        for c in conversation.api.calls_of("setMyCommands", after=after)
+        if c["scope"]["type"] == "chat_member"
+    ]
+    assert (int(menu["scope"]["chat_id"]), int(menu["scope"]["user_id"])) == (YARD.id, OWNER.id)
+    commands = {c["command"]: c for c in menu["commands"]}
+    assert commands["context"]["is_ephemeral"] is True and commands["memory"]["is_ephemeral"] is True

@@ -31,7 +31,7 @@ from derp.inference.scout import run_scout
 from derp.money.wallets import expire_lots, release, stale_holds
 from derp.ops import observability
 from derp.ops.console import proposal_buttons
-from derp.ops.owner import ErrorTally, notify_owners, send_error_digest
+from derp.ops.owner import ErrorTally, notify_owners, owner_groups, send_error_digest
 from derp.ops.periodic import every
 from derp.scheduler.worker import Firings
 from derp.settings.privacy import enforce_retention
@@ -231,7 +231,9 @@ async def run(settings: Settings) -> None:
         dispatcher = build_dispatcher(services)
         me = await services.bot.get_me()
         log.info("polling as bot %s", me.id)
-        await publish_commands(services.bot, services.settings.owner_ids)
+        async with db.session() as session:
+            groups = await owner_groups(session, settings.owner_ids)
+        await publish_commands(services.bot, settings.owner_ids, groups)
         tasks = background_tasks(services, dispatcher["runtime"])
         await dispatcher.start_polling(
             services.bot, allowed_updates=list(ALLOWED_UPDATES), handle_signals=True

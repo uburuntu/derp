@@ -7,12 +7,14 @@ which already includes server-tool fees such as web search. Never use
 
 import hashlib
 import hmac
+import json
 import secrets
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, cast, override
 
+import httpx2
 from openai.types import chat
 from openai.types.chat import (
     ChatCompletionContentPartInputAudioParam,
@@ -30,12 +32,40 @@ from derp.config import Settings
 from derp.inference.roles import EFFORTS, Effort, RolePin
 
 
-def build_provider(settings: Settings) -> OpenRouterProvider:
+def build_provider(settings: Settings, http_client: httpx2.AsyncClient | None = None) -> OpenRouterProvider:
     return OpenRouterProvider(
         api_key=settings.openrouter_api_key,
         app_url=settings.openrouter_app_url,
         app_title=settings.openrouter_app_title,
+        http_client=http_client,
     )
+
+
+class Captured(httpx2.AsyncBaseTransport):
+    """Keeps each chat request's body and answers it with an empty completion: nothing leaves the process.
+
+    Behind ``build_provider``, the real model shows exactly what it would send (``Runtime.preview``).
+    """
+
+    def __init__(self) -> None:
+        self.bodies: list[dict[str, Any]] = []
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(await request.aread())
+        self.bodies.append(body)
+        head = {"id": "captured", "created": 0, "model": body.get("model", ""), "provider": "captured"}
+        if not body.get("stream"):
+            choice = {"index": 0, "message": {"role": "assistant", "content": "."}, "finish_reason": "stop"}
+            return httpx2.Response(
+                200, json={**head, "object": "chat.completion", "choices": [choice]}, request=request
+            )
+        delta = {"index": 0, "delta": {"role": "assistant", "content": "."}, "finish_reason": "stop"}
+        chunk = json.dumps({**head, "object": "chat.completion.chunk", "choices": [delta]})
+        stream = f"data: {chunk}\n\ndata: [DONE]\n\n".encode()
+        return httpx2.Response(
+            200, content=stream, headers={"content-type": "text/event-stream"}, request=request
+        )
 
 
 # Fast routing preferences (p50 over OpenRouter's rolling 5 minutes); soft, unlike max_price.

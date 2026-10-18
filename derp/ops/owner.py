@@ -1,4 +1,5 @@
-"""Owners: short plain-text DMs to them, best effort; error digests to the ops chat; who counts as one.
+"""Owners: short plain-text DMs to them, best effort; error digests to the ops chat; who counts as one
+and the groups they are in.
 
 Errors are counted by logger name only (content-free) and sent as one digest per
 interval, so an outage produces a line, not a flood.
@@ -6,15 +7,16 @@ interval, so an outage produces a line, not a flood.
 
 import logging
 from collections import Counter
+from collections.abc import Sequence
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardMarkup, Message
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.config import Settings
-from derp.history.models import Chat, User
+from derp.history.models import Chat, ChatMember, User
 
 log = logging.getLogger("derp.owner")
 
@@ -26,6 +28,26 @@ async def from_owner(message: Message, settings: Settings) -> bool:
         and message.from_user is not None
         and message.from_user.id in settings.owner_ids
     )
+
+
+async def owner_here(message: Message, settings: Settings) -> bool:
+    """The filter on owner commands that work in any chat an owner is in (/context; others fall through)."""
+    return message.from_user is not None and message.from_user.id in settings.owner_ids
+
+
+async def owner_groups(session: AsyncSession, owner_ids: Sequence[int]) -> list[tuple[int, int]]:
+    """(group, owner) pairs where an owner is a member and Derp hasn't left: their own command menus there."""
+    rows = await session.execute(
+        select(ChatMember.chat_id, ChatMember.user_id)
+        .join(Chat, Chat.id == ChatMember.chat_id)
+        .where(
+            ChatMember.user_id.in_(owner_ids),
+            ChatMember.status.not_in(("left", "kicked")),
+            Chat.type.in_(("group", "supergroup")),
+            func.coalesce(Chat.bot_status, "member").not_in(("left", "kicked")),
+        )
+    )
+    return [(chat_id, user_id) for chat_id, user_id in rows]
 
 
 async def notify_owners(
