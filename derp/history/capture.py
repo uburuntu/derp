@@ -5,7 +5,7 @@ edits are idempotent. Ephemeral messages (``message_id == 0``) and guest-mode
 messages are never stored.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -61,6 +61,8 @@ def classify(message: TgMessage) -> str:
     content = content_type(message)
     if content in TYPED_KINDS:
         return content
+    if content == "rich_message":  # text with structure (Derp's answers among them); its media are rows
+        return "text"
     if content in {"giveaway_winners"} or content in SERVICE_TYPES:
         return "service"
     return "other"
@@ -110,39 +112,99 @@ def _service_data(message: TgMessage, event: str) -> Any:
     return _dump(value)
 
 
+FILE_KINDS = ("video", "voice", "video_note", "audio", "document", "sticker", "animation")
+
+
+def _attachments(source: Any) -> Iterator[tuple[str, Any]]:
+    """The files a message, a quoted message or a rich block carries, by kind; a photo as its largest size."""
+    if sizes := getattr(source, "photo", None):
+        yield "photo", max(sizes, key=lambda size: size.width * size.height)
+    for kind in FILE_KINDS:
+        if (item := getattr(source, kind, None)) is not None:
+            yield kind, item
+
+
+def _sticker_mime(sticker: Any) -> str:
+    """A sticker file's type as Telegram gives it for documents: TGS (Lottie), WebM or WebP."""
+    return (
+        "application/x-tgsticker"
+        if sticker.is_animated
+        else "video/webm"
+        if sticker.is_video
+        else "image/webp"
+    )
+
+
+def _file(kind: str, item: Any) -> dict[str, Any]:
+    """A media row's columns for one Telegram file, with its preview picture when Telegram made one."""
+    sticker = kind == "sticker"
+    side = getattr(item, "length", None)  # video notes are square
+    thumb = getattr(item, "thumbnail", None)
+    return {
+        "type": kind,
+        "file_id": item.file_id,
+        "file_unique_id": item.file_unique_id,
+        "file_size": getattr(item, "file_size", None),
+        "mime_type": _sticker_mime(item) if sticker else getattr(item, "mime_type", None),
+        "width": getattr(item, "width", None) or side,
+        "height": getattr(item, "height", None) or side,
+        "duration": getattr(item, "duration", None),
+        "file_name": getattr(item, "file_name", None),
+        "sticker_emoji": item.emoji if sticker else None,
+        "sticker_set": item.set_name if sticker else None,
+        "thumb_file_id": thumb.file_id if thumb else None,
+        "thumb_unique_id": thumb.file_unique_id if thumb else None,
+    }
+
+
+def _rich_blocks(message: TgMessage) -> Iterator[Any]:
+    """A rich message's blocks in reading order, nested ones (collages, quotes, details, list items) included."""
+    stack: list[Any] = list(reversed(message.rich_message.blocks)) if message.rich_message else []
+    while stack:
+        block = stack.pop()
+        yield block
+        stack.extend(
+            reversed([*(getattr(block, "blocks", None) or ()), *(getattr(block, "items", None) or ())])
+        )
+
+
+def _visible(text: Any) -> str:
+    """What a reader sees of rich text: never the URL, user or emoji id behind it."""
+    if text is None or isinstance(text, str):
+        return text or ""
+    if isinstance(text, list):
+        return "".join(_visible(part) for part in text)  # pyright: ignore[reportUnknownVariableType]
+    for field in ("text", "alternative_text", "expression"):
+        if (value := getattr(text, field, None)) is not None:
+            return _visible(value)
+    button = getattr(text, "button", None)
+    return button.text if button is not None else ""
+
+
+def _rich_text(message: TgMessage) -> str | None:
+    """The visible text of a rich message, a line per block (table rows with ``|`` between cells)."""
+    lines: list[str] = []
+    for block in _rich_blocks(message):
+        parts = [
+            _visible(getattr(block, field, None)) for field in ("summary", "text", "expression", "caption")
+        ]
+        parts += [
+            " | ".join(_visible(cell.text) for cell in row) for row in getattr(block, "cells", None) or ()
+        ]
+        lines.append(" ".join(part for part in parts if part))
+    return "\n".join(line for line in lines if line) or None
+
+
 def media_rows(message: TgMessage, bot_id: int) -> list[dict[str, Any]]:
-    """Media attached to a message, with the bot whose file_ids they are; a photo keeps only its largest size."""
-    rows: list[dict[str, Any]] = []
+    """Media of a message, with the bot whose file_ids (previews included) they are.
+
+    Its own file, then the media blocks of a rich message, then the media of the message it quotes from
+    another chat (``external_reply``), so each can be looked at like any attachment.
+    """
+    sources = [message, *_rich_blocks(message), *([message.external_reply] if message.external_reply else [])]
+    found = [file for source in sources for file in _attachments(source)]
     base = {"chat_id": message.chat.id, "message_id": message.message_id, "bot_id": bot_id}
-    if message.photo:
-        photo = max(message.photo, key=lambda size: size.width * size.height)
-        rows.append(
-            base | {"type": "photo", "file_id": photo.file_id, "file_unique_id": photo.file_unique_id,
-                    "file_size": photo.file_size, "width": photo.width, "height": photo.height}
-        )  # fmt: skip
-    for kind in ("video", "voice", "video_note", "audio", "document", "sticker", "animation"):
-        item = getattr(message, kind)
-        if item is None:
-            continue
-        row: dict[str, Any] = base | {
-            "type": kind,
-            "file_id": item.file_id,
-            "file_unique_id": item.file_unique_id,
-            "file_size": getattr(item, "file_size", None),
-            "mime_type": getattr(item, "mime_type", None),
-            "duration": getattr(item, "duration", None),
-            "file_name": getattr(item, "file_name", None),
-        }
-        width = getattr(item, "width", None) or getattr(item, "length", None)
-        height = getattr(item, "height", None) or getattr(item, "length", None)
-        row |= {"width": width, "height": height}
-        if kind == "sticker":
-            row |= {"sticker_emoji": item.emoji, "sticker_set": item.set_name}
-        rows.append(row)
-        break
-    for idx, row in enumerate(rows):
-        row["idx"] = idx
-    return rows
+    return [base | {"idx": idx} | _file(kind, item) for idx, (kind, item) in enumerate(found)]
 
 
 async def upsert_user(session: AsyncSession, user: TgUser) -> None:
@@ -202,7 +264,7 @@ def message_values(message: TgMessage, *, capture: str) -> dict[str, Any]:
         "date": utc(message.date),
         "edit_date": utc(message.edit_date) if message.edit_date else None,
         "kind": kind,
-        "text": message.text or message.caption,
+        "text": message.text or message.caption or _rich_text(message),
         "entities": _dump(message.entities or message.caption_entities) or None,
         "reply_to_message_id": reply.message_id
         if reply is not None and reply.chat.id == message.chat.id

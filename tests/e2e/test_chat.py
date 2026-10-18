@@ -8,6 +8,7 @@ from derp.history.models import Message
 from derp.inference.roles import DEFAULT_PINS, ModelRole
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
+from tests.e2e.test_media import PNG, images_in
 
 ANNA = Person(501, "Anna", language_code="ru")
 BOB = Person(502, "Bob")
@@ -192,11 +193,13 @@ async def test_a_reply_to_another_chat_shows_where_it_came_from(
         "photo": [{"file_id": "far", "file_unique_id": "u-far", "width": 9, "height": 9}],
     }  # fmt: skip
     quote = {"text": "prices doubled", "position": 0}
+    conversation.api.register_file("far", PNG)
     sent = await conversation.send(BOB, text="derp is this true?", external_reply=external, quote=quote)
     await conversation.expect_reply(sent)
     await conversation.settle(sent)
-    current = prompt_text(model.requests[-1][-1:])
-    assert "Bob ↩ (from Daily News: photo) «prices doubled»: derp is this true?" in current
+    asked = model.requests[0][-1:]
+    assert "Bob ↩ (from Daily News: photo) «prices doubled»: derp is this true? [photo]" in prompt_text(asked)
+    assert len(images_in(asked)) == 1  # the quoted photo itself, like an attachment
 
 
 async def test_group_answers_link_cited_messages_and_see_usernames(

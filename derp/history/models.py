@@ -181,6 +181,9 @@ class MessageMedia(Base):
     file_name: Mapped[str | None]
     sticker_emoji: Mapped[str | None]
     sticker_set: Mapped[str | None]
+    # Telegram's preview picture (same bot): how a clip, an animated sticker or a file is seen when it isn't one.
+    thumb_file_id: Mapped[str | None]
+    thumb_unique_id: Mapped[str | None]
     transcript: Mapped[
         str | None
     ]  # None: not tried yet; "": tried, nothing (``transcript_model`` may say why)
