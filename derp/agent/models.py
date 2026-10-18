@@ -73,7 +73,7 @@ class RunOutput(Base):
 
 
 class Approval(Base):
-    """An expensive action waiting for its requester's Run or Cancel; denial and expiry cost nothing."""
+    """An expensive action waiting for its requester's Make it or Cancel; denial and expiry cost nothing."""
 
     __tablename__ = "approvals"
     __table_args__ = (

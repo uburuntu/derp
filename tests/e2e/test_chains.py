@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from pydantic_ai.messages import ModelResponse, ToolReturnPart
 from sqlalchemy import select
 
 from derp.agent.models import AgentRun, RunOutput
+from derp.agent.runs import load_messages
 from derp.inference.models import ProviderCall
 from derp.money.models import RunFee
 from derp.money.wallets import balance
@@ -178,14 +180,60 @@ async def test_an_unconfirmed_end_result_uses_up_its_source(
         assert (call.run_id, call.funding) == (None, "creator")
 
 
-async def test_an_image_needing_approval_is_not_chained(
-    conversation: Conversation, model: ScriptedModel
+@pytest.mark.parametrize(
+    ("step", "method", "fees"),
+    [
+        (tool_call("make_meme", text="Monday", from_result="r1"), "sendPhoto", []),
+        (tool_call("make_sticker", from_result="r1"), "sendSticker", []),
+        (tool_call("remove_background", from_result="r1"), "sendDocument", ["cutout"]),
+    ],
+    ids=["caption", "sticker", "cutout"],
+)
+async def test_an_approved_image_finishes_the_chain_it_was_part_of(
+    conversation: Conversation,
+    model: ScriptedModel,
+    cutouts: list[bytes],
+    step: object,
+    method: str,
+    fees: list[str],
 ) -> None:
+    """The asking run pauses on the priced image; Make it resumes it, so the next step still happens."""
     images = FakeImages()
     conversation.overrides["api"] = images
     await conversation.restart()
-    await fund(conversation, 150)  # the image is over a quarter of the balance: it needs a press
-    model.reply(tool_call("generate_image", prompt="a cat", final=False), "it needs a press")
-    asked = await conversation.send(JO, text="draw a cat and make it a sticker")
+    wallet_id = await fund(conversation, 150)  # the image is over a quarter of the balance: it needs a press
+    model.reply(tool_call("generate_image", prompt="a frog", final=False))
+    asked = await conversation.send(JO, text="draw a frog and finish it off")
+    prompt = await conversation.expect_reply(asked)
     await conversation.settle(asked)
-    assert "can't be part of a chain" in results_of(model, "generate_image")[0] and images.prompts == []
+    assert "costs about" in prompt["rich_message"]["markdown"] and images.prompts == []
+    prompt_id = max(mid for (cid, mid) in conversation.api.messages if cid == JO.id)
+    model.reply(step, ".")  # type: ignore[arg-type]
+    after = conversation.seq
+    await conversation.press(
+        JO, JO.id, prompt_id, prompt["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    )
+    [result] = conversation.api.calls_of(method, after=after)
+    assert int(result["reply_parameters"]["message_id"]) == asked.message_id and images.prompts == ["a frog"]
+    for other in {"sendPhoto", "sendSticker", "sendDocument", "sendRichMessage"} - {method}:
+        assert conversation.api.calls_of(other, after=after) == [], other  # only the end result is posted
+    assert 'Kept it as result "r1"' in results_of(model, "generate_image")[0]
+    [deleted] = conversation.api.calls_of("deleteMessage", after=after)
+    assert int(deleted["message_id"]) == prompt_id
+    fee = conversation.settings.effect_credits * len(fees)
+    async with conversation.db.session() as session:
+        asking = await session.scalar(select(AgentRun).where(AgentRun.trigger == "message"))
+        approved = await session.scalar(select(AgentRun).where(AgentRun.trigger == "callback"))
+        assert asking is not None and approved is not None and approved.status == "completed"
+        assert approved.charged_credits == IMAGE_CREDITS + fee  # charged once, after the result arrived
+        [call] = await session.scalars(select(ProviderCall).where(ProviderCall.kind == "image"))
+        assert (call.run_id, call.funding) == (approved.id, "paid")
+        assert list(await session.scalars(select(RunFee.item))) == fees
+        assert await balance(session, wallet_id) == 150 - IMAGE_CREDITS - fee - asking.charged_credits
+        # The resumed run keeps the paused call at the head of its history, so a replay pairs it with its result.
+        stored = load_messages(approved.messages)
+    called = {c.tool_call_id for m in stored if isinstance(m, ModelResponse) for c in m.tool_calls}
+    answered = {p.tool_call_id for m in stored for p in m.parts if isinstance(p, ToolReturnPart)}
+    first = stored[0]
+    assert answered <= called and isinstance(first, ModelResponse)
+    assert first.tool_calls[0].tool_name == "generate_image"

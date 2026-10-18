@@ -27,8 +27,8 @@ them reaches Telegram — the result itself or one derived from it. A result
 that never arrives has its images ledgered as ``creator`` (absorbed) and its
 fees dropped; an unconfirmed send counts as never arrived, and uses up its
 source. When a derived result fails to send, its source stays kept and is
-posted at the end. Results needing an approval aren't kept (the approved
-image comes later, in its own run).
+posted at the end. An image needing approval pauses the run instead; Make
+it resumes the run from that call, so the chain carries on there.
 """
 
 from collections.abc import Awaitable, Callable, Sequence

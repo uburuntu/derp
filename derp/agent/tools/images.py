@@ -1,13 +1,15 @@
 """Image generation and editing, paid from Derpcoins.
 
-Images need paid funding (the free daily Derpcoins don't cover one). A single
-image goes straight out when it fits the run's hold, unless it costs more than
-the approval line, in which case the requester gets a Run / Cancel prompt.
+Images need paid funding (the free daily Derpcoins don't cover one). An image
+goes straight out (or is kept for a next step) when it fits the run's hold,
+unless it costs more than the approval line: then the requester gets a Make it /
+Cancel prompt and the run pauses on the call; Make it resumes the run there, so
+a chain (caption it, make it a sticker, cut it out) carries on from the image.
 """
 
 from typing import Literal
 
-from pydantic_ai import RunContext
+from pydantic_ai import ApprovalRequired, RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.approvals import ask, needs_approval
@@ -64,38 +66,33 @@ async def generate_image(
     price = deps.settings.credits_for_usd(deps.settings.image_price_usd)
     if deps.funding is not Funding.PAID or deps.funds.wallet_id is None:
         return "Images need Derpcoins (the free daily ones don't cover one). Tell them /buy gets some."
-    avatar_of: int | None = None
-    try:
-        if profile_photo or person:
-            avatar_of = await photo_owner(deps, edit_message_id, person)
-            await avatar_source(
-                deps, edit_message_id, person
-            )  # fails early (and warms the cache) without a photo
-        if chat_photo:
-            await chat_photo_source(deps)
-    except Refused as refused:
-        return str(refused)
-    edits_message = (edit or edit_message_id is not None) and avatar_of is None
-    references = ((edit_message_id,) if edit_message_id is not None else deps.seen) if edits_message else ()
-    job = ImageJob(prompt[:2000], aspect_ratio, references, avatar_of=avatar_of, chat_photo=chat_photo)
-    async with deps.db.session() as session:
-        rest = await balance(session, deps.funds.wallet_id, sources=PAID_SOURCES)
-    if needs_approval(deps.settings, price, deps.funds.credits + rest):
-        if source is not None or not final:
-            return (
-                "This image costs enough that they must confirm the price first, so it can't be part of a chain: "
-                "draw it on its own (final, without from_result) and carry on from the posted image next time."
-            )
-        prompt_card = lambda: ask(
-            deps.db, deps.bot, deps.settings, deps.target,
-            kind="image", args=job.as_args(), price=price, user_id=deps.user_id, run_id=deps.run_id,
-            locale=deps.locale,
-        )  # fmt: skip
+    if ctx.tool_call_approved:  # they pressed Make it: exactly the job the prompt priced
+        job = ImageJob.from_args(ctx.tool_call_metadata or {})
+    else:
         try:
-            await deliver(deps, "other", "price prompt", prompt_card, history=False)
+            job = await _job(
+                deps, prompt, edit, edit_message_id, profile_photo, chat_photo, person, aspect_ratio
+            )
         except Refused as refused:
             return str(refused)
-        return 'They were asked to confirm the price with a button; the image comes after they press it. End your turn with just ".".'
+        async with deps.db.session() as session:
+            rest = await balance(session, deps.funds.wallet_id, sources=PAID_SOURCES)
+        if needs_approval(deps.settings, price, deps.funds.credits + rest):
+            if source is not None:
+                return (
+                    "This image costs enough that they must confirm the price first, so it can't start from a "
+                    "kept result: draw it without from_result, or edit a posted image by its id."
+                )
+            prompt_card = lambda: ask(
+                deps.db, deps.bot, deps.settings, deps.target,
+                kind="image", args=job.as_args(), price=price, user_id=deps.user_id, run_id=deps.run_id,
+                call=ctx.tool_call_id or "", locale=deps.locale,
+            )  # fmt: skip
+            try:
+                await deliver(deps, "other", "price prompt", prompt_card, history=False)
+            except Refused as refused:
+                return str(refused)
+            raise ApprovalRequired  # the run pauses here; Make it resumes it from this call
     if (left := await hold_left(ctx)) is not None and price > left:
         return f"Not enough Derpcoins left in this answer for an image (needs about {price}). Tell them /buy gets more."
     extra = [source.data] if source is not None else []
@@ -113,6 +110,28 @@ async def generate_image(
         return await emit(deps, made, final=final, source=source.kept if source else None)
     except Refused as refused:
         return str(refused)
+
+
+async def _job(
+    deps: RunDeps,
+    prompt: str,
+    edit: bool,
+    edit_message_id: int | None,
+    profile_photo: bool,
+    chat_photo: bool,
+    person: str | None,
+    aspect_ratio: str,
+) -> ImageJob:
+    """What to draw, its references resolved now; ``Refused`` when one can't be."""
+    avatar_of: int | None = None
+    if profile_photo or person:
+        avatar_of = await photo_owner(deps, edit_message_id, person)
+        await avatar_source(deps, edit_message_id, person)  # no photo fails early (and warms the cache)
+    if chat_photo:
+        await chat_photo_source(deps)
+    edits_message = (edit or edit_message_id is not None) and avatar_of is None
+    references = ((edit_message_id,) if edit_message_id is not None else deps.seen) if edits_message else ()
+    return ImageJob(prompt[:2000], aspect_ratio, references, avatar_of=avatar_of, chat_photo=chat_photo)
 
 
 family = Family("images", toolset)

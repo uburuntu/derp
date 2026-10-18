@@ -287,7 +287,12 @@ async def test_a_failure_before_the_model_runs_returns_the_hold(
     await conversation.settle(sent)
     async with conversation.db.session() as session:
         assert await session.scalar(select(Reservation.state)) == "released"
-        assert await session.scalar(select(AgentRun.id)) is None  # its row rolled back with the window
+        run = await session.scalar(select(AgentRun))
+        assert run is not None and (run.status, run.error_type, run.charged_credits) == (
+            "failed",
+            "RuntimeError",
+            0,
+        )
 
 
 async def test_free_model_runs_keep_the_long_tail_in_the_toolbox(

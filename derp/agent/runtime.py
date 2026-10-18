@@ -13,8 +13,8 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import AsyncIterable
-from dataclasses import dataclass
+from collections.abc import AsyncIterable, Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
 
 from aiogram import Bot
@@ -22,10 +22,19 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramFor
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.types import Message as TgMessage
 from aiogram.types import User as TgUser
-from pydantic_ai import Agent, CancellationToken, RunCancelled, RunContext, capture_run_messages
+from pydantic_ai import (
+    Agent,
+    CancellationToken,
+    DeferredToolRequests,
+    DeferredToolResults,
+    RunCancelled,
+    RunContext,
+    capture_run_messages,
+)
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     AgentStreamEvent,
+    BinaryContent,
     FunctionToolCallEvent,
     ModelMessage,
     PartDeltaEvent,
@@ -38,20 +47,19 @@ from pydantic_ai.usage import UsageLimits
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from derp.agent.approvals import close_prompt
+from derp.agent.approvals import close_prompt, resumption
 from derp.agent.context import Window, build_window
 from derp.agent.decisions import Decider, Verdict
 from derp.agent.deps import RunDeps
 from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
-from derp.agent.images import ImageJob, make_image
 from derp.agent.lanes import Lanes
-from derp.agent.media import Referenced, as_content, inspect, note_images, run_media
+from derp.agent.media import Inspected, Referenced, as_content, inspect, note_images, run_media
 from derp.agent.models import AgentRun, Approval
 from derp.agent.outputs import absorb_kept, flush, hold_left
 from derp.agent.persona import PERSONA, situation
 from derp.agent.prefix import prefixes
 from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
-from derp.agent.runs import finish_run, price_unreported, record_output, start_run
+from derp.agent.runs import finish_run, load_messages, price_unreported, record_output, start_run
 from derp.agent.tools import CAPABILITIES, FAMILIES
 from derp.agent.tools import web as web_tools
 from derp.agent.tools.memory import family as memory_family
@@ -73,10 +81,10 @@ from derp.history.render import (
     render_line,
 )
 from derp.history.transcription import Transcriber
-from derp.inference.api import OpenRouterAPI, OpenRouterError
+from derp.inference.api import OpenRouterAPI
 from derp.inference.openrouter import ModelFactory, chat_settings, conversation_id
 from derp.inference.pins import PinStore
-from derp.inference.roles import ModelRole
+from derp.inference.roles import Effort, RolePin
 from derp.locales import resolve, t
 from derp.memory.notes import load_memory, notes_block
 from derp.money.free import answer_unfunded, consented, note_empty_wallet
@@ -86,7 +94,6 @@ from derp.ops.observability import record_run_failure
 from derp.ops.owner import is_blocked, notify_owners
 from derp.telegram.buttons import markup
 from derp.telegram.media import MediaGateway
-from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import PartialDeliveryError, Target, send_markdown
 from derp.tools.lookups import Lookups
 from derp.tools.workers import WorkerPool
@@ -104,6 +111,28 @@ class Outcome:
     status: str
     delivered: tuple[int, ...]
     refused: bool = False  # Telegram won't take messages here (removed, banned, topic gone)
+
+
+@dataclass(slots=True)
+class Ask:
+    """What a run puts to the model: a new request after the chat window, or a paused run picked up again.
+
+    A paused run (an action waiting for its requester's approval) resumes with ``request`` None: its
+    stored history ends on the call, ``approved`` lets that call run, and the model goes on from its
+    result. ``carried`` is the paused turn, kept at the head of this run's history (never re-ledgered)
+    so a later replay pairs the call with its result.
+    """
+
+    history: list[ModelMessage]
+    request: str | list[str | BinaryContent] | None
+    trigger_message_id: int
+    prompt: str = ""  # the current message as rendered, for the failure export
+    tokens: int = 0  # the window's estimated size
+    seen: tuple[int, ...] = ()  # messages whose images the run looks at (``RunDeps.seen``)
+    unnoted: list[Inspected] = field(default_factory=list[Inspected])  # inspected images to describe after
+    effort: Effort | None = None  # a deeper reasoning effort the decision asked for (paid runs)
+    approved: DeferredToolResults | None = None
+    carried: list[ModelMessage] = field(default_factory=list[ModelMessage])
 
 
 @dataclass(slots=True)
@@ -159,8 +188,9 @@ class Runtime:
         # Where each topic's last window started: kept while it fits, so consecutive runs share a cacheable prefix.
         # Keyed by funding tier too: tiers have their own budget and model, so they'd only reset each other.
         self.window_starts: dict[tuple[int, int | None, str], int] = {}
-        self.agent = Agent[RunDeps, str](
-            output_type=str,
+        # A call waiting for its requester's approval ends the run with DeferredToolRequests (approvals.py).
+        self.agent = Agent[RunDeps, str | DeferredToolRequests](
+            output_type=[str, DeferredToolRequests],
             deps_type=RunDeps,
             instructions=PERSONA,
             capabilities=CAPABILITIES,
@@ -239,35 +269,19 @@ class Runtime:
             await answer_unfunded(self.db, self.bot, message, chat, target, locale)
             return Outcome(None, "unfunded", ())
         funding = funds.funding
-        run_id: int | None = None
-        deps: RunDeps | None = None
-        spoke = False  # something was (or may have been) sent to the chat for this trigger
-        self.in_flight.add(funds.operation_id)
-        try:
+
+        async def compose(pin: RolePin) -> Ask:
             reply_to = _replied_id(message)
             async with self.db.session() as session:
                 images = await run_media(session, chat.id, message.message_id, reply_to)
-            if verdict is None:  # nothing was asked before queueing: ask what this turn needs, if anything
-                verdict = await self.decider.decide(
+            decided = verdict
+            if decided is None:  # nothing was asked before queueing: ask what this turn needs, if anything
+                decided = await self.decider.decide(
                     message, bot_id=self.bot.id, tz=tz, images=images, paid=funding is Funding.PAID
                 )
-            if images.fallback and not verdict.images:
+            if images.fallback and not decided.images:
                 images = Referenced([])
-            pin = await self.pins.get(funding.role)
-            async with self.db.transaction() as session:
-                run = await start_run(
-                    session,
-                    chat_id=chat.id,
-                    user_id=asker.id,
-                    trigger=trigger,
-                    role=funding.role.value,
-                    funding=funding.value,
-                    thread_id=target.thread_id,
-                    trigger_message_id=message.message_id or None,
-                    wallet_id=funds.wallet_id,
-                    reservation_id=funds.reservation_id,
-                )
-                run_id = run.id
+            async with self.db.session() as session:
                 topic_key = (chat.id, target.thread_id, funding.value)
                 window = await build_window(
                     session,
@@ -298,29 +312,6 @@ class Runtime:
                 ):
                     earlier = None
             inspected = await inspect(self.gateway, images.rows)
-            model = self.model_factory(pin)
-            deps = RunDeps(
-                db=self.db,
-                bot=self.bot,
-                settings=self.settings,
-                chat=chat,
-                user_id=asker.id,
-                locale=locale,
-                trigger_message_id=message.message_id,
-                run_id=run.id,
-                funds=funds,
-                target=target,
-                tz=tz,
-                gateway=self.gateway,
-                pin=pin,
-                model=model,
-                model_factory=self.model_factory,
-                api=self.api,
-                pins=self.pins,
-                lookups=self.lookups,
-                workers=self.workers,
-                seen=tuple(dict.fromkeys(row.message_id for row in images.rows)),
-            )
             brief = situation(
                 chat=chat,
                 asker=asker.full_name,
@@ -335,6 +326,91 @@ class Runtime:
                 blind=bool(inspected) and not pin.vision,
             )
             request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
+            return Ask(
+                # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing
+                # here keeps the captured list aligned so the run's own messages slice out exactly.
+                history=repair_messages(window.messages),
+                request=[request, *as_content(inspected)] if pin.vision and inspected else request,
+                prompt=prompt,
+                tokens=window.tokens,
+                trigger_message_id=message.message_id,
+                seen=tuple(dict.fromkeys(row.message_id for row in images.rows)),
+                unnoted=[item for item in inspected if item.row.message_id not in images.unnoted],
+                effort=decided.effort if funding is Funding.PAID else None,
+            )
+
+        return await self._run(
+            chat=chat,
+            user_id=asker.id,
+            locale=locale,
+            target=target,
+            funds=funds,
+            trigger=trigger,
+            trigger_message_id=message.message_id or None,
+            compose=compose,
+            say=lambda text: self._say(target, text),
+        )
+
+    async def _run(
+        self,
+        *,
+        chat: Chat,
+        user_id: int,
+        locale: str,
+        target: Target,
+        funds: Funds,
+        trigger: str,
+        trigger_message_id: int | None,
+        compose: Callable[[RolePin], Awaitable[Ask]],
+        say: Callable[[str], Awaitable[None]],
+    ) -> Outcome:
+        """Run the model on what ``compose`` asks, then deliver, record and settle; notices go to ``say``."""
+        funding = funds.funding
+        run_id: int | None = None
+        deps: RunDeps | None = None
+        spoke = False  # something was (or may have been) sent to the chat for this trigger
+        self.in_flight.add(funds.operation_id)
+        try:
+            pin = await self.pins.get(funding.role)
+            async with self.db.transaction() as session:
+                run = await start_run(
+                    session,
+                    chat_id=chat.id,
+                    user_id=user_id,
+                    trigger=trigger,
+                    role=funding.role.value,
+                    funding=funding.value,
+                    thread_id=target.thread_id,
+                    trigger_message_id=trigger_message_id,
+                    wallet_id=funds.wallet_id,
+                    reservation_id=funds.reservation_id,
+                )
+                run_id = run.id
+            ask = await compose(pin)
+            model = self.model_factory(pin)
+            deps = RunDeps(
+                db=self.db,
+                bot=self.bot,
+                settings=self.settings,
+                chat=chat,
+                user_id=user_id,
+                locale=locale,
+                trigger_message_id=ask.trigger_message_id,
+                run_id=run.id,
+                funds=funds,
+                target=target,
+                tz=chat_time(chat),
+                gateway=self.gateway,
+                pin=pin,
+                model=model,
+                model_factory=self.model_factory,
+                api=self.api,
+                pins=self.pins,
+                lookups=self.lookups,
+                workers=self.workers,
+                seen=ask.seen,
+                history_start=len(ask.history),
+            )
             caps = self.settings.run_caps
             progress: Progress = (
                 DraftProgress(self.bot, target, locale=locale)
@@ -345,10 +421,6 @@ class Runtime:
             output = ""
             error: BaseException | None = None
             stopped = False
-            # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing here
-            # keeps the captured list aligned so the run's own messages slice out exactly.
-            history = repair_messages(window.messages)
-            deps.history_start = len(history)
             new_messages: list[ModelMessage] = []
             stream = _Stream(progress, token)
             guard = Guard(
@@ -369,15 +441,16 @@ class Runtime:
                     try:
                         async with asyncio.timeout(caps.timeout_seconds):
                             result = await self.agent.run(
-                                [request, *as_content(inspected)] if pin.vision and inspected else request,
-                                message_history=history,
+                                ask.request,
+                                message_history=ask.history,
+                                deferred_tool_results=ask.approved,
                                 deps=deps,
                                 model=guard.model(model),
                                 model_settings=chat_settings(
                                     pin,
                                     max_tokens=caps.output_tokens,
                                     session=conversation_id(f"chat:{chat.id}:{target.thread_id or 0}"),
-                                    effort=verdict.effort if funding is Funding.PAID else None,
+                                    effort=ask.effort,
                                 ),
                                 usage_limits=UsageLimits(  # backstops: the guard wraps up before these
                                     request_limit=caps.tool_calls + 1 + BACKSTOP,
@@ -388,7 +461,8 @@ class Runtime:
                                 event_stream_handler=stream.handle,
                                 cancellation_token=token,
                             )
-                        output = result.output
+                        # A call paused for approval ends the run: its price prompt said what there was to say.
+                        output = result.output if isinstance(result.output, str) else ""
                         new_messages = result.new_messages()
                     except RunCancelled as cancelled:  # the user pressed stop: keep what was written so far
                         stopped = True
@@ -403,14 +477,14 @@ class Runtime:
                         new_messages = (
                             list(interrupted.new_messages())
                             if interrupted
-                            else list(captured[len(history) :])
+                            else list(captured[len(ask.history) :])
                         )
             finally:
                 if draft_key is not None:
                     self.active.pop(draft_key, None)
                 await progress.close()
             await price_unreported(
-                self.db, new_messages, funding.role, self.prefix[funding] + window.tokens, api=self.api
+                self.db, new_messages, funding.role, self.prefix[funding] + ask.tokens, api=self.api
             )
             await flush(deps)  # results kept for a next step nobody took: posted before the text answer
             silent = output.strip() in SILENT and bool(
@@ -442,19 +516,20 @@ class Runtime:
                     stored,
                     new_messages,
                     status=status,
-                    context_tokens=window.tokens,
+                    context_tokens=ask.tokens,
                     error_type=type(error).__name__ if error else None,
+                    carried=ask.carried,
                 )
             await note_images(
                 self.db,
                 model,
                 pin,
-                [item for item in inspected if item.row.message_id not in images.unnoted],
+                ask.unnoted,
                 run_id=run.id,
                 funding=funding.value,
                 role=funding.role,
                 chat_id=chat.id,
-                user_id=asker.id,
+                user_id=user_id,
             )
             async with self.db.transaction() as session:
                 charged = await self.funder.settle(
@@ -468,12 +543,12 @@ class Runtime:
             suffix = "_partial" if charged else ""
             if stream.capped and not deps.delivered:
                 spoke = True
-                await self._say(target, t(locale, f"agent.capped{suffix}"))
+                await say(t(locale, f"agent.capped{suffix}"))
             if error is not None:
-                record_run_failure(run.id, error, prompt)
+                record_run_failure(run.id, error, ask.prompt)
                 if not isinstance(error, TelegramAPIError) and not deps.delivered:
                     spoke = True
-                    await self._apologize(target, locale, error, funds, charged=bool(charged))
+                    await say(apology(locale, error, funds, charged=bool(charged)))
             refused = isinstance(error, TelegramForbiddenError | TelegramBadRequest) and not deps.delivered
             return Outcome(run.id, status, tuple(message_id for message_id, _ in deps.delivered), refused)
         except (
@@ -485,7 +560,7 @@ class Runtime:
             await self._abandon(run_id, funds, exc)
             answered = spoke or (deps is not None and bool(deps.delivered or deps.reacted))
             if isinstance(exc, Exception) and not answered:  # not on shutdown or cancellation
-                await self._say(target, t(locale, "agent.failed"))
+                await say(t(locale, "agent.failed"))
             raise
         finally:
             self.in_flight.discard(funds.operation_id)
@@ -570,7 +645,8 @@ class Runtime:
                             toolsets=toolsets_for(deps, families),
                             capabilities=[guard],
                         )
-                    text, messages = result.output, result.new_messages()
+                    text = result.output if isinstance(result.output, str) else ""  # nothing here asks first
+                    messages = result.new_messages()
                 except Exception as exc:  # noqa: BLE001 - the caller says so; nothing is charged
                     status, error_type, messages = "failed", type(exc).__name__, list(captured)
             await price_unreported(
@@ -603,7 +679,7 @@ class Runtime:
             self.in_flight.discard(detached.funds.operation_id)
 
     async def run_approved(self, approval: Approval, chat: Chat, locale: str) -> None:
-        """Carry out an approved action as its own run, funded now from the requester's paid order.
+        """Resume the run that asked, from its approved call, funded now from the requester's paid order.
 
         It queues in the chat topic's lane: the run that posted the button may still hold its turn's money.
         """
@@ -612,9 +688,35 @@ class Runtime:
 
     async def _run_approved(self, approval: Approval, chat: Chat, locale: str) -> None:
         target = Target(approval.chat_id, approval.thread_id, approval.reply_to)
+        told = False
+
+        async def say(text: str, keyboard: InlineKeyboardMarkup | None = None) -> None:
+            nonlocal told
+            told = True
+            if not await close_prompt(self.bot, approval, text, keyboard):  # no "drawing…" left behind
+                await self._say(target, text, keyboard)
+
         async with self.db.session() as session:
             if await is_blocked(session, chat.id, approval.user_id):
                 return
+            paused = await session.get(AgentRun, approval.run_id) if approval.run_id is not None else None
+        try:  # the asking run's history, its approved call still open
+            history = (
+                repair_messages(load_messages(paused.messages), repair_last_response=False) if paused else []
+            )
+        except ValueError:  # stored by a version this one can't load
+            history = []
+        found = resumption(approval, history)
+        if paused is None or found is None:  # its history is gone (privacy, retention): nothing to resume
+            return await say(t(locale, "approvals.failed"))
+        frontier, approved = found
+        ask = Ask(
+            history=history,
+            request=None,
+            trigger_message_id=paused.trigger_message_id or 0,
+            approved=approved,
+            carried=history[frontier:],
+        )
         funds = await self.funder.reserve(
             chat_id=chat.id,
             private=chat.type == "private",
@@ -622,58 +724,29 @@ class Runtime:
             operation_id=f"approval:{approval.id}",
             paid_minimum=approval.credits,
         )
-        if funds is None or funds.funding is not Funding.PAID or funds.credits < approval.credits:
-            if funds is not None and funds.reservation_id is not None:
-                async with self.db.transaction() as session:
-                    await release(session, funds.operation_id)
-            no_coins = t(locale, "approvals.no_coins")
-            buy = markup(buy_button(locale, group=chat.type != "private"))
-            if not await close_prompt(self.bot, approval, no_coins, buy):  # no "drawing…" left behind
-                await self._say(target, no_coins, buy)
-            return
-        async with self.db.transaction() as session:
-            run = await start_run(
-                session,
-                chat_id=chat.id,
-                user_id=approval.user_id,
-                trigger="callback",
-                role=ModelRole.IMAGE.value,
-                funding=funds.funding.value,
-                thread_id=approval.thread_id,
-                wallet_id=funds.wallet_id,
-                reservation_id=funds.reservation_id,
+        if funds is None:
+            return await say(
+                t(locale, "approvals.no_coins"), markup(buy_button(locale, group=chat.type != "private"))
             )
-        sent: TgMessage | None = None
-        error: BaseException | None = None
-        self.in_flight.add(funds.operation_id)
-        try:
-            sent = await make_image(
-                db=self.db, api=self.api, bot=self.bot, gateway=self.gateway,
-                pin=await self.pins.get(ModelRole.IMAGE), target=target, job=ImageJob.from_args(approval.args),
-                run_id=run.id, funding=funds.funding.value, user_id=approval.user_id,
-            )  # fmt: skip
-        except Exception as failed:  # noqa: BLE001 - released below; the prompt says so
-            error = failed
-        finally:
-            async with self.db.transaction() as session:
-                stored = await session.merge(run)
-                if sent is not None:
-                    record_output(session, stored, sent.message_id, "image")
-                finish_run(session, stored, [], status="completed" if sent else "failed",
-                           error_type=type(error).__name__ if error else None)  # fmt: skip
-                charged = await self.funder.settle(session, funds, run.id, delivered=sent is not None)
-                stored.charged_credits = charged
-            self.in_flight.discard(funds.operation_id)
-        if sent is not None:  # the image says it all: the "drawing…" prompt goes
+
+        async def compose(_pin: RolePin) -> Ask:
+            return ask
+
+        outcome = await self._run(
+            chat=chat,
+            user_id=approval.user_id,
+            locale=locale,
+            target=target,
+            funds=funds,
+            trigger="callback",
+            trigger_message_id=None,
+            compose=compose,
+            say=say,
+        )
+        if outcome.delivered:  # the result says it all: the "drawing…" prompt goes
             await close_prompt(self.bot, approval)
-            await note_empty_wallet(self.bot, self.funder, chat, funds, charged, approval.thread_id, locale)
-            return
-        unsure = isinstance(error, TelegramAPIError) and isinstance(error, AMBIGUOUS)  # it may have arrived
-        note = t(locale, "approvals.unconfirmed" if unsure else "approvals.failed")
-        if not await close_prompt(self.bot, approval, note):
-            await self._say(target, note)
-        if error is not None and not isinstance(error, OpenRouterError | TelegramAPIError):
-            raise error
+        elif not told:
+            await say(t(locale, "approvals.failed"))
 
     async def _abandon(self, run_id: int | None, funds: Funds, error: BaseException) -> None:
         """Mark a run that escaped its normal close as failed and return its hold (no-op once settled)."""
@@ -694,15 +767,6 @@ class Runtime:
             return False
         token.cancel()
         return True
-
-    async def _apologize(
-        self, target: Target, locale: str, error: BaseException, funds: Funds, *, charged: bool
-    ) -> None:
-        if funds.funding is Funding.FREE and isinstance(error, ModelHTTPError) and error.status_code == 429:
-            await self._say(target, t(locale, "agent.free_busy"))  # OpenRouter's shared free limits
-            return
-        key = "agent.timeout" if isinstance(error, TimeoutError) else "agent.failed"
-        await self._say(target, t(locale, f"{key}_partial" if charged else key))
 
     async def _say(self, target: Target, text: str, keyboard: InlineKeyboardMarkup | None = None) -> None:
         try:
@@ -741,6 +805,13 @@ class _Stream:
                     self.capped = True
                     self.token.cancel()
                 await self.progress.stage(stage_for_tool(event.part.tool_name))
+
+
+def apology(locale: str, error: BaseException, funds: Funds, *, charged: bool) -> str:
+    if funds.funding is Funding.FREE and isinstance(error, ModelHTTPError) and error.status_code == 429:
+        return t(locale, "agent.free_busy")  # OpenRouter's shared free limits
+    key = "agent.timeout" if isinstance(error, TimeoutError) else "agent.failed"
+    return t(locale, f"{key}_partial" if charged else key)
 
 
 def _replied_id(message: TgMessage) -> int | None:
