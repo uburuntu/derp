@@ -6,11 +6,13 @@ from typing import Any
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import Message, TelegramObject
 
-from derp.agent.invocation import detect_trigger, starts_with_command
+from derp.agent.decisions import Decider
+from derp.agent.invocation import TriggerKind, detect_trigger, starts_with_command
 from derp.db.engine import Database
 from derp.history.capture import index_sticker, is_stored, store_message, upsert_chat, upsert_user
 from derp.history.members import track_message
 from derp.history.models import Message as MessageRow
+from derp.history.render import chat_time
 from derp.history.transcription import Transcriber
 from derp.ops.owner import is_blocked
 
@@ -28,6 +30,11 @@ class CaptureMiddleware(BaseMiddleware):
     it (privacy mode, ambient off), so its text and media are available to the run. Stored voice
     messages and video notes are transcribed before handlers run (ambient ones only under the daily
     creator cap), audio files and videos only when they are part of an invocation.
+
+    A name-only mention in a group is an invocation only if the decision pin says it speaks to
+    Derp (``agent.decisions``), asked before anything is stored: a passing mention is an ordinary
+    message (stored only while the chat keeps ambient context, its reply not saved, no invocation
+    transcription). Nobody blocked is screened.
 
     Adds ``trigger`` (or None) and ``chat_row`` to handler data. Guest-mode
     messages pass through untouched: they are never stored.
@@ -54,6 +61,12 @@ class CaptureMiddleware(BaseMiddleware):
             if event.from_user is not None:
                 await upsert_user(session, event.from_user)
             blocked = await is_blocked(session, chat.id, event.from_user.id if event.from_user else None)
+        decider: Decider | None = data.get("decider")
+        if trigger is not None and trigger.kind is TriggerKind.NAME and not blocked and decider is not None:
+            verdict = await decider.decide(event, bot_id=me.id, tz=chat_time(chat), named=True)
+            if not verdict.addressed:
+                trigger = None
+        async with db.transaction() as session:
             stored = False
             keep = trigger is not None or chat.type == "private" or chat.ambient
             if self.edits and not keep and not command and not blocked:  # an edit updates a row already kept

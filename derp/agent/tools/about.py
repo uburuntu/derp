@@ -20,6 +20,7 @@ import derp
 from derp.agent.deps import RunDeps
 from derp.agent.toolsets import ALL_TIERS, Family
 from derp.config import Settings
+from derp.inference.openrouter import REASONING_ROOM
 from derp.locales import t
 from derp.memory import notes
 from derp.money.funding import Funding
@@ -125,7 +126,8 @@ def facts(topic: Topic, settings: Settings, username: str, families: Sequence[Fa
             return [
                 (
                     f"- Per answer: {caps.tool_calls} tool calls, {caps.visible_outputs} visible outputs (messages, "
-                    f"polls, stickers…), {caps.output_tokens:,} output tokens per model reply, "
+                    f"polls, stickers…), {caps.output_tokens:,} output tokens per model reply (up to "
+                    f"{caps.output_tokens * max(REASONING_ROOM.values()):,} when it thinks harder), "
                     f"{caps.timeout_seconds:g} seconds, {caps.credits} Derpcoins."
                 ),
                 (

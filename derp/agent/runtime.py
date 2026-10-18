@@ -49,7 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.approvals import close_prompt, resumption
 from derp.agent.context import Window, build_window
-from derp.agent.decisions import Decider, Verdict
+from derp.agent.decisions import Decider
 from derp.agent.deps import RunDeps
 from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
 from derp.agent.lanes import Lanes
@@ -197,24 +197,14 @@ class Runtime:
             retries=2,  # a second chance at a bad tool call: two misses in a row would end the turn
         )
 
-    async def screen(self, message: TgMessage, chat: Chat) -> Verdict:
-        """Whether a name-only mention speaks to Derp, asked along with what its run would need to know.
-
-        Called before anything is posted or queued: a passing mention never posts, nor supersedes a question
-        waiting its turn. The verdict goes on to ``answer``.
-        """
-        async with self.db.session() as session:
-            images = await run_media(session, chat.id, message.message_id, _replied_id(message))
-        return await self.decider.decide(
-            message, bot_id=self.bot.id, tz=chat_time(chat), named=True, images=images
-        )
-
     async def answer(
-        self, message: TgMessage, chat: Chat, *, trigger: str = "message", verdict: Verdict | None = None
+        self, message: TgMessage, chat: Chat, *, trigger: str = "message", again: bool = False
     ) -> Outcome | None:
-        """Answer an invocation, queued per chat topic; ``verdict``: what ``screen`` already decided.
+        """Answer an invocation, queued per chat topic.
 
-        None when an owner blocked the chat or the asker, or the trigger was merged into a newer one or is a duplicate.
+        None when an owner blocked the chat or the asker, or the trigger was merged into a newer one, is older
+        than one of the asker's already answered there (unless asked ``again``: Continue after a top-up), or is
+        a duplicate.
         """
         if message.from_user is None:
             raise ValueError("an invocation needs a sender")
@@ -222,10 +212,10 @@ class Runtime:
             if await is_blocked(session, chat.id, message.from_user.id):
                 return None
         key = (chat.id, Target.reply_to_message(message).thread_id)
-        async with self.lanes.turn(key, message.from_user.id, message.message_id) as go:
+        async with self.lanes.turn(key, message.from_user.id, message.message_id, ordered=not again) as go:
             if not go or (message.message_id and await self._answered(chat.id, message.message_id)):
                 return None
-            return await self._answer(message, chat, trigger=trigger, verdict=verdict)
+            return await self._answer(message, chat, trigger=trigger)
 
     async def _answered(self, chat_id: int, message_id: int) -> bool:
         """A redelivered update (e.g. after a restart) must not be answered twice."""
@@ -237,9 +227,7 @@ class Runtime:
             )
         return found is not None
 
-    async def _answer(
-        self, message: TgMessage, chat: Chat, *, trigger: str, verdict: Verdict | None
-    ) -> Outcome:
+    async def _answer(self, message: TgMessage, chat: Chat, *, trigger: str) -> Outcome:
         asker = message.from_user
         if asker is None:
             raise ValueError("an invocation needs a sender")
@@ -271,73 +259,78 @@ class Runtime:
         funding = funds.funding
 
         async def compose(pin: RolePin) -> Ask:
-            reply_to = _replied_id(message)
             async with self.db.session() as session:
-                images = await run_media(session, chat.id, message.message_id, reply_to)
-            decided = verdict
-            if decided is None:  # nothing was asked before queueing: ask what this turn needs, if anything
-                decided = await self.decider.decide(
-                    message, bot_id=self.bot.id, tz=tz, images=images, paid=funding is Funding.PAID
-                )
-            if images.fallback and not decided.images:
-                images = Referenced([])
-            async with self.db.session() as session:
-                topic_key = (chat.id, target.thread_id, funding.value)
-                window = await build_window(
-                    session,
-                    chat_id=chat.id,
-                    thread_id=target.thread_id,
-                    before_message_id=message.message_id or 2**62,
-                    budget=self.funder.window(funding),
+                images = await run_media(session, chat.id, message.message_id, _replied_id(message))
+                deeper = await self.funder.affords_deeper(session, funds)
+            # Asked while the window is built; awaited before images are inspected and the request is built.
+            deciding = asyncio.create_task(
+                self.decider.decide(message, bot_id=self.bot.id, tz=tz, images=images, effort=deeper)
+            )
+            try:
+                async with self.db.session() as session:
+                    topic_key = (chat.id, target.thread_id, funding.value)
+                    window = await build_window(
+                        session,
+                        chat_id=chat.id,
+                        thread_id=target.thread_id,
+                        before_message_id=message.message_id or 2**62,
+                        budget=self.funder.window(funding),
+                        tz=tz,
+                        start_at=self.window_starts.get(topic_key),
+                    )
+                    if len(self.window_starts) > WINDOW_STARTS_KEPT:
+                        self.window_starts.clear()
+                    if window.oldest_message_id is not None:
+                        self.window_starts[topic_key] = window.oldest_message_id
+                    prompt = await current_prompt(session, message, window, tz, self.bot.id)
+                    topic = (
+                        await session.get(ForumTopic, (chat.id, target.thread_id))
+                        if target.thread_id
+                        else None
+                    )
+                    memory = await load_memory(session, chat.id, asker.id)
+                    earlier = await latest_before(
+                        session,
+                        chat.id,
+                        target.thread_id or 0,
+                        window.oldest_message_id or message.message_id or 2**62,
+                    )
+                    if earlier is not None and earlier.day < datetime.now(tz).date() - timedelta(
+                        days=EARLIER_DAYS
+                    ):
+                        earlier = None
+                decided = await deciding
+                if images.fallback and not decided.images:
+                    images = Referenced([])
+                inspected = await inspect(self.gateway, images.rows)
+                brief = situation(
+                    chat=chat,
+                    asker=asker.full_name,
+                    now=datetime.now(UTC),
                     tz=tz,
-                    start_at=self.window_starts.get(topic_key),
+                    topic=topic.name if topic else None,
+                    rules=chat.rules,
+                    notes=notes_block(
+                        memory, asker.full_name, chat.notes_mode if funding in memory_family.tiers else None
+                    ),
+                    earlier=earlier,
+                    blind=bool(inspected) and not pin.vision,
                 )
-                if len(self.window_starts) > WINDOW_STARTS_KEPT:
-                    self.window_starts.clear()
-                if window.oldest_message_id is not None:
-                    self.window_starts[topic_key] = window.oldest_message_id
-                prompt = await current_prompt(session, message, window, tz, self.bot.id)
-                topic = (
-                    await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
+                request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
+                return Ask(
+                    # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing
+                    # here keeps the captured list aligned so the run's own messages slice out exactly.
+                    history=repair_messages(window.messages),
+                    request=[request, *as_content(inspected)] if pin.vision and inspected else request,
+                    prompt=prompt,
+                    tokens=window.tokens,
+                    trigger_message_id=message.message_id,
+                    seen=tuple(dict.fromkeys(row.message_id for row in images.rows)),
+                    unnoted=[item for item in inspected if item.row.message_id not in images.unnoted],
+                    effort=decided.effort,
                 )
-                memory = await load_memory(session, chat.id, asker.id)
-                earlier = await latest_before(
-                    session,
-                    chat.id,
-                    target.thread_id or 0,
-                    window.oldest_message_id or message.message_id or 2**62,
-                )
-                if earlier is not None and earlier.day < datetime.now(tz).date() - timedelta(
-                    days=EARLIER_DAYS
-                ):
-                    earlier = None
-            inspected = await inspect(self.gateway, images.rows)
-            brief = situation(
-                chat=chat,
-                asker=asker.full_name,
-                now=datetime.now(UTC),
-                tz=tz,
-                topic=topic.name if topic else None,
-                rules=chat.rules,
-                notes=notes_block(
-                    memory, asker.full_name, chat.notes_mode if funding in memory_family.tiers else None
-                ),
-                earlier=earlier,
-                blind=bool(inspected) and not pin.vision,
-            )
-            request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
-            return Ask(
-                # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing
-                # here keeps the captured list aligned so the run's own messages slice out exactly.
-                history=repair_messages(window.messages),
-                request=[request, *as_content(inspected)] if pin.vision and inspected else request,
-                prompt=prompt,
-                tokens=window.tokens,
-                trigger_message_id=message.message_id,
-                seen=tuple(dict.fromkeys(row.message_id for row in images.rows)),
-                unnoted=[item for item in inspected if item.row.message_id not in images.unnoted],
-                effort=decided.effort if funding is Funding.PAID else None,
-            )
+            finally:
+                deciding.cancel()  # a no-op once awaited; stops the call when composing failed
 
         return await self._run(
             chat=chat,

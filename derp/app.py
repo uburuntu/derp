@@ -119,6 +119,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         settings=services.settings,
         db=services.db,
         runtime=runtime,
+        decider=runtime.decider,
         funder=runtime.funder,
         transcriber=services.transcriber,
         api=services.api,

@@ -22,6 +22,7 @@ from derp.db.engine import Database
 from derp.history.models import User
 from derp.inference.ledger import estimate_cost
 from derp.inference.models import ModelPin, ProviderCall
+from derp.inference.openrouter import REASONING_ROOM
 from derp.inference.roles import ModelRole
 from derp.money.models import RunFee, Wallet
 from derp.money.wallets import balance, capture, credit, release, reserve, wallet
@@ -100,7 +101,9 @@ class Funder:
             funding
         ]
 
-    async def typical_turn(self, session: AsyncSession, funding: Funding) -> int:
+    async def typical_turn(
+        self, session: AsyncSession, funding: Funding, output_tokens: int = TYPICAL_OUTPUT_TOKENS
+    ) -> int:
         """Credits a plain turn usually costs on this tier's model: the least worth starting a run for.
 
         Input is the prompt prefix (persona, tool schemas) plus half the window, priced uncached.
@@ -110,11 +113,19 @@ class Funder:
             return 1
         usd = estimate_cost(
             self.prefix.get(funding, 0) + self.window(funding) // 2,
-            TYPICAL_OUTPUT_TOKENS,
+            output_tokens,
             float(prices.price_prompt),
             float(prices.price_completion or 0),
         )
         return max(1, self.settings.credits_for_usd(float(usd)))
+
+    async def affords_deeper(self, session: AsyncSession, funds: Funds) -> bool:
+        """A paid hold covering a typical turn that spends the deepest effort's whole output allowance
+        (``chat_settings``: reasoning tokens count against a multiplied ``max_tokens``)."""
+        if funds.funding is not Funding.PAID:
+            return False
+        allowance = self.settings.run_caps.output_tokens * max(REASONING_ROOM.values())
+        return funds.credits >= await self.typical_turn(session, Funding.PAID, allowance)
 
     async def reserve(
         self,

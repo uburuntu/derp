@@ -72,3 +72,20 @@ async def test_scheduled_prompts_are_never_merged_away() -> None:
     release.set()
     assert await asyncio.gather(busy, job, newer) == [True, True, True]
     assert ran == [10, 0, 11]
+
+
+async def test_a_trigger_older_than_one_that_already_ran_is_not_answered() -> None:
+    """A message held up in capture (screened, transcribed) must not be answered after the same person's newer one."""
+    lanes = Lanes(concurrency=4)
+
+    async def run(user: int, message_id: int, *, ordered: bool = True) -> bool:
+        async with lanes.turn((1, None), user, message_id, ordered=ordered) as go:
+            return go
+
+    assert await run(7, 21)  # the newer message ran while #20 was still being screened
+    assert lanes.busy == 0
+    assert not await run(7, 20)
+    assert await run(8, 19)  # someone else's older message still runs
+    assert await run(7, 20, ordered=False)  # asked again on purpose (Continue after a top-up)
+    assert not await run(7, 20)  # what ran is still remembered as #21
+    assert await run(7, 22)

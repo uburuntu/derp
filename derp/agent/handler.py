@@ -17,21 +17,17 @@ async def invoked(message: Message, trigger: Trigger | None = None) -> bool:
 
 async def on_invocation(
     message: Message,
-    trigger: Trigger,
     chat_row: Chat,
     runtime: Runtime,
     bot: Bot,
     db: Database,
     settings: Settings,
 ) -> None:
-    verdict = await runtime.screen(message, chat_row) if trigger.kind is TriggerKind.NAME else None
-    if verdict is not None and not verdict.addressed:
-        return  # a passing mention of Derp's name: nothing runs and nothing is posted
     if chat_row.onboarded_at is None and chat_row.type in GROUP_TYPES:  # chats that predate the join notice
         await ensure_onboarded(
             bot, db, settings, chat_row.id, message.from_user.language_code if message.from_user else None
         )
-    await runtime.answer(message, chat_row, verdict=verdict)
+    await runtime.answer(message, chat_row)
 
 
 async def on_stop(update: MessageGenerationStopped, runtime: Runtime) -> None:

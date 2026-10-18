@@ -1,26 +1,29 @@
 """Typed questions to the decision pin before a run, answered with probabilities.
 
-Up to three questions go out in one call, only those that apply:
+Two moments ask, each in one call with only the questions that apply:
 
-- ``addressed``: a name-only trigger in a group (``TriggerKind.NAME``) runs only when it speaks to Derp —
-  "derp, what's 17×23?" does, "classic derp moment" or "derp drew a horse yesterday" don't.
-- ``images``: images only the fallback rules attach (``media.run_media``: the asker's photo just before, the
-  image behind an answered run) are attached only when answering needs them. Media in the trigger or the
-  message it replies to is never gated.
-- ``effort``: a paid turn reasons harder (``chat_settings(effort=…)``) only when the answer confidently takes
-  it. It rides along with any call; on its own it is asked only for paid turns.
+- Capture (``history.middleware``), before a message is stored: ``addressed`` — a name-only trigger in a group
+  (``TriggerKind.NAME``) is an invocation only when it speaks to Derp: "derp, what's 17×23?" does, "classic
+  derp moment" or "derp drew a horse yesterday" don't.
+- The run, while its window is built: ``images`` — images only the fallback rules attach (``media.run_media``:
+  the asker's image just before, the image behind an answered run) are attached only when answering needs
+  them; media in the trigger or the message it replies to is never gated. ``effort`` — a paid turn whose hold
+  covers a deeper one reasons harder (``chat_settings(effort=…)``) only when the answer confidently takes it.
 
 The state is short on purpose (accuracy drops with long or irrelevant state): the last few transcript lines,
-the lines carrying fallback images and the new message, rendered as in the window. Every call is ledgered as
-creator-funded silent work (``kind='decision'``, no run: it comes before one). A timeout, an error or an
-unreadable answer decides as if nothing was asked: run, attach, the pin's effort.
+the lines carrying fallback images and the new message (stored or not yet), rendered as in the window. Every
+call is ledgered as creator-funded silent work (``kind='decision'``, no run: it comes before one; a timed-out
+call at an estimate). Any failure (the state, the pin, the call, an unreadable answer, the ledger) decides as
+if nothing was asked: invoke, attach, the pin's effort.
 """
 
 import asyncio
+import logging
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import tzinfo
+from decimal import Decimal
 from typing import Any
 
 from aiogram.types import Message as TgMessage
@@ -30,16 +33,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from derp.agent.media import Referenced
 from derp.config import Decisions
 from derp.db.engine import Database
-from derp.history.capture import unstored_view
+from derp.history.capture import message_values, unstored_view
 from derp.history.models import Message, MessageMedia
 from derp.history.render import MessageView, load_views, render_line
-from derp.inference.api import OpenRouterAPI, OpenRouterError
+from derp.inference.api import Decided, OpenRouterAPI, OpenRouterError, decision_body, estimated_tokens
 from derp.inference.ledger import record_usage, simple_usage
 from derp.inference.pins import PinStore
-from derp.inference.roles import Effort, ModelRole
+from derp.inference.roles import Effort, ModelRole, RolePin
 from derp.ops.observability import record_decision
 
 type Json = dict[str, Any]
+
+log = logging.getLogger("derp.agent")
 
 CONTEXT_LINES = 3  # transcript lines before the new message
 LINE_LIMIT = 400  # characters of one line in the state
@@ -59,12 +64,12 @@ IMAGES: Json = {
     "type": "noul",
     "instructions": (
         "Derp is an AI bot in this group chat. `new_message` asks Derp something. Does answering it require "
-        "looking at the photo in `images_from`?"
+        "looking at the image in `images_from`?"
     ),
     "criteria": {
-        "true": "The message is about the photo: it asks what is in it, to read, rate, judge or edit it, "
+        "true": "The message is about the image: it asks what is in it, to read, rate, judge or edit it, "
         "or refers to it as “this” or “it”.",
-        "false": "The message is about something else and can be answered without seeing the photo.",
+        "false": "The message is about something else and can be answered without seeing the image.",
     },
 }
 EFFORT: Json = {
@@ -100,44 +105,64 @@ class Decider:
         tz: tzinfo,
         named: bool = False,
         images: Referenced | None = None,
-        paid: bool = False,
+        effort: bool = False,
     ) -> Verdict:
-        """Ask what applies: ``named`` (a name-only trigger), ``images`` the run would attach, ``paid`` turns."""
+        """Ask what applies: ``named`` (a name-only trigger), fallback ``images`` the run would attach,
+        ``effort`` (a paid turn whose hold covers a deeper one). Never raises: a failure is ``Verdict()``."""
         fallback = images.rows if images is not None and images.fallback else []
         questions: Json = {}
         if named:
             questions["addressed"] = ADDRESSED
         if fallback:
             questions["images"] = IMAGES
-        if questions or paid:
+        if effort:
             questions["effort"] = EFFORT
         if not self.settings.enabled or not questions:
             return Verdict()
         chat_id = message.chat.id
         user_id = message.from_user.id if message.from_user else None
-        async with self.db.session() as session:
-            state = await decision_state(session, message, bot_id, tz, fallback)
-        pin = await self.pins.get(ModelRole.DECISION)
         started = time.monotonic()
+        state: Json | None = None
+        pin: RolePin | None = None
         try:
+            async with self.db.session() as session:
+                state = await decision_state(session, message, bot_id, tz, fallback)
+            pin = await self.pins.get(ModelRole.DECISION)
             async with asyncio.timeout(self.settings.timeout_seconds):
                 decided = await self.api.decide(pin.model, state, questions, zdr=pin.zdr)
         except Exception as error:  # noqa: BLE001 - decisions fail open: the run goes ahead as before
             record_decision(chat_id, _failure(error), _ms(started))
+            if isinstance(error, TimeoutError) and state is not None and pin is not None:
+                # The provider may well have answered (and billed) after we stopped waiting.
+                tokens = estimated_tokens(decision_body(pin.model, state, questions, zdr=pin.zdr))
+                await self._ledger(Decided({}, pin.model, self._estimate(tokens), tokens), chat_id, user_id)
             return Verdict()
-        async with self.db.transaction() as session:
-            record_usage(
-                session,
-                simple_usage(decided.model, decided.cost_usd, input_tokens=decided.input_tokens),
-                kind="decision", funding="creator", role=ModelRole.DECISION.value, chat_id=chat_id, user_id=user_id,
-            )  # fmt: skip
+        await self._ledger(decided, chat_id, user_id)
         try:
             verdict, seen = self.read(decided.answers)
-        except (KeyError, TypeError, ValueError) as error:
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
             record_decision(chat_id, _failure(error), _ms(started))
             return Verdict()
         record_decision(chat_id, "answered", _ms(started), **seen)
         return verdict
+
+    def _estimate(self, tokens: int) -> Decimal:
+        return (Decimal(str(self.settings.price_usd_per_m_input)) * tokens / 1_000_000).quantize(
+            Decimal("0.00000001")
+        )
+
+    async def _ledger(self, decided: Decided, chat_id: int, user_id: int | None) -> None:
+        """Creator-funded and outside any run; a ledger failure is logged and never blocks the run."""
+        try:
+            async with self.db.transaction() as session:
+                record_usage(
+                    session,
+                    simple_usage(decided.model, decided.cost_usd, input_tokens=decided.input_tokens),
+                    kind="decision", funding="creator", role=ModelRole.DECISION.value, chat_id=chat_id,
+                    user_id=user_id,
+                )  # fmt: skip
+        except Exception as error:  # noqa: BLE001 - money telemetry for creator spend, not a reason to fail
+            log.warning("decision in %s not ledgered: %s", chat_id, type(error).__name__)
 
     def read(self, answers: Json) -> tuple[Verdict, dict[str, float | str]]:
         """The verdict, and the probabilities behind it for telemetry."""
@@ -164,33 +189,35 @@ class Decider:
 async def decision_state(
     session: AsyncSession, message: TgMessage, bot_id: int, tz: tzinfo, fallback: Sequence[MessageMedia]
 ) -> Json:
-    """The new message, the transcript lines just before it in its topic and those carrying fallback images."""
+    """The new message, the transcript lines just before it in its topic and those carrying fallback images.
+
+    The new message may not be stored yet (capture screens before it stores): it is then rendered as it would be.
+    """
     chat_id = message.chat.id
-    row = await session.get(Message, (chat_id, message.message_id)) if message.message_id else None
-    previous: list[Message] = []
-    if row is not None:
-        previous = list(
-            await session.scalars(
-                select(Message)
-                .where(
-                    Message.chat_id == chat_id,
-                    Message.message_id < row.message_id,
-                    Message.deleted_at.is_(None),
-                    Message.thread_id == row.thread_id
-                    if row.thread_id is not None
-                    else Message.thread_id.is_(None),
-                )
-                .order_by(Message.message_id.desc())
-                .limit(CONTEXT_LINES)
+    stored = await session.get(Message, (chat_id, message.message_id)) if message.message_id else None
+    row = stored or Message(**message_values(message, capture="invocation"))
+    previous = list(
+        await session.scalars(
+            select(Message)
+            .where(
+                Message.chat_id == chat_id,
+                Message.message_id < row.message_id,
+                Message.deleted_at.is_(None),
+                Message.thread_id == row.thread_id
+                if row.thread_id is not None
+                else Message.thread_id.is_(None),
             )
-        )[::-1]
+            .order_by(Message.message_id.desc())
+            .limit(CONTEXT_LINES)
+        )
+    )[::-1]
     carriers = [
         carrier
         for message_id in dict.fromkeys(media.message_id for media in fallback)
         if (carrier := await session.get(Message, (chat_id, message_id))) is not None
     ]
-    views = await load_views(session, [*previous, *carriers, *([row] if row is not None else [])])
-    current = views.pop() if row is not None else unstored_view(message, bot_id)
+    views = await load_views(session, [*previous, *carriers, *([stored] if stored is not None else [])])
+    current = views.pop() if stored is not None else unstored_view(message, bot_id)
 
     def line(view: MessageView) -> str:
         return render_line(view, tz, reactions=False)[:LINE_LIMIT]

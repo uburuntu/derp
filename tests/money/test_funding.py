@@ -133,3 +133,24 @@ async def test_settle_charges_marked_up_run_cost_only_when_delivered(
         assert await balance(session, mine) == 500 - 18
         states = dict((await session.execute(select(Reservation.operation_id, Reservation.state))).all())
         assert states == {"turn:1": "captured", "turn:2": "released"}
+
+
+async def test_a_deeper_effort_needs_a_hold_that_covers_its_whole_output_allowance(
+    database: Database, settings: Settings
+) -> None:
+    async with database.transaction() as session:
+        # $1/M in, $10/M out: a plain turn ≈ 13 credits; one spending 4 × 2,000 output tokens ≈ 113
+        session.add(ModelPin(role="chat", pin={}, price_prompt=Decimal(1), price_completion=Decimal(10)))
+    funder = Funder(database, settings)
+    await give(database, "user", 7, 60, "stars:1")
+    await give(database, "user", 8, 500, "stars:2")
+    low = await funder.reserve(chat_id=7, private=True, user_id=7, operation_id="turn:1", now=NOW)
+    high = await funder.reserve(chat_id=8, private=True, user_id=8, operation_id="turn:2", now=NOW)
+    assert low is not None and high is not None and low.funding is high.funding is Funding.PAID
+    sponsored = Funds(Funding.SPONSORED, "turn:3", None, None, 10_000)
+    async with database.session() as session:
+        assert [await funder.affords_deeper(session, funds) for funds in (low, high, sponsored)] == [
+            False,
+            True,
+            False,
+        ]
