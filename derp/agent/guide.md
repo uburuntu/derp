@@ -35,7 +35,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - People never choose a model: Derp picks one by who pays (see money). Bought and free daily answers go only to
   AI providers that keep nothing (zero data retention).
 - /feedback (or asking Derp) passes words to Derp's developer, who may send a short thank-you in private once it's
-  handled.
+  handled. To flag one answer, reply /info to it and press Report a problem: pick what went wrong (wrong answer,
+  missed context, wrong image, broken), then optionally send one message saying more, or skip. In a group that
+  message is visible like any other; Derp marks it with 👌 instead of replying.
 
 ## groups
 
@@ -64,7 +66,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Answers cost Derpcoins: what the AI providers actually charged plus a margin, rounded up. If nothing reached
   the chat, nothing is charged. If an answer breaks or gets too expensive after part of it (even just a
   reaction) reached the chat, the work so far is charged, and Derp says so. Reply /info to any answer to see its
-  model, tokens, cost and who paid.
+  model, tokens, cost and who paid (and to report a problem with it).
 - Free daily Derpcoins: everyone gets an allowance each UTC day on a cheaper model with fewer tools; it doesn't
   accumulate. Drawing images needs paid Derpcoins (Derp+, bought packs or a group wallet). On paid Derpcoins a
   clearly hard question (multi-step math, code, proofs) gets more thinking, which costs a little more.

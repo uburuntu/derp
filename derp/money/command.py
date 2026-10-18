@@ -1,5 +1,7 @@
 """/credits and /info: balances and per-answer receipts, shown only to the person asking.
 
+The /info receipt carries Report a problem (``ops.feedback``), which files a report on that answer.
+
 In groups both are ephemeral commands, so replies are ephemeral too (see
 ``Target``); a command sent the ordinary way is answered by DM instead. Admins
 also see who spent the chat's Derpcoins in the last 30 days.
@@ -9,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +28,8 @@ from derp.memory.notes import is_admin
 from derp.money.funding import day_end, sponsored_lot_id
 from derp.money.models import CreditLot, Wallet
 from derp.money.wallets import balances, wallet
+from derp.ops.feedback import report_button
+from derp.telegram.buttons import markup
 from derp.telegram.sender import Target, send_markdown, send_privately
 from derp.telegram.text import literal
 
@@ -33,12 +37,14 @@ USAGE_DAYS = 30
 USAGE_ROWS = 10
 
 
-async def _reply_privately(bot: Bot, message: Message, locale: str, text: str) -> None:
+async def _reply_privately(
+    bot: Bot, message: Message, locale: str, text: str, keyboard: InlineKeyboardMarkup | None = None
+) -> None:
     target = Target.reply_to_message(message)
     if message.chat.type == "private" or message.ephemeral_message_id or message.from_user is None:
-        await send_markdown(bot, target, text)
+        await send_markdown(bot, target, text, reply_markup=keyboard)
         return
-    delivered = await send_privately(bot, message.from_user.id, text)
+    delivered = await send_privately(bot, message.from_user.id, text, reply_markup=keyboard)
     await send_markdown(bot, target, t(locale, "money.sent_privately" if delivered else "money.dm_first"))
 
 
@@ -126,7 +132,7 @@ async def _chat_usage(db: Database, wallet_id: int, locale: str, now: datetime) 
 
 
 async def show_info(message: Message, db: Database, bot: Bot) -> None:
-    """Reply to one of Derp's messages: which model answered, the tokens, and what it cost."""
+    """Reply to one of Derp's messages: which model answered, the tokens, what it cost, and a way to report it."""
     if message.from_user is None:
         return
     locale = resolve(message.from_user.language_code)
@@ -138,7 +144,7 @@ async def show_info(message: Message, db: Database, bot: Bot) -> None:
             run = await run_for_output(session, message.chat.id, replied.message_id)
             if run is not None and run.wallet_id is not None:
                 payer = await session.scalar(select(Wallet.kind).where(Wallet.id == run.wallet_id))
-    if run is None:
+    if run is None or replied is None:
         await send_markdown(bot, Target.reply_to_message(message), t(locale, "info.how"))
         return
     funding = {"paid": f"info.paid_{payer or 'user'}", "sponsored": "info.sponsored", "free": "info.free"}
@@ -153,7 +159,8 @@ async def show_info(message: Message, db: Database, bot: Bot) -> None:
         charged=f"{run.charged_credits:,}",
         funding=t(locale, funding.get(run.funding, "info.free")),
     )
-    await _reply_privately(bot, message, locale, text)
+    report = markup(report_button(locale, run.id, replied.message_id))
+    await _reply_privately(bot, message, locale, text, report)
 
 
 def build_router() -> Router:

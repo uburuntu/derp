@@ -1,25 +1,40 @@
-"""Feedback for the owners: /feedback, the agent's leave_feedback, and the owners' /feedbacks review.
+"""Feedback for the owners: /feedback, the agent's leave_feedback, /info's Report a problem, and the
+owners' /feedbacks review.
 
 People's words are stored as they wrote them and shown only to owners, in a
 private chat, a page at a time; an owner marks items done, or done with a
 thank-you DM to the author (at most once: only the press that closes the item
 sends it). /forget removes a person's feedback from that chat with the rest of
 what they said.
+
+A report on one answer starts from the /info receipt's button (ephemeral in
+groups; buttons there work like anywhere else): a category files it at once,
+with the answer's run and message, one report per person per answer (a second
+press changes its category). For ``DETAILS_WINDOW`` the author's next text
+message in that chat or in private (not a command, and in groups not addressed
+to Derp) becomes its text, unless they skip.
 """
 
+import contextlib
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReactionTypeEmoji
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from derp.agent.invocation import Trigger, starts_with_command
+from derp.agent.models import AgentRun
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat, User
 from derp.history.render import one_line
 from derp.locales import resolve, t
-from derp.ops.models import FEEDBACK_KINDS, Feedback
+from derp.ops.models import FEEDBACK_KINDS, REPORT_KINDS, Feedback
 from derp.ops.owner import from_owner, is_blocked
 from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, sanitize_untrusted, send_markdown, send_privately
@@ -27,11 +42,19 @@ from derp.telegram.text import literal
 
 PAGE = 5
 MAX_CHARS = 2000
+DETAILS_WINDOW = timedelta(minutes=5)
 
 
 class FeedbackAction(CallbackData, prefix="fb"):
     action: str  # page | done | thank (done, and the author gets a thank-you)
     value: int = 0  # page offset, or the feedback id
+
+
+class ReportAction(CallbackData, prefix="report"):
+    step: str  # open (show the categories) | kind (file it) | skip (no text)
+    run: int
+    message: int = 0  # the reported answer
+    kind: str = ""
 
 
 async def file(
@@ -79,12 +102,125 @@ async def on_feedback(message: Message, command: CommandObject, db: Database, bo
     await send_markdown(bot, target, t(locale, "feedback.thanks"))
 
 
+def report_button(locale: str, run_id: int, message_id: int) -> InlineKeyboardButton:
+    """The /info receipt's way to report the answer."""
+    return button(t(locale, "report.button"), ReportAction(step="open", run=run_id, message=message_id))
+
+
+def _categories(locale: str, data: ReportAction) -> InlineKeyboardMarkup | None:
+    def pick(kind: str) -> InlineKeyboardButton:
+        return button(
+            t(locale, f"report.{kind}"),
+            ReportAction(step="kind", run=data.run, message=data.message, kind=kind),
+        )
+
+    return markup(*([pick(a), pick(b)] for a, b in zip(REPORT_KINDS[::2], REPORT_KINDS[1::2], strict=True)))
+
+
+async def _file_report(db: Database, user_id: int, data: ReportAction) -> bool:
+    """File (or recategorize) the person's report on the run and open its details window; False if gone."""
+    async with db.transaction() as session:
+        run = await session.get(AgentRun, data.run, with_for_update=True)  # double taps file once
+        if run is None:
+            return False
+        if await is_blocked(session, run.chat_id, user_id):
+            return True  # blocked: nothing reaches the owners, and nothing says so
+        report_id = await session.scalar(
+            select(Feedback.id).where(
+                Feedback.user_id == user_id,
+                Feedback.run_id == run.id,
+                Feedback.kind.in_(REPORT_KINDS),
+                Feedback.state == "open",
+            )
+        )
+        if report_id is None:
+            report_id = await file(
+                session, user_id=user_id, chat_id=run.chat_id, text="", kind=data.kind,
+                message_id=data.message, run_id=run.id,
+            )  # fmt: skip
+        await session.execute(
+            update(Feedback)
+            .where(Feedback.id == report_id)
+            .values(kind=data.kind, details_until=datetime.now(UTC) + DETAILS_WINDOW)
+        )
+    return True
+
+
+async def on_report(press: Press, data: ReportAction, db: Database) -> None:
+    locale = press.locale
+    if data.step == "open":
+        return await press.edit(t(locale, "report.ask"), _categories(locale, data))
+    if data.step == "kind":
+        if data.kind not in REPORT_KINDS or not await _file_report(db, press.user_id, data):
+            return await press.deny("buttons.stale")
+        skip = button(t(locale, "report.skip"), ReportAction(step="skip", run=data.run))
+        return await press.edit(t(locale, "report.filed"), markup(skip))
+    async with db.transaction() as session:
+        await session.execute(
+            update(Feedback)
+            .where(
+                Feedback.user_id == press.user_id,
+                Feedback.run_id == data.run,
+                Feedback.details_until.is_not(None),
+            )
+            .values(details_until=None)
+        )
+    return await press.edit(t(locale, "report.done"))
+
+
+async def awaiting_details(
+    message: Message, db: Database, trigger: Trigger | None = None
+) -> bool | dict[str, Any]:
+    """A report's author writing its text: their next text message in its chat or in private, within the window.
+
+    Commands are never details, nor in groups a message addressed to Derp (that is an ask).
+    """
+    sender = message.from_user
+    if sender is None or message.guest_query_id or not (message.text or message.caption):
+        return False
+    if starts_with_command(message):
+        return False
+    private = message.chat.type == "private"
+    if not private and trigger is not None:
+        return False
+    where = [Feedback.user_id == sender.id, Feedback.details_until > datetime.now(UTC)]
+    if not private:
+        where.append(Feedback.chat_id == message.chat.id)
+    async with db.session() as session:
+        report = await session.scalar(
+            select(Feedback.id).where(*where).order_by(Feedback.details_until.desc()).limit(1)
+        )
+    return False if report is None else {"report_id": report}
+
+
+async def on_details(message: Message, report_id: int, db: Database, bot: Bot) -> None:
+    """Add the text to the report; private chats get a plain line, groups a quiet 👌 on the message."""
+    text = message.text or message.caption or ""
+    async with db.transaction() as session:
+        added = await session.scalar(
+            update(Feedback)
+            .where(Feedback.id == report_id, Feedback.details_until.is_not(None))
+            .values(text=text.strip()[:MAX_CHARS], details_until=None)
+            .returning(Feedback.id)
+        )
+    if added is None:
+        return
+    if message.chat.type == "private":
+        locale = resolve(message.from_user.language_code if message.from_user else None)
+        await send_markdown(bot, Target.reply_to_message(message), t(locale, "report.added"))
+        return
+    with contextlib.suppress(TelegramAPIError):
+        await bot.set_message_reaction(
+            chat_id=message.chat.id, message_id=message.message_id, reaction=[ReactionTypeEmoji(emoji="👌")]
+        )
+
+
 async def _page(db: Database, offset: int) -> tuple[str, InlineKeyboardMarkup | None]:
     async with db.session() as session:
         total = await session.scalar(select(func.count()).where(Feedback.state == "open")) or 0
         rows = (
             await session.execute(
-                select(Feedback, User.first_name, User.username, Chat.title)
+                select(Feedback, User.first_name, User.username, Chat)
                 .outerjoin(User, User.id == Feedback.user_id)
                 .outerjoin(Chat, Chat.id == Feedback.chat_id)
                 .where(Feedback.state == "open")
@@ -97,12 +233,19 @@ async def _page(db: Database, offset: int) -> tuple[str, InlineKeyboardMarkup | 
         return "No open feedback.", None
     lines = [f"**Open feedback: {total}** (showing {offset + 1}–{offset + len(rows)})"]
     items: list[list[InlineKeyboardButton]] = []
-    for item, name, username, title in rows:
+    for item, name, username, chat in rows:
         who = literal(one_line(name or "someone")) + (f" @{username}" if username else "")
+        title = chat.title if chat is not None else None
         where = "private" if item.chat_id == item.user_id else literal(one_line(title or str(item.chat_id)))
-        lines.append(
-            f"\n#{item.id} · {item.kind} · {who} · {where} · {item.created_at:%Y-%m-%d}\n> {sanitize_untrusted(one_line(item.text, 600))}"
-        )
+        head = [f"#{item.id}", item.kind.replace("_", " "), who, where, f"{item.created_at:%Y-%m-%d}"]
+        url = chat.message_link(item.message_id) if chat is not None and item.message_id else None
+        if item.run_id is not None:
+            head.append(f"[run {item.run_id}]({url})" if url else f"run {item.run_id}")
+        elif url:
+            head.append(f"[message]({url})")
+        lines.append("\n" + " · ".join(head))
+        if item.text:
+            lines.append(f"> {sanitize_untrusted(one_line(item.text, 600))}")
         items.append(
             [
                 button(f"✓ #{item.id}", FeedbackAction(action="done", value=item.id)),
@@ -159,5 +302,7 @@ def build_router() -> Router:
     router = Router(name="feedback")
     router.message.register(on_feedback, Command("feedback"))
     router.message.register(on_feedbacks, Command("feedbacks"), from_owner)
+    router.message.register(on_details, awaiting_details)
     on_press(router, FeedbackAction, F.action.in_({"page", "done", "thank"}))(on_review)
+    on_press(router, ReportAction, F.step.in_({"open", "kind", "skip"}))(on_report)
     return router

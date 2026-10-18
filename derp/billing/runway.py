@@ -39,9 +39,9 @@ async def daily_pace(session: AsyncSession, wallet_id: int, now: datetime) -> fl
     return int(spent) / span
 
 
-def lasts(locale: str, credits: int, pace: float) -> str:
-    """How long ``credits`` last at ``pace`` a day, in words ("about **13 days**", "over a month")."""
-    days = credits / pace
+def lasts(locale: str, amount: int, pace: float) -> str:
+    """How long ``amount`` Derpcoins last at ``pace`` a day, in words ("about **13 days**", "over a month")."""
+    days = amount / pace
     if days > MONTH_DAYS:
         return t(locale, "runway.month")
     if days >= 2:

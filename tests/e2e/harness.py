@@ -209,8 +209,10 @@ class Conversation:
             },
         )
 
-    async def ephemeral_command(self, person: Person, room: Room, text: str, ephemeral_id: int = 77) -> int:
-        """An ephemeral command: message id 0, visible only to the sender and Derp."""
+    async def ephemeral_command(
+        self, person: Person, room: Room, text: str, ephemeral_id: int = 77, *, reply_to: int | None = None
+    ) -> int:
+        """An ephemeral command (as a reply to ``reply_to``): message id 0, visible only to the sender and Derp."""
         command = text.split()[0]
         message: dict[str, Any] = {
             "message_id": 0,
@@ -221,6 +223,8 @@ class Conversation:
             "text": text,
             "entities": [{"type": "bot_command", "offset": 0, "length": len(command)}],
         }
+        if reply_to is not None:
+            message["reply_to_message"] = self.api.message(room.id, reply_to)
         return await self.push("message", message)
 
     async def press_ephemeral(
