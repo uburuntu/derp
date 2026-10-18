@@ -3,7 +3,7 @@
 One line per message: ``[10:42] #123 Ann ↩#120: text [photo: a cat] {🔥3}``; a reply to a
 message in another chat names where it came from instead (``↩ (from News: photo) «quoted part»``).
 Media show their stored description or transcript when one exists (or why a
-recording has none: too long, or transcription failed); payloads
+recording has none: too long, too big, silent, or transcription failed); payloads
 (dice, polls, locations, service events…) become short bracketed notes.
 Contacts render without phone numbers: the window never needs them.
 
@@ -25,6 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from derp.history.models import (
+    SILENT,
+    TOO_BIG,
     TOO_LONG,
     UNHEARD,
     Chat,
@@ -79,7 +81,12 @@ def _duration(seconds: int | None) -> str:
     return f" {minutes}:{secs:02d}"
 
 
-UNTRANSCRIBED = {TOO_LONG: "too long to transcribe", UNHEARD: "couldn't transcribe"}
+UNTRANSCRIBED = {
+    TOO_LONG: "too long to transcribe",
+    TOO_BIG: "too big to download",
+    SILENT: "no sound",
+    UNHEARD: "couldn't transcribe",
+}
 
 
 def kind_label(kind: str) -> str:

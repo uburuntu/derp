@@ -72,6 +72,7 @@ class Services:
         api = OpenRouterAPI(settings)
         pins = PinStore(db, settings)
         media = MediaGateway(bot, max_pixels=settings.media.max_pixels)
+        workers = WorkerPool(settings.media)
         return cls(
             settings=settings,
             db=db,
@@ -85,11 +86,12 @@ class Services:
                 api=api,
                 gateway=media,
                 pins=pins,
+                workers=workers,
                 settings=settings,
                 notify=lambda text: notify_owners(bot, settings, text),
             ),
             lookups=Lookups(settings),
-            workers=WorkerPool(settings.media),
+            workers=workers,
         )
 
     async def close(self) -> None:

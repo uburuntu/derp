@@ -62,6 +62,13 @@ class MediaUnavailableError(Exception):
         self.reason = reason
 
 
+class TooLargeError(MediaUnavailableError):
+    """Past what the Bot API lets bots download: it won't fit later either."""
+
+    def __init__(self) -> None:
+        super().__init__("too large")
+
+
 @dataclass(frozen=True, slots=True)
 class Media:
     data: bytes
@@ -152,12 +159,12 @@ class MediaGateway:
             self._cache.move_to_end(cache_key)
             return hit[1]
         if size_hint and size_hint > self.max_bytes:
-            raise MediaUnavailableError("too large")
+            raise TooLargeError
         try:
             async with asyncio.timeout(self.timeout):
                 file = await self.bot.get_file(file_id)
                 if file.file_size and file.file_size > self.max_bytes:
-                    raise MediaUnavailableError("too large")
+                    raise TooLargeError
                 if not file.file_path:
                     raise MediaUnavailableError("not downloadable")
                 if file.file_path.endswith(".tgs"):  # Telegram names files by type; rows may not know it
@@ -172,7 +179,7 @@ class MediaGateway:
             raise MediaUnavailableError(f"download failed ({type(error).__name__})") from None
         data = buffer.getvalue()
         if len(data) > self.max_bytes:
-            raise MediaUnavailableError("too large")
+            raise TooLargeError
         self._remember(cache_key, data)
         return data
 

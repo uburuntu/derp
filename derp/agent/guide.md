@@ -22,7 +22,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   videos, GIFs and audio (memes, reversing, song recognition). Group voice messages nobody asked about are transcribed
   in the background up to a daily limit; past it, a voice message is transcribed when someone calls Derp in
   reply to it. Short audio files (forwarded memos, recordings) and the speech in videos are transcribed when
-  someone calls Derp with one or in reply to one. Recordings over the length limit aren't transcribed, and Derp says so instead of guessing.
+  someone calls Derp with one or in reply to one. Recordings over the length limit, files too big for Telegram to hand bots and videos without sound aren't transcribed, and Derp says so instead of guessing.
 - Profile pictures and the chat photo work as sources: "add me a hat on my profile picture", "draw Vasya as a
   knight", "meme @vasya's avatar" or "meme our chat photo". People are found by name or @username among those
   seen in this chat; in reply to a forward, it's the person it was forwarded from when Telegram shows them. Derp sends the result; bots can't change anyone's profile photo, so people set it themselves.
