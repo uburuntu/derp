@@ -15,8 +15,9 @@ from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
 from derp.agent.digests import build
-from derp.agent.media import CLIPS, IMAGE_LIKE, as_content, inspect, note_images, referenced_media
+from derp.agent.media import CLIPS, IMAGE_LIKE, SOUNDS, as_content, inspect, note_images, referenced_media
 from derp.agent.toolsets import Family
+from derp.agent.watch import medium, watch
 from derp.history.digests import day_stats, is_current, scope_key
 from derp.history.models import Digest, ForumTopic, Message, Poll
 from derp.history.queries import ChatQuery, Scope, around, id_range, resolve_members, run_query, search
@@ -156,21 +157,35 @@ async def chat_info(ctx: RunContext[RunDeps]) -> str:
     return "\n".join(lines)
 
 
-@toolset.tool
-async def inspect_media(ctx: RunContext[RunDeps], message_id: int) -> list[str | BinaryContent] | str:
-    """Look at a stored message's picture (photo, sticker, image file, album) or a frame of its video/GIF/video message.
+@toolset.tool(sequential=True)  # a look's price check and its call must not interleave with another's
+async def inspect_media(
+    ctx: RunContext[RunDeps], message_id: int, question: str = ""
+) -> list[str | BinaryContent] | str:
+    """Open a stored message's media: pictures (photo, sticker, image file, album); videos, GIFs and video messages watched whole with sound; audio and voice listened to; PDFs read.
+
+    Clips, audio and PDFs come back as notes with timestamps or page numbers; when a file can't be
+    watched (tier, length, size, money) the result says why and shows a still frame or preview instead.
 
     Args:
         message_id: The message id shown as #id in the history.
+        question: What to look or listen for, e.g. "what does he say at the end?"; empty for a general look.
     """
     deps = ctx.deps
     async with deps.db.session() as session:
-        rows = await referenced_media(session, deps.chat.id, message_id, None, (*IMAGE_LIKE, *CLIPS))
+        rows = await referenced_media(session, deps.chat.id, message_id, None, (*IMAGE_LIKE, *CLIPS, *SOUNDS))
     if not rows:
-        return "That message has no picture or video I can open."
-    inspected = await inspect(deps.gateway, rows, frames=deps.workers)
+        return "That message has no picture, video, audio or PDF I can open."
+    looks = [await watch(ctx, row, kind, question) for row in rows if (kind := medium(row))]
+    watched = {(look.row.message_id, look.row.idx) for look in looks if look.notes}
+    rest = [  # the still frame or preview picture of what wasn't watched; a voice message has neither
+        row
+        for row in rows
+        if (row.message_id, row.idx) not in watched and (row.type not in SOUNDS or row.thumb_file_id)
+    ]
+    inspected = await inspect(deps.gateway, rest, frames=deps.workers)
+    lines = [look.line() for look in looks]
     if not inspected:
-        return "That media can't be opened (too big, expired, or no picture in it)."
+        return "\n".join(lines) or "That media can't be opened (too big, expired, or no picture in it)."
     await note_images(
         deps.db,
         deps.model,
@@ -183,8 +198,11 @@ async def inspect_media(ctx: RunContext[RunDeps], message_id: int) -> list[str |
         user_id=deps.user_id,
     )
     notes = [
-        f"#{item.row.message_id}{f' ({item.still})' if item.still else ''}: {item.row.description or item.row.type}"
-        for item in inspected
+        *lines,
+        *(
+            f"#{item.row.message_id}{f' ({item.still})' if item.still else ''}: {item.row.description or item.row.type}"
+            for item in inspected
+        ),
     ]
     if not deps.pin.vision:
         return "\n".join(notes)

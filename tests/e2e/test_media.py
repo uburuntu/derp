@@ -1,5 +1,6 @@
 import io
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from PIL import Image
 from pydantic_ai.messages import (
@@ -9,13 +10,15 @@ from pydantic_ai.messages import (
     ModelResponse,
     TextPart,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import insert, select, update
 
 from derp.history.models import Chat, Message, MessageMedia, Sticker
-from derp.inference.models import ProviderCall
+from derp.inference.models import ModelPin, ProviderCall
+from derp.inference.roles import DEFAULT_PINS, ModelRole
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
@@ -241,3 +244,117 @@ async def test_an_animated_sticker_reaches_the_model_as_its_preview_picture(
     await conversation.expect_reply(later)
     window = str([p.content for m in model.requests[-1] for p in m.parts if isinstance(p, UserPromptPart)])
     assert "[sticker 🐸: a green square frog]" in window
+
+
+def inspect_results(messages: list[ModelMessage]) -> list[str]:
+    return [
+        str(part.content)
+        for message in messages
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "inspect_media"
+    ]
+
+
+async def test_inspect_media_watches_a_clip_with_its_sound_and_keeps_a_one_line_note(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    group = Room(-1031, title="Clips")
+    conversation.meet(DORA, group)
+    conversation.api.register_file("film", b"synthetic mp4 bytes")
+    film = {
+        "file_id": "film", "file_unique_id": "u-film", "width": 640, "height": 360, "duration": 42,
+        "mime_type": "video/mp4", "file_size": 19,
+    }  # fmt: skip
+    posted = await conversation.send(DORA, group, video=film)
+    await conversation.settle(posted)
+
+    def watcher(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        (clip,) = images_in(messages[-1:])
+        assert clip.media_type == "video/mp4" and clip.data == b"synthetic mp4 bytes"  # the whole file
+        assert "The question: what does he shout?" in str(messages[-1])
+        return ModelResponse(
+            parts=[TextPart('A man yells at a goose in a park.\n\n0:03 He shouts "give it back!"')],
+            provider_details={"cost": 0.0006},
+        )
+
+    def answer(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        (result,) = inspect_results(messages)
+        assert result.startswith(f"#{posted.message_id} (video 0:42, watched with sound):")
+        assert '0:03 He shouts "give it back!"' in result
+        assert images_in(messages) == []  # notes, not a still frame
+        return ModelResponse(parts=[TextPart("he wants his sandwich back")])
+
+    model.reply(tool_call("inspect_media", message_id=posted.message_id, question="what does he shout?"))
+    model.reply(watcher, answer)
+    asked = await conversation.send(DORA, group, f"derp what's going on in #{posted.message_id}?")
+    reply = await conversation.expect_reply(asked)
+    assert reply["rich_message"]["markdown"] == "he wants his sandwich back"
+    await conversation.settle(asked)
+    assert DEFAULT_PINS[ModelRole.MEDIA] in model.pins  # the media pin watched it
+    async with conversation.db.session() as session:
+        media = await session.scalar(select(MessageMedia).where(MessageMedia.message_id == posted.message_id))
+        assert media is not None and media.description == "A man yells at a goose in a park."
+        looks = list(await session.execute(select(ProviderCall.role, ProviderCall.cost_usd).where(
+            ProviderCall.kind == "media")))  # fmt: skip
+        assert [(role, float(cost)) for role, cost in looks] == [("media", 0.0006)]
+
+    model.reply("the goose again")
+    later = await conversation.send(DORA, group, "derp and the goose?")
+    await conversation.expect_reply(later)
+    window = str([p.content for m in model.requests[-1] for p in m.parts if isinstance(p, UserPromptPart)])
+    assert "[video 0:42: A man yells at a goose in a park.]" in window
+
+
+async def test_a_pdf_past_the_free_allowance_pages_or_a_pricey_look_says_why_and_shows_its_preview(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    group = Room(-1032, title="Papers")
+    conversation.meet(DORA, group)
+    pages = b"%PDF-1.4\n" + b"1 0 obj << /Type /Page >> endobj\n" * 12
+    conversation.api.register_file("paper", pages)
+    conversation.api.register_file("paper-thumb", png("white", (60, 80)))
+    document = {
+        "file_id": "paper", "file_unique_id": "u-paper", "file_name": "thesis.pdf",
+        "mime_type": "application/pdf", "file_size": len(pages),
+        "thumbnail": {"file_id": "paper-thumb", "file_unique_id": "u-paper-thumb", "width": 60, "height": 80},
+    }  # fmt: skip
+    posted = await conversation.send(DORA, group, document=document)
+    await conversation.settle(posted)
+
+    def answer(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        (result,) = inspect_results(messages)
+        assert result.startswith(
+            f"#{posted.message_id} (file thesis.pdf, 12 pages): not read — longer than the "
+        )
+        assert "(paid answers take up to 50 pages)" in result
+        assert f"#{posted.message_id} (preview)" in result and len(images_in(messages)) == 1
+        return ModelResponse(parts=[TextPart("too long for me today")])
+
+    model.reply(tool_call("inspect_media", message_id=posted.message_id), "a title page", answer)
+    asked = await conversation.send(DORA, group, f"derp summarize #{posted.message_id}")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    assert all(pin.model != "google/gemini-3.5-flash-lite" for pin in model.pins)
+
+    # A short one fits the pages, but not this answer's money at a steep price.
+    async with conversation.db.transaction() as session:
+        await session.merge(ModelPin(role="media", pin=DEFAULT_PINS[ModelRole.MEDIA].model_dump(mode="json"),
+                                     price_prompt=Decimal(900), price_completion=Decimal(900)))  # fmt: skip
+    short = b"%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n"
+    conversation.api.register_file("memo", short)
+    memo = await conversation.send(DORA, group, document={
+        "file_id": "memo", "file_unique_id": "u-memo", "file_name": "memo.pdf", "mime_type": "application/pdf",
+        "file_size": len(short)})  # fmt: skip
+    await conversation.settle(memo)
+
+    def broke(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        (result,) = inspect_results(messages)
+        assert "Derpcoins, more than this answer has left" in result
+        return ModelResponse(parts=[TextPart("can't afford reading it")])
+
+    model.reply(tool_call("inspect_media", message_id=memo.message_id), broke)
+    asked = await conversation.send(DORA, group, f"derp read #{memo.message_id}")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(ProviderCall.id).where(ProviderCall.role == "media")) is None

@@ -46,6 +46,8 @@ from derp.tools.workers import EffectError, WorkerPool
 log = logging.getLogger("derp.media")
 IMAGE_LIKE = ("photo", "sticker", "document", "animation")
 CLIPS = ("animation", "video", "video_note")
+# Opened only by ``inspect_media`` (``agent.watch``); an audio file's cover is its preview picture.
+SOUNDS = ("audio", "voice")
 MAX_IMAGES = 4  # also bounds the concurrent note calls of one run
 NOTE_TOKENS = 300  # room for a reasoning model's mandatory thinking before the one line
 NOTE_SECONDS = 30

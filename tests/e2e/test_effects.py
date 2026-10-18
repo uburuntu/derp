@@ -303,13 +303,13 @@ async def test_a_cutout_becomes_a_transparent_sticker(
 
 
 @needs_ffmpeg
-async def test_derp_looks_at_a_gif_and_a_video_message_through_a_frame(
+async def test_clips_too_long_to_watch_are_seen_through_a_frame_and_say_why(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
     conversation.meet(LIV, PUB)
     data = clip("video")
-    gif = await ambient(conversation, "gif", data, animation=video("gif", data))
-    note = {"file_id": "vnote", "file_unique_id": "u-vnote", "length": 240, "duration": 2}
+    gif = await ambient(conversation, "gif", data, animation=video("gif", data) | {"duration": 200})
+    note = {"file_id": "vnote", "file_unique_id": "u-vnote", "length": 240, "duration": 90}
     round_note = await ambient(conversation, "vnote", data, video_note=note)
     model.reply(
         tool_call("inspect_media", message_id=gif),
@@ -328,6 +328,11 @@ async def test_derp_looks_at_a_gif_and_a_video_message_through_a_frame(
         if isinstance(part, ToolReturnPart) and part.tool_name == "inspect_media"
     ]
     assert "still frame of the gif" in labels[0] and "still frame of the video note" in labels[1]
+    assert "(gif 3:20): not watched — longer than the 1:00 this answer can take." in labels[0]
+    assert (
+        "(video note 1:30): not watched — longer than the 1:00 this answer can take (paid answers take up to 3:00)."
+        in labels[1]
+    )
     async with conversation.db.session() as session:
         notes = set(await session.scalars(select(MessageMedia.description)))
     assert {"a test pattern", "a test pattern again"} <= notes
