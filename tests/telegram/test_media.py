@@ -78,6 +78,17 @@ def test_normalize_puts_transparency_on_white(fmt: str) -> None:
     assert max(cast(tuple[int, ...], image.getpixel((3, 10)))) < 20  # opaque black stays black
 
 
+def test_normalize_scales_deep_grayscale_to_eight_bits_instead_of_clipping_to_white() -> None:
+    deep = Image.new("I;16", (16, 16), 30000)  # a 16-bit grayscale PNG: 30000 of 65535
+    gray = cast(tuple[int, ...], decoded(normalize(encoded(deep, "PNG"))).getpixel((8, 8)))
+    assert all(abs(channel - 30000 // 256) < 6 for channel in gray)
+    floating = Image.new("F", (16, 16), 0.5)  # a float TIFF: scaled by its own range, dark to white
+    floating.paste(1.0, (8, 0, 16, 16))
+    image = decoded(normalize(encoded(floating, "TIFF")))
+    assert max(cast(tuple[int, ...], image.getpixel((2, 8)))) < 20
+    assert min(cast(tuple[int, ...], image.getpixel((13, 8)))) > 235
+
+
 def test_normalize_refuses_what_is_not_a_picture() -> None:
     with pytest.raises(MediaUnavailableError, match="not an image"):
         normalize(b"\x1aE\xdf\xa3webm video sticker")

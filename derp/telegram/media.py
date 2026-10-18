@@ -18,6 +18,7 @@ import io
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from typing import cast
 
 import aiohttp
 import pillow_heif
@@ -72,6 +73,20 @@ def sniff_image(data: bytes) -> str | None:
     return None
 
 
+def _eight_bit(image: Image.Image) -> Image.Image:
+    """Deep grayscale (16-bit PNG, 32-bit or float TIFF) as 8-bit ``L``: converted directly it clips to white.
+
+    16-bit samples scale by their fixed range; 32-bit and float ones, which have none, by the picture's own.
+    """
+    if image.mode.startswith("I;16"):
+        return image.convert("I").point(lambda value: value / 256).convert("L")
+    if image.mode in ("I", "F"):
+        low, high = cast(tuple[float, float], image.getextrema())
+        scale = 255 / (high - low) if high > low else 1
+        return image.point(lambda value: (value - low) * scale).convert("L")
+    return image
+
+
 def normalize(data: bytes, max_pixels: int = DEFAULTS.max_pixels) -> Media:
     """A picture as a model should get it: upright, at most ``VISION_SIDE``, opaque, JPEG (an animation's first frame).
 
@@ -82,7 +97,7 @@ def normalize(data: bytes, max_pixels: int = DEFAULTS.max_pixels) -> Media:
         with Image.open(io.BytesIO(data), formats=DECODABLE) as source:
             check_dimensions(*source.size, max_pixels)
             source.draft("RGB", (VISION_SIDE, VISION_SIDE))  # a big JPEG decodes at a fraction of its size
-            upright = ImageOps.exif_transpose(source)
+            upright = _eight_bit(ImageOps.exif_transpose(source))
             clear = upright.mode in ("RGBA", "LA", "PA") or "transparency" in upright.info
             image = upright.convert("RGBA" if clear else "RGB")
             image.thumbnail((VISION_SIDE, VISION_SIDE), Image.Resampling.LANCZOS)
