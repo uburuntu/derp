@@ -28,6 +28,15 @@ class Database:
         async with self.sessions() as session, session.begin():
             yield session
 
+    @asynccontextmanager
+    async def trial(self) -> AsyncIterator[AsyncSession]:
+        """A transaction that is always rolled back: what a unit of work would do, leaving no trace."""
+        async with self.sessions() as session, session.begin():
+            try:
+                yield session
+            finally:
+                await session.rollback()
+
     async def check(self) -> None:
         async with self.engine.connect() as connection:
             await connection.execute(text("select 1"))

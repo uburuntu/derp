@@ -154,3 +154,18 @@ async def test_a_deeper_effort_needs_a_hold_that_covers_its_whole_output_allowan
             True,
             False,
         ]
+
+
+async def test_a_dry_reservation_decides_the_same_and_holds_nothing(
+    database: Database, settings: Settings
+) -> None:
+    funder = Funder(database, settings)
+    mine = await give(database, "user", 7, 500, "stars:1")
+    dry = await funder.reserve(chat_id=7, private=True, user_id=7, operation_id="peek", now=NOW, dry=True)
+    assert dry is not None and (dry.funding, dry.credits) == (Funding.PAID, 200)
+    poor = await funder.reserve(chat_id=9, private=True, user_id=9, operation_id="peek:9", now=NOW, dry=True)
+    assert poor is not None and poor.funding is Funding.SPONSORED
+    async with database.session() as session:
+        assert await balances(session, mine, now=NOW) == {"purchase": 500}
+        assert await session.scalar(select(Reservation.id)) is None
+        assert await session.scalar(select(CreditLot.id).where(CreditLot.source == "sponsored")) is None

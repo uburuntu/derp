@@ -133,8 +133,12 @@ class Funder:
         free_allowed: bool = False,
         paid_minimum: int | None = None,
         now: datetime | None = None,
+        dry: bool = False,
     ) -> Funds | None:
         """Hold money for a run from the first payer that can cover a typical turn.
+
+        ``dry`` decides the same way and holds nothing: the funds a run started now would get (their ids
+        point at nothing).
 
         Free models (nothing held) come last and only when allowed (consent / admin opt-in);
         None means nobody can pay. ``paid_minimum`` funds an action of known price (an approved one):
@@ -144,7 +148,7 @@ class Funder:
         moment = now or datetime.now(UTC)
         cap = self.settings.run_caps.credits
         cap_hit = False
-        async with self.db.transaction() as session:
+        async with self.db.trial() if dry else self.db.transaction() as session:
             payers = [] if private else [(await wallet(session, "chat", chat_id)).id]
             mine = (await wallet(session, "user", user_id)).id
             person = await session.get(User, user_id)
@@ -183,7 +187,7 @@ class Funder:
                 )
                 if held is not None:
                     return Funds(Funding.SPONSORED, operation_id, mine, held.id, held.amount)
-        if cap_hit and self._cap_reported != moment.date():
+        if cap_hit and not dry and self._cap_reported != moment.date():
             self._cap_reported = moment.date()
             await self.notify(
                 f"Sponsored usage hit today's ${self.settings.sponsored_global_daily_usd:g} cap."

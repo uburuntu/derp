@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import (
+    BufferedInputFile,
     EphemeralMessageParameters,
     InlineKeyboardMarkup,
     InputMediaPhoto,
@@ -95,6 +96,13 @@ class Target:
             self.ephemeral_reply_to,
             self.callback_query_id,
         )
+
+    @property
+    def unanchored(self) -> Target | None:
+        """For a reply to an ephemeral command, the same ephemeral message without the reply (admin bots only)."""
+        if self.ephemeral_to is None or self.ephemeral_reply_to is None:
+            return None
+        return Target(self.chat_id, self.thread_id, ephemeral_to=self.ephemeral_to)
 
     @property
     def reply_parameters(self) -> ReplyParameters | None:
@@ -174,43 +182,57 @@ async def send_markdown(
     except TelegramAPIError as error:
         if sent:
             raise PartialDeliveryError(error, sent) from error
-        receiver = target.ephemeral_to
-        if not (isinstance(error, TelegramBadRequest) and receiver and target.ephemeral_reply_to):
+        if not isinstance(error, TelegramBadRequest) or (loose := target.unanchored) is None:
             raise
-        return await _answer_refused(
-            bot, target, receiver, markdown, chunks, links=links, reply_markup=reply_markup, silent=silent
-        )
+        try:  # a refused ephemeral reply (its 15 seconds ran out): unanchored, else privately
+            await _send_chunks(
+                bot, loose, chunks, sent, links=links, reply_markup=reply_markup, silent=silent
+            )
+        except TelegramBadRequest as again:
+            if sent:
+                raise PartialDeliveryError(again, sent) from again
+            # Without its buttons: they act on the chat they were pressed in.
+            _refused(loose, await send_privately(bot, loose.ephemeral_to or 0, markdown))
     return sent
 
 
-async def _answer_refused(
-    bot: Bot,
-    target: Target,
-    receiver: int,
-    markdown: str,
-    chunks: list[str],
-    *,
-    links: Links | None,
-    reply_markup: InlineKeyboardMarkup | None,
-    silent: bool,
-) -> list[Message]:
-    """An ephemeral reply Telegram refused, sent unanchored or else privately; [] when not in the chat.
-
-    The private copy goes without its buttons: they act on the chat they were pressed in.
-    """
-    loose = Target(target.chat_id, target.thread_id, ephemeral_to=receiver)
-    sent: list[Message] = []
-    try:
-        await _send_chunks(bot, loose, chunks, sent, links=links, reply_markup=reply_markup, silent=silent)
-    except TelegramBadRequest as error:
-        if sent:
-            raise PartialDeliveryError(error, sent) from error
-    else:
-        return sent
-    delivered = await send_privately(bot, receiver, markdown)
+def _refused(loose: Target, delivered: bool) -> None:
     log.warning(
         "ephemeral reply refused in %s, %s", loose.chat_id, "sent privately" if delivered else "dropped"
     )
+
+
+async def send_document(
+    bot: Bot, target: Target, document: BufferedInputFile, *, caption: str | None = None
+) -> list[Message]:
+    """One file (``caption`` as plain text); a refused ephemeral reply goes like ``send_markdown``'s."""
+
+    async def to(where: Target) -> list[Message]:
+        message = await bot.send_document(
+            chat_id=where.chat_id,
+            message_thread_id=where.thread_id,
+            document=document,
+            caption=caption,
+            reply_parameters=where.reply_parameters,
+            ephemeral_message_parameters=where.ephemeral,
+        )
+        return [message]
+
+    try:
+        return await to(target)
+    except TelegramBadRequest:
+        if (loose := target.unanchored) is None:
+            raise
+    try:
+        return await to(loose)
+    except TelegramBadRequest:
+        pass
+    try:
+        await to(Target(loose.ephemeral_to or 0))
+    except TelegramForbiddenError, TelegramBadRequest:
+        _refused(loose, False)
+    else:
+        _refused(loose, True)
     return []
 
 
