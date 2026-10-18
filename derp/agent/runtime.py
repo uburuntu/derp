@@ -49,10 +49,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.approvals import close_prompt, resumption
 from derp.agent.context import Window, build_window
+from derp.agent.decisions import Decider, Verdict
 from derp.agent.deps import RunDeps
 from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
 from derp.agent.lanes import Lanes
-from derp.agent.media import Inspected, as_content, inspect, note_images, run_media
+from derp.agent.media import Inspected, Referenced, as_content, inspect, note_images, run_media
 from derp.agent.models import AgentRun, Approval
 from derp.agent.outputs import absorb_kept, flush, hold_left
 from derp.agent.persona import PERSONA, situation
@@ -83,7 +84,7 @@ from derp.history.transcription import Transcriber
 from derp.inference.api import OpenRouterAPI
 from derp.inference.openrouter import ModelFactory, chat_settings, conversation_id
 from derp.inference.pins import PinStore
-from derp.inference.roles import RolePin
+from derp.inference.roles import Effort, RolePin
 from derp.locales import resolve, t
 from derp.memory.notes import load_memory, notes_block
 from derp.money.free import answer_unfunded, consented, note_empty_wallet
@@ -129,6 +130,7 @@ class Ask:
     tokens: int = 0  # the window's estimated size
     seen: tuple[int, ...] = ()  # messages whose images the run looks at (``RunDeps.seen``)
     unnoted: list[Inspected] = field(default_factory=list[Inspected])  # inspected images to describe after
+    effort: Effort | None = None  # a deeper reasoning effort the decision asked for (paid runs)
     approved: DeferredToolResults | None = None
     carried: list[ModelMessage] = field(default_factory=list[ModelMessage])
 
@@ -180,6 +182,7 @@ class Runtime:
         self.workers = workers
         self.transcriber = transcriber
         self.lanes = Lanes(settings.run_concurrency)
+        self.decider = Decider(db, api, pins, settings.decisions)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.in_flight: set[str] = set()  # operation ids of holds a live run still owns
         # Where each topic's last window started: kept while it fits, so consecutive runs share a cacheable prefix.
@@ -194,8 +197,22 @@ class Runtime:
             retries=2,  # a second chance at a bad tool call: two misses in a row would end the turn
         )
 
-    async def answer(self, message: TgMessage, chat: Chat, *, trigger: str = "message") -> Outcome | None:
-        """Answer an invocation, queued per chat topic.
+    async def screen(self, message: TgMessage, chat: Chat) -> Verdict:
+        """Whether a name-only mention speaks to Derp, asked along with what its run would need to know.
+
+        Called before anything is posted or queued: a passing mention never posts, nor supersedes a question
+        waiting its turn. The verdict goes on to ``answer``.
+        """
+        async with self.db.session() as session:
+            images = await run_media(session, chat.id, message.message_id, _replied_id(message))
+        return await self.decider.decide(
+            message, bot_id=self.bot.id, tz=chat_time(chat), named=True, images=images
+        )
+
+    async def answer(
+        self, message: TgMessage, chat: Chat, *, trigger: str = "message", verdict: Verdict | None = None
+    ) -> Outcome | None:
+        """Answer an invocation, queued per chat topic; ``verdict``: what ``screen`` already decided.
 
         None when an owner blocked the chat or the asker, or the trigger was merged into a newer one or is a duplicate.
         """
@@ -208,7 +225,7 @@ class Runtime:
         async with self.lanes.turn(key, message.from_user.id, message.message_id) as go:
             if not go or (message.message_id and await self._answered(chat.id, message.message_id)):
                 return None
-            return await self._answer(message, chat, trigger=trigger)
+            return await self._answer(message, chat, trigger=trigger, verdict=verdict)
 
     async def _answered(self, chat_id: int, message_id: int) -> bool:
         """A redelivered update (e.g. after a restart) must not be answered twice."""
@@ -220,7 +237,9 @@ class Runtime:
             )
         return found is not None
 
-    async def _answer(self, message: TgMessage, chat: Chat, *, trigger: str) -> Outcome:
+    async def _answer(
+        self, message: TgMessage, chat: Chat, *, trigger: str, verdict: Verdict | None
+    ) -> Outcome:
         asker = message.from_user
         if asker is None:
             raise ValueError("an invocation needs a sender")
@@ -252,6 +271,16 @@ class Runtime:
         funding = funds.funding
 
         async def compose(pin: RolePin) -> Ask:
+            reply_to = _replied_id(message)
+            async with self.db.session() as session:
+                images = await run_media(session, chat.id, message.message_id, reply_to)
+            decided = verdict
+            if decided is None:  # nothing was asked before queueing: ask what this turn needs, if anything
+                decided = await self.decider.decide(
+                    message, bot_id=self.bot.id, tz=tz, images=images, paid=funding is Funding.PAID
+                )
+            if images.fallback and not decided.images:
+                images = Referenced([])
             async with self.db.session() as session:
                 topic_key = (chat.id, target.thread_id, funding.value)
                 window = await build_window(
@@ -268,8 +297,6 @@ class Runtime:
                 if window.oldest_message_id is not None:
                     self.window_starts[topic_key] = window.oldest_message_id
                 prompt = await current_prompt(session, message, window, tz, self.bot.id)
-                reply_to = message.reply_to_message.message_id if message.reply_to_message else None
-                images = await run_media(session, chat.id, message.message_id, reply_to)
                 topic = (
                     await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
                 )
@@ -309,6 +336,7 @@ class Runtime:
                 trigger_message_id=message.message_id,
                 seen=tuple(dict.fromkeys(row.message_id for row in images.rows)),
                 unnoted=[item for item in inspected if item.row.message_id not in images.unnoted],
+                effort=decided.effort if funding is Funding.PAID else None,
             )
 
         return await self._run(
@@ -422,6 +450,7 @@ class Runtime:
                                     pin,
                                     max_tokens=caps.output_tokens,
                                     session=conversation_id(f"chat:{chat.id}:{target.thread_id or 0}"),
+                                    effort=ask.effort,
                                 ),
                                 usage_limits=UsageLimits(  # backstops: the guard wraps up before these
                                     request_limit=caps.tool_calls + 1 + BACKSTOP,
@@ -783,6 +812,10 @@ def apology(locale: str, error: BaseException, funds: Funds, *, charged: bool) -
         return t(locale, "agent.free_busy")  # OpenRouter's shared free limits
     key = "agent.timeout" if isinstance(error, TimeoutError) else "agent.failed"
     return t(locale, f"{key}_partial" if charged else key)
+
+
+def _replied_id(message: TgMessage) -> int | None:
+    return message.reply_to_message.message_id if message.reply_to_message else None
 
 
 async def current_prompt(

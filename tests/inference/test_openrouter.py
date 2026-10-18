@@ -1,6 +1,7 @@
 import base64
 import json
 from decimal import Decimal
+from typing import Any
 
 import httpx
 import pytest
@@ -129,3 +130,54 @@ async def test_missing_cost_falls_back_to_the_configured_estimate() -> None:
     assert image.cost_usd == Decimal(str(defaults.image_price_usd))
     transcript = await api.transcribe("m/stt", b"OggS", "ogg", seconds=90)
     assert transcript.cost_usd == Decimal(str(defaults.stt_price_usd_per_minute)) * Decimal("1.5")
+
+
+async def test_decide_asks_the_systemone_endpoint_under_zdr() -> None:
+    seen: dict[str, Any] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen.update(json.loads(request.content))
+        answers = {"addressed": {"type": "noul", "noul": 0.91}}
+        usage = {"input_tokens": 350, "output_tokens": 35, "cost": 1.47e-05}
+        return httpx.Response(
+            200, json={"model": "typesafe/jev-1.14-20261014", "answers": answers, "usage": usage}
+        )
+
+    api = api_with(httpx.MockTransport(handle))
+    question = {"type": "noul", "instructions": "Is `new_message` speaking to Derp?"}
+    decided = await api.decide("typesafe/jev-1.14", {"new_message": "derp, hi"}, {"addressed": question})
+    assert seen["path"] == "/api/v1/systemone"
+    assert seen["provider"] == {"zdr": True, "data_collection": "deny"}
+    assert decided.answers["addressed"]["noul"] == 0.91 and decided.cost_usd == Decimal("0.0000147")
+    assert decided.model == "typesafe/jev-1.14-20261014" and decided.input_tokens == 350
+    with pytest.raises(OpenRouterError, match="do not match"):  # every question must come back answered
+        await api.decide("typesafe/jev-1.14", "x", {"addressed": question, "extra": question})
+
+
+async def test_a_decision_without_a_cost_is_priced_from_its_tokens() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        answers = {"q": {"type": "noul", "noul": 0.1}}
+        return httpx.Response(
+            200, json={"model": "m", "answers": answers, "usage": {"input_tokens": 1_000_000}}
+        )
+
+    decided = await api_with(httpx.MockTransport(handle)).decide("m", "x", {"q": {"type": "noul"}})
+    defaults = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert decided.cost_usd == Decimal(str(defaults.decisions.price_usd_per_m_input))
+
+
+def test_a_deeper_effort_raises_reasoning_and_its_room_but_never_lowers_it() -> None:
+    pin = RolePin(model="a/b")  # reasoning "low"
+    assert chat_settings(pin, max_tokens=2000).get("openrouter_reasoning") == {
+        "effort": "low",
+        "exclude": True,
+    }
+    high = chat_settings(pin, max_tokens=2000, effort="high")
+    assert high.get("openrouter_reasoning") == {"effort": "high", "exclude": True}
+    assert high.get("max_tokens") == 8000  # reasoning shares max_tokens with the answer
+    assert chat_settings(pin, max_tokens=2000, effort="medium").get("max_tokens") == 4000
+    deep = chat_settings(RolePin(model="a/b", reasoning="high"), max_tokens=10, effort="medium")
+    assert deep.get("openrouter_reasoning") == {"effort": "high", "exclude": True}
+    unset = chat_settings(RolePin(model="a/b", reasoning=None), max_tokens=10, effort="high")
+    assert "openrouter_reasoning" not in unset and unset.get("max_tokens") == 10

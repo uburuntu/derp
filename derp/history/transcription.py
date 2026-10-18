@@ -1,17 +1,19 @@
-"""Silent transcription of every stored voice message and video note.
+"""Silent transcription of stored voice messages and video notes, and of audio and videos on invocation.
 
 Runs inline during capture, before handlers, so an invocation by voice is
 answered from its transcript. Creator-funded and ledgered as ``kind='stt'``;
-nothing is posted. Video notes go through ffmpeg (audio only) first. Long
-recordings, failed downloads and provider errors leave the message with an
-empty transcript (like an image whose note came back empty) and the reason in
+nothing is posted. Long recordings, failed downloads (Telegram hands bots
+files up to 20 MB) and provider errors leave the message with an empty
+transcript (like an image whose note came back empty) and the reason in
 ``transcript_model``, so the transcript line can say it — they never fail
 capture; a failed one is tried again when an invocation replies to it. Which
 messages get transcribed is decided here (``transcribe``). Ambient voice (not
 part of an invocation) stops being transcribed once the day's creator-paid STT reaches
 ``ambient_stt_daily_usd``; owners get one ping per UTC day when that happens.
-Audio files (forwarded memos, recordings) are transcribed only as part of an
-invocation, never ambient; anything but OGG goes through ffmpeg first.
+Audio files (forwarded memos, recordings) and videos are transcribed only as
+part of an invocation, never ambient. Anything but OGG audio goes through
+ffmpeg first (audio track only: the provider takes audio formats, not video
+containers).
 
 Updates are handled concurrently, so a run may start while a voice note sent
 just before it is still being transcribed: ``settle`` lets it wait for those,
@@ -43,7 +45,7 @@ from derp.telegram.media import MediaGateway
 
 log = logging.getLogger("derp.transcription")
 SPOKEN = ("voice", "video_note")  # transcribed whenever stored
-AUDIBLE = (*SPOKEN, "audio")  # audio files: only as part of an invocation
+AUDIBLE = (*SPOKEN, "audio", "video")  # audio files and videos: only as part of an invocation
 FFMPEG_SECONDS = 60
 SETTLE_SECONDS = 5.0  # how long a run waits for transcriptions still running before its message
 Notify = Callable[[str], Awaitable[None]]
@@ -62,7 +64,7 @@ async def stt_spent_today(session: AsyncSession, now: datetime) -> Decimal:
 
 
 async def extract_audio(media: bytes) -> bytes:
-    """Audio track of a video note or audio file as OGG/Opus (MP4 needs a seekable input, hence the temp file).
+    """Audio track of a video, video note or audio file as OGG/Opus (MP4 needs a seekable input, hence the temp file).
 
     ffmpeg recognizes the container from its content, so the file needs no (user-supplied) extension.
     """
@@ -135,7 +137,7 @@ class Transcriber:
     async def transcribe(
         self, message: TgMessage, *, thread_id: int | None = None, ambient: bool = False
     ) -> str | None:
-        """The transcript of a stored voice message, video note or (not ambient) audio file; others are skipped."""
+        """The transcript of a stored voice message or video note, or (not ambient) audio file or video; else None."""
         if content_type(message) not in (SPOKEN if ambient else AUDIBLE):
             return None
         return await self.transcribe_message(
@@ -166,11 +168,14 @@ class Transcriber:
     async def _transcribe(self, chat_id: int, message_id: int, *, ambient: bool) -> str | None:
         async with self.db.session() as session:
             media = await session.scalar(
-                select(MessageMedia).where(
+                select(MessageMedia)
+                .where(
                     MessageMedia.chat_id == chat_id,
                     MessageMedia.message_id == message_id,
                     MessageMedia.type.in_(SPOKEN if ambient else AUDIBLE),
                 )
+                .order_by(MessageMedia.idx)  # the message's own recording before one it quotes
+                .limit(1)
             )
             user_id = await session.scalar(
                 select(Message.user_id).where(Message.chat_id == chat_id, Message.message_id == message_id)

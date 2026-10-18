@@ -34,7 +34,7 @@ from derp.agent.tools.sources import (
 from derp.agent.toolsets import Family
 from derp.money.funding import Funding
 from derp.money.models import RunFee
-from derp.telegram.media import sniff_image
+from derp.telegram.media import MediaUnavailableError
 from derp.tools import background, effects, lookups
 from derp.tools.captions import Style
 from derp.tools.workers import EffectError
@@ -321,14 +321,14 @@ async def profile_photo(
         return "This model can't see images."
     try:
         source = await (chat_photo_source(deps) if chat_photo else avatar_source(deps, message_id, person))
+        image = await deps.gateway.normalize(source.data)
     except Refused as refused:
         return str(refused)
-    media_type = sniff_image(source.data)
-    if media_type is None:
+    except MediaUnavailableError:
         return "That photo isn't a picture I can open."
     return [
         f"({'chat' if chat_photo else 'profile'} photo)",
-        BinaryContent(source.data, media_type=media_type),
+        BinaryContent(image.data, media_type=image.media_type),
     ]
 
 

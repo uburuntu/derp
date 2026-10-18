@@ -15,7 +15,9 @@ COST = Numeric(14, 8)
 class ProviderCall(Base):
     __tablename__ = "provider_calls"
     __table_args__ = (
-        CheckConstraint("kind in ('chat', 'stt', 'image', 'digest', 'scout', 'media')", name="kind"),
+        CheckConstraint(
+            "kind in ('chat', 'stt', 'image', 'digest', 'scout', 'media', 'decision')", name="kind"
+        ),
         CheckConstraint("cost_usd >= 0", name="cost_nonnegative"),
         Index("ix_provider_calls_created_at", "created_at"),
     )

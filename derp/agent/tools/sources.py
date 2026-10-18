@@ -7,8 +7,9 @@ Message media is the one named, or else the current message's, the one it
 replies to, or the images the run looks at (``RunDeps.seen``: the asker's photo
 just before, the image behind an answered run). A profile photo belongs to a
 person named in this chat (name or @username, matched against members seen
-here), else a stored message's sender, else the person replied to, else the
-asker; tools never take a user id.
+here), else a stored message's author (a forward's original author when Telegram
+names them), else the replied-to message's, else the asker; tools never take a
+user id.
 Failures raise ``Refused``, whose text is meant for the model.
 """
 
@@ -121,19 +122,29 @@ async def resolve_person(deps: RunDeps, name: str) -> int:
 
 
 async def photo_owner(deps: RunDeps, message_id: int | None, name: str | None = None) -> int:
-    """Whose profile photo: the named person, else message_id's sender, else the person replied to, else the asker."""
+    """Whose profile photo: the named person, else message_id's author, else the replied-to one's, else the asker.
+
+    A message's author is its sender, or for a forward the person it was forwarded from when Telegram names
+    them (a hidden account, a chat or a channel leaves the sender).
+    """
     if name:
         return await resolve_person(deps, name)
     anchor = message_id if message_id is not None else await replied_to(deps)
     if anchor is None:
         return deps.user_id
     async with deps.db.session() as session:
-        sender = await session.scalar(
-            select(Message.user_id).where(Message.chat_id == deps.chat.id, Message.message_id == anchor)
-        )
-    if sender is None and message_id is not None:
+        found = (
+            await session.execute(
+                select(Message.user_id, Message.forward_origin).where(
+                    Message.chat_id == deps.chat.id, Message.message_id == anchor
+                )
+            )
+        ).first()
+    sender, origin = found if found else (None, {})
+    author = origin["sender_user"]["id"] if origin and origin.get("type") == "user" else None
+    if author is None and sender is None and message_id is not None:
         raise Refused(f"Message #{message_id} isn't in this chat's history or has no person behind it.")
-    return sender or deps.user_id
+    return author or sender or deps.user_id
 
 
 async def avatar_source(deps: RunDeps, message_id: int | None, name: str | None = None) -> Source:

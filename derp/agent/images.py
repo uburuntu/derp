@@ -21,7 +21,7 @@ from derp.db.engine import Database
 from derp.inference.api import GeneratedImage, OpenRouterAPI, OpenRouterError
 from derp.inference.ledger import record_usage, simple_usage
 from derp.inference.roles import ModelRole, RolePin
-from derp.telegram.media import MediaGateway, chat_photo_bytes, profile_photo_bytes, sniff_image
+from derp.telegram.media import Media, MediaGateway, chat_photo_bytes, profile_photo_bytes
 
 log = logging.getLogger("derp.images")
 ASPECT_RATIOS = ("1:1", "16:9", "9:16", "4:3", "3:4")
@@ -56,19 +56,17 @@ class ImageJob:
         )
 
 
-async def _references(
-    db: Database, gateway: MediaGateway, chat_id: int, ids: Sequence[int]
-) -> list[tuple[bytes, str]]:
+async def _references(db: Database, gateway: MediaGateway, chat_id: int, ids: Sequence[int]) -> list[Media]:
     async with db.session() as session:
         found = [
             row for message_id in ids for row in await referenced_media(session, chat_id, message_id, None)
         ]
     rows = list({(row.message_id, row.idx): row for row in found}.values())  # an album's photos come once
-    return [(item.image.data, item.image.media_type) for item in await inspect(gateway, rows)]
+    return [item.image for item in await inspect(gateway, rows)]
 
 
 async def _generate(
-    api: OpenRouterAPI, pin: RolePin, job: ImageJob, references: list[tuple[bytes, str]]
+    api: OpenRouterAPI, pin: RolePin, job: ImageJob, references: list[Media]
 ) -> GeneratedImage:
     error: OpenRouterError | None = None
     for model in (pin.model, *pin.fallbacks):
@@ -78,7 +76,7 @@ async def _generate(
                 job.prompt,
                 only=pin.only.get(model, ()),
                 zdr=pin.zdr,
-                references=references,
+                references=[(image.data, image.media_type) for image in references],
                 aspect_ratio=job.aspect_ratio,
             )
         except OpenRouterError as failed:  # next model in the pin
@@ -96,18 +94,20 @@ async def draw(
     pin: RolePin,
     chat_id: int,
     job: ImageJob,
-    extra: Sequence[tuple[bytes, str]] = (),
+    extra: Sequence[bytes] = (),
 ) -> GeneratedImage:
     """Generate one image (not yet ledgered: the caller ledgers it once it knows whether it was delivered).
 
-    ``extra`` adds reference pictures by content (a result an earlier tool of the run kept).
+    ``extra`` adds reference pictures by content (a result an earlier tool of the run kept). Every
+    reference reaches the model normalized (``MediaGateway.image`` / ``normalize``).
     """
-    references = [*await _references(db, gateway, chat_id, job.references), *extra]
-    photos = [
+    references = await _references(db, gateway, chat_id, job.references)
+    pictures = [
+        *extra,
         *([await profile_photo_bytes(bot, gateway, job.avatar_of)] if job.avatar_of is not None else []),
         *([await chat_photo_bytes(bot, gateway, chat_id)] if job.chat_photo else []),
     ]
-    references += [(data, sniff_image(data) or "image/jpeg") for data in photos]
+    references += [await gateway.normalize(data) for data in pictures]
     return await _generate(api, pin, job, references)
 
 

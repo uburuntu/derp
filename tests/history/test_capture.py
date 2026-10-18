@@ -10,6 +10,7 @@ from derp.db.engine import Database
 from derp.history.capture import (
     classify,
     media_rows,
+    message_values,
     payload_for,
     record_outgoing,
     store_message,
@@ -81,6 +82,89 @@ def test_media_keeps_largest_photo_and_sticker_fields() -> None:
     )  # fmt: skip
     (row,) = media_rows(sticker, BOT_ID)
     assert (row["sticker_emoji"], row["sticker_set"]) == ("😂", "memes")
+    assert row["mime_type"] == "image/webp" and row["thumb_file_id"] is None
+
+
+def thumb(name: str) -> dict[str, Any]:
+    return {"file_id": f"t-{name}", "file_unique_id": f"ut-{name}", "width": 320, "height": 180}
+
+
+STICKER = {"file_unique_id": "us", "type": "regular", "width": 512, "height": 512, "emoji": "🐸"}
+CLIP = {"width": 640, "height": 360, "duration": 3}
+
+
+@pytest.mark.parametrize(
+    ("kind", "item", "mime"),
+    [
+        ("sticker", STICKER | {"file_id": "tgs", "is_animated": True, "is_video": False}, "application/x-tgsticker"),
+        ("sticker", STICKER | {"file_id": "webm", "is_animated": False, "is_video": True}, "video/webm"),
+        ("animation", CLIP | {"file_id": "gif", "file_unique_id": "ug", "mime_type": "video/mp4"}, "video/mp4"),
+        ("video", CLIP | {"file_id": "vid", "file_unique_id": "uv", "mime_type": "video/mp4"}, "video/mp4"),
+        ("video_note", {"file_id": "vn", "file_unique_id": "un", "length": 240, "duration": 5}, None),
+        ("document", {"file_id": "pdf", "file_unique_id": "ud", "mime_type": "application/pdf"}, "application/pdf"),
+    ],
+)  # fmt: skip
+def test_media_keeps_the_preview_picture_of_what_isnt_one(
+    kind: str, item: dict[str, Any], mime: str | None
+) -> None:
+    (row,) = media_rows(tg(**{kind: item | {"thumbnail": thumb(kind)}}), BOT_ID)
+    assert row["type"] == kind and row["mime_type"] == mime and row["bot_id"] == BOT_ID
+    assert (row["thumb_file_id"], row["thumb_unique_id"]) == (f"t-{kind}", f"ut-{kind}")
+
+
+def size(name: str, side: int) -> dict[str, Any]:
+    return {"file_id": name, "file_unique_id": f"u-{name}", "width": side, "height": side}
+
+
+def paragraph(text: Any) -> dict[str, Any]:
+    return {"type": "paragraph", "text": text}
+
+
+def test_a_rich_message_is_text_and_its_media_blocks_are_rows() -> None:
+    caption = {"text": "the view", "credit": "me"}
+    rich = tg(
+        rich_message={
+            "blocks": [
+                {"type": "heading", "text": "Trip", "size": 1},
+                paragraph(["Day one, ", {"type": "url", "text": "the map", "url": "https://example.com/secret"}]),
+                {"type": "collage", "blocks": [
+                    {"type": "photo", "photo": [size("small", 90), size("big", 1280)], "caption": caption},
+                    {"type": "video", "video": CLIP | {"file_id": "clip", "file_unique_id": "uc",
+                                                        "thumbnail": thumb("clip")}},
+                ]},
+                {"type": "list", "items": [{"label": "•", "blocks": [paragraph("pack socks")]}]},
+                {"type": "table", "cells": [[{"align": "left", "valign": "top", "text": "a"},
+                                             {"align": "left", "valign": "top", "text": "b"}]]},
+                {"type": "paragraph", "text": [{"type": "custom_emoji", "custom_emoji_id": "42",
+                                                "alternative_text": "🔥"}]},
+            ]
+        }
+    )  # fmt: skip
+    values = message_values(rich, capture="ambient")
+    assert values["kind"] == "text" and values["raw"] is None
+    assert values["text"] == "Trip\nDay one, the map\nthe view\npack socks\na | b\n🔥"  # never the URL
+    photo, video = media_rows(rich, BOT_ID)
+    assert (photo["type"], photo["file_id"], photo["idx"]) == ("photo", "big", 0)
+    assert (video["type"], video["file_id"], video["thumb_file_id"], video["idx"]) == (
+        "video",
+        "clip",
+        "t-clip",
+        1,
+    )
+
+
+def test_media_of_a_message_quoted_from_another_chat_are_rows() -> None:
+    quoting = tg(
+        text="lol look",
+        external_reply={
+            "origin": {"type": "channel", "date": 1_700_000_000, "message_id": 5,
+                       "chat": {"id": -200, "type": "channel", "title": "News"}},
+            "photo": [size("q-small", 90), size("q-big", 800)],
+        },
+    )  # fmt: skip
+    (row,) = media_rows(quoting, BOT_ID)
+    assert (row["type"], row["file_id"], row["bot_id"]) == ("photo", "q-big", BOT_ID)
+    assert message_values(quoting, capture="ambient")["text"] == "lol look"
 
 
 pytestmark = pytest.mark.db

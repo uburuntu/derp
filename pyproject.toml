@@ -12,6 +12,7 @@ dependencies = [
     "logfire>=5.2.0",
     "onnxruntime>=1.31",
     "pillow>=12.3",
+    "pillow-heif>=1.8",
     "pydantic>=2.12",
     "pydantic-ai-harness[codemode]>=0.57.0",
     "pydantic-ai-slim[openrouter]>=2.57.0",

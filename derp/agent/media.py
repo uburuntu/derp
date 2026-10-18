@@ -3,14 +3,18 @@
 When neither has one, two follow-ups still bring a photo along (``run_media``):
 the asker's own photo (or album) sent just before the question in the same topic,
 and, for a reply to one of Derp's answers, the image the run behind that answer
-looked at (one hop: its trigger's or the message that trigger replied to).
+looked at (one hop: its trigger's or the message that trigger replied to) —
+unless a decision (``agent.decisions``) says answering doesn't need them.
 
 Vision-capable pins get the pixels; every inspected image also gets a one-line
 description stored on ``message_media`` (and folded into search text), so later
 runs — and models without vision — see "[photo: a grey cat on a laptop]"
 instead of a bare placeholder. Descriptions are written only for images a run
-actually inspected. Asked for explicitly (``frames``), videos, GIFs and video
-messages are seen through one still frame. Notes for one run are made concurrently
+actually inspected. What isn't a picture itself (an animated or video sticker, a
+GIF, a file) is seen through Telegram's preview picture of it; asked for
+explicitly (``frames``), videos, GIFs and video messages are seen through one
+still frame first. Every picture reaches the model normalized
+(``MediaGateway.image``). Notes for one run are made concurrently
 under a timeout; every provider response is ledgered, and an image whose paid note
 came back empty is marked with an empty description so it is never paid for twice.
 """
@@ -31,9 +35,10 @@ from derp.agent.models import AgentRun, RunOutput
 from derp.agent.runs import ledger_side_call
 from derp.db.engine import Database
 from derp.history.models import Message, MessageMedia
+from derp.history.render import kind_label
 from derp.inference.openrouter import chat_settings
 from derp.inference.roles import ModelRole, RolePin
-from derp.telegram.media import Media, MediaGateway, MediaUnavailableError, sniff_image
+from derp.telegram.media import Media, MediaGateway, MediaUnavailableError
 from derp.tools.effects import still
 from derp.tools.workers import EffectError, WorkerPool
 
@@ -55,7 +60,7 @@ DESCRIBE_PROMPT = (
 class Inspected:
     row: MessageMedia
     image: Media
-    frame: bool = False  # a still taken from a clip
+    still: str = ""  # how a picture stands in for a file that isn't one: "frame" (of a clip) or "preview"
 
 
 async def referenced_media(
@@ -100,6 +105,8 @@ class Referenced:
     rows: list[MessageMedia]
     # Messages whose images are shown but not described by this run (see ``run_media``).
     unnoted: frozenset[int] = field(default_factory=frozenset[int])
+    # The rows came from the fallback rules: attached only if answering needs them (``agent.decisions``).
+    fallback: bool = False
 
 
 async def preceding_media(session: AsyncSession, trigger: Message) -> list[MessageMedia]:
@@ -166,39 +173,55 @@ async def run_media(session: AsyncSession, chat_id: int, message_id: int, reply_
     recent = await preceding_media(session, trigger)
     shown = {(r.message_id, r.idx) for r in recent}
     rows = [*(r for r in answered if (r.message_id, r.idx) not in shown), *recent][-MAX_IMAGES:]
-    return Referenced(rows, frozenset(r.message_id for r in answered) - {r.message_id for r in recent})
+    unnoted = frozenset(r.message_id for r in answered) - {r.message_id for r in recent}
+    return Referenced(rows, unnoted, fallback=bool(rows))
 
 
 async def inspect(
     gateway: MediaGateway, rows: Sequence[MessageMedia], *, frames: WorkerPool | None = None
 ) -> list[Inspected]:
-    """Download what can be downloaded; oversized files are skipped, and clips too unless ``frames``.
+    """Each row as a picture a model can take (``MediaGateway.image``), or skipped when it has none.
 
-    ``frames`` is the worker pool that takes a clip's still frame.
+    The row's own file when it is a picture; else, with ``frames`` (the worker pool of an explicit look),
+    a still frame of the clip; else Telegram's preview picture of it (an animated sticker, a GIF, a file).
     """
     inspected: list[Inspected] = []
     for row in rows:
         try:
-            data = await gateway.fetch(
-                row.file_id, bot_id=row.bot_id, key=row.file_unique_id, size_hint=row.file_size
-            )
-            if media_type := sniff_image(data):
-                inspected.append(Inspected(row, Media(data, media_type)))
-            elif frames is not None:
-                inspected.append(Inspected(row, Media(await still(frames, data), "image/jpeg"), frame=True))
-            else:
-                log.info("media #%s skipped: not an image", row.message_id)
+            inspected.append(await _picture(gateway, row, frames))
         except MediaUnavailableError as unavailable:
             log.info("media #%s skipped: %s", row.message_id, unavailable.reason)
-        except EffectError as failed:
-            log.info("media #%s frame failed: %s", row.message_id, failed.reason)
     return inspected
+
+
+async def _picture(gateway: MediaGateway, row: MessageMedia, frames: WorkerPool | None) -> Inspected:
+    file = row.file_id, row.bot_id, row.file_unique_id, row.file_size
+    try:
+        return Inspected(row, await gateway.image(*file, mime_type=row.mime_type))
+    except MediaUnavailableError as unavailable:
+        failure = unavailable
+    if frames is not None:
+        try:
+            frame = await still(frames, await gateway.fetch(*file))
+            return Inspected(row, await gateway.normalize(frame), still="frame")
+        except EffectError as failed:
+            failure = MediaUnavailableError(f"no frame ({failed.reason})")
+        except MediaUnavailableError as unavailable:
+            failure = unavailable
+    if row.thumb_file_id is None:
+        raise failure
+    return Inspected(
+        row, await gateway.image(row.thumb_file_id, row.bot_id, row.thumb_unique_id), still="preview"
+    )
+
+
+STILLS = {"frame": "a still frame of the {}", "preview": "the preview picture of the {}"}
 
 
 def as_content(items: Sequence[Inspected]) -> list[str | BinaryContent]:
     content: list[str | BinaryContent] = []
     for item in items:
-        what = f"a still frame of the {item.row.type.replace('_', ' ')}" if item.frame else "image"
+        what = STILLS[item.still].format(kind_label(item.row.type)) if item.still else "image"
         content.append(f"({what} from #{item.row.message_id})")
         content.append(BinaryContent(item.image.data, media_type=item.image.media_type))
     return content

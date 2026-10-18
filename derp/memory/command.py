@@ -11,7 +11,7 @@ from derp.db.engine import Database
 from derp.history.models import Chat
 from derp.locales import resolve, t
 from derp.memory.models import Note
-from derp.memory.notes import is_admin, load_memory
+from derp.memory.notes import decide, is_admin, load_memory
 from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, send_markdown
 
@@ -54,8 +54,15 @@ def _decided(note_id: int) -> set[str]:
     return {NoteAction(action=action, note_id=note_id).pack() for action in ("approve", "reject")}
 
 
-def _lines(notes: list[Note]) -> list[str]:
-    return [f"- `#{n.id}` {n.text}" for n in notes]
+def _label(locale: str, note: Note) -> str:
+    """How people see a note's number, like the model does: "note 12"; a proposed edit goes by its note's."""
+    if note.replaces_id is not None:
+        return t(locale, "memory.note_edit", id=note.replaces_id)
+    return t(locale, "memory.note", id=note.id)
+
+
+def _lines(locale: str, notes: list[Note]) -> list[str]:
+    return [f"- {_label(locale, n)}: {n.text}" for n in notes]
 
 
 async def show_memory(message: Message, bot: Bot, db: Database, chat_row: Chat) -> None:
@@ -73,24 +80,24 @@ async def show_memory(message: Message, bot: Bot, db: Database, chat_row: Chat) 
         sections.append(
             t(locale, "memory.chat_notes", mode=t(locale, f"memory.mode.{chat_row.notes_mode}"))
             + "\n"
-            + ("\n".join(_lines(active)) or t(locale, "memory.empty"))
+            + ("\n".join(_lines(locale, active)) or t(locale, "memory.empty"))
         )
     if chat_row.type == "private" or message.ephemeral_message_id:
         sections.append(
             t(locale, "memory.my_notes")
             + "\n"
-            + ("\n".join(_lines(memory.my_notes)) or t(locale, "memory.empty"))
+            + ("\n".join(_lines(locale, memory.my_notes)) or t(locale, "memory.empty"))
         )
     else:  # a public reply: someone's own notes stay out of the group
         sections.append(t(locale, "memory.my_notes_hidden"))
     keyboard = None
     if proposed:
-        sections.append(t(locale, "memory.proposed") + "\n" + "\n".join(_lines(proposed)))
+        sections.append(t(locale, "memory.proposed") + "\n" + "\n".join(_lines(locale, proposed)))
         keyboard = markup(
             *(
                 [
-                    button(f"✅ #{n.id}", NoteAction(action="approve", note_id=n.id)),
-                    button(f"✖️ #{n.id}", NoteAction(action="reject", note_id=n.id)),
+                    button(f"✅ {_label(locale, n)}", NoteAction(action="approve", note_id=n.id)),
+                    button(f"✖️ {_label(locale, n)}", NoteAction(action="reject", note_id=n.id)),
                 ]
                 for n in proposed[:10]
             )
@@ -102,8 +109,10 @@ async def show_memory(message: Message, bot: Bot, db: Database, chat_row: Chat) 
 
 
 async def on_note_action(press: Press, data: NoteAction, bot: Bot, db: Database) -> None:
-    """An admin's decision on one proposal; that proposal's buttons go, the others' stay."""
+    """An admin's decision on one proposal (a new note, or an edit that rewrites its note); that proposal's
+    buttons go, the others' stay."""
     refusal: str | None = None
+    shown_id = data.note_id
     async with db.transaction() as session:
         chat = await session.get(Chat, press.chat_id)
         note = await session.get(Note, data.note_id)
@@ -111,15 +120,14 @@ async def on_note_action(press: Press, data: NoteAction, bot: Bot, db: Database)
             refusal = "memory.gone"
         elif not await is_admin(bot, chat, press.user_id):
             return await press.deny("memory.admins_only")
-        elif data.action == "approve":
-            note.state = "active"
         else:
-            await session.delete(note)
+            shown_id = note.replaces_id or note.id
+            await decide(session, note, approve=data.action == "approve")
     decided = _decided(data.note_id)
     await press.strip(keep=lambda b: b.callback_data not in decided)
     if refusal:
         return await press.deny(refusal)
-    await press.toast("memory.approved" if data.action == "approve" else "memory.rejected", id=data.note_id)
+    await press.toast("memory.approved" if data.action == "approve" else "memory.rejected", id=shown_id)
 
 
 async def on_rules_action(press: Press, data: RulesAction, bot: Bot, db: Database) -> None:

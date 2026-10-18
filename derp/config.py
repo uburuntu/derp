@@ -78,6 +78,21 @@ class MediaLimits(BaseModel, frozen=True):
     voice_max_seconds: int = 600
 
 
+class Decisions(BaseModel, frozen=True):
+    """Typed questions to the decision pin before a run (``agent.decisions``); any failure answers as if unasked.
+
+    Thresholds are probabilities from the pinned model (tuned on a synthetic en/ru set); they lean towards
+    running, attaching and staying at the pin's effort.
+    """
+
+    enabled: bool = True
+    timeout_seconds: float = 1.5
+    addressed: float = 0.3  # a name-only mention in a group runs at or above this chance it speaks to Derp
+    images: float = 0.3  # fallback images are attached at or above this chance the answer needs them
+    effort: float = 0.7  # a paid turn thinks harder only when this much probability says it is that hard
+    price_usd_per_m_input: float = 0.042  # estimate for a call without a reported cost
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -162,6 +177,7 @@ class Settings(BaseSettings):
     context_windows: ContextWindows = ContextWindows()
     retention: Retention = Retention()
     media: MediaLimits = MediaLimits()
+    decisions: Decisions = Decisions()
 
     # Telemetry — optional, fails soft
     logfire_token: str = Field(default="", repr=False)

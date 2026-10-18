@@ -1,6 +1,6 @@
 # Ops
 
-- `observability.py` is the only module that configures logging or Logfire. Spans carry numeric IDs, kinds, counts and outcomes; never message text, captions, tool arguments, file IDs, URLs or exception messages. The one exception is `record_run_failure`, which exports a redacted, truncated exchange.
+- `observability.py` is the only module that configures logging or Logfire. Spans carry numeric IDs, kinds, counts and outcomes; never message text, captions, tool arguments, file IDs, URLs or exception messages. The one exception is `record_run_failure`, which exports a redacted, truncated exchange. `record_decision` logs one event per pre-run decision call (outcome, duration, probabilities and the chosen effort).
 - Logfire is optional and must fail soft. Do not instrument HTTPX/aiohttp globally — Telegram file URLs contain the bot token.
 - `redaction.py` masks known secrets (from `Settings.secret_values()`) and secret-shaped strings in every log line.
 - `feedback.py` + `models.py` (`feedback`): `/feedback <text>` and the agent's `leave_feedback` store a person's words with kind, chat, message and run; owners review open items with `/feedbacks` in a private chat (`from_owner`; 5 per page, mark done, or done + thank: a localized DM to the author, sent only by the press that closes the item, so at most once; an undeliverable DM still closes it and the owner is told). `forget_member` deletes a person's feedback from that chat.

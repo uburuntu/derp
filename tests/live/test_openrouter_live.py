@@ -95,3 +95,39 @@ async def test_free_chains_with_the_free_router_are_accepted() -> None:
         result = await agent.run("Reply with exactly one word: pong")
         print(chain.models, result.output, response_usage(result.response))
         assert result.output.strip()
+
+
+async def test_the_decision_pin_tells_addresses_from_passing_mentions() -> None:
+    """The synthetic en/ru set (``tests/agent/name_mentions.json``), asked as for a named trigger, under ZDR."""
+    import asyncio
+    import json
+    from pathlib import Path
+    from typing import Any
+
+    from derp.agent.decisions import ADDRESSED, EFFORT
+    from derp.inference.api import OpenRouterAPI
+
+    settings = Settings()
+    pin = settings.model_pins[ModelRole.DECISION]
+    cases: list[dict[str, Any]] = json.loads(
+        (Path(__file__).parents[1] / "agent" / "name_mentions.json").read_text()
+    )
+    api = OpenRouterAPI(settings)
+
+    async def ask(case: dict[str, Any]) -> float:
+        before = [f"[12:0{i}] #{100 + i} {who}: {text}" for i, (who, text) in enumerate(case["before"])]
+        line = f"[12:0{len(before)}] #{100 + len(before)} Kate: {case['text']}"
+        state = {"previous_messages": before, "new_message": line}
+        decided = await api.decide(pin.model, state, {"addressed": ADDRESSED, "effort": EFFORT}, zdr=pin.zdr)
+        return float(decided.answers["addressed"]["noul"])
+
+    try:
+        chances = await asyncio.gather(*(ask(case) for case in cases))
+    finally:
+        await api.close()
+    labels = [bool(case["addressed"]) for case in cases]
+    right = sum(
+        (p >= settings.decisions.addressed) == label for p, label in zip(chances, labels, strict=True)
+    )
+    print(f"{right}/{len(cases)}", sorted(zip(chances, labels, strict=True)))
+    assert right / len(cases) >= 0.9

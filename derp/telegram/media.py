@@ -5,6 +5,12 @@ the same for every bot but can't be downloaded), so every fetch names the
 owning bot and a file of another bot — say, rows captured by a test bot — is
 unavailable rather than a Telegram error. File URLs embed the bot token: they are never logged or returned, and errors carry
 only the exception type.
+
+Pictures a model sees go through one step, ``normalize``: decoded once (JPEG,
+PNG, GIF, WebP, TIFF, BMP, HEIC/HEIF, AVIF; within the media workers' pixel
+and side caps, ``check_dimensions``), turned upright by EXIF, scaled down to ``VISION_SIDE``,
+transparency put on white, encoded as JPEG. ``MediaGateway.image`` fetches and
+normalizes; a file whose MIME type says it isn't a picture is never downloaded.
 """
 
 import asyncio
@@ -14,8 +20,12 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 import aiohttp
+import pillow_heif
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
+from PIL import Image, ImageOps
+
+from derp.tools.workers import DEFAULTS, EffectError, check_dimensions
 
 BOT_API_DOWNLOAD_LIMIT = 20 * 1024 * 1024  # getFile refuses larger files
 CACHE_SECONDS = 600
@@ -25,7 +35,16 @@ IMAGE_SIGNATURES: tuple[tuple[bytes, str], ...] = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
     (b"GIF87a", "image/gif"),
     (b"GIF89a", "image/gif"),
+    (b"II*\x00", "image/tiff"),
+    (b"MM\x00*", "image/tiff"),
+    (b"BM", "image/bmp"),
 )
+HEIF_BRANDS = {b"heic": "image/heic", b"heix": "image/heic", b"mif1": "image/heif", b"avif": "image/avif"}
+DECODABLE = ("JPEG", "PNG", "GIF", "WEBP", "TIFF", "BMP", "HEIF", "AVIF")  # never EPS, PSD & co
+VISION_SIDE = 1568  # the longer side of a picture sent to a model: past this, providers scale down anyway
+VISION_QUALITY = 88
+
+pillow_heif.register_heif_opener()  # a format registry entry, so Pillow (and the effects) open iPhone photos
 
 
 class MediaUnavailableError(Exception):
@@ -48,19 +67,56 @@ def sniff_image(data: bytes) -> str | None:
             return media_type
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
+    if data[4:8] == b"ftyp":
+        return HEIF_BRANDS.get(data[8:12])
     return None
 
 
+def normalize(data: bytes, max_pixels: int = DEFAULTS.max_pixels) -> Media:
+    """A picture as a model should get it: upright, at most ``VISION_SIDE``, opaque, JPEG (an animation's first frame).
+
+    Raises ``MediaUnavailableError`` for anything that isn't a picture or would decode past the caps. Pillow
+    is CPU-bound: callers run it off the event loop (``MediaGateway.normalize``).
+    """
+    try:
+        with Image.open(io.BytesIO(data), formats=DECODABLE) as source:
+            check_dimensions(*source.size, max_pixels)
+            source.draft("RGB", (VISION_SIDE, VISION_SIDE))  # a big JPEG decodes at a fraction of its size
+            upright = ImageOps.exif_transpose(source)
+            clear = upright.mode in ("RGBA", "LA", "PA") or "transparency" in upright.info
+            image = upright.convert("RGBA" if clear else "RGB")
+            image.thumbnail((VISION_SIDE, VISION_SIDE), Image.Resampling.LANCZOS)
+            if clear:
+                flat = Image.new("RGB", image.size, "white")
+                flat.paste(image, mask=image.getchannel("A"))
+                image = flat
+            buffer = io.BytesIO()
+            image.save(buffer, format="JPEG", quality=VISION_QUALITY, optimize=True)
+    except EffectError as refused:
+        raise MediaUnavailableError(refused.reason) from None
+    except OSError, ValueError, EOFError, SyntaxError, Image.DecompressionBombError:
+        raise MediaUnavailableError("not an image") from None
+    return Media(buffer.getvalue(), "image/jpeg")
+
+
 class MediaGateway:
-    def __init__(self, bot: Bot, *, max_bytes: int = BOT_API_DOWNLOAD_LIMIT, timeout: float = 30) -> None:
+    def __init__(
+        self,
+        bot: Bot,
+        *,
+        max_bytes: int = BOT_API_DOWNLOAD_LIMIT,
+        timeout: float = 30,
+        max_pixels: int = DEFAULTS.max_pixels,
+    ) -> None:
         self.bot = bot
         self.max_bytes = min(max_bytes, BOT_API_DOWNLOAD_LIMIT)
         self.timeout = timeout
+        self.max_pixels = max_pixels
         self._cache: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
         self._cached_bytes = 0
 
     async def fetch(
-        self, file_id: str, *, bot_id: int, key: str | None = None, size_hint: int | None = None
+        self, file_id: str, bot_id: int, key: str | None = None, size_hint: int | None = None
     ) -> bytes:
         """Bytes of a file owned by ``bot_id``; ``key`` (the file_unique_id) makes repeated fetches free for a while."""
         if bot_id != self.bot.id:
@@ -93,13 +149,22 @@ class MediaGateway:
         return data
 
     async def image(
-        self, file_id: str, *, bot_id: int, key: str | None = None, size_hint: int | None = None
+        self,
+        file_id: str,
+        bot_id: int,
+        key: str | None = None,
+        size_hint: int | None = None,
+        *,
+        mime_type: str | None = None,
     ) -> Media:
-        data = await self.fetch(file_id, bot_id=bot_id, key=key, size_hint=size_hint)
-        media_type = sniff_image(data)
-        if media_type is None:
+        """A file as a picture for a model (``normalize``); one whose ``mime_type`` isn't an image is never fetched."""
+        if mime_type and not mime_type.startswith("image/"):
             raise MediaUnavailableError("not an image")
-        return Media(data, media_type)
+        return await self.normalize(await self.fetch(file_id, bot_id=bot_id, key=key, size_hint=size_hint))
+
+    async def normalize(self, data: bytes) -> Media:
+        """``normalize`` off the event loop: for pictures that didn't come from a file (avatars, kept results)."""
+        return await asyncio.to_thread(normalize, data, self.max_pixels)
 
     def _remember(self, key: str, data: bytes) -> None:
         if len(data) > CACHE_BYTES // 4:

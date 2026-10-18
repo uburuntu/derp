@@ -22,7 +22,7 @@ from derp.inference.api import OpenRouterError
 from derp.inference.roles import ModelRole
 from derp.money.funding import PAID_SOURCES, Funding
 from derp.money.wallets import balance
-from derp.telegram.media import sniff_image
+from derp.telegram.media import MediaUnavailableError
 
 toolset = FunctionToolset[RunDeps]()
 IMAGES = ("photo", "document", "sticker")  # kept results an edit can start from
@@ -95,7 +95,7 @@ async def generate_image(
             raise ApprovalRequired  # the run pauses here; Make it resumes it from this call
     if (left := await hold_left(ctx)) is not None and price > left:
         return f"Not enough Derpcoins left in this answer for an image (needs about {price}). Tell them /buy gets more."
-    extra = [(source.data, sniff_image(source.data) or "image/png")] if source is not None else []
+    extra = [source.data] if source is not None else []
     try:
         image = await draw(
             db=deps.db, api=deps.api, bot=deps.bot, gateway=deps.gateway,
@@ -103,6 +103,8 @@ async def generate_image(
         )  # fmt: skip
     except OpenRouterError as error:
         return f"The image failed ({error.status}); nothing was charged for it."
+    except MediaUnavailableError as unavailable:
+        return f"A reference picture can't be used ({unavailable.reason}); nothing was charged."
     made = Made("photo", image.data, filename(image), "image", Pending(images=[image]))
     try:  # the image is charged with the run only once it (or a result made from it) reached Telegram
         return await emit(deps, made, final=final, source=source.kept if source else None)

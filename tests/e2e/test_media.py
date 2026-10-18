@@ -1,5 +1,7 @@
+import io
 from datetime import UTC, datetime
 
+from PIL import Image
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -17,7 +19,14 @@ from derp.inference.models import ProviderCall
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+def png(color: str = "grey", size: tuple[int, int] = (32, 32)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+PNG = png()
 DORA = Person(601, "Dora")
 
 
@@ -52,7 +61,8 @@ async def test_photo_question_sends_pixels_and_stores_a_note(
 
     def look(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         (image,) = images_in(messages[-1:])
-        assert image.media_type == "image/png" and image.data == PNG
+        assert image.media_type == "image/jpeg"  # normalized for the model
+        assert Image.open(io.BytesIO(image.data)).size == (32, 32)
         return ModelResponse(parts=[TextPart("a very square cat")])
 
     model.reply(look, "grey square cat on black background")
@@ -193,3 +203,41 @@ async def test_media_and_stickers_of_another_bot_degrade_instead_of_failing(
     await conversation.settle(again)
     assert not conversation.api.calls_of("sendSticker", after=again.after)
     assert "I don't know a sticker" in str(model.requests[-1][-1])
+
+
+async def test_an_animated_sticker_reaches_the_model_as_its_preview_picture(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    group = Room(-1009, title="Stickers")
+    conversation.meet(DORA, group)
+    conversation.api.register_file("frog-thumb", png("green", (128, 128)))
+    frog = {
+        "file_id": "frog-tgs", "file_unique_id": "u-frog-tgs", "type": "regular", "width": 512, "height": 512,
+        "is_animated": True, "is_video": False, "emoji": "🐸", "set_name": "frogs",
+        "thumbnail": {"file_id": "frog-thumb", "file_unique_id": "u-frog-thumb", "width": 128, "height": 128},
+    }  # fmt: skip
+    posted = await conversation.send(DORA, group, sticker=frog)
+    await conversation.settle(posted)
+
+    def look(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        (image,) = images_in(messages[-1:])
+        assert image.media_type == "image/jpeg" and Image.open(io.BytesIO(image.data)).size == (128, 128)
+        assert f"(the preview picture of the sticker from #{posted.message_id})" in str(messages[-1])
+        return ModelResponse(parts=[TextPart("a smug frog")])
+
+    model.reply(look, "a green square frog")
+    asked = await conversation.send(DORA, group, "derp what's this", reply_to=posted.message_id)
+    reply = await conversation.expect_reply(asked)
+    assert reply["rich_message"]["markdown"] == "a smug frog"
+    await conversation.settle(asked)
+    fetched = [call.fields["file_id"] for call in conversation.api.calls_of("getFile")]
+    assert fetched == ["frog-thumb"]  # the Lottie file itself is never downloaded
+    async with conversation.db.session() as session:
+        media = await session.scalar(select(MessageMedia).where(MessageMedia.message_id == posted.message_id))
+        assert media is not None and media.description == "a green square frog"
+
+    model.reply("still a frog")
+    later = await conversation.send(DORA, group, "derp and now?")
+    await conversation.expect_reply(later)
+    window = str([p.content for m in model.requests[-1] for p in m.parts if isinstance(p, UserPromptPart)])
+    assert "[sticker 🐸: a green square frog]" in window

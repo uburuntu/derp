@@ -181,6 +181,9 @@ class MessageMedia(Base):
     file_name: Mapped[str | None]
     sticker_emoji: Mapped[str | None]
     sticker_set: Mapped[str | None]
+    # Telegram's preview picture (same bot): how a clip, an animated sticker or a file is seen when it isn't one.
+    thumb_file_id: Mapped[str | None]
+    thumb_unique_id: Mapped[str | None]
     transcript: Mapped[
         str | None
     ]  # None: not tried yet; "": tried, nothing (``transcript_model`` may say why)
@@ -299,10 +302,12 @@ class PollVote(Base):
 
 
 class GameScore(Base):
-    """Quiz points per member and chat-local day: +1 for a right answer in Derp's quizzes, −1 for a wrong one, never below 0."""
+    """Quiz points per member and chat-local day: +1 for a right answer in Derp's quizzes, −1 for a wrong one.
+
+    The plain sum, so answer order doesn't matter; a day counts as at least 0 where totals are read.
+    """
 
     __tablename__ = "game_scores"
-    __table_args__ = (CheckConstraint("points >= 0", name="points"),)
 
     chat_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     user_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)

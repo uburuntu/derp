@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, Index, String, func
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from derp.db.base import Base
@@ -36,4 +36,6 @@ class Job(Base):
     misses: Mapped[int] = mapped_column(default=0)  # unfunded firings in a row; pauses at the limit
     runs: Mapped[int] = mapped_column(default=0)
     last_fired_at: Mapped[datetime | None]
+    # a one-off snoozed off a repeating job's firing: the series' one extra firing, moved by later snoozes
+    snooze_of: Mapped[int | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"), index=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -10,7 +10,7 @@ from alembic.config import Config
 from sqlalchemy import Connection, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from derp.config import Settings
+from derp.config import Decisions, Settings
 from derp.db.engine import Database
 from derp.db.metadata import metadata
 
@@ -67,4 +67,5 @@ def settings() -> Iterator[Settings]:
         database_url=TEST_DATABASE_URL or "postgresql+asyncpg://unused/unused",
         openrouter_api_key="sk-or-test",
         owner_ids=[1000],
+        decisions=Decisions(enabled=False),  # a real API call; tests that cover decisions stub it
     )
