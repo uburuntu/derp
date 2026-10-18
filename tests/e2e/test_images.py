@@ -270,6 +270,32 @@ async def test_a_member_is_drawn_by_name(conversation: Conversation, model: Scri
     assert [data for data, _ in images.references[0]] == [normalize(avatar).data]
 
 
+async def test_a_forward_is_drawn_as_its_original_author(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 1300)
+    club, kim = Room(-1506, title="Club"), Person(1507, "Kim")
+    conversation.meet(JO, club)
+    conversation.meet(kim, club)
+    author = {"id": 1508, "is_bot": False, "first_name": "Lev"}  # not in this chat
+    conversation.api.register_file(f"profile-{kim.id}", jpeg("red"))
+    conversation.api.register_file(f"profile-{author['id']}", jpeg("blue"))
+    shown = {"type": "user", "date": 1_700_000_000, "sender_user": author}
+    hidden = {"type": "hidden_user", "date": 1_700_000_000, "sender_user_name": "Ghost"}
+    for origin, painted in ((shown, jpeg("blue")), (hidden, jpeg("red"))):
+        forwarded = await conversation.send(kim, club, "look what he wrote", forward_origin=origin)
+        await conversation.settle(forwarded)
+        model.reply(tool_call("generate_image", prompt="this person as a knight", profile_photo=True), ".")
+        asked = await conversation.send(JO, club, "derp draw him as a knight", reply_to=forwarded.message_id)
+        await conversation.expect_reply(asked, method="sendPhoto")
+        await conversation.settle(asked)
+        # A visible original author is the one drawn; a hidden one leaves the person who forwarded it.
+        assert [data for data, _ in images.references[-1]] == [normalize(painted).data]
+
+
 async def test_the_chat_photo_is_a_source_for_edits(conversation: Conversation, model: ScriptedModel) -> None:
     images = FakeImages()
     conversation.overrides["api"] = images
