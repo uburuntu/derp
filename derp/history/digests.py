@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from derp.history.models import ChatMember, Digest, Message, User
-from derp.history.queries import Scope, terms
+from derp.history.queries import Scope, name_forms
 
 
 def scope_key(scope: Scope) -> int:
@@ -160,15 +160,13 @@ async def aimed_at(
 ) -> list[Message]:
     """Others' messages in a stretch that reply to this person or mention them, the newest ``limit`` oldest first.
 
-    A mention is their first name or a name they've had in the chat (its first word, inflections met the way
-    ``search_history`` meets them: ``queries.terms`` against the indexed ``tsv``), their @username, or a tag.
+    A mention is their first name or a name they've had in the chat (its first word in any of its case forms,
+    ``queries.name_forms``, as exact terms against the indexed ``tsv``), their @username, or a tag.
     """
     person = await session.get(User, user_id)
     member = await session.get(ChatMember, (scope.chat_id, user_id))
     names = [person.first_name if person else None, *(member.names if member else [])]
-    words = list(
-        dict.fromkeys(term for name in names if name and name.split() for term in terms(name.split()[0]))
-    )
+    words = list(dict.fromkeys(form for name in names if name for form in name_forms(name)))
     parent = aliased(Message)
     replied = (
         select(parent.message_id)

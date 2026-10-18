@@ -13,9 +13,11 @@ from derp.history.queries import (
     _ranked,
     around,
     conversations,
+    name_forms,
     resolve_members,
     run_query,
     search,
+    terms,
 )
 
 CHAT = -700
@@ -171,3 +173,15 @@ async def test_days_follow_the_chats_time_zone(database: Database) -> None:
         assert (await run_query(session, moscow, by_day)).groups == [("2026-10-16", 1), ("2026-10-17", 1)]
         today = ChatQuery(since=datetime(2026, 10, 17, 0, 0))  # local midnight, no offset
         assert [m.message_id for m in (await run_query(session, moscow, today)).messages] == [1]
+
+
+def test_name_forms_are_a_russian_names_cases_and_other_names_as_terms() -> None:
+    assert name_forms("Маша К") == ["маша", "маши", "маше", "машу", "машей", "машею"]
+    assert name_forms("Дима") == ["дима", "димы", "диме", "диму", "димой", "димою"]
+    assert name_forms("Ваня") == ["ваня", "вани", "ване", "ваню", "ваней", "ванею"]
+    assert name_forms("Олег") == ["олег", "олега", "олегу", "олегом", "олеге"]
+    assert name_forms("Игорь")[:5] == ["игорь", "игоря", "игорю", "игорем", "игоре"]
+    assert name_forms("Андрей")[:5] == ["андрей", "андрея", "андрею", "андреем", "андрее"]
+    assert name_forms("Нино") == ["нино"]
+    assert name_forms("Annie") == terms("Annie") and name_forms("Ann") == ["ann"]
+    assert all(":*" not in form for form in name_forms("Маша"))

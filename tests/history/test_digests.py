@@ -154,3 +154,42 @@ async def test_lines_aimed_at_someone_are_replies_names_handles_and_tags(databas
             session, Scope(CHAT), ASKER, start=at, end=None, after_id=1, before_id=99, limit=2
         )
         assert [r.message_id for r in newest] == [5, 6]
+
+
+@pytest.mark.db
+async def test_short_russian_names_are_met_in_every_case_and_nothing_else(database: Database) -> None:
+    at = datetime(2026, 10, 10, 10, tzinfo=UTC)
+    masha, oleg, ann = 31, 32, 33
+    lines = [
+        "Маше напишите кто-нибудь?",
+        "позови Машу",
+        "с Машей договорились",
+        "машина сломалась",
+        "Олегу скинь адрес",
+        "Annie said hi",
+    ]
+    async with database.transaction() as session:
+        session.add(Chat(id=CHAT, type="supergroup", title="D"))
+        session.add_all(
+            [
+                User(id=masha, first_name="Маша"),
+                User(id=oleg, first_name="Олег"),
+                User(id=ann, first_name="Annie"),
+            ]
+        )
+        await session.flush()
+        for n, text in enumerate(lines, 1):
+            row = msg(n, at + timedelta(minutes=n))
+            row.user_id, row.text = OTHER, text
+            session.add(row)
+
+    async def aimed(user_id: int) -> list[int]:
+        async with database.session() as session:
+            rows = await aimed_at(
+                session, Scope(CHAT), user_id, start=at, end=None, after_id=0, before_id=99, limit=10
+            )
+        return [r.message_id for r in rows]
+
+    assert await aimed(masha) == [1, 2, 3]  # never "машина"
+    assert await aimed(oleg) == [5]
+    assert await aimed(ann) == [6]  # other names as search reads them
