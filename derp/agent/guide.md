@@ -121,7 +121,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 
 ## privacy
 
-- Bot commands and inline/guest conversations are never stored. Telemetry holds numbers only, never text.
+- Bot commands and inline/guest conversations are never stored. Telemetry holds numbers only, except
+  that when an answer fails a shortened copy of that exchange, credentials masked, is kept for debugging.
 - /forget as a reply removes that message; /forget alone removes everything the person said in that chat, with
   their reactions, votes, notes and reminders there. Day summaries that mention it are redone without it.
 - Shortening how long a chat's history is kept asks for confirmation first, since older messages get deleted;

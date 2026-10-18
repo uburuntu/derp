@@ -4,7 +4,7 @@
 
 ### What I keep
 
-Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Contacts and locations shared in a chat are kept like any other message, for the same time. Short daily summaries of a chat, for up to a year. Notes and reminders you ask me to keep, until they finish or you remove them. Quiz points and titles of the day in groups, until /forget. Payment receipts, for accounting. Nothing is used to train AI models, and nothing from one chat is used in another — apart from public stickers, which I may reuse anywhere.
+Messages that invoke me, and — while a group allows it — other group messages for context: 30 days in groups and 365 days in private chats by default. Contacts and locations shared in a chat are kept like any other message, for the same time. Short daily summaries of a chat, for up to a year. Notes and reminders you ask me to keep, until they finish or you remove them. Quiz points and titles of the day in groups, until /forget. Payment receipts, for accounting. Diagnostics hold only numbers, except when an answer fails: then a shortened copy of that exchange, with credentials masked, is kept so the developer can debug it. Nothing is used to train AI models, and nothing from one chat is used in another — apart from public stickers, which I may reuse anywhere.
 
 ### Who processes it
 
@@ -22,7 +22,7 @@ Telegram handles payments; I only see the amount and a charge id. Buying Derpcoi
 
 ### Что я храню
 
-Сообщения, в которых меня зовут, и — пока группа это разрешает — остальные сообщения группы для контекста: по умолчанию 30 дней в группах и 365 дней в личке. Контакты и геолокации, отправленные в чат, хранятся как обычные сообщения и столько же. Короткие сводки дня по чату — до года. Заметки и напоминания, которые меня попросили сохранить, — пока они не сработают или их не удалят. Очки викторин и титулы дня в группах — до /forget. Чеки об оплате — для учёта. Ничего не идёт на обучение ИИ-моделей, и ничего из одного чата не используется в другом — кроме публичных стикеров, их я могу отправлять где угодно.
+Сообщения, в которых меня зовут, и — пока группа это разрешает — остальные сообщения группы для контекста: по умолчанию 30 дней в группах и 365 дней в личке. Контакты и геолокации, отправленные в чат, хранятся как обычные сообщения и столько же. Короткие сводки дня по чату — до года. Заметки и напоминания, которые меня попросили сохранить, — пока они не сработают или их не удалят. Очки викторин и титулы дня в группах — до /forget. Чеки об оплате — для учёта. В диагностике только числа — кроме сбоев: если ответ сломался, сокращённая копия этого обмена (без ключей и паролей) сохраняется, чтобы разработчик разобрался. Ничего не идёт на обучение ИИ-моделей, и ничего из одного чата не используется в другом — кроме публичных стикеров, их я могу отправлять где угодно.
 
 ### Кто это обрабатывает
 
