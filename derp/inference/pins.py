@@ -92,6 +92,15 @@ class PinStore:
         return {role: self._cache.get(role, pin) for role, pin in self.defaults.items()}
 
 
+async def snapshot_prices[T](session: AsyncSession, role: ModelRole, fallback: T) -> tuple[float, float] | T:
+    """The role's price snapshot, USD per 1M prompt and completion units (tokens; characters for speech),
+    as the scout took it; ``fallback`` while there is none (a new model, or a role the scout doesn't price)."""
+    row = await session.get(ModelPin, role.value)
+    if row is None or row.price_prompt is None:
+        return fallback
+    return float(row.price_prompt), float(row.price_completion or 0)
+
+
 async def apply_pin(session: AsyncSession, role: ModelRole, pin: RolePin, *, source: str) -> None:
     row = await session.get(ModelPin, role.value)
     if row is None:

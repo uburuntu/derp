@@ -21,7 +21,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
-from derp.agent.outputs import Made, Pending, Sendable, check_budget, emit, hold_left, pending_cost
+from derp.agent.outputs import Made, Pending, Sendable, afford, check_budget, emit, pending_cost
 from derp.agent.tools.sources import (
     SOUND,
     VISUAL,
@@ -68,13 +68,14 @@ async def heavy_allowed(ctx: RunContext[RunDeps], *, price: int | None = None) -
     """Refuse a heavy effect the answer can't cover; ``Refused`` says why.
 
     ``price`` (Derpcoins) is what it costs in this answer (default: the flat fee on paid runs, nothing on
-    sponsored ones) and must fit what the hold has left; sponsored runs also count it against today's effects.
+    sponsored ones) and must fit what the hold has left (``outputs.afford``, a next turn set aside);
+    sponsored runs also count it against today's effects.
     """
     deps = ctx.deps
     paid = deps.funding is Funding.PAID
-    cost = price if price is not None else deps.settings.effect_credits if paid else 0
-    if cost and (left := await hold_left(ctx)) is not None and cost > left:
-        raise Refused("Not enough Derpcoins left in this answer for that. Tell them /buy gets more.")
+    await afford(
+        ctx, price if price is not None else deps.settings.effect_credits if paid else 0, next_turn=True
+    )
     if paid:
         return
     async with deps.db.session() as session:

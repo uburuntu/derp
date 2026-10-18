@@ -46,8 +46,7 @@ from pydantic_ai.messages import ModelResponse
 from derp.agent.deps import RunDeps
 from derp.agent.runs import totals
 from derp.history.capture import Spoken, record_outgoing
-from derp.inference.ledger import Made as Billed
-from derp.inference.ledger import record_made
+from derp.inference.ledger import Billed, record_made
 from derp.money.funding import Funding, run_cost, run_fees
 from derp.money.models import RunFee
 from derp.telegram.policy import AMBIGUOUS
@@ -216,6 +215,20 @@ async def hold_left(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> int
     latest = next((m for m in reversed(run) if isinstance(m, ModelResponse)), None)
     turn = max(deps.settings.credits_for_usd(float(totals([latest]).cost_usd)) if latest else 0, 1)
     return deps.funds.credits - spent - (turn if next_turn else 0)
+
+
+async def afford(ctx: RunContext[RunDeps], price: int, *, next_turn: bool) -> None:
+    """Refuse side work of ``price`` (Derpcoins) this answer's hold can't cover; ``Refused`` tells the model.
+
+    ``next_turn``: side work the answer still has to talk about (a look, a search, an image, a voice line, an
+    effect) also sets aside one more turn like the latest, so paying for it never leaves the answer unable
+    to finish. Only work the payer already agreed to at this price (an approved image, whose resumed run is
+    funded for it alone) goes without. Free-model runs hold nothing and are never refused here.
+    """
+    if price and (left := await hold_left(ctx, next_turn=next_turn)) is not None and price > left:
+        raise Refused(
+            f"Not enough Derpcoins left in this answer for that (about {price}). Tell them /buy gets more."
+        )
 
 
 async def settle(deps: RunDeps, pending: Pending, *, delivered: bool) -> None:

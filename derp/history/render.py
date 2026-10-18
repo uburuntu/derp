@@ -57,12 +57,30 @@ DERP_NAME = "Derp"
 TEXT_LIMIT = 2000  # characters of one message kept in the window; longer texts are cut with "…"
 
 
+@dataclass(frozen=True, slots=True)
+class Author:
+    """Who wrote a message: a person (``user_id``: their profile photo), a chat or channel (``chat_id``: its
+    photo), or only a name (a forward from a hidden account)."""
+
+    name: str
+    user_id: int | None = None
+    chat_id: int | None = None
+    username: str | None = None
+    first_name: str | None = None  # a person's: transcript lines name a forward's author by it
+
+    @property
+    def label(self) -> str:
+        """The name with the @username, as ``User.label`` writes members."""
+        return f"{self.name} @{self.username}" if self.username else self.name
+
+
 @dataclass(slots=True)
 class MessageView:
     row: Message
     sender: str
     media: list[MessageMedia] = field(default_factory=list[MessageMedia])
     reactions: dict[str, int] = field(default_factory=dict[str, int])
+    author: Author | None = None  # who wrote it (``author``), set by ``load_views``
 
 
 def estimate_tokens(text: str) -> int:
@@ -170,30 +188,42 @@ def render_payload(kind: str, payload: dict[str, Any]) -> str:
             return f"[{kind_label(kind)}]"
 
 
+def _nested(data: dict[str, Any], key: str) -> dict[str, Any]:
+    value: Any = data.get(key)
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
 def _field(data: dict[str, Any], outer: str, inner: str) -> str | None:
-    nested: Any = data.get(outer)
-    if not isinstance(nested, dict):
-        return None
-    value = cast(dict[str, Any], nested).get(inner)
+    value = _nested(data, outer).get(inner)
     return str(value) if value else None
 
 
-def _origin_source(origin: Any) -> str | None:
-    """Who a ``MessageOrigin`` names: a user by first name, a hidden user's name, else the chat or channel."""
+def origin_author(origin: Any) -> Author | None:
+    """Who a ``MessageOrigin`` names: a user, a hidden user's name, else the chat or channel; None: nobody."""
     if not isinstance(origin, dict):
         return None
     data = cast(dict[str, Any], origin)
-    hidden = data.get("sender_user_name")
-    return (
-        _field(data, "sender_user", "first_name")
-        or (str(hidden) if hidden else None)
-        or _field(data, "chat", "title")
-        or _field(data, "sender_chat", "title")
-    )
+    if first := _field(data, "sender_user", "first_name"):
+        person = _nested(data, "sender_user")
+        full = " ".join(str(part) for part in (first, person.get("last_name")) if part)
+        username = str(person["username"]) if person.get("username") else None
+        return Author(full, int(person.get("id") or 0) or None, None, username, first)
+    if hidden := data.get("sender_user_name"):
+        return Author(str(hidden))
+    source = _nested(data, "chat") or _nested(data, "sender_chat")
+    if title := source.get("title"):
+        return Author(str(title), chat_id=int(source.get("id") or 0) or None)
+    return None
+
+
+def _origin_name(origin: Any) -> str | None:
+    """How a line names an origin's author: a person by first name, else the hidden name, chat or channel."""
+    found = origin_author(origin)
+    return (found.first_name or found.name) if found else None
 
 
 def _forward(origin: dict[str, Any] | None) -> str:
-    return f" (fwd from {_origin_source(origin) or 'someone'})" if origin else ""
+    return f" (fwd from {_origin_name(origin) or 'someone'})" if origin else ""
 
 
 EXTERNAL_KINDS = (
@@ -219,7 +249,7 @@ def external_reply(info: Any, chat_id: int) -> str:
     if isinstance(chat, dict) and cast(dict[str, Any], chat).get("id") == chat_id:
         message_id = data.get("message_id")
         return f" ↩ (#{message_id} in another topic{suffix})" if message_id else f" ↩ (another topic{suffix})"
-    author = _origin_source(data.get("origin"))
+    author = _origin_name(data.get("origin"))
     place = _field(data, "chat", "title")
     if author and place and author != place:
         source = f"{one_line(author)} in {one_line(place)}"
@@ -290,10 +320,10 @@ async def load_views(session: AsyncSession, rows: Sequence[Message]) -> list[Mes
     ids = [r.message_id for r in rows]
     user_ids = {r.user_id for r in rows if r.user_id is not None}
     sender_chats = {r.sender_chat_id for r in rows if r.sender_chat_id is not None}
-    names: dict[int, str] = {}
+    users: dict[int, User] = {}
     if user_ids:
-        for user in await session.scalars(select(User).where(User.id.in_(user_ids))):
-            names[user.id] = user.label
+        users = {user.id: user for user in await session.scalars(select(User).where(User.id.in_(user_ids)))}
+    names = {user_id: user.label for user_id, user in users.items()}
     chat_titles: dict[int, str] = {}
     if sender_chats:
         sender = aliased(Chat)
@@ -332,6 +362,7 @@ async def load_views(session: AsyncSession, rows: Sequence[Message]) -> list[Mes
             sender_label(row, names, chat_titles),
             media.get(row.message_id, []),
             reactions.get(row.message_id, {}),
+            author(row, users, chat_titles),
         )
         for row in rows
     ]
@@ -348,6 +379,23 @@ def sender_label(row: Message, names: Mapping[int, str], chat_titles: Mapping[in
     if row.sender_chat_id is not None:
         return chat_titles.get(row.sender_chat_id, "a channel")
     return "someone"
+
+
+def author(row: Message, users: Mapping[int, User], chat_titles: Mapping[int, str]) -> Author:
+    """Who wrote the message: a forward's original author when Telegram names them, else its sender
+    (Derp, the person, or the chat for anonymous admins and channels)."""
+    if (origin := origin_author(row.forward_origin)) is not None:
+        return origin
+    if row.is_derp:
+        return Author(DERP_NAME, row.user_id)
+    if row.user_id is not None and row.sender_chat_id is None:
+        user = users.get(row.user_id)
+        if user is None:
+            return Author(f"user {row.user_id}", row.user_id)
+        return Author(user.full_name, user.id, None, user.username, user.first_name)
+    if row.sender_chat_id is not None:
+        return Author(chat_titles.get(row.sender_chat_id, "a channel"), chat_id=row.sender_chat_id)
+    return Author("someone")
 
 
 def chat_time(chat: Chat | None) -> tzinfo:

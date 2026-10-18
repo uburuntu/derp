@@ -24,6 +24,11 @@ from derp.agent.tools.code import CODE_MODE
 from derp.agent.tools.web import WEB_CAPABILITIES
 from derp.agent.toolsets import Family
 
+# Quote stickers and voice lines are effects (same tiers, same toolbox) kept in their own modules; each
+# one's budget check and send must not interleave with another tool's.
+effects.toolset.add_function(quotes.make_quote, sequential=True)
+effects.toolset.add_function(voice.speak, sequential=True)
+
 FAMILIES: tuple[Family, ...] = (
     about.family,
     about.source_family,
@@ -42,8 +47,6 @@ FAMILIES: tuple[Family, ...] = (
     effects.background_family,
     effects.song_family,
     effects.profile_family,
-    quotes.family,
-    voice.family,
 )
 
 

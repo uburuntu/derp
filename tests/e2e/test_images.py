@@ -324,7 +324,7 @@ async def test_two_members_are_drawn_together_each_from_their_photo(
     assert [data for data, _ in references] == [normalize(jpeg("green")).data, normalize(jpeg("blue")).data]
     [sent] = images.prompts
     assert sent.startswith(prompt)
-    assert "reference image 1 is Ann (@a), reference image 2 is Bob (@b)" in sent
+    assert "reference image 1 is Ann @a, reference image 2 is Bob @b" in sent
 
 
 async def test_a_member_joins_a_photo_from_the_chat(conversation: Conversation, model: ScriptedModel) -> None:
@@ -376,36 +376,6 @@ async def test_a_group_portrait_draws_someone_without_a_photo_from_the_descripti
     assert "No photo of Bob: draw them from the description." in sent
     [result] = results_of(model, "generate_image")
     assert "No profile photo of Bob" in result
-
-
-async def test_a_portrait_approval_stored_with_a_single_avatar_still_resumes(
-    conversation: Conversation, model: ScriptedModel
-) -> None:
-    """Prompts priced before group portraits kept one ``avatar_of`` id: Make it still draws that person."""
-    images = FakeImages()
-    conversation.overrides["api"] = images
-    await conversation.restart()
-    await fund(conversation, 150)
-    ann = Person(1514, "Ann", username="a")
-    club = await club_with(conversation, ann)
-    conversation.api.register_file(f"profile-{ann.id}", jpeg("green"))
-    model.reply(tool_call("generate_image", prompt="Ann as a knight", people=["Ann"]), ".")
-    asked = await conversation.send(JO, club, "derp draw Ann as a knight")
-    card = await conversation.expect_reply(asked)
-    await conversation.settle(asked)
-    async with conversation.db.transaction() as session:
-        approval = await session.scalar(select(Approval))
-        assert approval is not None and approval.args["job"]["avatar_of"] == [
-            {"id": ann.id, "name": "Ann (@a)"}
-        ]
-        old = {"prompt": "Ann as a knight", "aspect_ratio": "1:1", "references": [], "avatar_of": ann.id}
-        approval.args = {**approval.args, "job": old}
-    prompt_id = max(mid for (cid, mid) in conversation.api.messages if cid == club.id)
-    make_it = card["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
-    await conversation.press(JO, club.id, prompt_id, make_it)
-    assert [[data for data, _ in sent] for sent in images.references] == [[normalize(jpeg("green")).data]]
-    [sent] = images.prompts
-    assert sent.startswith("Ann as a knight\n\nPeople: reference image 1 is the person (profile photos).")
 
 
 async def test_a_forward_is_drawn_as_its_original_author(

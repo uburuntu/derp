@@ -5,10 +5,11 @@ the file plus the question and its notes become the tool result — timestamps f
 numbers for PDFs, speech quoted. A look is for paid and sponsored answers within their tier's limits
 (``settings.watching``) and the Bot API's download cap; it is priced before it is made and refused when
 the run's hold can't cover it and one more turn. Whatever isn't watched says why (``Look.why``), so the
-chat model doesn't guess, and falls back to a still frame or preview picture (``media.inspect``).
+chat model doesn't guess, and falls back to a still frame or preview picture (``media.inspect``). A voice
+message Derp performed is never sent: its stored script is the notes.
 
-Every response is ledgered against the run as ``kind='media'`` (a look that timed out without one at
-its estimate, on Derp, since the provider may still bill it); the notes' first line, a one-line
+Every response is ledgered against the run as ``kind='media'`` (a look that timed out or was stopped
+without one at its estimate, on Derp, since the provider may still bill it); the notes' first line, a one-line
 description, is stored on the media row like an image note (``media.store_description``), so later
 windows and search see it; the notes themselves stay in the tool result.
 """
@@ -22,17 +23,18 @@ from decimal import Decimal
 from typing import Literal
 
 from pydantic_ai import Agent, BinaryContent, RunContext, capture_run_messages
+from sqlalchemy import select
 
 from derp.agent.deps import RunDeps
 from derp.agent.media import store_description
-from derp.agent.outputs import hold_left
+from derp.agent.outputs import Refused, afford
 from derp.agent.runs import ledger_side_call
 from derp.config import WatchLimits
-from derp.history.models import MessageMedia
+from derp.history.models import Message, MessageMedia
 from derp.history.render import duration_label, kind_label
 from derp.inference.ledger import estimate_cost, record_usage, simple_usage
-from derp.inference.models import ModelPin
 from derp.inference.openrouter import AUDIO_FORMATS, chat_settings, responses
+from derp.inference.pins import snapshot_prices
 from derp.inference.roles import ModelRole
 from derp.money.funding import Funding
 from derp.telegram.media import BOT_API_DOWNLOAD_LIMIT, MediaUnavailableError, TooLargeError, known_type
@@ -134,9 +136,12 @@ class Look:
     notes: str = ""
     why: str = ""
     pages: int | None = None
+    script: bool = False  # the notes are the script Derp performed, not a listen
 
     def line(self) -> str:
         what = label(self.row) + (f", {self.pages} pages" if self.pages else "")
+        if self.script:
+            return f"#{self.row.message_id} ({what}, Derp's own voice message; its script):\n{self.notes}"
         if self.notes:
             sound = " with sound" if self.row.type in SOUNDTRACKS else ""  # GIFs and video stickers have none
             return f"#{self.row.message_id} ({what}, {VERBS[self.kind]}{sound}):\n{self.notes}"
@@ -166,12 +171,34 @@ def _too_long(kind: Kind, size: int, deps: RunDeps) -> str | None:
 
 async def _price(deps: RunDeps, input_tokens: int) -> Decimal:
     watching = deps.settings.watching
+    fallback = (watching.price_usd_per_m_input, watching.price_usd_per_m_output)
     async with deps.db.session() as session:
-        prices = await session.get(ModelPin, ModelRole.MEDIA.value)
-    prompt, completion = watching.price_usd_per_m_input, watching.price_usd_per_m_output
-    if prices is not None and prices.price_prompt is not None:
-        prompt, completion = float(prices.price_prompt), float(prices.price_completion or 0)
-    return estimate_cost(input_tokens, watching.output_tokens, prompt, completion)
+        prices = await snapshot_prices(session, ModelRole.MEDIA, fallback)
+    return estimate_cost(input_tokens, watching.output_tokens, *prices)
+
+
+async def _performed(deps: RunDeps, row: MessageMedia) -> str | None:
+    """The script of a voice message Derp performed (``speak``): stored as its transcript, so it is never
+    listened to; None for anything else."""
+    if row.type != "voice" or not row.transcript:
+        return None
+    async with deps.db.session() as session:
+        derps = await session.scalar(
+            select(Message.is_derp).where(
+                Message.chat_id == row.chat_id, Message.message_id == row.message_id
+            )
+        )
+    return row.transcript if derps else None
+
+
+async def _absorb(deps: RunDeps, model: str, usd: Decimal, input_tokens: int) -> None:
+    """A look that may still be billed with no response to show for it (timed out, stopped): its estimate,
+    on Derp."""
+    async with deps.db.transaction() as session:
+        record_usage(
+            session, simple_usage(model, usd, input_tokens=input_tokens), kind="media", funding="creator",
+            role=ModelRole.MEDIA.value, chat_id=deps.chat.id, user_id=deps.user_id,
+        )  # fmt: skip
 
 
 async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, question: str) -> Look:
@@ -179,6 +206,9 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
     deps = ctx.deps
     watching = deps.settings.watching
     look = Look(row, kind)
+    if (script := await _performed(deps, row)) is not None:
+        look.notes, look.script = script, True
+        return look
     media_type = _media_type(row, kind)
     seconds = row.duration or (STICKER_SECONDS if row.type == "sticker" else None)
     if deps.funding is Funding.FREE:
@@ -216,7 +246,9 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
     input_tokens = watching.prompt_tokens + units
     usd = await _price(deps, input_tokens)
     price = deps.settings.credits_for_usd(float(usd))
-    if (left := await hold_left(ctx, next_turn=True)) is not None and price > left:
+    try:
+        await afford(ctx, price, next_turn=True)
+    except Refused:
         look.why = f"it would cost about {price} Derpcoins, more than this answer has left"
         return look
     pin = await deps.pins.get(ModelRole.MEDIA)
@@ -236,16 +268,15 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
                     ]
                 )
             text = result.output.strip()
+        except asyncio.CancelledError:  # Stop pressed mid-look: the provider may still finish and bill it
+            if not responses(captured):
+                await _absorb(deps, pin.model, usd, input_tokens)
+            raise
         except Exception as error:  # noqa: BLE001 - a failed look falls back to a still frame
             log.info("media look failed: %s", type(error).__name__)
             failure = "timed out" if isinstance(error, TimeoutError) else "failed"
             if isinstance(error, TimeoutError) and not responses(captured):
-                # The provider may well finish (and bill) after we stopped waiting: the estimate, on Derp.
-                async with deps.db.transaction() as session:
-                    record_usage(
-                        session, simple_usage(pin.model, usd, input_tokens=input_tokens), kind="media",
-                        funding="creator", role=ModelRole.MEDIA.value, chat_id=deps.chat.id, user_id=deps.user_id,
-                    )  # fmt: skip
+                await _absorb(deps, pin.model, usd, input_tokens)  # it may finish after we stopped waiting
     await ledger_side_call(
         deps.db, captured, kind="media", funding=deps.funding.value, role=ModelRole.MEDIA,
         context_tokens=input_tokens, run_id=deps.run_id, chat_id=deps.chat.id, user_id=deps.user_id,
