@@ -271,5 +271,19 @@ def responses(messages: Iterable[ModelMessage]) -> list[ModelResponse]:
     return [message for message in messages if isinstance(message, ModelResponse)]
 
 
+def never_started(message: ModelMessage) -> bool:
+    """The empty response Pydantic AI records for a stream that failed before its first chunk.
+
+    After an HTTP error status (the provider refused the request) nothing was generated or billed;
+    after a timeout the request may still have been processed, so only the caller knows which it was.
+    """
+    return (
+        isinstance(message, ModelResponse)
+        and message.state == "interrupted"
+        and not message.parts
+        and not message.provider_response_id
+    )
+
+
 def total_cost(messages: Iterable[ModelMessage]) -> Decimal:
     return sum((response_usage(r).cost_usd for r in responses(messages)), Decimal(0))

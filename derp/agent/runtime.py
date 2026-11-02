@@ -93,6 +93,7 @@ from derp.inference.openrouter import (
     chat_model,
     chat_settings,
     conversation_id,
+    never_started,
 )
 from derp.inference.pins import PinStore
 from derp.inference.roles import Effort, RolePin
@@ -576,6 +577,8 @@ class Runtime:
                             if interrupted
                             else list(captured[len(ask.history) :])
                         )
+                        if isinstance(exc, ModelHTTPError):  # refused, not cut off: nothing to price or keep
+                            new_messages = [m for m in new_messages if not never_started(m)]
             finally:
                 if draft_key is not None:
                     self.active.pop(draft_key, None)

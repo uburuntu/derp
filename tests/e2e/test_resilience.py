@@ -177,6 +177,25 @@ async def test_a_busy_free_model_falls_back_to_the_next(
         assert run is not None and (run.status, run.funding) == ("completed", "free")
 
 
+def refused(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+    raise ModelHTTPError(status_code=404, model_name="m")  # e.g. no provider under the ceiling takes images
+
+
+async def test_a_refused_request_is_never_ledgered_as_a_call(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    async with conversation.db.transaction() as session:
+        await credit(session, (await wallet(session, "user", DORA.id)).id, "stars:dora", 1000, "purchase")
+    model.reply(refused)
+    sent = await conversation.send(DORA, text="what's in the picture")
+    await conversation.settle(sent)
+    async with conversation.db.session() as session:
+        run = await session.scalar(select(AgentRun))
+        assert run is not None and (run.status, run.funding, run.cost_usd) == ("failed", "paid", 0)
+        assert run.messages is not None and not any(m["kind"] == "response" for m in run.messages)
+        assert await session.scalar(select(ProviderCall).where(ProviderCall.run_id == run.id)) is None
+
+
 def searches_allowed(info: AgentInfo) -> int | None:
     """The request's web search allowance; None when search was left out."""
     tool = next((t for t in info.model_request_parameters.native_tools if isinstance(t, WebSearchTool)), None)
