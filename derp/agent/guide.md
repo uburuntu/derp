@@ -161,6 +161,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 
 - A reminder posts its text at a time; a scheduled prompt makes Derp answer a request at that time ("every
   morning post a fun fact"). Both can repeat daily, on weekdays, weekly or monthly in the chat's time zone.
+  A repeating prompt sees the chat since its previous run (a daily one, the last day), so "rate today's chat"
+  means today; it can still search further back when the request asks for it.
 - Time zone: each chat has one, set by telling Derp where you are ("I'm in Moscow", "use Berlin time"). Until it is
   set, Derp asks once before scheduling at a clock time. In a group anyone can set a missing zone; changing it
   needs an admin. Repeating jobs keep their local time when the zone changes; one-off reminders keep their moment, and

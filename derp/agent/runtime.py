@@ -222,9 +222,15 @@ class Runtime:
         )
 
     async def answer(
-        self, message: TgMessage, chat: Chat, *, trigger: str = "message", again: bool = False
+        self,
+        message: TgMessage,
+        chat: Chat,
+        *,
+        trigger: str = "message",
+        again: bool = False,
+        since: datetime | None = None,
     ) -> Outcome | None:
-        """Answer an invocation, queued per chat topic.
+        """Answer an invocation, queued per chat topic; ``since`` bounds what it sees of the chat (a job's period).
 
         None when an owner blocked the chat or the asker, or the trigger was merged into a newer one, is older
         than one of the asker's already answered there (unless asked ``again``: Continue after a top-up), or is
@@ -239,7 +245,7 @@ class Runtime:
         async with self.lanes.turn(key, message.from_user.id, message.message_id, ordered=not again) as go:
             if not go or (message.message_id and await self._answered(chat.id, message.message_id)):
                 return None
-            return await self._answer(message, chat, trigger=trigger)
+            return await self._answer(message, chat, trigger=trigger, since=since)
 
     async def _answered(self, chat_id: int, message_id: int) -> bool:
         """A redelivered update (e.g. after a restart) must not be answered twice."""
@@ -251,7 +257,9 @@ class Runtime:
             )
         return found is not None
 
-    async def _answer(self, message: TgMessage, chat: Chat, *, trigger: str) -> Outcome:
+    async def _answer(
+        self, message: TgMessage, chat: Chat, *, trigger: str, since: datetime | None = None
+    ) -> Outcome:
         asker = message.from_user
         if asker is None:
             raise ValueError("an invocation needs a sender")
@@ -278,7 +286,7 @@ class Runtime:
             funds=funds,
             trigger=trigger,
             trigger_message_id=message.message_id or None,
-            compose=lambda pin: self._compose(message, chat, funds, pin),
+            compose=lambda pin: self._compose(message, chat, funds, pin, since=since),
             say=lambda text: self._say(target, text),
         )
 
@@ -395,12 +403,20 @@ class Runtime:
         )
 
     async def _compose(
-        self, message: TgMessage, chat: Chat, funds: Funds, pin: RolePin, *, preview: bool = False
+        self,
+        message: TgMessage,
+        chat: Chat,
+        funds: Funds,
+        pin: RolePin,
+        *,
+        preview: bool = False,
+        since: datetime | None = None,
     ) -> Ask:
         """What a fresh run puts to the model for ``message``: the window before it and the request.
 
         A ``preview`` builds the same without the decision call (as if unasked: images attached, the pin's
-        effort) and leaves the topic's remembered window start as it is.
+        effort) and leaves the topic's remembered window start as it is. A window bounded by ``since`` (a
+        repeating job sees its period) neither keeps nor moves that start, and brings no earlier digest.
         """
         asker = message.from_user
         if asker is None:
@@ -427,9 +443,10 @@ class Runtime:
                     before_message_id=message.message_id or 2**62,
                     budget=self.funder.window(funding),
                     tz=tz,
-                    start_at=self.window_starts.get(topic_key),
+                    start_at=None if since else self.window_starts.get(topic_key),
+                    since=since,
                 )
-                if not preview:
+                if not preview and since is None:
                     if len(self.window_starts) > WINDOW_STARTS_KEPT:
                         self.window_starts.clear()
                     if window.oldest_message_id is not None:
@@ -445,8 +462,9 @@ class Runtime:
                     target.thread_id or 0,
                     window.oldest_message_id or message.message_id or 2**62,
                 )
-                if earlier is not None and earlier.day < datetime.now(tz).date() - timedelta(
-                    days=EARLIER_DAYS
+                if since is not None or (
+                    earlier is not None
+                    and earlier.day < datetime.now(tz).date() - timedelta(days=EARLIER_DAYS)
                 ):
                     earlier = None
             decided = await deciding if deciding is not None else Verdict()

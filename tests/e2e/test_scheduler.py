@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from sqlalchemy import select, update
 
+from derp.history.models import Message
 from derp.inference.models import ProviderCall
 from derp.money.wallets import claw_back, credit, wallet
 from derp.scheduler.jobs import MISS_LIMIT, ResumeJob, SnoozeJob
@@ -302,3 +303,33 @@ async def test_a_scheduled_prompt_stays_its_creators_and_a_firing_never_edits_it
     async with conversation.db.session() as session:
         job = await session.get(Job, job_id)
         assert job is not None and (job.text, job.repeat) == ("tell us a joke", "daily")
+
+
+async def test_a_daily_prompt_sees_the_chat_since_its_last_firing(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(LEE, YARD, status="administrator")
+    conversation.meet(MAX, YARD)
+    async with conversation.db.transaction() as session:
+        await credit(session, (await wallet(session, "user", LEE.id)).id, "stars:lee", 650, "purchase")
+    await conversation.settle(await conversation.send(MAX, YARD, "old gossip about the fence"))
+    now = datetime.now(UTC)
+    async with conversation.db.transaction() as session:  # said three days ago
+        await session.execute(
+            update(Message).where(Message.chat_id == YARD.id).values(date=now - timedelta(days=3))
+        )
+        session.add(
+            Job(chat_id=YARD.id, creator_id=LEE.id, kind="prompt", text="rate today's chatter", repeat="daily",
+                next_at=now, anchor_at=now - timedelta(days=1), last_fired_at=now - timedelta(days=1), runs=1)
+        )  # fmt: skip
+    await conversation.settle(await conversation.send(MAX, YARD, "fresh news about the cat"))
+
+    model.reply("today: the cat")
+    assert await fire_now(conversation) == 1
+    seen = str(model.requests[-1])
+    assert "fresh news about the cat" in seen and "old gossip" not in seen
+    assert "starts at its last firing" in seen
+
+    model.reply("the fence, three days ago")  # a run of its own still sees the usual window
+    await conversation.settle(await conversation.send(LEE, YARD, "derp what was that about the fence?"))
+    assert "old gossip about the fence" in str(model.requests[-1])

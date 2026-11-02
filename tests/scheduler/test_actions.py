@@ -121,7 +121,7 @@ async def behind_a_claim(db: Database, chat: Chat, action: Change | Snooze) -> J
 
 async def test_snoozing_a_fired_one_off_moves_it_and_a_stale_button_refuses(database: Database) -> None:
     chat = await setup(database, due=-timedelta(seconds=1))
-    [(fired, _)] = await claim_due(database, datetime.now(UTC))
+    [(fired, _, _)] = await claim_due(database, datetime.now(UTC))
     soon = datetime.now(UTC) + timedelta(minutes=10)
     assert await act(database, chat, OTHER, False, Snooze(soon, fired.runs)) == "not_yours"
     snoozed = await act(database, chat, CREATOR, False, Snooze(soon, fired.runs))

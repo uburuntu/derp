@@ -22,7 +22,7 @@ from sqlalchemy import select, update
 
 from derp.db.engine import Database
 from derp.history.models import Chat, User
-from derp.history.render import chat_time
+from derp.history.render import chat_time, describe_time
 from derp.locales import resolve, t
 from derp.ops.owner import is_blocked
 from derp.scheduler.jobs import MISS_LIMIT, SNOOZES, ResumeJob, SnoozeJob, next_after
@@ -38,7 +38,10 @@ BATCH = 10
 FIRING_LIMIT = 8  # jobs firing at once; the rest wait for the next tick
 
 
-async def claim_due(db: Database, now: datetime, limit: int = BATCH) -> list[tuple[Job, Chat]]:
+async def claim_due(
+    db: Database, now: datetime, limit: int = BATCH
+) -> list[tuple[Job, Chat, datetime | None]]:
+    """Due jobs with their chats and, for a repeating job, its previous firing: what the firing covers."""
     async with db.transaction() as session:
         due = list(
             await session.scalars(
@@ -49,22 +52,28 @@ async def claim_due(db: Database, now: datetime, limit: int = BATCH) -> list[tup
                 .with_for_update(skip_locked=True)
             )
         )
-        claimed: list[tuple[Job, Chat]] = []
+        claimed: list[tuple[Job, Chat, datetime | None]] = []
         for job in due:
             chat = await session.get(Chat, job.chat_id)
             upcoming = next_after(job, now, chat_time(chat))
+            since = job.last_fired_at if job.repeat else None
             job.last_fired_at, job.runs = now, job.runs + 1
             if upcoming is None:
                 job.state = "done"
             else:
                 job.next_at = upcoming
             if chat is not None:
-                claimed.append((job, chat))
+                claimed.append((job, chat, since))
     return claimed
 
 
-def as_message(job: Job, chat: Chat, user: User | None, now: datetime) -> TgMessage:
+def as_message(job: Job, chat: Chat, user: User | None, now: datetime, since: datetime | None) -> TgMessage:
     """The scheduled prompt as an invocation from its creator (never stored: id 0)."""
+    covers = (
+        f"; the chat shown starts at its last firing, {describe_time(since, chat_time(chat))}"
+        if since
+        else ""
+    )
     tg_chat = TgChat(id=chat.id, type=chat.type, title=chat.title, is_forum=chat.is_forum or None)
     sender = TgUser(
         id=job.creator_id,
@@ -78,7 +87,7 @@ def as_message(job: Job, chat: Chat, user: User | None, now: datetime) -> TgMess
         date=now,
         chat=tg_chat,
         from_user=sender,
-        text=f"⏰ (scheduled task firing now — carry it out, don't schedule it again) {job.text}",
+        text=f"⏰ (scheduled task firing now{covers} — carry it out, don't schedule it again) {job.text}",
         message_thread_id=job.thread_id,
         is_topic_message=job.thread_id is not None or None,
     )
@@ -89,7 +98,16 @@ async def _set(db: Database, job_id: int, **values: object) -> None:
         await session.execute(update(Job).where(Job.id == job_id).values(**values))
 
 
-async def fire(db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, now: datetime) -> None:
+async def fire(
+    db: Database,
+    bot: Bot,
+    runtime: Runtime,
+    job: Job,
+    chat: Chat,
+    now: datetime,
+    since: datetime | None = None,
+) -> None:
+    """``since``: a repeating job's previous firing; its run sees the chat from there on."""
     target = Target(chat.id, job.thread_id)
     async with db.session() as session:
         user = await session.get(User, job.creator_id)
@@ -109,7 +127,9 @@ async def fire(db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, n
             text = t(locale, "scheduler.reminder", name=name, text=job.text)
             await send_markdown(bot, target, text, trusted=False, reply_markup=markup(snooze))
             return
-        outcome = await runtime.answer(as_message(job, chat, user, now), chat, trigger="job")
+        outcome = await runtime.answer(
+            as_message(job, chat, user, now, since), chat, trigger="job", since=since
+        )
         if outcome is not None and outcome.refused:
             log.info("job %s paused: the chat refused the answer", job.id)
             await _set(db, job.id, state="paused")
@@ -132,9 +152,11 @@ async def fire(db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, n
         await _set(db, job.id, state="paused")
 
 
-async def _fire_logged(db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, now: datetime) -> None:
+async def _fire_logged(
+    db: Database, bot: Bot, runtime: Runtime, job: Job, chat: Chat, now: datetime, since: datetime | None
+) -> None:
     try:
-        await fire(db, bot, runtime, job, chat, now)
+        await fire(db, bot, runtime, job, chat, now, since)
     except Exception as error:  # noqa: BLE001 - one job must not take the others down
         log.error("job %s failed: %s", job.id, type(error).__name__)
 
@@ -143,7 +165,9 @@ async def run_due(db: Database, bot: Bot, runtime: Runtime) -> int:
     """Claim what is due and fire it all, returning when every firing finished."""
     now = datetime.now(UTC)
     claimed = await claim_due(db, now)
-    await asyncio.gather(*(_fire_logged(db, bot, runtime, job, chat, now) for job, chat in claimed))
+    await asyncio.gather(
+        *(_fire_logged(db, bot, runtime, job, chat, now, since) for job, chat, since in claimed)
+    )
     return len(claimed)
 
 
@@ -160,8 +184,8 @@ class Firings:
             return 0
         now = datetime.now(UTC)
         claimed = await claim_due(db, now, min(BATCH, room))
-        for job, chat in claimed:
-            task = asyncio.create_task(_fire_logged(db, bot, runtime, job, chat, now))
+        for job, chat, since in claimed:
+            task = asyncio.create_task(_fire_logged(db, bot, runtime, job, chat, now, since))
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
         return len(claimed)

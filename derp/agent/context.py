@@ -1,7 +1,8 @@
 """The recent-context window a run sees before the current message.
 
 Walks the current chat (and forum topic) backwards from the trigger until the
-token budget is spent. Members' messages become transcript blocks framed as
+token budget is spent, or a run's own period (``since``: a repeating job's
+previous firing) begins. Members' messages become transcript blocks framed as
 untrusted data; Derp's own replies come back as the model turns that produced
 them, tool calls and (clipped) tool results included, so the model remembers
 what it looked up. Runs are kept whole or dropped whole; the window always
@@ -18,7 +19,7 @@ deterministically.
 """
 
 from dataclasses import dataclass, field, replace
-from datetime import tzinfo
+from datetime import datetime, tzinfo
 from typing import Any
 
 from pydantic_ai.messages import (
@@ -180,6 +181,7 @@ async def build_window(
     budget: int,
     tz: tzinfo,
     start_at: int | None = None,
+    since: datetime | None = None,
 ) -> Window:
     scope = select(Message).where(
         Message.chat_id == chat_id,
@@ -187,6 +189,8 @@ async def build_window(
         Message.deleted_at.is_(None),
         Message.thread_id == thread_id if thread_id is not None else Message.thread_id.is_(None),
     )
+    if since is not None:  # a period of its own (a repeating job's): nothing older, whatever the budget
+        scope = scope.where(Message.date >= since)
     fresh = start_at is None or start_at >= before_message_id
     limit, scan = budget, SCAN_LIMIT
     if not fresh:  # a kept window gets the same slack in rows, or busy chats of short messages never keep one
@@ -250,6 +254,7 @@ async def build_window(
             before_message_id=before_message_id,
             budget=budget,
             tz=tz,
+            since=since,
         )
     while segments and isinstance(segments[-1], _Derp):  # the window opens with members, never mid-run
         spent -= segments.pop().tokens
