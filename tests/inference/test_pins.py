@@ -57,29 +57,29 @@ async def sent_body(pin: RolePin) -> dict[str, Any]:
     return bodies[0]
 
 
-async def test_chat_roles_route_under_twice_their_price_snapshot(
+async def test_chat_roles_route_under_six_times_their_price_snapshot(
     database: Database, settings: Settings
 ) -> None:
     store = PinStore(database, settings)
     await store.seed()
-    await snapshot(database, ModelRole.CHAT, "0.2", "0.8")  # USD per 1M tokens
-    await snapshot(database, ModelRole.CHAT_SPONSORED, "0.1", None)
+    await snapshot(database, ModelRole.CHAT, "0.25", "0.5")  # USD per 1M tokens
+    await snapshot(database, ModelRole.CHAT_SPONSORED, "0.125", None)
     await snapshot(database, ModelRole.CHAT_FREE, "0.1", "0.1")
     await store.refresh()
 
     chat = await store.get(ModelRole.CHAT)
-    assert (chat.max_price_prompt, chat.max_price_completion) == (0.4, 1.6)
+    assert (chat.max_price_prompt, chat.max_price_completion) == (1.5, 3.0)
     retry = chat.rotated()  # led by a fallback the primary's price says nothing about: no ceiling
     assert (retry.max_price_prompt, retry.max_price_completion) == (None, None)
     assert "max_price" not in (await sent_body(retry))["provider"]
     sponsored = await store.get(ModelRole.CHAT_SPONSORED)
-    assert (sponsored.max_price_prompt, sponsored.max_price_completion) == (0.2, None)
+    assert (sponsored.max_price_prompt, sponsored.max_price_completion) == (0.75, None)
     assert (await store.get(ModelRole.CHAT_FREE)).max_price_prompt is None
 
     body = await sent_body(chat)
-    assert body["provider"]["max_price"] == {"prompt": 0.4, "completion": 1.6}
+    assert body["provider"]["max_price"] == {"prompt": 1.5, "completion": 3.0}
     assert body["provider"]["zdr"] is True
-    assert (await sent_body(sponsored))["provider"]["max_price"] == {"prompt": 0.2}
+    assert (await sent_body(sponsored))["provider"]["max_price"] == {"prompt": 0.75}
 
     # The stored pins stay as chosen, so the scout never writes the derived ceiling back.
     stored = await store.all()

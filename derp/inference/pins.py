@@ -15,9 +15,11 @@ from derp.inference.roles import ModelRole, RolePin
 log = logging.getLogger("derp.pins")
 CACHE_SECONDS = 300
 CEILING_ROLES = (ModelRole.CHAT, ModelRole.CHAT_SPONSORED)
-# OpenRouter's provider.max_price (USD per 1M tokens) at this multiple of the price snapshot: routing
-# may still pick a pricier provider for speed or uptime, but a swap can't silently multiply the cost.
-MAX_PRICE_HEADROOM = 2
+# OpenRouter's provider.max_price (USD per 1M tokens) at this multiple of the price snapshot: a swap
+# can't silently multiply the cost tenfold, yet the ceiling leaves a pool of providers. The snapshot is
+# the cheapest route, often a text-only fp4 host: a tighter ceiling left images (and rate-limited
+# requests) one provider, and none (a 404) whenever it was down.
+MAX_PRICE_HEADROOM = 6
 
 
 def with_ceiling(pin: RolePin, row: ModelPin) -> RolePin:
