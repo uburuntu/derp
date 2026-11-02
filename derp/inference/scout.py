@@ -222,7 +222,9 @@ def _challenger(
     if best is None:
         return None
     score, candidate, cheapest = best
-    proposed = pin.model_copy(update={"model": candidate.id, "fallbacks": (pin.model, *pin.fallbacks)[:2]})
+    # The incumbent becomes the first fallback; the candidate may already be one.
+    fallbacks = tuple(m for m in (pin.model, *pin.fallbacks) if m != candidate.id)[:2]
+    proposed = pin.model_copy(update={"model": candidate.id, "fallbacks": fallbacks})
     reason = (
         f"{candidate.id}: intelligence {score:g} vs {incumbent.intelligence:g}, "
         f"≈${turn_cost(cheapest, window, cached):.5f}/turn vs ${budget:.5f} ({cached:.0%} cached)"

@@ -67,6 +67,18 @@ def test_challenger_needs_more_intelligence_at_no_higher_turn_cost() -> None:
     assert proposal.pin.fallbacks == ("openai/a",)
 
 
+def test_a_challenger_already_among_the_fallbacks_leads_without_repeating_itself() -> None:
+    pins = {ModelRole.CHAT: RolePin(model="openai/a", fallbacks=("acme/smart",))}
+    models = [
+        model("openai/a", 38, "0.0000001", "0.0000005"),
+        model("acme/smart", 45, "0.00000009", "0.0000005"),
+    ]
+    routes = [route(m["id"], m["pricing"]["prompt"], m["pricing"]["completion"]) for m in models]
+    changes = plan(pins, build_catalog(models, routes, []), allowlist=ALLOW, windows=WINDOWS)
+    proposal = next(c for c in changes if not c.safe)
+    assert (proposal.pin.model, proposal.pin.fallbacks) == ("acme/smart", ("openai/a",))
+
+
 def test_turn_prices_count_the_prompt_cache() -> None:
     """A smarter model with cheaper output but a dearer cache read only looks cheaper when nothing is cached."""
     pins = {ModelRole.CHAT: RolePin(model="deepseek/snapshot")}
