@@ -3,22 +3,26 @@
 A model stays offered while its provider's own endpoint is listed with tool calling (the only route a key
 can take) and, at most weekly, passes the same tiny live check challengers do (on Derp's credits, through
 that endpoint: a cent or so). Its price is taken from that endpoint, for the picker and turn estimates.
-A model that drops out disappears from the picker; keys already on it go on until their owner picks
-another, and the owners are told about the change of list in the scout's note.
+A model that drops out disappears from the picker, and keys picked on it serve on their provider's
+recommended model until their owner picks another (``routing.serving_model``); the change lands in the
+scout's note. Every live key is then re-registered for today's list, which a deploy may have changed.
 """
 
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import select
+
 from derp.agent.runs import ledger_side_call
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.inference.api import OpenRouterAPI, OpenRouterError
+from derp.inference.api import OpenRouterAPI, OpenRouterError, OpenRouterManagement
 from derp.inference.openrouter import ModelFactory
 from derp.inference.roles import ModelRole
 from derp.inference.scout import MIN_UPTIME, SMOKE_TOKENS, passes_smoke, per_million
-from derp.keys.models import KeyModelCheck
+from derp.keys.models import ContributedKey, KeyModelCheck
+from derp.keys.register import allow_models
 from derp.keys.routing import key_pin
 
 log = logging.getLogger("derp.keys")
@@ -40,9 +44,14 @@ def _own_route(endpoints: list[dict[str, Any]], provider: str) -> dict[str, Any]
 
 
 async def check_key_models(
-    db: Database, api: OpenRouterAPI, settings: Settings, model_factory: ModelFactory
+    db: Database,
+    api: OpenRouterAPI,
+    settings: Settings,
+    model_factory: ModelFactory,
+    management: OpenRouterManagement | None = None,
 ) -> list[str]:
-    """Refresh every curated model's liveness and price; returns notes on models that changed state."""
+    """Refresh every curated model's liveness and price, and keep every key registered for today's list;
+    returns notes on models that changed state."""
     now = datetime.now(UTC)
     notes: list[str] = []
     for provider, models in settings.keys.models.items():
@@ -77,4 +86,14 @@ async def check_key_models(
                     row.price_cache_read = per_million(cache) if cache is not None else None
             if live != was_live:
                 notes.append(f"key model {listed.model}: {'back' if live else 'no longer offered'}")
+    if management is not None:  # the list may have changed with a deploy: registrations follow it
+        async with db.session() as session:
+            keys = list(
+                await session.scalars(select(ContributedKey).where(ContributedKey.removed_at.is_(None)))
+            )
+        for key in keys:
+            try:
+                await allow_models(settings, management, key)
+            except OpenRouterError as error:
+                log.info("re-registering a key's models failed: %s", error.status)
     return notes

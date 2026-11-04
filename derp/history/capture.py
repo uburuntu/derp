@@ -21,6 +21,7 @@ from derp.history.digests import mark_stale
 from derp.history.models import Chat, ForumTopic, Message, MessageMedia, Sticker, User
 from derp.history.polls import upsert_poll
 from derp.history.render import MessageView, media_note, sender_label
+from derp.keys.pasted import redact
 from derp.telegram.media import TGS
 from derp.telegram.text import plain_emoji
 
@@ -264,12 +265,12 @@ def message_values(message: TgMessage, *, capture: str) -> dict[str, Any]:
         "date": utc(message.date),
         "edit_date": utc(message.edit_date) if message.edit_date else None,
         "kind": kind,
-        "text": message.text or message.caption or _rich_text(message),
+        "text": redact(message.text or message.caption or _rich_text(message)),  # never a pasted API key
         "entities": _dump(message.entities or message.caption_entities) or None,
         "reply_to_message_id": reply.message_id
         if reply is not None and reply.chat.id == message.chat.id
         else None,
-        "quote": message.quote.text if message.quote else None,
+        "quote": redact(message.quote.text) if message.quote else None,
         "forward_origin": _dump(message.forward_origin) if message.forward_origin else None,
         "media_group_id": message.media_group_id,
         "via_bot_id": message.via_bot.id if message.via_bot else None,

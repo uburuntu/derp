@@ -23,12 +23,11 @@ from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat, User
 from derp.history.render import one_line
-from derp.inference.models import ProviderCall
 from derp.keys.models import ContributedKey
 from derp.keys.notices import brand, owner_name
 from derp.locales import resolve, t
 from derp.memory.notes import is_admin
-from derp.money.funding import day_end, sponsored_lot_id
+from derp.money.funding import day_end, run_upstream, sponsored_lot_id
 from derp.money.models import CreditLot, Wallet
 from derp.money.wallets import balances, wallet
 from derp.ops.feedback import report_button
@@ -154,11 +153,7 @@ async def show_info(message: Message, db: Database, bot: Bot) -> None:
                 and (key := await session.get(ContributedKey, run.key_id))
             ):
                 owner = await session.get(User, key.user_id)
-                usd = await session.scalar(
-                    select(func.coalesce(func.sum(ProviderCall.upstream_usd), 0)).where(
-                        ProviderCall.run_id == run.id, ProviderCall.key_id == key.id
-                    )
-                )
+                usd = await run_upstream(session, run.id)
                 keyed = t(
                     locale,
                     "info.key",

@@ -160,7 +160,7 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
             ),
         )
         if notes := await check_key_models(
-            services.db, services.api, services.settings, services.model_factory
+            services.db, services.api, services.settings, services.model_factory, services.management
         ):
             await notify_owners(services.bot, services.settings, "Key models:\n" + "\n".join(notes))
 

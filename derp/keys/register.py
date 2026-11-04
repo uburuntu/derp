@@ -8,7 +8,6 @@ sealed sub-key and OpenRouter's ids; the pasted key itself is never stored or lo
 """
 
 import logging
-import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,21 +18,13 @@ from sqlalchemy import update
 
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.inference.api import OpenRouterAPI, OpenRouterError, OpenRouterManagement
+from derp.inference.api import Credential, OpenRouterAPI, OpenRouterError, OpenRouterManagement, SubKey
 from derp.keys.models import ContributedKey, KeyChat
 from derp.keys.routing import curated
 from derp.keys.vault import seal
 
 log = logging.getLogger("derp.keys")
-# Provider API keys as people paste them: OpenAI (sk-, sk-proj-, sk-svcacct-…) and Anthropic (sk-ant-…).
-KEY_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}")
 type Rejection = Literal["unknown", "rejected", "no_credits", "unavailable"]
-
-
-def pasted_key(text: str | None) -> str | None:
-    """A provider API key in a message (the whole of it, as pasted), or None."""
-    found = KEY_PATTERN.search(text or "")
-    return found.group(0) if found else None
 
 
 def provider_of(key: str) -> str:
@@ -64,6 +55,7 @@ async def plug_in(
     """Register ``raw`` for ``user_id``; it serves their private chat at once (other chats once turned on).
 
     Starts at the provider's recommended model and the middle monthly cap; the flow asks for both next.
+    Whatever goes wrong before the key is saved, nothing is left registered at OpenRouter.
     """
     provider = provider_of(raw)
     models = curated(settings, provider)
@@ -72,27 +64,41 @@ async def plug_in(
     sub = await management.create_key(
         f"derp contributor {secrets.token_hex(4)}", limit_usd=settings.keys.sub_key_limit_usd
     )
+    credential: Credential | None = None
+    saved = False
     try:
-        credential = await management.register(
-            provider, raw, name="derp", sub_key_hash=sub.hash, models=allowed_models(settings, provider)
-        )
-    except OpenRouterError as error:
-        await management.delete_key(sub.hash)
-        return Refused("rejected" if error.status in (400, 401, 403, 422) else "unavailable")
-    cheapest = min(models, key=lambda m: m.prompt + m.completion)
-    try:
-        await api.ping(cheapest.model, provider, api_key=sub.secret)
-    except OpenRouterError as error:
-        await _take_out(management, credential.id, sub.hash)
-        why: Rejection = (
-            "rejected"
-            if error.status in (401, 403)
-            else "no_credits"
-            if error.status in (402, 429)
-            else "unavailable"
-        )
-        log.info("contributed key refused: %s", error.status)
-        return Refused(why)
+        try:
+            credential = await management.register(
+                provider, raw, name="derp", sub_key_hash=sub.hash, models=allowed_models(settings, provider)
+            )
+        except OpenRouterError as error:
+            return Refused("rejected" if error.status in (400, 401, 403, 422) else "unavailable")
+        cheapest = min(models, key=lambda m: m.prompt + m.completion)
+        try:
+            await api.ping(cheapest.model, provider, api_key=sub.secret)
+        except OpenRouterError as error:
+            log.info("contributed key refused: %s", error.status)
+            if error.status in (401, 403):
+                return Refused("rejected")
+            return Refused("no_credits" if error.status in (402, 429) else "unavailable")
+        key = await _save(db, settings, user_id, provider, raw, sub, credential)
+        saved = True
+        return key
+    finally:
+        if not saved:
+            await _take_out(management, credential.id if credential else None, sub.hash, quiet=True)
+
+
+async def _save(
+    db: Database,
+    settings: Settings,
+    user_id: int,
+    provider: str,
+    raw: str,
+    sub: SubKey,
+    credential: Credential,
+) -> ContributedKey:
+    models = curated(settings, provider)
     chosen = next((m for m in models if m.recommended), models[0])
     caps = settings.keys.caps_usd
     now = datetime.now(UTC)
@@ -127,13 +133,21 @@ async def take_out(db: Database, management: OpenRouterManagement, key: Contribu
         )
 
 
-async def _take_out(management: OpenRouterManagement, credential_id: str, sub_key_hash: str) -> None:
-    for remove, target in ((management.unregister, credential_id), (management.delete_key, sub_key_hash)):
+async def _take_out(
+    management: OpenRouterManagement, credential_id: str | None, sub_key_hash: str, *, quiet: bool = False
+) -> None:
+    """Unregister the provider key, then delete the sub-key; ``quiet`` (cleaning up a failed plug-in) logs
+    failures instead of raising, so the original outcome stands."""
+    steps = [(management.unregister, credential_id)] if credential_id else []
+    for remove, target in [*steps, (management.delete_key, sub_key_hash)]:
         try:
             await remove(target)
         except OpenRouterError as error:
-            if error.status != 404:  # already gone is gone
+            if error.status == 404:  # already gone is gone
+                continue
+            if not quiet:
                 raise
+            log.warning("cleaning up a failed plug-in left something at OpenRouter: %s", error.status)
 
 
 async def allow_models(settings: Settings, management: OpenRouterManagement, key: ContributedKey) -> None:

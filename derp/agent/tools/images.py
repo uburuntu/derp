@@ -32,7 +32,8 @@ from derp.agent.tools.sources import (
 )
 from derp.agent.toolsets import Family
 from derp.inference.api import OpenRouterError
-from derp.inference.roles import ModelRole, RolePin
+from derp.inference.roles import ModelRole
+from derp.keys.routing import key_pin
 from derp.money.funding import PAID_SOURCES, Funding
 from derp.money.wallets import balance
 from derp.telegram.media import MediaUnavailableError, profile_photo_bytes
@@ -116,7 +117,7 @@ async def generate_image(
         left = await key_left(ctx, next_turn=True)
         if left is not None and left < Decimal(str(deps.settings.keys.image_price_usd)):
             return "What's left of this key's monthly cap doesn't cover an image now; say so."
-        pin, sub_key = RolePin(model=drawn_by, zdr=False, only={drawn_by: (key.provider,)}), key.sub_key
+        pin, sub_key = key_pin(key.provider, drawn_by), key.sub_key
     else:
         try:  # an approved image was agreed to at this price: its resumed run is funded for it alone
             await afford(ctx, price, next_turn=not ctx.tool_call_approved)

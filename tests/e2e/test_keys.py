@@ -19,7 +19,7 @@ from derp.inference.models import ProviderCall
 from derp.keys.flows import chat_ref
 from derp.keys.models import ContributedKey, KeyChat
 from derp.money.wallets import credit, wallet
-from tests.e2e.fake_api import Call
+from tests.e2e.fake_api import Call, Failure
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel
 
@@ -99,6 +99,20 @@ def said(conversation: Conversation, chat_id: int, after: int) -> list[Call]:
 def newest(conversation: Conversation, chat_id: int) -> int:
     """The id of the newest live message in a chat (Derp's, right after it sent one)."""
     return max(mid for (cid, mid) in conversation.api.messages if cid == chat_id)
+
+
+async def forge(conversation: Conversation, person: Person, chat_id: int, message_id: int, data: str) -> None:
+    """Press with hand-made callback data no button carries (a crafted client)."""
+    query_id = f"forged{len(conversation.api.calls)}"
+    conversation.api.outstanding_callbacks.add(query_id)
+    query = {
+        "id": query_id,
+        "from": person.payload(),
+        "chat_instance": "c",
+        "message": conversation.api.message(chat_id, message_id),
+        "data": data,
+    }
+    await conversation.settle(await conversation.push("callback_query", query))
 
 
 @pytest.fixture
@@ -253,7 +267,12 @@ async def test_a_dead_key_is_announced_to_the_chat_and_its_owner_once(
 
     def revoked(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         raise ModelHTTPError(
-            status_code=401, model_name="openai/gpt-6.1-sol", body={"message": "invalid api key"}
+            status_code=401,
+            model_name="openai/gpt-6.1-sol",
+            body={
+                "message": "Provider returned error",
+                "metadata": {"provider_name": "OpenAI", "is_byok": True},
+            },
         )
 
     key_model.reply(revoked)
@@ -302,3 +321,71 @@ async def test_a_key_the_provider_rejects_is_not_plugged_in(
     assert management.calls == ["create_key", "register", "unregister", "delete_key"]
     async with conversation.db.session() as session:
         assert await session.scalar(select(ContributedKey.id)) is None
+
+
+async def test_a_forged_turn_on_press_cannot_borrow_someone_elses_key(
+    keyed: tuple[Conversation, ScriptedModel, FakeManagement],
+) -> None:
+    conversation, _, _ = keyed
+    key_id = await plug_into_crew(conversation)
+    carl, den = Person(1703, "Carl"), Room(-1704, title="Den")
+    conversation.meet(carl, den, status="administrator")
+    hello = await conversation.send(carl, den, "hi")
+    await conversation.settle(hello)
+    mine = await conversation.send(
+        carl, text="hi derp"
+    )  # a message of Derp's in Carl's private chat to press
+    await conversation.settle(mine)
+    for chat_id in (carl.id, den.id):  # Carl's private chat (where Carl counts as admin) and Carl's group
+        await forge(conversation, carl, chat_id, newest(conversation, chat_id), f"key:here_on:{key_id}:")
+    async with conversation.db.session() as session:
+        borrowed = list(await session.scalars(select(KeyChat).where(KeyChat.chat_id.in_([carl.id, den.id]))))
+    assert borrowed == []
+
+
+async def test_a_key_failing_after_tools_ran_is_not_answered_twice(
+    keyed: tuple[Conversation, ScriptedModel, FakeManagement], model: ScriptedModel
+) -> None:
+    from tests.e2e.model import tool_call
+
+    conversation, key_model, _ = keyed
+    key_id = await plug_into_crew(conversation)
+
+    def out_of_credit(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(
+            status_code=402,
+            model_name="openai/gpt-6.1-sol",
+            body={"message": "insufficient_quota", "metadata": {"provider_name": "OpenAI", "is_byok": True}},
+        )
+
+    key_model.reply(tool_call("about_derp", topics=["money"]), out_of_credit)
+    asked = await conversation.send(BO, CREW, "@DerpRobot how much is a pack?", entities=MENTION)
+    await conversation.settle(asked)
+    assert not model.requests  # no second run on the usual model: the first had already used a tool
+    async with conversation.db.session() as session:
+        runs = list(await session.scalars(select(AgentRun).order_by(AgentRun.id)))
+        key = await session.get(ContributedKey, key_id)
+    assert [r.status for r in runs] == ["failed"]
+    assert key is not None and key.paused == "exhausted"  # what it said about the key still counts
+    assert [markdown(c) for c in said(conversation, CREW.id, asked.after)] == [
+        "Something broke on my side — nothing was charged. Try again in a moment."
+    ]
+
+
+async def test_a_reply_to_a_pasted_key_never_shows_the_key_to_the_model(
+    keyed: tuple[Conversation, ScriptedModel, FakeManagement], model: ScriptedModel
+) -> None:
+    conversation, _, _ = keyed
+    conversation.api.failures["deleteMessage"].append(Failure(400, "Bad Request: message can't be deleted"))
+    pasted = await conversation.send(ANA, CREW, f"look {PASTED}")
+    await conversation.settle(pasted)
+    asked = await conversation.send(
+        BO, CREW, "@DerpRobot what's this?", entities=MENTION, reply_to=pasted.message_id
+    )
+    await conversation.settle(asked)
+    sent = str(model.requests)
+    assert model.requests and "sk-proj" not in sent and "[API key removed]" in sent
+    async with conversation.db.session() as session:
+        assert (
+            await session.scalar(select(StoredMessage).where(StoredMessage.text.contains("sk-proj"))) is None
+        )

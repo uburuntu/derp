@@ -16,6 +16,7 @@ from decimal import Decimal
 from sqlalchemy import ColumnElement, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from derp.agent.models import AgentRun
 from derp.config import KeyModel, Settings
 from derp.inference.ledger import estimate_cost
 from derp.inference.models import ProviderCall
@@ -95,6 +96,16 @@ async def offered_models(session: AsyncSession, settings: Settings, provider: st
     return [m for m in models if m.model not in dead]
 
 
+async def serving_model(session: AsyncSession, settings: Settings, key: ContributedKey) -> str | None:
+    """The model a key runs: its owner's pick, or while that one isn't offered (the scout found it dead, or it
+    left the list), the provider's first model still offered. Keys stay registered for the whole list
+    (``catalog.check_key_models`` re-syncs them daily), so the stand-in runs on the key too."""
+    offered = [m.model for m in await offered_models(session, settings, key.provider)]
+    if key.model in offered:
+        return key.model
+    return offered[0] if offered else None
+
+
 def cycle_start(anchor: date, now: datetime) -> datetime:
     """The start of the current monthly cycle: the anchor's day of this month (or the last one, when it hasn't
     come yet), clamped to short months."""
@@ -166,20 +177,27 @@ async def choose(
     """
     moment = now or datetime.now(UTC)
     for key in await candidates(session, chat_id, moment):
-        priced = await prices(session, settings, key.model)
-        if priced is None:  # its model left the curated list: the owner picks another
+        model = await serving_model(session, settings, key)
+        priced = await prices(session, settings, model) if model else None
+        if model is None or priced is None:  # nothing it may run is offered now: the owner picks again
             continue
         left = key.cap_usd - await spent(session, key, moment)
         if left < priced.turn(*turn_tokens):
             await pause(session, key, "cap", next_cycle(key.cycle_anchor, moment))
             continue
+        # Runs on this key still in flight haven't ledgered their turns: each is set aside at a typical turn,
+        # so keys shared by busy chats overshoot their cap by little.
+        flying = await session.scalar(
+            select(func.count()).where(AgentRun.key_id == key.id, AgentRun.status == "running")
+        )
+        left -= priced.turn(*turn_tokens) * (flying or 0)
         if key.paused is not None:  # a cycle pause that lapsed
             await resume(session, key)
         return KeyRoute(
             key_id=key.id,
             user_id=key.user_id,
             provider=key.provider,
-            pin=key_pin(key.provider, key.model),
+            pin=key_pin(key.provider, model),
             prices=priced,
             left_usd=left,
             sub_key=unseal(settings.keys_secret, key.sub_key),

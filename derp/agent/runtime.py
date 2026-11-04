@@ -65,7 +65,7 @@ from derp.agent.outputs import absorb_kept, flush, out_of_money
 from derp.agent.persona import PERSONA, chat_card, situation
 from derp.agent.prefix import prefixes
 from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
-from derp.agent.runs import finish_run, load_messages, price_unreported, record_output, start_run
+from derp.agent.runs import finish_run, load_messages, price_unreported, record_output, start_run, totals
 from derp.agent.tools import CAPABILITIES, FAMILIES
 from derp.agent.tools import web as web_tools
 from derp.agent.tools.memory import family as memory_family
@@ -128,7 +128,8 @@ class Outcome:
     status: str
     delivered: tuple[int, ...]
     refused: bool = False  # Telegram won't take messages here (removed, banned, topic gone)
-    key_failure: KeyFailure | None = None  # the contributed key that paid failed before anything was sent
+    key_failure: KeyFailure | None = None  # the contributed key that paid the run failed
+    again: bool = False  # …before the run did anything: answer the turn again without keys
 
 
 @dataclass(slots=True)
@@ -304,9 +305,11 @@ class Runtime:
                 compose=lambda pin, held=held: self._compose(message, chat, held, pin, since=since),
                 say=lambda text: self._say(target, text),
             )
-            if outcome.key_failure is None or not keys:
+            failure = outcome.key_failure
+            if failure is not None and (outcome.again or failure.kind != "refused"):
+                await key_failed(self.db, self.bot, self.settings, chat, target, failure, locale)
+            if not outcome.again or not keys:
                 return outcome
-            await key_failed(self.db, self.bot, self.settings, chat, target, outcome.key_failure, locale)
             keys = False
             operation_id = f"{operation_id}:again"  # the failed run's hold was released under the first id
 
@@ -650,14 +653,20 @@ class Runtime:
                 self.db, new_messages, funding.role, self.prefix[funding] + ask.tokens,
                 api=None if key else self.api, key=key.prices if key else None,
             )  # fmt: skip
-            # A key that failed before anything was sent: the turn is answered again on usual funding.
+            # What a key's failure says about the key; when the run had done nothing yet (no tool ran, nothing
+            # was sent, no time lost to a timeout) the turn is answered again on usual funding instead.
             failure = (
                 KeyFailure(classify(error) if not isinstance(error, KeyRefused) else "refused", key.key_id,
                            error.text if isinstance(error, KeyRefused) else "")
-                if key is not None and error is not None and not stopped and not (deps.delivered or deps.reacted)
-                and not deps.kept
+                if key is not None and error is not None and not stopped
                 else None
             )  # fmt: skip
+            again = (
+                failure is not None
+                and not (deps.delivered or deps.reacted or deps.kept)
+                and totals(new_messages).tool_calls == 0
+                and not isinstance(error, TimeoutError)
+            )
             await flush(deps)  # results kept for a next step nobody took: posted before the text answer
             silent = output.strip() in SILENT and bool(
                 deps.delivered or deps.reacted
@@ -717,14 +726,14 @@ class Runtime:
             if stream.capped and not deps.delivered:
                 spoke = True
                 await say(t(locale, f"agent.capped{suffix}"))
-            if error is not None and failure is None:
+            if error is not None and not again:
                 record_run_failure(run.id, error, ask.prompt)
                 if not isinstance(error, TelegramAPIError) and not deps.delivered:
                     spoke = True
                     await say(apology(locale, error, funds, charged=bool(charged)))
             refused = isinstance(error, TelegramForbiddenError | TelegramBadRequest) and not deps.delivered
             delivered = tuple(message_id for message_id, _ in deps.delivered)
-            return Outcome(run.id, status, delivered, refused, failure)
+            return Outcome(run.id, status, delivered, refused, failure, again)
         except (
             BaseException
         ) as exc:  # died outside the model call (network, shutdown): never leave it running

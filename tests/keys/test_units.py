@@ -11,7 +11,8 @@ from derp.inference.api import upstream_cost
 from derp.inference.openrouter import response_usage
 from derp.keys.failures import classify
 from derp.keys.flows import chat_from_ref, chat_ref
-from derp.keys.register import allowed_models, pasted_key, provider_of
+from derp.keys.pasted import pasted_key, redact
+from derp.keys.register import allowed_models, provider_of
 from derp.keys.routing import Prices, cycle_start, key_pin, next_cycle
 from derp.keys.vault import seal, unseal
 
@@ -20,6 +21,7 @@ def test_pasted_keys_are_found_whole_and_tell_their_provider() -> None:
     key = "sk-proj-" + "A1b2_C3-" * 6
     assert pasted_key(f"here you go: {key} thanks") == key
     assert pasted_key("sk-short") is None and pasted_key(None) is None
+    assert redact(f"use {key} now") == "use [API key removed] now" and redact(None) is None
     assert provider_of("sk-ant-api03-" + "x" * 30) == "anthropic"
     assert provider_of(key) == "openai"
 
@@ -71,16 +73,22 @@ def test_a_key_pin_serves_one_model_on_its_providers_own_endpoints_without_zdr()
     assert Prices(2, 10).turn(10_000, 300) == Decimal("0.023")
 
 
-def error(status: int, body: object = None) -> ModelHTTPError:
-    return ModelHTTPError(status_code=status, model_name="m", body=body)
+def error(status: int, body: object = None, *, upstream: bool = True) -> ModelHTTPError:
+    """An error as OpenRouter relays it: the provider's own carries its name (seen live for a revoked key)."""
+    wrapped: dict[str, object] = {"message": str(body or "Provider returned error"), "code": status}
+    if upstream:
+        wrapped["metadata"] = {"provider_name": "OpenAI", "is_byok": True, "raw": str(body)}
+    return ModelHTTPError(status_code=status, model_name="m", body=wrapped)
 
 
-def test_failures_say_what_happened_to_the_key() -> None:
-    assert classify(error(401)) == "dead" and classify(error(403, {"message": "invalid key"})) == "dead"
-    assert classify(error(403, {"message": "Input was flagged by moderation"})) == "refused"
+def test_failures_blame_the_key_only_for_its_providers_errors() -> None:
+    assert classify(error(401, "invalid_api_key")) == "dead" and classify(error(403, "invalid key")) == "dead"
+    assert classify(error(403, "Input was flagged by moderation", upstream=False)) == "refused"
     assert classify(error(402)) == "exhausted"
     assert classify(error(429, {"error": {"code": "insufficient_quota"}})) == "exhausted"
-    assert classify(error(429, {"message": "rate limited, slow down"})) == "failed"
+    assert classify(error(429, "rate limited, slow down")) == "failed"
+    assert classify(error(403, "Key limit exceeded", upstream=False)) == "failed"  # the sub-key's own limit
+    assert classify(error(402, "Insufficient credits", upstream=False)) == "failed"  # Derp's balance
     assert classify(error(503)) == "failed" and classify(TimeoutError()) == "failed"
 
 

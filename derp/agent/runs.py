@@ -95,12 +95,21 @@ async def price_unreported(
     may lack ``usage.cost`` too. OpenRouter is asked by generation id (when ``api`` is given);
     otherwise the cost is estimated from the response's tokens (``context_tokens`` and the
     written text when it has none) at the pin's price snapshot. Free models stay free.
-    A response a contributed key paid (``key``: its model's prices) is estimated as its provider's
-    charge, OpenRouter's own part as nothing.
+    A response a contributed key paid (``key``: its model's prices) without its provider's charge gets an
+    estimate of it (OpenRouter's own part, if reported, is kept).
     """
     if role is ModelRole.CHAT_FREE:
         return
-    unpriced = [m for m in messages if isinstance(m, ModelResponse) and unreported(m)]
+    unpriced = [
+        m
+        for m in messages
+        if isinstance(m, ModelResponse)
+        and (
+            unreported(m)
+            if key is None
+            else (m.provider_details or {}).get("upstream_inference_cost") is None
+        )
+    ]
     if not unpriced:
         return
     if key is not None:
@@ -109,9 +118,10 @@ async def price_unreported(
             usd = key.turn(
                 response.usage.input_tokens or context_tokens, response.usage.output_tokens or written
             )
+            details = response.provider_details or {}
             response.provider_details = {
-                **(response.provider_details or {}),
-                "cost": 0.0,
+                **details,
+                "cost": details.get("cost") or 0.0,
                 "is_byok": True,
                 "upstream_inference_cost": float(usd),
                 "estimated": True,

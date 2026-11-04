@@ -71,6 +71,7 @@ def upgrade() -> None:
         sa.Column("state", sa.String(length=8), nullable=False),
         sa.Column("enabled_by", sa.BigInteger(), nullable=True),
         sa.Column("enabled_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("paused_by", sa.BigInteger(), nullable=True),
         sa.Column("card_message_id", sa.BigInteger(), nullable=True),
         sa.Column("refusal_noticed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("paused_noticed_at", sa.DateTime(timezone=True), nullable=True),

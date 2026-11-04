@@ -74,6 +74,7 @@ class KeyChat(Base):
     state: Mapped[str] = mapped_column(String(8), default="offered")
     enabled_by: Mapped[int | None]
     enabled_at: Mapped[datetime | None]  # keys serve a chat in the order they were turned on
+    paused_by: Mapped[int | None]  # who paused it here: an owner's own pause only they lift
     card_message_id: Mapped[int | None]  # the enable card or notice in the chat
     refusal_noticed_at: Mapped[datetime | None]  # an explicit refusal shown in the chat (rate-limited)
     paused_noticed_at: Mapped[datetime | None]  # "ran out / stopped working" said in the chat, once per pause

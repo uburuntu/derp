@@ -39,7 +39,8 @@ from derp.history.render import one_line
 from derp.inference.api import OpenRouterAPI, OpenRouterError, OpenRouterManagement
 from derp.keys.models import ContributedKey, KeyChat, KeyRequest
 from derp.keys.notices import KeyAction, brand, model_label, owner_name, when
-from derp.keys.register import Refused, allow_models, pasted_key, plug_in, take_out
+from derp.keys.pasted import pasted_key
+from derp.keys.register import Refused, allow_models, plug_in, take_out
 from derp.keys.routing import Prices, cycle_start, next_cycle, offered_models, pause, prices, resume, spent
 from derp.locales import resolve, t
 from derp.memory.notes import is_admin
@@ -144,7 +145,7 @@ async def open_plug(bot: Bot, person: TgUser, db: Database, settings: Settings, 
     reuse = [
         button(
             t(locale, "keys.use_button", brand=brand(k.provider), label=literal(k.label)),
-            KeyAction(action="use", key=k.id, value=str(chat.id)),
+            KeyAction(action="use", key=k.id, value=chat_ref(settings, chat.id)),  # signed, like the link
         )
         for k in keys
         if chat is not None and k.dead_at is None
@@ -468,6 +469,7 @@ async def _enable(
         if row.state == "on":
             return None
         row.state, row.enabled_by, row.enabled_at, row.off_noticed_at = "on", admin_id, now, None
+        row.paused_by = None
     text = t(
         locale,
         "keys.enabled",
@@ -499,10 +501,23 @@ async def _chat_press(press: Press, data: KeyAction, db: Database, settings: Set
     if chat is None or key is None or key.removed_at is not None:
         await press.strip()
         return await press.deny("keys.gone")
+    if chat.type == "private":  # a private chat's key is its owner's own, on from the start
+        return await press.deny("keys.gone")
     admin = await is_admin(bot, chat, press.user_id)
+    async with db.session() as session:
+        link_row = await session.get(KeyChat, (key.id, chat.id))
+    if (
+        link_row is None or link_row.state == "off"
+    ):  # never offered here, or unplugged: only its owner offers it
+        await press.strip()
+        return await press.deny("keys.gone")
     if data.action == "here_on":
         if not admin:
             return await press.deny("keys.admins_only")
+        if link_row.state == "on":
+            return await press.strip()
+        if link_row.paused_by == key.user_id and press.user_id != key.user_id:
+            return await press.deny("keys.owner_paused")
         await _enable(
             bot,
             db,
@@ -527,6 +542,7 @@ async def _chat_press(press: Press, data: KeyAction, db: Database, settings: Set
             return await press.strip()
         was_offered = row.state == "offered"
         row.state, row.off_noticed_at = state, datetime.now(UTC)
+        row.paused_by = press.user_id if state == "paused" else None
     public = chat.locale or press.locale
     if was_offered and state == "off":
         return await press.edit(t(public, "keys.declined"))
@@ -568,11 +584,12 @@ async def on_press_key(
         case "use":
             async with db.session() as session:
                 key = await _own_key(session, press.user_id, data.key)
-            if key is None or not data.value.lstrip("-").isdigit():
+            chat_id = chat_from_ref(settings, data.value)
+            if key is None or chat_id is None:
                 return await press.deny("keys.gone")
             async with db.transaction() as session:
                 await session.execute(delete(KeyRequest).where(KeyRequest.user_id == press.user_id))
-            return await offer(press, db, settings, key, int(data.value))
+            return await offer(press, db, settings, key, chat_id)
         case "cap" if data.value == "other":
             async with db.transaction() as session:
                 if await _own_key(session, press.user_id, data.key) is None:
@@ -833,6 +850,7 @@ def chat_keys_page(
 def build_router() -> Router:
     router = Router(name="keys")
     router.message.register(on_pasted, PastedKey())
+    router.edited_message.register(on_pasted, PastedKey())  # a key edited in goes the same way
     router.message.register(on_cap_amount, F.chat.type == "private", CapAmount())
     on_press(router, KeyAction)(on_press_key)
     return router

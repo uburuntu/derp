@@ -14,7 +14,7 @@ from derp.history.members import track_message
 from derp.history.models import Message as MessageRow
 from derp.history.render import chat_time
 from derp.history.transcription import Transcriber
-from derp.keys.register import pasted_key
+from derp.keys.pasted import pasted_key
 from derp.ops.feedback import details_for
 from derp.ops.owner import is_blocked
 
@@ -26,7 +26,7 @@ class CaptureMiddleware(BaseMiddleware):
     is off; edits to messages Derp didn't keep are stored only when ambient messages would be.
 
     Bot commands are never stored: they are controls, not conversation. Neither is a message carrying a
-    provider API key (``keys.register.pasted_key``): it is no invocation either, and the keys router deletes
+    provider API key (``keys.pasted.pasted_key``): it is no invocation either, and the keys router deletes
     it. Nothing from a chat or person an owner blocked is stored or transcribed.
 
     The message an invocation replies to is part of the invocation: stored too if Derp hadn't kept

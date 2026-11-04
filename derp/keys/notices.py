@@ -83,6 +83,16 @@ def _why(key: ContributedKey) -> str:
 async def announce(db: Database, bot: Bot, chat: Chat, thread_id: int | None, locale: str) -> None:
     """Say once in this chat, and once to each owner, that a key stopped serving here."""
     now = datetime.now(UTC)
+    stopped = (
+        select(KeyChat.key_id)
+        .join(ContributedKey, ContributedKey.id == KeyChat.key_id)
+        .where(KeyChat.chat_id == chat.id, KeyChat.state == "on", KeyChat.paused_noticed_at.is_(None))
+        .where(*_stopped(now))
+        .limit(1)
+    )
+    async with db.session() as session:  # most chats have no key that stopped: no locking transaction then
+        if await session.scalar(stopped) is None:
+            return
     async with db.transaction() as session:
         rows = (
             await session.execute(

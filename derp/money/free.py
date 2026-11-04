@@ -219,9 +219,14 @@ async def offer_continue(
         waiting = await waiting_question(session, settings, chat_id, user_id) if chat_id is not None else None
     if waiting is None or chat_id is None or (chat is not None and waiting.thread_id != chat[1]):
         return
+    await _offer_continue(bot, chat_id, waiting, locale)
+
+
+async def _offer_continue(bot: Bot, chat_id: int, waiting: StoredMessage, locale: str) -> None:
+    """The Continue button, replying to a waiting question; a courtesy, so a refusal changes nothing."""
     again = markup(button(t(locale, "money.continue"), Unblock(action="continue")))
     target = Target(chat_id, waiting.thread_id, waiting.message_id)
-    with contextlib.suppress(TelegramAPIError):  # the purchase is recorded; the button is a courtesy
+    with contextlib.suppress(TelegramAPIError):
         await send_markdown(bot, target, t(locale, "money.continue_offer"), reply_markup=again)
 
 
@@ -241,11 +246,8 @@ async def offer_continues(db: Database, bot: Bot, settings: Settings, chat_id: i
         waiting = [
             q for user_id in askers if (q := await waiting_question(session, settings, chat_id, user_id))
         ]
-    again = markup(button(t(locale, "money.continue"), Unblock(action="continue")))
     for question in waiting:
-        target = Target(chat_id, question.thread_id, question.message_id)
-        with contextlib.suppress(TelegramAPIError):  # a courtesy, like after a purchase
-            await send_markdown(bot, target, t(locale, "money.continue_offer"), reply_markup=again)
+        await _offer_continue(bot, chat_id, question, locale)
 
 
 async def resume(press: Press, db: Database, settings: Settings, runtime: Answers) -> bool | None:

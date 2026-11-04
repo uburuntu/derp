@@ -508,6 +508,7 @@ enabled = "🔑 {who}'s {brand} key is on: I answer here with **{model}** now, p
 turned_on = "Turned on."
 declined = "Not turned on."
 admins_only = "Only admins can turn keys on here."
+owner_paused = "Its owner paused it here; only they can turn it back on."
 owner_or_admin = "Only the key's owner or an admin can do that."
 paused_here = "⏸ {who}'s {brand} key is paused here; I'm back to my usual model."
 unplugged_here = "🔌 {who}'s {brand} key is unplugged from this chat; I'm back to my usual model."
