@@ -46,7 +46,7 @@ from derp.telegram.sender import Target, send_document, send_markdown, send_priv
 from derp.telegram.text import literal
 
 WINDOWS = ((1, "24 h"), (7, "7 d"), (30, "30 d"))
-FUNDINGS = ("paid", "sponsored", "free", "creator")
+FUNDINGS = ("paid", "sponsored", "free", "creator", "key")
 TOP_CHATS = 5
 CACHE_ROWS = 8
 MAX_GRANT = 1_000_000
@@ -106,6 +106,9 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
             .group_by(ProviderCall.funding)
         )
         by_funding: dict[str, Decimal] = {row[0]: row[1] for row in rows}
+        keyed = await session.scalar(  # what contributed keys' providers charged their owners
+            select(func.sum(ProviderCall.upstream_usd)).where(ProviderCall.created_at >= week)
+        )
         fees = await session.scalar(select(func.sum(RunFee.credits)).where(RunFee.created_at >= week))
         people, chats = (
             await session.execute(
@@ -150,6 +153,7 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
         "",
         "### Last 7 days",
         "- **Cost by funding:** " + " · ".join(f"{f} {_usd(by_funding.get(f))}" for f in FUNDINGS),
+        f"- **Contributed keys:** {_usd(keyed)} of their owners' credits",
         f"- **Derp fees:** {fees or 0} dc",
         f"- **Active:** {people} people in {chats} chats",
         f"- **Blocked:** {blocked or 0} people, {blocked_chats or 0} chats",
