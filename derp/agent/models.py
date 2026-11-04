@@ -34,6 +34,9 @@ class AgentRun(Base):
     status: Mapped[str] = mapped_column(String(20), default="running")
     role: Mapped[str] = mapped_column(String(16))
     funding: Mapped[str] = mapped_column(String(12))  # paid | sponsored | free
+    key_id: Mapped[int | None] = mapped_column(
+        ForeignKey("contributed_keys.id")
+    )  # a contributed key ran its turns
     wallet_id: Mapped[int | None]
     reservation_id: Mapped[int | None]
     served_model: Mapped[str | None] = mapped_column(String(128))

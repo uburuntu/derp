@@ -18,6 +18,10 @@ derived from the primary's price doesn't follow); after a token-limit cut the
 retry gets twice the output tokens. Retrying continues the run: tools that already ran are
 in its history and are not repeated. Failures after streaming began are not
 retried (part of the answer may already be on screen).
+
+On a run a contributed key pays, the money cap is what is left of the key's cap (``outputs.key_left``),
+and an explicit refusal from its model (a ``refusal``/``content_filter`` finish) ends the run with
+``KeyRefused``: the runtime answers again on the chat's usual funding.
 """
 
 import asyncio
@@ -44,7 +48,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
 from derp.agent.deps import RunDeps
-from derp.agent.outputs import hold_left
+from derp.agent.outputs import out_of_money
 from derp.agent.tools.web import search_budget
 from derp.inference.openrouter import provider_config
 from derp.inference.roles import RolePin
@@ -57,6 +61,26 @@ EMPTY_NOTE = "Your last reply came back empty. Answer the current message now."
 SEARCH_NOTE = "Web search is out of budget for this answer; answer without it (say so if it matters)."
 BACKSTOP = 4  # requests and tool calls past the soft caps before the hard limits stop the run
 RETRYABLE_STATUS = frozenset({408, 429})
+
+
+class KeyRefused(Exception):  # noqa: N818 - an outcome the runtime handles, not a bug
+    """A contributed key's model refused the request outright; ``text`` is what it said, ``response`` the turn."""
+
+    def __init__(self, text: str, response: ModelResponse) -> None:
+        super().__init__("refused")
+        self.text = text
+        self.response = response
+
+
+def refusal(response: ModelResponse) -> str | None:
+    """What the model said when it refused (maybe empty), or None when it didn't refuse explicitly."""
+    details = response.provider_details or {}
+    if response.finish_reason != "content_filter" and details.get("finish_reason") != "refusal":
+        return None
+    said = details.get("refusal")
+    if isinstance(said, str) and said.strip():
+        return said.strip()
+    return " ".join(p.content.strip() for p in response.parts if isinstance(p, TextPart)).strip()
 
 
 def unanswered(response: ModelResponse) -> bool:
@@ -106,7 +130,7 @@ class Guard(AbstractCapability[RunDeps]):
             ctx.usage.tool_calls >= self.tool_calls
             or ctx.usage.requests >= self.requests
             or asyncio.get_running_loop().time() >= self.deadline
-            or ((left := await hold_left(ctx, next_turn=True)) is not None and left <= 0)
+            or await out_of_money(ctx, next_turn=True)
         ):
             self.wrapping = True
             log.info("run %s wraps up", self.run_id)
@@ -162,6 +186,8 @@ class Guard(AbstractCapability[RunDeps]):
     async def after_model_request(
         self, ctx: RunContext[RunDeps], *, request_context: ModelRequestContext, response: ModelResponse
     ) -> ModelResponse:
+        if ctx.deps.funds.key is not None and (said := refusal(response)) is not None:
+            raise KeyRefused(said, response)
         if not unanswered(response) or not self.recover("an empty reply"):
             return response
         self.longer = response.finish_reason == "length"

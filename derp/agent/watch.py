@@ -6,7 +6,9 @@ numbers for PDFs, speech quoted. A look is for paid and sponsored answers within
 (``settings.watching``) and the Bot API's download cap; it is priced before it is made and refused when
 the run's hold can't cover it and one more turn. Whatever isn't watched says why (``Look.why``), so the
 chat model doesn't guess, and falls back to a still frame or preview picture (``media.inspect``). A voice
-message Derp performed is never sent: its stored script is the notes.
+message Derp performed is never sent: its stored script is the notes. On a run a contributed key pays, a
+PDF goes to the key's own model instead (both providers read PDFs), priced against what is left of the key's
+cap; clips and audio stay on the media pin and the run's hold.
 
 Every response is ledgered against the run as ``kind='media'`` (a look that timed out or was stopped
 without one at its estimate, on Derp, since the provider may still bill it); the notes' first line, a one-line
@@ -27,7 +29,7 @@ from sqlalchemy import select
 
 from derp.agent.deps import RunDeps
 from derp.agent.media import store_description
-from derp.agent.outputs import Refused, afford
+from derp.agent.outputs import Refused, afford, key_left
 from derp.agent.runs import ledger_side_call
 from derp.config import WatchLimits
 from derp.history.models import Message, MessageMedia
@@ -244,16 +246,25 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
         rate = watching.video_tokens_per_second if kind == "clip" else watching.audio_tokens_per_second
         units = (seconds or 0) * rate
     input_tokens = watching.prompt_tokens + units
-    usd = await _price(deps, input_tokens)
-    price = deps.settings.credits_for_usd(float(usd))
-    try:
-        await afford(ctx, price, next_turn=True)
-    except Refused:
-        look.why = f"it would cost about {price} Derpcoins, more than this answer has left"
-        return look
-    pin = await deps.pins.get(ModelRole.MEDIA)
+    key = deps.funds.key if kind == "pdf" else None  # a contributed key's model reads PDFs itself
+    if key is not None:
+        usd = key.prices.turn(input_tokens, watching.output_tokens)
+        if (left := await key_left(ctx, next_turn=True)) is not None and usd > left:
+            look.why = "reading it would take more than what's left of this key's monthly cap"
+            return look
+        pin, model = deps.pin, deps.model
+    else:
+        usd = await _price(deps, input_tokens)
+        price = deps.settings.credits_for_usd(float(usd))
+        try:
+            await afford(ctx, price, next_turn=True)
+        except Refused:
+            look.why = f"it would cost about {price} Derpcoins, more than this answer has left"
+            return look
+        pin = await deps.pins.get(ModelRole.MEDIA)
+        model = deps.model_factory(pin)
     agent = Agent(
-        deps.model_factory(pin),
+        model,
         instructions=INSTRUCTIONS + HOW[kind],
         model_settings=chat_settings(pin, max_tokens=watching.output_tokens, documents=kind == "pdf"),
     )
@@ -281,7 +292,7 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
             await ledger_side_call(
                 deps.db, captured, kind="media", funding=deps.funding.value, role=ModelRole.MEDIA,
                 context_tokens=input_tokens, run_id=deps.run_id, chat_id=deps.chat.id, user_id=deps.user_id,
-                requested_model=pin.model,
+                requested_model=pin.model, key=key,
             )  # fmt: skip
     first, _, rest = text.partition("\n")
     summary = " ".join(first.split())[:300]

@@ -1,11 +1,14 @@
 """Who pays for a run, and holding the money before it starts.
 
-Order — private chat: the user's paid credits (plan allowance, purchases,
-grants) → the user's sponsored daily allowance. Group: the chat's credits →
-the invoker's paid credits → the invoker's sponsored allowance. The payer is
-fixed when the run reserves; everything the run does counts against that
-reservation. Paid runs use the standard chat model, sponsored runs the cheap
-one, and sponsorship also stops at a global daily dollar cap.
+Order — a contributed key that serves the chat (``derp.keys``) → private chat: the user's paid credits
+(plan allowance, purchases, grants) → the user's sponsored daily allowance. Group: the chat's credits →
+the invoker's paid credits → the invoker's sponsored allowance. The payer is fixed when the run reserves;
+everything the run does counts against that reservation. Paid runs use the standard chat model, sponsored
+runs the cheap one, and sponsorship also stops at a global daily dollar cap.
+
+A key run is a paid run with two payers: the key pays every call through its model (``Funds.key``), and
+a hold on the first paid wallet with anything in it (it may have none) pays the rest of its work — side
+calls on Derp's own pins and fees — so a key never costs anyone Derpcoins for its own turns.
 """
 
 from collections.abc import Awaitable, Callable, Mapping
@@ -25,6 +28,7 @@ from derp.inference.models import ProviderCall
 from derp.inference.openrouter import REASONING_ROOM
 from derp.inference.pins import snapshot_prices
 from derp.inference.roles import ModelRole
+from derp.keys.routing import KeyRoute, choose
 from derp.money.models import RunFee, Wallet
 from derp.money.wallets import balance, capture, credit, release, reserve, wallet
 
@@ -52,7 +56,8 @@ class Funds:
     operation_id: str
     wallet_id: int | None  # None: nothing reserved (free models)
     reservation_id: int | None
-    credits: int  # held for this run; the run's hard money cap
+    credits: int  # held for this run; the run's hard money cap (on a key run: for its side work only)
+    key: KeyRoute | None = None  # a contributed key pays the run's turns
 
 
 Notify = Callable[[str], Awaitable[None]]
@@ -115,12 +120,18 @@ class Funder:
         usd = estimate_cost(self.prefix.get(funding, 0) + self.window(funding) // 2, output_tokens, *prices)
         return max(1, self.settings.credits_for_usd(float(usd)))
 
+    def turn_tokens(self, output_tokens: int = TYPICAL_OUTPUT_TOKENS) -> tuple[int, int]:
+        """A typical paid turn's input (prompt prefix + half the window) and output tokens."""
+        return self.prefix.get(Funding.PAID, 0) + self.window(Funding.PAID) // 2, output_tokens
+
     async def affords_deeper(self, session: AsyncSession, funds: Funds) -> bool:
-        """A paid hold covering a typical turn that spends the deepest effort's whole output allowance
-        (``chat_settings``: reasoning tokens count against a multiplied ``max_tokens``)."""
+        """A paid hold (or a key's cap left) covering a typical turn that spends the deepest effort's whole
+        output allowance (``chat_settings``: reasoning tokens count against a multiplied ``max_tokens``)."""
         if funds.funding is not Funding.PAID:
             return False
         allowance = self.settings.run_caps.output_tokens * max(REASONING_ROOM.values())
+        if funds.key is not None:
+            return funds.key.left_usd >= funds.key.prices.turn(*self.turn_tokens(allowance))
         return funds.credits >= await self.typical_turn(session, Funding.PAID, allowance)
 
     async def reserve(
@@ -134,11 +145,13 @@ class Funder:
         paid_minimum: int | None = None,
         now: datetime | None = None,
         dry: bool = False,
+        keys: bool = True,
     ) -> Funds | None:
         """Hold money for a run from the first payer that can cover a typical turn.
 
         ``dry`` decides the same way and holds nothing: the funds a run started now would get (their ids
-        point at nothing).
+        point at nothing). ``keys``: contributed keys may pay (not for an approved action, which was priced
+        in Derpcoins, nor when the run answers again after a key failed).
 
         Free models (nothing held) come last and only when allowed (consent / admin opt-in);
         None means nobody can pay. ``paid_minimum`` funds an action of known price (an approved one):
@@ -154,6 +167,19 @@ class Funder:
             person = await session.get(User, user_id)
             if private or person is None or person.group_spending:
                 payers.append(mine)
+            route = None
+            if keys and paid_minimum is None:
+                route = await choose(
+                    session, self.settings, chat_id=chat_id, turn_tokens=self.turn_tokens(), now=moment
+                )
+            if route is not None:  # its side work: from the first wallet with anything in it, if any
+                for wallet_id in payers:
+                    held = await reserve(
+                        session, wallet_id, operation_id, cap, sources=PAID_SOURCES, minimum=1, now=moment
+                    )
+                    if held is not None:
+                        return Funds(Funding.PAID, operation_id, wallet_id, held.id, held.amount, route)
+                return Funds(Funding.PAID, operation_id, None, None, 0, route)
             minimum = paid_minimum or await self.typical_turn(session, Funding.PAID)
             for wallet_id in payers:
                 held = await reserve(
@@ -234,8 +260,21 @@ async def run_fees(session: AsyncSession, run_id: int) -> int:
 
 
 async def run_cost(session: AsyncSession, run_id: int) -> Decimal:
-    """Everything the provider ledger attributes to a run: model turns, image notes, tools."""
+    """What the run's payer is charged for: its model turns, image notes and tools in the provider ledger,
+    except what a contributed key paid (a key's calls never cost anyone Derpcoins)."""
     total = await session.scalar(
-        select(func.coalesce(func.sum(ProviderCall.cost_usd), 0)).where(ProviderCall.run_id == run_id)
+        select(func.coalesce(func.sum(ProviderCall.cost_usd), 0)).where(
+            ProviderCall.run_id == run_id, ProviderCall.key_id.is_(None)
+        )
+    )
+    return Decimal(total or 0)
+
+
+async def run_upstream(session: AsyncSession, run_id: int) -> Decimal:
+    """What contributed keys' providers charged for a run's side calls in the ledger (images, notes, looks)."""
+    total = await session.scalar(
+        select(func.coalesce(func.sum(ProviderCall.upstream_usd), 0)).where(
+            ProviderCall.run_id == run_id, ProviderCall.key_id.is_not(None)
+        )
     )
     return Decimal(total or 0)

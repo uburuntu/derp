@@ -186,6 +186,7 @@ usage_none = "_Nobody spent this chat's Derpcoins in the last {days} days._"
 hint = "_Spending order: chat wallet (in groups) → Derp+ → bought Derpcoins → free daily allowance. Top up: /buy._"
 
 [info]
+key = "Model paid by {who}'s {brand} key: **${usd}** of its credits."
 how = "Reply to one of my messages with /info to see what it cost."
 receipt = "🧾 **About this answer**\nModel: `{model}`\nTokens: {input} in · {output} out · {context} context · tool calls: {tools}\nCharged: **{charged}** dc — {funding}"
 paid_user = "from personal Derpcoins"
@@ -332,6 +333,16 @@ unfunded = "Out of Derpcoins for today. Open @{username} and /buy to keep asking
 failed = "Couldn't answer that one — nothing was charged. Try again?"
 
 [settings]
+keys_off = "🔑 Smarter model: **off** — plug in your Claude or ChatGPT to answer with it here"
+keys_on = "🔑 Smarter model: {keys} (not zero data retention)"
+key_name = "{who}'s {brand} (**{model}**)"
+keys_private = "🔑 Your API keys: **{count}**"
+keys_plug = "🔌 Plug in your Claude/ChatGPT"
+keys_button = "🔑 Keys here: {count}"
+my_keys = "🔑 My keys"
+keys_page = "🔑 **Keys in this chat**\nEach answers with its owner's plan, in this order; when one runs out the next takes over, then Derpcoins."
+key_line = "• {who}'s {brand} · **{model}** · {state}"
+keys_none = "_No keys here yet._"
 title = "⚙️ **Settings — {title}**"
 this_chat = "this chat"
 on = "on"
@@ -436,3 +447,102 @@ contact = "Contact"
 checklist = "Checklist"
 story = "Story"
 other = "Message"
+
+[keys]
+intro = """🔌 **Plug in your Claude or ChatGPT**{for_chat}
+
+ChatGPT Pro and Claude Max or Ultra plans include monthly API credits. Plug your API key in and I answer with a smarter model, paid from those credits instead of Derpcoins.
+
+<details><summary>How to get the key</summary>
+
+• **ChatGPT Pro:** claim the credits at chatgpt.com/settings/billing, then create a key at platform.openai.com/api-keys.
+• **Claude Max or Ultra:** link a Console organization at claude.ai/settings/billing, then create a key at platform.claude.com/settings/keys.
+
+Best: a key in its own project or workspace with a spend limit there.
+</details>
+
+<details><summary>Good to know</summary>
+
+• I never store your key. OpenRouter keeps it encrypted, locked so that only the chats you plug it into can use it. Unplug or remove it any time.
+• What I send through your key goes to OpenAI or Anthropic, which may keep it for up to 30 days (not zero data retention).
+• Requests run under your provider account, and its usage policy applies to whatever people in the chat ask.
+• You set a monthly cap; past it, the chat goes back to my usual model.
+</details>
+
+Paste your API key as your next message."""
+for_chat = " for **{title}**"
+or_reuse = "Or use a key you already plugged in:"
+use_button = "Use {brand} {label}"
+pasted_in_group = "🚨 That message had an API key in it, so I deleted it. Revoke that key at your provider, then plug a new one in privately."
+pasted_in_group_kept = "🚨 That message has an API key in it and I can't delete it here. Delete it yourself, revoke the key at your provider, then plug a new one in privately."
+plug_privately = "🔌 Plug in privately"
+not_configured = "Plugging in keys isn't available right now."
+unknown = "That doesn't look like an OpenAI or Anthropic API key."
+rejected = "That key didn't work: the provider rejected it. Make sure it's an API key from the platform site, then paste it again."
+no_credits = "That key works but has no credits. Claim your plan's API credits first (see “How to get the key”), then paste it again."
+unavailable = "I couldn't check the key right now. Try again in a minute."
+plugged = "✅ Plugged in: {brand} key {label}.\nHow much may I spend from it per month? Plans include $100–500 (ChatGPT Pro) or $100–200 (Claude Max, Ultra)."
+cap_other_button = "Other amount"
+cap_other = "Send the monthly amount in dollars, for example 75 (up to {max})."
+cap_bad = "That amount won't work: send a number of dollars from 1 to {max}."
+cap_page = "Monthly cap now: **${cap}**. Pick a new one:"
+pick_model = "Cap: **${cap}** a month. Which model should answer?\nPrices are for a typical reply."
+model_button = "{label} · ~${price}{star}"
+ready = "✅ All set: **{model}** answers you here now, paid by your key. To use it in a group, open /settings there and tap “Plug in your Claude/ChatGPT”."
+gone = "This key or button is out of date."
+gone_chat = "That chat is gone or isn't a group."
+already_on = "Your key is already on in **{title}**."
+on_in = "✅ Your key is on in **{title}** now."
+asked_admins = "📨 Asked the admins of **{title}** to turn your key on."
+open_chat = "Open the chat"
+card_failed = "I couldn't post in that chat. Is Derp still there?"
+card = "🔑 {who} offers their {brand} key for this chat: I'd answer with **{model}**, paid by their plan instead of Derpcoins.\nWhat I send through it goes to {company}, which may keep it for up to 30 days. An admin can turn it on."
+turn_on = "✅ Turn on"
+not_now = "Not now"
+enabled = "🔑 {who}'s {brand} key is on: I answer here with **{model}** now, paid by their plan. What I send through it goes to {company}, which may keep it for up to 30 days. Admins can turn it off in /settings."
+turned_on = "Turned on."
+declined = "Not turned on."
+admins_only = "Only admins can turn keys on here."
+owner_or_admin = "Only the key's owner or an admin can do that."
+paused_here = "⏸ {who}'s {brand} key is paused here; I'm back to my usual model."
+unplugged_here = "🔌 {who}'s {brand} key is unplugged from this chat; I'm back to my usual model."
+model_changed = "🔑 {who}'s {brand} key now answers here with **{model}**."
+mine = "🔑 **Your keys**"
+mine_none = "🔑 You haven't plugged in a key yet."
+key_button = "{brand} {label}"
+page = "🔑 **{brand}** key {label}\nModel: **{model}** · ~${price} a typical reply\nCap: **${cap}** a month · spent **${spent}** since {since} (resets {reset})\nStatus: {state}"
+state_on = "working"
+state_paused = "paused by you"
+state_cap = "monthly cap reached, back on {date}"
+state_exhausted = "out of provider credits, back on {date}"
+state_dead = "stopped working; plug in a new key"
+chat_line = "• {title}: ${spent} · {state}"
+chat_offered = "waiting for an admin"
+chat_on = "on"
+chat_paused = "paused"
+chat_off = "unplugged"
+no_chats = "_Only our private chat so far. To use it in a group, open /settings there._"
+unplug_button = "🔌 Unplug: {title}"
+model_change = "🧠 Model"
+cap_change = "💵 Cap"
+pause = "⏸ Pause"
+resume = "▶️ Resume"
+remove = "🗑 Remove"
+all_keys = "🔑 All my keys"
+remove_page = "Remove this key? It stops serving every chat and is deleted from OpenRouter. Revoke it at your provider too if you won't use it again."
+remove_confirm = "🗑 Remove the key"
+removed = "🗑 Removed. Chats it served are back on my usual model."
+remove_failed = "Removing didn't go through. Try again in a minute."
+cap_chat = "🔋 {who}'s {brand} key reached its monthly cap, so I'm back to my usual model here until {date}."
+exhausted_chat = "🔋 {who}'s {brand} key ran out of provider credits, so I'm back to my usual model here until {date}."
+dead_chat = "🔌 {who}'s {brand} key stopped working, so I'm back to my usual model here."
+cap_dm = "🔋 Your {brand} key {label} reached its **{cap}** monthly cap{chat}. Chats it serves use my usual model until {date}. Raise the cap in /settings → My keys."
+exhausted_dm = "🔋 Your {brand} key {label} ran out of credits at the provider{chat}. Top up there and press Resume in /settings → My keys; otherwise it's back on {date}."
+dead_dm = "🔌 Your {brand} key {label} stopped working{chat}: revoked, expired or suspended at the provider. Plug in a new one from /settings; if this one stays dead, I'll remove it."
+refused = "🙊 **{model}** (on {who}'s key) refused this one:\n> {said}\nMy usual model answers instead."
+refused_silent = "(no reason given)"
+pause_button = "⏸ Pause here"
+remove_button = "🔌 Unplug here"
+left_dm = "🔌 Your {brand} key was unplugged from **{chat}** since you left it."
+in_chat = " (noticed in **{title}**)"
+removed_dm = "🗑 I removed your {brand} key {label} from OpenRouter: it stopped working {days} days ago. Plug in a new one any time from /settings."

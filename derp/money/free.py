@@ -10,7 +10,8 @@ An ask nobody could pay for is the person's waiting question in that chat
 ``waiting_minutes`` it can be resumed, once: right after consenting to (or an
 admin enabling) free models, or with the Continue button a purchase offers the
 buyer for their own waiting question (in the chat and topic a chat pack was for; for
-Derpcoins of their own, in whichever chat they asked last).
+Derpcoins of their own, in whichever chat they asked last), or every waiting asker in a chat where a
+contributed key was just turned on.
 Each resume claims the question (``claim``), so presses never answer it twice.
 
 The out-of-Derpcoins offer says when the free daily Derpcoins refill (a date-time
@@ -222,6 +223,29 @@ async def offer_continue(
     target = Target(chat_id, waiting.thread_id, waiting.message_id)
     with contextlib.suppress(TelegramAPIError):  # the purchase is recorded; the button is a courtesy
         await send_markdown(bot, target, t(locale, "money.continue_offer"), reply_markup=again)
+
+
+async def offer_continues(db: Database, bot: Bot, settings: Settings, chat_id: int, locale: str) -> None:
+    """A contributed key was turned on in this chat: every waiting question there gets a Continue button."""
+    since = datetime.now(UTC) - timedelta(minutes=settings.waiting_minutes)
+    async with db.session() as session:
+        askers = list(
+            await session.scalars(
+                select(ChatMember.user_id).where(
+                    ChatMember.chat_id == chat_id,
+                    ChatMember.waiting_message_id.is_not(None),
+                    ChatMember.waiting_at > since,
+                )
+            )
+        )
+        waiting = [
+            q for user_id in askers if (q := await waiting_question(session, settings, chat_id, user_id))
+        ]
+    again = markup(button(t(locale, "money.continue"), Unblock(action="continue")))
+    for question in waiting:
+        target = Target(chat_id, question.thread_id, question.message_id)
+        with contextlib.suppress(TelegramAPIError):  # a courtesy, like after a purchase
+            await send_markdown(bot, target, t(locale, "money.continue_offer"), reply_markup=again)
 
 
 async def resume(press: Press, db: Database, settings: Settings, runtime: Answers) -> bool | None:

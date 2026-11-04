@@ -27,10 +27,16 @@ FETCH_TOKENS = 6000  # page text kept per fetch
 
 
 async def search_budget(ctx: RunContext[RunDeps]) -> int | None:
-    """Searches the coming request may make: what the hold covers after one more turn; None on free runs."""
+    """Searches the coming request may make: what the hold covers after one more turn; None on free runs.
+
+    On a key run the fees land on Derp's OpenRouter credits (the key pays only its provider), a cent or so
+    a turn: absorbed like OpenRouter's BYOK fee, so it searches as a paid run with money left would.
+    """
     deps = ctx.deps
     if deps.funding not in TIERS:
         return None
+    if deps.funds.key is not None:
+        return SEARCHES
     left = await hold_left(ctx, next_turn=True)
     if left is None:
         return SEARCHES

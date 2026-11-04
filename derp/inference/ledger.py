@@ -24,7 +24,9 @@ def record_usage(
     user_id: int | None = None,
     requested_model: str | None = None,
     units: int = 0,
+    key_id: int | None = None,
 ) -> ProviderCall:
+    """``key_id``: the contributed key that paid the call (its provider's charge is ``usage.upstream_usd``)."""
     call = ProviderCall(
         kind=kind,
         role=role,
@@ -42,15 +44,22 @@ def record_usage(
         web_search_requests=usage.web_search_requests,
         units=units,
         cost_usd=usage.cost_usd,
+        key_id=key_id,
+        upstream_usd=usage.upstream_usd if key_id is not None else None,
     )
     session.add(call)
     return call
 
 
 def simple_usage(
-    model: str, cost_usd: Decimal, *, generation_id: str | None = None, **counts: int
+    model: str,
+    cost_usd: Decimal,
+    *,
+    generation_id: str | None = None,
+    upstream_usd: Decimal | None = None,
+    **counts: int,
 ) -> CallUsage:
-    """Usage for non-chat calls (images, STT, speech) that only report a cost."""
+    """Usage for non-chat calls (images, STT, speech) that only report a cost (and a key's provider charge)."""
     return CallUsage(
         cost_usd=cost_usd,
         model=model,
@@ -61,22 +70,27 @@ def simple_usage(
         cache_read_tokens=0,
         reasoning_tokens=0,
         web_search_requests=0,
+        upstream_usd=upstream_usd,
     )
 
 
 def record_made(
     session: AsyncSession, made: Billed, *, funding: str, run_id: int | None, chat_id: int, user_id: int
 ) -> ProviderCall:
-    """An image or a voice line: against the run once delivered, else ``creator`` without a run (absorbed)."""
+    """An image or a voice line: against the run once delivered, else ``creator`` without a run (absorbed).
+
+    One a contributed key paid stays the key's either way: its provider billed the owner.
+    """
     match made:
         case GeneratedImage():
-            usage, kind, role, units = simple_usage(made.model, made.cost_usd), "image", ModelRole.IMAGE, 1
+            usage = simple_usage(made.model, made.cost_usd, upstream_usd=made.upstream_usd)
+            kind, role, units = "image", ModelRole.IMAGE, 1
         case Speech():
             usage = simple_usage(made.model, made.cost_usd, generation_id=made.generation_id)
             kind, role, units = "speech", ModelRole.SPEECH, made.characters
     return record_usage(
-        session, usage, kind=kind, funding=funding, role=role.value, run_id=run_id, chat_id=chat_id,
-        user_id=user_id, units=units,
+        session, usage, kind=kind, funding="key" if made.key_id else funding, role=role.value, run_id=run_id,
+        chat_id=chat_id, user_id=user_id, units=units, key_id=made.key_id,
     )  # fmt: skip
 
 

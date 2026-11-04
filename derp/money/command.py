@@ -23,6 +23,9 @@ from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat, User
 from derp.history.render import one_line
+from derp.inference.models import ProviderCall
+from derp.keys.models import ContributedKey
+from derp.keys.notices import brand, owner_name
 from derp.locales import resolve, t
 from derp.memory.notes import is_admin
 from derp.money.funding import day_end, sponsored_lot_id
@@ -139,11 +142,30 @@ async def show_info(message: Message, db: Database, bot: Bot) -> None:
     replied = message.reply_to_message
     run: AgentRun | None = None
     payer: str | None = None
+    keyed = ""  # a contributed key paid the turns: whose, and what its provider charged
     if replied is not None:
         async with db.session() as session:
             run = await run_for_output(session, message.chat.id, replied.message_id)
             if run is not None and run.wallet_id is not None:
                 payer = await session.scalar(select(Wallet.kind).where(Wallet.id == run.wallet_id))
+            if (
+                run is not None
+                and run.key_id is not None
+                and (key := await session.get(ContributedKey, run.key_id))
+            ):
+                owner = await session.get(User, key.user_id)
+                usd = await session.scalar(
+                    select(func.coalesce(func.sum(ProviderCall.upstream_usd), 0)).where(
+                        ProviderCall.run_id == run.id, ProviderCall.key_id == key.id
+                    )
+                )
+                keyed = t(
+                    locale,
+                    "info.key",
+                    who=owner_name(owner, locale),
+                    brand=brand(key.provider),
+                    usd=f"{usd:.4f}",
+                )
     if run is None or replied is None:
         await send_markdown(bot, Target.reply_to_message(message), t(locale, "info.how"))
         return
@@ -159,6 +181,8 @@ async def show_info(message: Message, db: Database, bot: Bot) -> None:
         charged=f"{run.charged_credits:,}",
         funding=t(locale, funding.get(run.funding, "info.free")),
     )
+    if keyed:
+        text += "\n" + keyed
     report = markup(report_button(locale, run.id, replied.message_id))
     await _reply_privately(bot, message, locale, text, report)
 

@@ -9,6 +9,7 @@ from derp.billing import models as _billing  # noqa: F401
 from derp.db.base import Base
 from derp.history import models as _history  # noqa: F401
 from derp.inference import models as _inference  # noqa: F401
+from derp.keys import models as _keys  # noqa: F401
 from derp.memory import models as _memory  # noqa: F401
 from derp.money import models as _money  # noqa: F401
 from derp.ops import models as _ops  # noqa: F401

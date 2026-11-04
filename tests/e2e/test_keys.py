@@ -1,0 +1,304 @@
+"""Contributed keys: plugging a ChatGPT key in privately, an admin turning it on, the key answering the group,
+and the chat falling back to its usual funding when the key refuses or stops working."""
+
+from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.models.function import AgentInfo
+from sqlalchemy import select
+
+from derp.agent.models import AgentRun
+from derp.config import Settings
+from derp.history.models import Message as StoredMessage
+from derp.inference.api import Credential, OpenRouterError, SubKey
+from derp.inference.models import ProviderCall
+from derp.keys.flows import chat_ref
+from derp.keys.models import ContributedKey, KeyChat
+from derp.money.wallets import credit, wallet
+from tests.e2e.fake_api import Call
+from tests.e2e.harness import Conversation, Person, Room
+from tests.e2e.model import ScriptedModel
+
+ANA = Person(1701, "Ana")  # an admin of the group
+BO = Person(1702, "Bo")  # has a ChatGPT Pro plan
+CREW = Room(-1700, title="Crew")
+PASTED = "sk-proj-" + "Zx9_" * 12
+MENTION = [{"type": "mention", "offset": 0, "length": 10}]
+
+
+@dataclass
+class FakeManagement:
+    calls: list[str] = field(default_factory=list[str])
+
+    async def create_key(self, name: str, *, limit_usd: float) -> SubKey:
+        self.calls.append("create_key")
+        return SubKey(secret="sk-or-v1-bo", hash="b" * 64)
+
+    async def delete_key(self, key_hash: str) -> None:
+        self.calls.append("delete_key")
+
+    async def register(
+        self, provider: str, key: str, *, name: str, sub_key_hash: str, models: Any
+    ) -> Credential:
+        self.calls.append("register")
+        return Credential(id="cred-bo", label="sk-proj-...Zx9_")
+
+    async def allow_models(self, credential_id: str, models: Any) -> None:
+        self.calls.append("allow_models")
+
+    async def unregister(self, credential_id: str) -> None:
+        self.calls.append("unregister")
+
+    async def close(self) -> None:
+        return None
+
+
+@dataclass
+class FakeKeysAPI:
+    """Stands in for OpenRouterAPI: the plug-in ping succeeds unless ``status`` says otherwise."""
+
+    status: int | None = None
+
+    async def ping(self, model: str, provider: str, *, api_key: str) -> None:
+        if self.status:
+            raise OpenRouterError(self.status, "no")
+
+    async def close(self) -> None:
+        return None
+
+
+def markdown(call: Call) -> str:
+    return str(call["rich_message"]["markdown"])
+
+
+def buttons(call: Call) -> list[dict[str, Any]]:
+    return [b for row in call["reply_markup"]["inline_keyboard"] for b in row]
+
+
+def data_of(call: Call, label: str) -> str:
+    return next(str(b["callback_data"]) for b in buttons(call) if label in b["text"])
+
+
+async def latest(conversation: Conversation, method: str, chat_id: int, after: int) -> Call:
+    return await conversation.api.wait_call(method, after=after, where=lambda c: int(c["chat_id"]) == chat_id)
+
+
+def said(conversation: Conversation, chat_id: int, after: int) -> list[Call]:
+    """What Derp posted in a chat since ``after``, the group's one-time onboarding notice aside."""
+    return [
+        c
+        for c in conversation.api.calls_of("sendRichMessage", after=after)
+        if int(c["chat_id"]) == chat_id and "Derp is here" not in markdown(c)
+    ]
+
+
+def newest(conversation: Conversation, chat_id: int) -> int:
+    """The id of the newest live message in a chat (Derp's, right after it sent one)."""
+    return max(mid for (cid, mid) in conversation.api.messages if cid == chat_id)
+
+
+@pytest.fixture
+async def keyed(
+    conversation: Conversation, settings: Settings
+) -> tuple[Conversation, ScriptedModel, FakeManagement]:
+    """The conversation with key plumbing faked: management, the plug-in ping, and the key's model."""
+    key_model = ScriptedModel(default="key answer")
+    management = FakeManagement()
+    conversation.settings = conversation.settings.model_copy(update={"keys_secret": "e2e-secret"})
+    conversation.overrides |= {
+        "management": management,
+        "api": FakeKeysAPI(),
+        "key_model_factory": key_model.key_factory,
+    }
+    await conversation.restart()
+    conversation.meet(ANA, CREW, status="administrator")
+    conversation.meet(BO, CREW)
+    hello = await conversation.send(
+        ANA, CREW, "hi all"
+    )  # Derp knows the group (the link comes from its /settings)
+    await conversation.settle(hello)
+    return conversation, key_model, management
+
+
+async def plug_into_crew(conversation: Conversation) -> int:
+    """Bo follows the group's plug-in link, pastes the key, picks $100 and the recommended model; Ana turns it on."""
+    link = await conversation.send(BO, text=f"/start key-{chat_ref(conversation.settings, CREW.id)}")
+    intro = await latest(conversation, "sendRichMessage", BO.id, link.after)
+    assert "Plug in your Claude or ChatGPT" in markdown(intro) and "Crew" in markdown(intro)
+    await conversation.settle(link)
+
+    pasted = await conversation.send(BO, text=PASTED)
+    plugged = await latest(conversation, "sendRichMessage", BO.id, pasted.after)
+    await conversation.settle(pasted)
+    assert conversation.api.calls_of("deleteMessage", after=pasted.after)  # the key leaves the chat at once
+    assert "Plugged in" in markdown(plugged) and PASTED not in markdown(plugged)
+    async with conversation.db.session() as session:
+        assert (
+            await session.scalar(select(StoredMessage).where(StoredMessage.text.contains("sk-proj"))) is None
+        )
+
+    before = conversation.seq
+    await conversation.press(BO, BO.id, newest(conversation, BO.id), data_of(plugged, "$100"))
+    models = await latest(conversation, "editMessageText", BO.id, before)
+    assert "$100" in markdown(models) and "GPT-6.1 Sol" in str(models["reply_markup"])
+
+    before = conversation.seq
+    await conversation.press(BO, BO.id, int(models["message_id"]), data_of(models, "GPT-6.1 Sol"))
+    card = await latest(conversation, "sendRichMessage", CREW.id, before)
+    assert "Bo" in markdown(card) and "OpenAI" in markdown(card) and "30 days" in markdown(card)
+    asked = await latest(conversation, "editMessageText", BO.id, before)
+    assert "Asked the admins" in markdown(asked)
+
+    before = conversation.seq
+    card_id = newest(conversation, CREW.id)
+    await conversation.press(BO, CREW.id, card_id, data_of(card, "Turn on"))
+    assert any(
+        "Only admins" in str(c.fields) for c in conversation.api.calls_of("answerCallbackQuery", after=before)
+    )
+    await conversation.press(ANA, CREW.id, card_id, data_of(card, "Turn on"))
+    enabled = await latest(conversation, "editMessageText", CREW.id, before)
+    assert "key is on" in markdown(enabled) and "GPT-6.1 Sol" in markdown(enabled)
+    async with conversation.db.session() as session:
+        key = await session.scalar(select(ContributedKey))
+        assert key is not None and key.cap_usd == Decimal(100) and key.model == "openai/gpt-6.1-sol"
+        link_row = await session.get(KeyChat, (key.id, CREW.id))
+        assert link_row is not None and link_row.state == "on" and link_row.enabled_by == ANA.id
+        return key.id
+
+
+async def test_a_key_plugged_in_privately_answers_the_group_once_an_admin_turns_it_on(
+    keyed: tuple[Conversation, ScriptedModel, FakeManagement], model: ScriptedModel
+) -> None:
+    conversation, key_model, management = keyed
+    key_id = await plug_into_crew(conversation)
+    assert management.calls == ["create_key", "register"]
+
+    key_model.reply("4, obviously")
+    asked = await conversation.send(BO, CREW, "@DerpRobot what's 2+2?", entities=MENTION)
+    answer = await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    assert "4, obviously" in markdown(answer)
+    assert key_model.sub_keys == ["sk-or-v1-bo"] and key_model.pins[-1].model == "openai/gpt-6.1-sol"
+    assert not key_model.pins[-1].zdr and not model.requests  # Derp's own model never ran
+    async with conversation.db.session() as session:
+        run = await session.scalar(select(AgentRun).order_by(AgentRun.id.desc()))
+        calls = (
+            list(await session.scalars(select(ProviderCall).where(ProviderCall.run_id == run.id)))
+            if run
+            else []
+        )
+    assert run is not None and run.key_id == key_id and run.charged_credits == 0
+    assert [(c.funding, c.key_id, c.upstream_usd) for c in calls] == [("key", key_id, Decimal("0.02"))]
+
+    info = await conversation.send(BO, CREW, "/info", reply_to=newest(conversation, CREW.id))
+    await conversation.settle(info)
+    receipt = next(
+        c
+        for c in conversation.api.calls_of("sendRichMessage", after=info.after)
+        if "About this answer" in markdown(c)
+    )
+    assert "Bo's ChatGPT key" in markdown(receipt) or "**Bo**" in markdown(receipt)
+
+
+async def test_a_refusal_is_shown_once_and_the_usual_model_answers_instead(
+    keyed: tuple[Conversation, ScriptedModel, FakeManagement], model: ScriptedModel
+) -> None:
+    conversation, key_model, _ = keyed
+    await plug_into_crew(conversation)
+    async with conversation.db.transaction() as session:  # the chat can pay its usual model
+        await credit(session, (await wallet(session, "chat", CREW.id)).id, "stars:crew", 650, "purchase")
+
+    def refuse(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart("I can't help with that.")], finish_reason="content_filter")
+
+    key_model.reply(refuse, refuse)
+    model.cost = 0.01  # 12 credits a turn
+    model.reply("ha, fine: here's the roast", "second roast")
+    asked = await conversation.send(BO, CREW, "@DerpRobot roast Ana", entities=MENTION)
+    await conversation.settle(asked)
+    replies = said(conversation, CREW.id, asked.after)
+    assert "refused this one" in markdown(replies[0]) and "help with that" in markdown(replies[0])
+    assert {"Pause here", "Unplug here"} <= {b["text"].split(" ", 1)[1] for b in buttons(replies[0])}
+    refusal_id = newest(conversation, CREW.id) - 1  # the usual model's answer came after it
+    assert "here's the roast" in markdown(replies[1])
+    async with conversation.db.session() as session:
+        runs = list(await session.scalars(select(AgentRun).order_by(AgentRun.id)))
+    assert [(r.key_id is not None, r.status) for r in runs] == [(True, "failed"), (False, "completed")]
+    assert runs[1].charged_credits > 0  # the usual model, on the chat's Derpcoins
+
+    again = await conversation.send(BO, CREW, "@DerpRobot roast Ana again", entities=MENTION)
+    await conversation.settle(again)
+    later = said(conversation, CREW.id, again.after)
+    assert [markdown(c) for c in later] == ["second roast"]  # within the hours a refusal is shown once
+
+    before = conversation.seq
+    await conversation.press(ANA, CREW.id, refusal_id, data_of(replies[0], "Unplug here"))
+    unplugged = await latest(conversation, "editMessageText", CREW.id, before)
+    assert "unplugged from this chat" in markdown(unplugged)
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(KeyChat.state).where(KeyChat.chat_id == CREW.id)) == "off"
+
+
+async def test_a_dead_key_is_announced_to_the_chat_and_its_owner_once(
+    keyed: tuple[Conversation, ScriptedModel, FakeManagement], model: ScriptedModel
+) -> None:
+    conversation, key_model, _ = keyed
+    key_id = await plug_into_crew(conversation)
+    async with conversation.db.transaction() as session:
+        await credit(session, (await wallet(session, "chat", CREW.id)).id, "stars:crew", 650, "purchase")
+
+    def revoked(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(
+            status_code=401, model_name="openai/gpt-6.1-sol", body={"message": "invalid api key"}
+        )
+
+    key_model.reply(revoked)
+    model.reply("usual answer", "usual again")
+    asked = await conversation.send(BO, CREW, "@DerpRobot hi", entities=MENTION)
+    await conversation.settle(asked)
+    group = [markdown(c) for c in said(conversation, CREW.id, asked.after)]
+    dms = [markdown(c) for c in said(conversation, BO.id, asked.after)]
+    assert any("stopped working" in text for text in group) and group[-1] == "usual answer"
+    assert len(dms) == 1 and "stopped working" in dms[0] and "Crew" in dms[0]
+    async with conversation.db.session() as session:
+        key = await session.get(ContributedKey, key_id)
+    assert key is not None and key.dead_at is not None
+
+    again = await conversation.send(BO, CREW, "@DerpRobot hi again", entities=MENTION)
+    await conversation.settle(again)
+    later = [markdown(c) for c in conversation.api.calls_of("sendRichMessage", after=again.after)]
+    assert later == ["usual again"]  # a dead key is skipped and announced only once
+
+
+async def test_a_key_pasted_into_the_group_is_deleted_and_never_reaches_the_model(
+    keyed: tuple[Conversation, ScriptedModel, FakeManagement], model: ScriptedModel
+) -> None:
+    conversation, _, management = keyed
+    pasted = await conversation.send(BO, CREW, f"@DerpRobot use this {PASTED}", entities=MENTION)
+    await conversation.settle(pasted)
+    warning = await latest(conversation, "sendRichMessage", CREW.id, pasted.after)
+    assert "API key" in markdown(warning) and "Plug in privately" in str(warning["reply_markup"])
+    assert not model.requests and not management.calls
+    async with conversation.db.session() as session:
+        assert (
+            await session.scalar(select(StoredMessage).where(StoredMessage.text.contains("sk-proj"))) is None
+        )
+
+
+async def test_a_key_the_provider_rejects_is_not_plugged_in(
+    keyed: tuple[Conversation, ScriptedModel, FakeManagement],
+) -> None:
+    conversation, _, management = keyed
+    conversation.overrides["api"] = FakeKeysAPI(status=401)
+    await conversation.restart()
+    pasted = await conversation.send(BO, text=PASTED)
+    reply = await latest(conversation, "sendRichMessage", BO.id, pasted.after)
+    await conversation.settle(pasted)
+    assert "rejected" in markdown(reply)
+    assert management.calls == ["create_key", "register", "unregister", "delete_key"]
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(ContributedKey.id)) is None

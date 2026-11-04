@@ -57,11 +57,11 @@ from derp.agent.approvals import close_prompt, resumption
 from derp.agent.context import IDLE_SECONDS, IDLE_SHARE, Window, build_window, messages_tokens
 from derp.agent.decisions import Decider, Verdict
 from derp.agent.deps import RunDeps
-from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
+from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard, KeyRefused
 from derp.agent.lanes import Lanes
 from derp.agent.media import Inspected, Referenced, as_content, inspect, note_images, run_media
 from derp.agent.models import AgentRun, Approval
-from derp.agent.outputs import absorb_kept, flush, hold_left
+from derp.agent.outputs import absorb_kept, flush, out_of_money
 from derp.agent.persona import PERSONA, chat_card, situation
 from derp.agent.prefix import prefixes
 from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
@@ -90,6 +90,7 @@ from derp.history.transcription import Transcriber
 from derp.inference.api import OpenRouterAPI
 from derp.inference.openrouter import (
     Captured,
+    KeyModelFactory,
     ModelFactory,
     build_provider,
     chat_model,
@@ -99,6 +100,8 @@ from derp.inference.openrouter import (
 )
 from derp.inference.pins import PinStore
 from derp.inference.roles import Effort, RolePin
+from derp.keys.failures import KeyFailure, classify
+from derp.keys.notices import announce, key_failed
 from derp.locales import resolve, t
 from derp.memory.notes import chat_notes, load_memory, notes_block
 from derp.money.free import answer_unfunded, consented, note_empty_wallet
@@ -125,6 +128,7 @@ class Outcome:
     status: str
     delivered: tuple[int, ...]
     refused: bool = False  # Telegram won't take messages here (removed, banned, topic gone)
+    key_failure: KeyFailure | None = None  # the contributed key that paid failed before anything was sent
 
 
 @dataclass(slots=True)
@@ -187,6 +191,7 @@ class Runtime:
         settings: Settings,
         pins: PinStore,
         model_factory: ModelFactory,
+        key_model_factory: KeyModelFactory,
         gateway: MediaGateway,
         api: OpenRouterAPI,
         lookups: Lookups,
@@ -198,6 +203,7 @@ class Runtime:
         self.settings = settings
         self.pins = pins
         self.model_factory = model_factory
+        self.key_model_factory = key_model_factory
         self.prefix = prefixes(FAMILIES)  # tokens of persona + tool schemas per tier, for turn prices
         self.funder = Funder(
             db, settings, notify=lambda text: notify_owners(bot, settings, text), prefix=self.prefix
@@ -275,23 +281,34 @@ class Runtime:
         operation_id = (
             f"turn:{chat.id}:{message.message_id}" if message.message_id else f"turn:{uuid.uuid4().hex}"
         )
-        funds = await self._reserve(chat, asker.id, operation_id)
-        if funds is None and trigger == "job":  # the scheduler posts its own note
-            return Outcome(None, "unfunded", ())
-        if funds is None:  # nobody can pay: offer Derpcoins or free models (consent / admin opt-in)
-            await answer_unfunded(self.db, self.bot, message, chat, target, locale)
-            return Outcome(None, "unfunded", ())
-        return await self._run(
-            chat=chat,
-            user_id=asker.id,
-            locale=locale,
-            target=target,
-            funds=funds,
-            trigger=trigger,
-            trigger_message_id=message.message_id or None,
-            compose=lambda pin: self._compose(message, chat, funds, pin, since=since),
-            say=lambda text: self._say(target, text),
-        )
+        keys = True
+        while True:  # a key that failed before anything was sent: answered again without keys, once
+            funds = await self._reserve(chat, asker.id, operation_id, keys=keys)
+            await announce(
+                self.db, self.bot, chat, target.thread_id, locale
+            )  # keys that stopped serving here
+            if funds is None and trigger == "job":  # the scheduler posts its own note
+                return Outcome(None, "unfunded", ())
+            if funds is None:  # nobody can pay: offer Derpcoins or free models (consent / admin opt-in)
+                await answer_unfunded(self.db, self.bot, message, chat, target, locale)
+                return Outcome(None, "unfunded", ())
+            held = funds
+            outcome = await self._run(
+                chat=chat,
+                user_id=asker.id,
+                locale=locale,
+                target=target,
+                funds=held,
+                trigger=trigger,
+                trigger_message_id=message.message_id or None,
+                compose=lambda pin, held=held: self._compose(message, chat, held, pin, since=since),
+                say=lambda text: self._say(target, text),
+            )
+            if outcome.key_failure is None or not keys:
+                return outcome
+            await key_failed(self.db, self.bot, self.settings, chat, target, outcome.key_failure, locale)
+            keys = False
+            operation_id = f"{operation_id}:again"  # the failed run's hold was released under the first id
 
     def _deps(
         self,
@@ -330,6 +347,13 @@ class Runtime:
             history_start=len(ask.history),
         )
 
+    def _factory(self, funds: Funds) -> ModelFactory:
+        """Models for the run's pins: on the contributed key that pays it, else on Derp's credits."""
+        key = funds.key
+        if key is None:
+            return self.model_factory
+        return lambda pin: self.key_model_factory(pin, key.sub_key)
+
     def _guard(self, run_id: int, pin: RolePin, model_factory: ModelFactory) -> Guard:
         caps = self.settings.run_caps
         return Guard(
@@ -362,7 +386,7 @@ class Runtime:
         funds = await self._reserve(chat, asker.id, "preview", dry=True)
         if funds is None:
             return None
-        pin = await self.pins.get(funds.funding.role)
+        pin = funds.key.pin if funds.key else await self.pins.get(funds.funding.role)
         ask = await self._compose(message, chat, funds, pin, preview=True)
         captured = Captured()
         async with httpx2.AsyncClient(transport=captured) as client:
@@ -390,9 +414,11 @@ class Runtime:
         return Preview(captured.bodies[0], funds.funding, pin, ask.tokens, self.prefix[funds.funding])
 
     async def _reserve(
-        self, chat: Chat, user_id: int, operation_id: str, *, dry: bool = False
+        self, chat: Chat, user_id: int, operation_id: str, *, dry: bool = False, keys: bool = True
     ) -> Funds | None:
-        """The first payer that covers a turn (``dry``: decided, nothing held); free models when allowed."""
+        """The first payer that covers a turn (``dry``: decided, nothing held); free models when allowed.
+
+        ``keys``: contributed keys may pay (not after one failed this turn)."""
         private = chat.type == "private"
         async with self.db.session() as session:
             free_allowed = consented(await session.get(User, user_id)) if private else chat.free_models
@@ -403,6 +429,7 @@ class Runtime:
             operation_id=operation_id,
             free_allowed=free_allowed,
             dry=dry,
+            keys=keys,
         )
 
     async def _compose(
@@ -529,13 +556,13 @@ class Runtime:
         say: Callable[[str], Awaitable[None]],
     ) -> Outcome:
         """Run the model on what ``compose`` asks, then deliver, record and settle; notices go to ``say``."""
-        funding = funds.funding
+        funding, key = funds.funding, funds.key
         run_id: int | None = None
         deps: RunDeps | None = None
         spoke = False  # something was (or may have been) sent to the chat for this trigger
         self.in_flight.add(funds.operation_id)
         try:
-            pin = await self.pins.get(funding.role)
+            pin = key.pin if key else await self.pins.get(funding.role)
             async with self.db.transaction() as session:
                 run = await start_run(
                     session,
@@ -548,10 +575,12 @@ class Runtime:
                     trigger_message_id=trigger_message_id,
                     wallet_id=funds.wallet_id,
                     reservation_id=funds.reservation_id,
+                    key_id=key.key_id if key else None,
                 )
                 run_id = run.id
             ask = await compose(pin)
-            model = self.model_factory(pin)
+            factory = self._factory(funds)
+            model = factory(pin)
             deps = self._deps(chat, user_id, locale, target, funds, pin, model, ask, run_id=run.id)
             caps = self.settings.run_caps
             progress: Progress = (
@@ -565,7 +594,7 @@ class Runtime:
             stopped = False
             new_messages: list[ModelMessage] = []
             stream = _Stream(progress, token)
-            guard = self._guard(run.id, pin, self.model_factory)
+            guard = self._guard(run.id, pin, factory)
             await progress.start()
             # Kept locally: the draft id is cleared if drafts fail mid-run.
             draft_key = (chat.id, progress.draft_id) if progress.draft_id is not None else None
@@ -611,13 +640,24 @@ class Runtime:
                         )
                         if isinstance(exc, ModelHTTPError):  # refused, not cut off: nothing to price or keep
                             new_messages = [m for m in new_messages if not never_started(m)]
+                        if isinstance(exc, KeyRefused) and exc.response not in new_messages:
+                            new_messages.append(exc.response)  # billed by the provider all the same
             finally:
                 if draft_key is not None:
                     self.active.pop(draft_key, None)
                 await progress.close()
             await price_unreported(
-                self.db, new_messages, funding.role, self.prefix[funding] + ask.tokens, api=self.api
-            )
+                self.db, new_messages, funding.role, self.prefix[funding] + ask.tokens,
+                api=None if key else self.api, key=key.prices if key else None,
+            )  # fmt: skip
+            # A key that failed before anything was sent: the turn is answered again on usual funding.
+            failure = (
+                KeyFailure(classify(error) if not isinstance(error, KeyRefused) else "refused", key.key_id,
+                           error.text if isinstance(error, KeyRefused) else "")
+                if key is not None and error is not None and not stopped and not (deps.delivered or deps.reacted)
+                and not deps.kept
+                else None
+            )  # fmt: skip
             await flush(deps)  # results kept for a next step nobody took: posted before the text answer
             silent = output.strip() in SILENT and bool(
                 deps.delivered or deps.reacted
@@ -662,6 +702,7 @@ class Runtime:
                 role=funding.role,
                 chat_id=chat.id,
                 user_id=user_id,
+                key=key,
             )
             async with self.db.transaction() as session:
                 charged = await self.funder.settle(
@@ -676,13 +717,14 @@ class Runtime:
             if stream.capped and not deps.delivered:
                 spoke = True
                 await say(t(locale, f"agent.capped{suffix}"))
-            if error is not None:
+            if error is not None and failure is None:
                 record_run_failure(run.id, error, ask.prompt)
                 if not isinstance(error, TelegramAPIError) and not deps.delivered:
                     spoke = True
                     await say(apology(locale, error, funds, charged=bool(charged)))
             refused = isinstance(error, TelegramForbiddenError | TelegramBadRequest) and not deps.delivered
-            return Outcome(run.id, status, tuple(message_id for message_id, _ in deps.delivered), refused)
+            delivered = tuple(message_id for message_id, _ in deps.delivered)
+            return Outcome(run.id, status, delivered, refused, failure)
         except (
             BaseException
         ) as exc:  # died outside the model call (network, shutdown): never leave it running
@@ -714,6 +756,7 @@ class Runtime:
             user_id=asker.id,
             operation_id=operation_id,
             free_allowed=consented(user),
+            keys=False,  # a contributed key serves the chats it is plugged into, not answers outside them
         )
         if funds is None:
             return None
@@ -912,8 +955,9 @@ class Runtime:
 class _Stream:
     """Feeds streamed events to progress, remembers the latest answer text and enforces the money cap.
 
-    Before each tool call the run's spending is checked against its hold (``outputs.hold_left``); once it
-    is used up, the run is stopped like a user stop (whatever was written is posted).
+    Before each tool call the run's spending is checked against its hold, or a key run's against what is
+    left of the key's cap (``outputs.out_of_money``); once it is used up, the run is stopped like a user
+    stop (whatever was written is posted).
     """
 
     def __init__(self, progress: Progress, token: CancellationToken) -> None:
@@ -934,7 +978,7 @@ class _Stream:
                 self.partial += event.delta.content_delta
                 await self.progress.text(self.partial)
             elif isinstance(event, FunctionToolCallEvent):
-                if (left := await hold_left(ctx)) is not None and left <= 0:
+                if await out_of_money(ctx):
                     log.info("run %s stopped at its money cap", ctx.deps.run_id)
                     self.capped = True
                     self.token.cancel()

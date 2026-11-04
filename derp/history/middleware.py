@@ -14,6 +14,7 @@ from derp.history.members import track_message
 from derp.history.models import Message as MessageRow
 from derp.history.render import chat_time
 from derp.history.transcription import Transcriber
+from derp.keys.register import pasted_key
 from derp.ops.feedback import details_for
 from derp.ops.owner import is_blocked
 
@@ -24,8 +25,9 @@ class CaptureMiddleware(BaseMiddleware):
     An edit to a message already kept (an invocation, say) updates it even while the chat's context
     is off; edits to messages Derp didn't keep are stored only when ambient messages would be.
 
-    Bot commands are never stored: they are controls, not conversation. Nothing from a chat or
-    person an owner blocked is stored or transcribed.
+    Bot commands are never stored: they are controls, not conversation. Neither is a message carrying a
+    provider API key (``keys.register.pasted_key``): it is no invocation either, and the keys router deletes
+    it. Nothing from a chat or person an owner blocked is stored or transcribed.
 
     The message an invocation replies to is part of the invocation: stored too if Derp hadn't kept
     it (privacy mode, ambient off), so its text and media are available to the run. Stored voice
@@ -56,8 +58,13 @@ class CaptureMiddleware(BaseMiddleware):
         db: Database = data["db"]
         bot: Bot = data["bot"]
         me = await bot.me()
-        trigger = None if self.edits else detect_trigger(event, bot_id=me.id, bot_username=me.username or "")
-        command = starts_with_command(event)  # edits too: an edited command is still a command
+        secret = pasted_key(event.text or event.caption) is not None  # never stored, never sent to a model
+        trigger = (
+            None
+            if self.edits or secret
+            else detect_trigger(event, bot_id=me.id, bot_username=me.username or "")
+        )
+        command = starts_with_command(event) or secret  # edits too: an edited command is still a command
         async with db.transaction() as session:
             chat = await upsert_chat(session, event.chat)
             if event.from_user is not None:

@@ -5,8 +5,14 @@ goes straight out (or is kept for a next step) when it fits the run's hold,
 unless it costs more than the approval line: then the requester gets a Make it /
 Cancel prompt and the run pauses on the call; Make it resumes the run there, so
 a chain (caption it, make it a sticker, cut it out) carries on from the image.
+
+On a run a contributed key pays whose provider draws (``settings.keys.images``), the key draws it with
+its provider's image model instead: no Derpcoins and no approval (the key's monthly cap is its owner's
+limit), only while what is left of the cap covers one.
 """
 
+from dataclasses import replace
+from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -16,7 +22,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from derp.agent.approvals import ask, needs_approval
 from derp.agent.deps import RunDeps
 from derp.agent.images import ImageJob, Portrait, draw, filename
-from derp.agent.outputs import Made, Pending, Refused, afford, check_budget, deliver, emit
+from derp.agent.outputs import Made, Pending, Refused, afford, check_budget, deliver, emit, key_left
 from derp.agent.tools.sources import (
     avatar_source,
     chat_photo_source,
@@ -26,7 +32,7 @@ from derp.agent.tools.sources import (
 )
 from derp.agent.toolsets import Family
 from derp.inference.api import OpenRouterError
-from derp.inference.roles import ModelRole
+from derp.inference.roles import ModelRole, RolePin
 from derp.money.funding import PAID_SOURCES, Funding
 from derp.money.wallets import balance
 from derp.telegram.media import MediaUnavailableError, profile_photo_bytes
@@ -72,7 +78,9 @@ async def generate_image(
     except Refused as refused:
         return str(refused)
     price = deps.settings.credits_for_usd(deps.settings.image_price_usd)
-    if deps.funding is not Funding.PAID or deps.funds.wallet_id is None:
+    key = deps.funds.key
+    drawn_by = deps.settings.keys.images.get(key.provider) if key is not None else None
+    if drawn_by is None and (deps.funding is not Funding.PAID or deps.funds.wallet_id is None):
         return "Images need Derpcoins (the free daily ones don't cover one). Tell them /buy gets some."
     if ctx.tool_call_approved:  # they pressed Make it: exactly the job the prompt priced
         job = ImageJob.from_args(ctx.tool_call_metadata or {})
@@ -83,9 +91,12 @@ async def generate_image(
             )
         except Refused as refused:
             return str(refused)
-        async with deps.db.session() as session:
-            rest = await balance(session, deps.funds.wallet_id, sources=PAID_SOURCES)
-        if needs_approval(deps.settings, price, deps.funds.credits + rest):
+        if drawn_by is None and deps.funds.wallet_id is not None:
+            async with deps.db.session() as session:
+                rest = await balance(session, deps.funds.wallet_id, sources=PAID_SOURCES)
+        else:
+            rest = 0
+        if drawn_by is None and needs_approval(deps.settings, price, deps.funds.credits + rest):
             if source is not None:
                 return (
                     "This image costs enough that they must confirm the price first, so it can't start from a "
@@ -101,20 +112,35 @@ async def generate_image(
             except Refused as refused:
                 return str(refused)
             raise ApprovalRequired  # the run pauses here; Make it resumes it from this call
-    try:  # an approved image was agreed to at this price: its resumed run is funded for it alone
-        await afford(ctx, price, next_turn=not ctx.tool_call_approved)
-    except Refused as refused:
-        return str(refused)
+    if key is not None and drawn_by is not None:
+        left = await key_left(ctx, next_turn=True)
+        if left is not None and left < Decimal(str(deps.settings.keys.image_price_usd)):
+            return "What's left of this key's monthly cap doesn't cover an image now; say so."
+        pin, sub_key = RolePin(model=drawn_by, zdr=False, only={drawn_by: (key.provider,)}), key.sub_key
+    else:
+        try:  # an approved image was agreed to at this price: its resumed run is funded for it alone
+            await afford(ctx, price, next_turn=not ctx.tool_call_approved)
+        except Refused as refused:
+            return str(refused)
+        pin, sub_key = await deps.pins.get(ModelRole.IMAGE), None
     extra = [source.data] if source is not None else []
     try:
         image = await draw(
-            db=deps.db, api=deps.api, bot=deps.bot, gateway=deps.gateway,
-            pin=await deps.pins.get(ModelRole.IMAGE), chat_id=deps.chat.id, job=job, extra=extra,
+            db=deps.db, api=deps.api, bot=deps.bot, gateway=deps.gateway, pin=pin, chat_id=deps.chat.id, job=job,
+            extra=extra, api_key=sub_key,
         )  # fmt: skip
     except OpenRouterError as error:
         return f"The image failed ({error.status}); nothing was charged for it."
     except MediaUnavailableError as unavailable:
         return f"A reference picture can't be used ({unavailable.reason}); nothing was charged."
+    if key is not None and drawn_by is not None:
+        estimate = Decimal(
+            str(deps.settings.keys.image_price_usd)
+        )  # when the provider's charge wasn't reported
+        upstream = image.upstream_usd if image.upstream_usd is not None else estimate
+        image = replace(
+            image, key_id=key.key_id, upstream_usd=upstream
+        )  # the key's from here on, sent or not
     made = Made("photo", image.data, filename(image), "image", Pending(calls=[image]))
     try:  # the image is charged with the run only once it (or a result made from it) reached Telegram
         result = await emit(deps, made, final=final, source=source.kept if source else None)

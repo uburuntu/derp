@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from derp.db.engine import Database
 from derp.history.capture import upsert_chat, upsert_user
 from derp.history.models import Chat, ChatMember, MemberEvent, Message
+from derp.keys.sweep import detach_member
 from derp.scheduler.jobs import pause_jobs
 
 log = logging.getLogger("derp.members")
@@ -74,8 +75,9 @@ async def record_event(
     )
     if duplicate is None:
         session.add(MemberEvent(chat_id=chat_id, user_id=user_id, kind=kind, actor_id=actor_id))
-    if kind in ("leave", "ban"):  # their scheduled prompts would keep spending in a chat they left
+    if kind in ("leave", "ban"):  # their scheduled prompts and keys would keep spending in a chat they left
         await pause_jobs(session, chat_id, user_id)
+        await detach_member(session, chat_id, user_id)
     if status is not None:
         statement = insert(ChatMember).values(chat_id=chat_id, user_id=user_id, status=status)
         await session.execute(

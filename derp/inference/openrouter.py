@@ -32,9 +32,12 @@ from derp.config import Settings
 from derp.inference.roles import EFFORTS, IGNORED_HOSTS, Effort, RolePin
 
 
-def build_provider(settings: Settings, http_client: httpx2.AsyncClient | None = None) -> OpenRouterProvider:
+def build_provider(
+    settings: Settings, http_client: httpx2.AsyncClient | None = None, *, api_key: str | None = None
+) -> OpenRouterProvider:
+    """``api_key``: a contributor's sub-key (``derp.keys``), so the call runs on their provider key."""
     return OpenRouterProvider(
-        api_key=settings.openrouter_api_key,
+        api_key=api_key or settings.openrouter_api_key,
         app_url=settings.openrouter_app_url,
         app_title=settings.openrouter_app_title,
         http_client=http_client,
@@ -176,10 +179,17 @@ def conversation_id(scope: str) -> str:
 
 
 type ModelFactory = Callable[[RolePin], Model]  # ``chat_model`` bound to the provider (tests script it)
+# A contributed key's model: the pin and the key's OpenRouter sub-key (``key_model``; tests script it).
+type KeyModelFactory = Callable[[RolePin, str], Model]
 
 
 def chat_model(pin: RolePin, provider: OpenRouterProvider) -> OpenRouterModel:
     return DerpOpenRouterModel(pin.model, provider=provider)
+
+
+def key_model(pin: RolePin, sub_key: str, settings: Settings) -> OpenRouterModel:
+    """The pin's model on a contributor's sub-key: its calls run on their provider key, never Derp's credits."""
+    return DerpOpenRouterModel(pin.model, provider=build_provider(settings, api_key=sub_key))
 
 
 # Reasoning tokens count against max_tokens: a deeper effort gets this many times the room, so it still answers.
@@ -249,6 +259,9 @@ class CallUsage:
     cache_read_tokens: int
     reasoning_tokens: int
     web_search_requests: int
+    # What the provider behind a contributed key charged its owner (``cost_usd`` is then OpenRouter's own
+    # part: its fee and server-tool fees); None for calls on Derp's credits.
+    upstream_usd: Decimal | None = None
 
 
 def response_usage(response: ModelResponse) -> CallUsage:
@@ -266,6 +279,9 @@ def response_usage(response: ModelResponse) -> CallUsage:
         cache_read_tokens=usage.cache_read_tokens,
         reasoning_tokens=int(usage.details.get("reasoning_tokens", 0)),
         web_search_requests=int(server_tools.get("web_search_requests") or 0),
+        upstream_usd=(
+            Decimal(str(details.get("upstream_inference_cost") or 0)) if details.get("is_byok") else None
+        ),
     )
 
 

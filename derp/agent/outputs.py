@@ -47,7 +47,7 @@ from derp.agent.deps import RunDeps
 from derp.agent.runs import totals
 from derp.history.capture import Spoken, record_outgoing
 from derp.inference.ledger import Billed, record_made
-from derp.money.funding import Funding, run_cost, run_fees
+from derp.money.funding import Funding, run_cost, run_fees, run_upstream
 from derp.money.models import RunFee
 from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import PartialDeliveryError, Target
@@ -189,9 +189,11 @@ class Kept:
 
 
 def pending_cost(deps: RunDeps) -> tuple[Decimal, int]:
-    """Provider USD and fees (count) carried by the run's kept results, not yet ledgered."""
-    usd = sum((c.cost_usd for k in deps.kept.values() for c in k.made.pending.calls), Decimal(0))
-    return usd, sum(len(k.made.pending.fees) for k in deps.kept.values())
+    """Provider USD and fees (count) carried by the run's kept results, not yet ledgered (a key's calls aside)."""
+    calls = [c for k in deps.kept.values() for c in k.made.pending.calls if c.key_id is None]
+    return sum((c.cost_usd for c in calls), Decimal(0)), sum(
+        len(k.made.pending.fees) for k in deps.kept.values()
+    )
 
 
 async def hold_left(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> int | None:
@@ -200,21 +202,51 @@ async def hold_left(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> int
     Used: side calls in the ledger (images, voice, media notes, digests), the run's own model turns, its fees,
     and what its kept results carry. ``next_turn`` also sets aside one more request like the latest (at
     least a credit). The one measure of the money cap: the guard wraps up, the stream stops the run and
-    web search is sized by it.
+    web search is sized by it. A key run's hold pays only its side work (the key pays its turns, ``key_left``);
+    with no hold its side work has nothing to spend.
     """
     deps = ctx.deps
+    key = deps.funds.key
     if deps.funds.reservation_id is None:
-        return None
+        return 0 if key is not None else None
     async with deps.db.session() as session:
         side = await run_cost(session, deps.run_id)
         fees = await run_fees(session, deps.run_id)
     run = ctx.messages[deps.history_start :]
+    own = totals(run).cost_usd if key is None else Decimal(0)
     kept_usd, kept_fees = pending_cost(deps)
     paid_fees = kept_fees * deps.settings.effect_credits if deps.funding is Funding.PAID else 0
-    spent = deps.settings.credits_for_usd(float(totals(run).cost_usd + side + kept_usd)) + fees + paid_fees
+    spent = deps.settings.credits_for_usd(float(own + side + kept_usd)) + fees + paid_fees
     latest = next((m for m in reversed(run) if isinstance(m, ModelResponse)), None)
     turn = max(deps.settings.credits_for_usd(float(totals([latest]).cost_usd)) if latest else 0, 1)
-    return deps.funds.credits - spent - (turn if next_turn else 0)
+    return deps.funds.credits - spent - (turn if next_turn and key is None else 0)
+
+
+async def key_left(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> Decimal | None:
+    """USD of a key run's cap not yet used (None on other runs): what the cycle had left when the run began,
+    less the provider's charge for the run's turns, its side calls through the key and kept results.
+    ``next_turn`` also sets aside one more request like the latest."""
+    deps = ctx.deps
+    key = deps.funds.key
+    if key is None:
+        return None
+    async with deps.db.session() as session:
+        side = await run_upstream(session, deps.run_id)
+    run = ctx.messages[deps.history_start :]
+    kept = sum(
+        (c.upstream_usd or Decimal(0) for k in deps.kept.values() for c in k.made.pending.calls if c.key_id),
+        Decimal(0),
+    )
+    latest = next((m for m in reversed(run) if isinstance(m, ModelResponse)), None)
+    turn = totals([latest]).upstream_usd if latest and next_turn else Decimal(0)
+    return key.left_usd - totals(run).upstream_usd - side - kept - turn
+
+
+async def out_of_money(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> bool:
+    """The run can't pay for another step: a key run by its cap left, any other by its hold."""
+    if (left := await key_left(ctx, next_turn=next_turn)) is not None:
+        return left <= 0
+    return (held := await hold_left(ctx, next_turn=next_turn)) is not None and held <= 0
 
 
 async def afford(ctx: RunContext[RunDeps], price: int, *, next_turn: bool) -> None:
@@ -236,10 +268,11 @@ async def settle(deps: RunDeps, pending: Pending, *, delivered: bool) -> None:
     if not pending.calls and not pending.fees:
         return
     async with deps.db.transaction() as session:
-        for call in pending.calls:
+        for call in pending.calls:  # a key's call stays the key's: its provider billed it either way
             record_made(
                 session, call, chat_id=deps.chat.id, user_id=deps.user_id,
-                funding=deps.funding.value if delivered else "creator", run_id=deps.run_id if delivered else None,
+                funding=deps.funding.value if delivered else "creator",
+                run_id=deps.run_id if delivered or call.key_id else None,
             )  # fmt: skip
         for item in pending.fees if delivered else ():
             session.add(

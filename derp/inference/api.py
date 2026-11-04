@@ -1,5 +1,6 @@
 """Small OpenRouter REST client for what Pydantic AI does not cover:
-image generation, speech-to-text, text-to-speech, decisions, the model catalog and generation lookups.
+image generation, speech-to-text, text-to-speech, decisions, the model catalog and generation lookups;
+and the management API for contributed keys (``OpenRouterManagement``).
 """
 
 import base64
@@ -31,7 +32,9 @@ class GeneratedImage:
     data: bytes
     media_type: str
     model: str
-    cost_usd: Decimal
+    cost_usd: Decimal  # what OpenRouter charged Derp (on a contributed key: its fee only)
+    upstream_usd: Decimal | None = None  # what a contributed key's provider charged its owner
+    key_id: int | None = None  # the contributed key that paid it
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +54,8 @@ class Speech:
     cost_usd: Decimal
     characters: int
     generation_id: str | None = None
+    upstream_usd: Decimal | None = None  # never: voice lines are on Derp's credits (``Billed`` alike)
+    key_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,17 +68,40 @@ class Decided:
     input_tokens: int
 
 
+def _client(settings: Settings, api_key: str) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        base_url=settings.openrouter_base_url.rstrip("/") + "/",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": settings.openrouter_app_url,
+            "X-Title": settings.openrouter_app_title,
+        },
+        timeout=httpx.Timeout(90, connect=10),
+    )
+
+
+async def _send(client: httpx.AsyncClient, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    try:
+        response = await client.request(method, path, **kwargs)
+    except httpx.HTTPError as error:  # timeouts and connection failures: status 0
+        raise OpenRouterError(0, type(error).__name__) from None
+    if response.status_code >= 400:
+        try:
+            message = str(response.json().get("error", {}).get("message", ""))[:200]
+        except ValueError:
+            message = ""
+        raise OpenRouterError(response.status_code, message or response.reason_phrase)
+    return response
+
+
+def _as(api_key: str | None) -> dict[str, str]:
+    """Headers that make one request on a contributor's sub-key (``derp.keys``) instead of Derp's own key."""
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
 class OpenRouterAPI:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
-        self._client = client or httpx.AsyncClient(
-            base_url=settings.openrouter_base_url.rstrip("/") + "/",
-            headers={
-                "Authorization": f"Bearer {settings.openrouter_api_key}",
-                "HTTP-Referer": settings.openrouter_app_url,
-                "X-Title": settings.openrouter_app_title,
-            },
-            timeout=httpx.Timeout(90, connect=10),
-        )
+        self._client = client or _client(settings, settings.openrouter_api_key)
         # Price estimates for responses without ``usage.cost``: never record a paid call as free.
         self._image_price = Decimal(str(settings.image_price_usd))
         self._stt_minute_price = Decimal(str(settings.stt_price_usd_per_minute))
@@ -83,17 +111,7 @@ class OpenRouterAPI:
         await self._client.aclose()
 
     async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        try:
-            response = await self._client.request(method, path, **kwargs)
-        except httpx.HTTPError as error:  # timeouts and connection failures: status 0
-            raise OpenRouterError(0, type(error).__name__) from None
-        if response.status_code >= 400:
-            try:
-                message = str(response.json().get("error", {}).get("message", ""))[:200]
-            except ValueError:
-                message = ""
-            raise OpenRouterError(response.status_code, message or response.reason_phrase)
-        return response
+        return await _send(self._client, method, path, **kwargs)
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Json:
         return (await self._send(method, path, **kwargs)).json()
@@ -119,6 +137,19 @@ class OpenRouterAPI:
         """Usage of a finished generation — the cost source for cancelled streams."""
         return (await self._request("GET", "generation", params={"id": generation_id}))["data"]
 
+    async def ping(self, model: str, provider: str, *, api_key: str) -> None:
+        """One tiny completion on ``provider``'s own endpoints, no fallbacks: does this sub-key work there?
+
+        Raises ``OpenRouterError`` with the status the key got (401/403 rejected, 402 no credits, …).
+        """
+        body: Json = {
+            "model": model,
+            "messages": [{"role": "user", "content": "Say ok."}],
+            "max_tokens": 16,
+            "provider": {"only": [provider], "allow_fallbacks": False},
+        }
+        await self._request("POST", "chat/completions", json=body, headers=_as(api_key))
+
     # Images (all-or-nothing billing; no zdr flag, so ZDR hosts are pinned via provider.only)
 
     async def generate_image(
@@ -130,7 +161,9 @@ class OpenRouterAPI:
         zdr: bool = True,
         references: Sequence[tuple[bytes, str]] = (),
         aspect_ratio: str | None = None,
+        api_key: str | None = None,
     ) -> GeneratedImage:
+        """``api_key``: a contributor's sub-key, so their provider key pays for the image."""
         if zdr and not only:
             raise ValueError(f"no ZDR host pinned for {model}; refusing an unrestricted image request")
         body: Json = {"model": model, "prompt": prompt}
@@ -143,7 +176,7 @@ class OpenRouterAPI:
             ]
         if aspect_ratio:
             body["aspect_ratio"] = aspect_ratio
-        result = await self._request("POST", "images", json=body)
+        result = await self._request("POST", "images", json=body, headers=_as(api_key))
         images = result.get("data") or []
         if not images:
             raise OpenRouterError(502, "no image returned")
@@ -153,6 +186,7 @@ class OpenRouterAPI:
             media_type=str(first.get("media_type") or "image/png"),
             model=model,
             cost_usd=_reported_cost(result, self._image_price),
+            upstream_usd=upstream_cost(result.get("usage")),
         )
 
     # Speech-to-text
@@ -237,6 +271,16 @@ def estimated_tokens(body: Json) -> int:
     return len(json.dumps(body).encode()) // 4
 
 
+def upstream_cost(usage: object) -> Decimal | None:
+    """What the provider behind a contributed key charged for a call (OpenRouter's ``upstream_inference_cost``),
+    None when the call didn't go through one."""
+    if not isinstance(usage, dict) or not cast(Json, usage).get("is_byok"):
+        return None
+    details = cast(Json, usage).get("cost_details") or {}
+    cost = details.get("upstream_inference_cost") if isinstance(details, dict) else None
+    return Decimal(str(cost)) if cost is not None else None
+
+
 def _reported_cost(result: Json, estimate: Decimal) -> Decimal:
     """OpenRouter's ``usage.cost`` when present (0 included), else the configured estimate."""
     cost = (result.get("usage") or {}).get("cost")
@@ -245,3 +289,68 @@ def _reported_cost(result: Json, estimate: Decimal) -> Decimal:
 
 def _data_url(data: bytes, mime: str) -> str:
     return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+
+
+@dataclass(frozen=True, slots=True)
+class SubKey:
+    """An OpenRouter API key made for one contributor: ``secret`` is shown once, ``hash`` names it afterwards."""
+
+    secret: str
+    hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class Credential:
+    """A provider key registered on Derp's OpenRouter account (BYOK); ``label`` is OpenRouter's masked form."""
+
+    id: str
+    label: str
+
+
+class OpenRouterManagement:
+    """The management API (its own key, which can't make calls): contributors' sub-keys and their provider keys.
+
+    Each contributed key is registered locked to its own sub-key (``allowed_api_key_hashes``) and to the
+    models it may serve, with OpenRouter's shared capacity removed for those models (``is_required``): a
+    request through the sub-key runs on the contributor's key or fails, and no other key can spend it.
+    """
+
+    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
+        self._client = client or _client(settings, settings.openrouter_management_key)
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    async def _request(self, method: str, path: str, **kwargs: Any) -> Json:
+        response = await _send(self._client, method, path, **kwargs)
+        return response.json() if response.content else {}
+
+    async def create_key(self, name: str, *, limit_usd: float) -> SubKey:
+        """A sub-key whose own spending (Derp's credits: web search, BYOK fees) stops at ``limit_usd`` a month."""
+        body = {"name": name, "limit": limit_usd, "limit_reset": "monthly", "include_byok_in_limit": False}
+        result = await self._request("POST", "keys", json=body)
+        return SubKey(secret=str(result["key"]), hash=str(result["data"]["hash"]))
+
+    async def delete_key(self, key_hash: str) -> None:
+        await self._request("DELETE", f"keys/{key_hash}")
+
+    async def register(
+        self, provider: str, key: str, *, name: str, sub_key_hash: str, models: Sequence[str]
+    ) -> Credential:
+        body: Json = {
+            "provider": provider,
+            "key": key,
+            "name": name,
+            "allowed_api_key_hashes": [sub_key_hash],
+            "allowed_models": list(models),
+            "is_required": True,
+            "declared_zdr": False,  # a subscription's API org has no ZDR agreement
+        }
+        data = (await self._request("POST", "byok", json=body))["data"]
+        return Credential(id=str(data["id"]), label=str(data.get("label") or ""))
+
+    async def allow_models(self, credential_id: str, models: Sequence[str]) -> None:
+        await self._request("PATCH", f"byok/{credential_id}", json={"allowed_models": list(models)})
+
+    async def unregister(self, credential_id: str) -> None:
+        await self._request("DELETE", f"byok/{credential_id}")

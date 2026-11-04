@@ -27,11 +27,13 @@ from derp.inference.ledger import cancelled_cost, estimate_cost, record_usage
 from derp.inference.openrouter import response_usage, responses
 from derp.inference.pins import snapshot_prices
 from derp.inference.roles import ModelRole
+from derp.keys.routing import KeyRoute, Prices
 
 
 @dataclass(frozen=True, slots=True)
 class RunTotals:
-    cost_usd: Decimal
+    cost_usd: Decimal  # what OpenRouter charged Derp
+    upstream_usd: Decimal  # what a contributed key's provider charged its owner
     input_tokens: int
     output_tokens: int
     tool_calls: int
@@ -63,6 +65,7 @@ def totals(messages: Sequence[ModelMessage]) -> RunTotals:
     usages = [response_usage(r) for r in responses]
     return RunTotals(
         cost_usd=sum((u.cost_usd for u in usages), Decimal(0)),
+        upstream_usd=sum((u.upstream_usd or Decimal(0) for u in usages), Decimal(0)),
         input_tokens=sum(u.input_tokens for u in usages),
         output_tokens=sum(u.output_tokens for u in usages),
         tool_calls=sum(isinstance(p, ToolCallPart) for r in responses for p in r.parts),
@@ -77,6 +80,7 @@ async def price_unreported(
     context_tokens: int,
     *,
     api: OpenRouterAPI | None = None,
+    key: Prices | None = None,
 ) -> None:
     """Give every paid response that came back without a cost one, so none is ledgered as free.
 
@@ -84,6 +88,8 @@ async def price_unreported(
     may lack ``usage.cost`` too. OpenRouter is asked by generation id (when ``api`` is given);
     otherwise the cost is estimated from the response's tokens (``context_tokens`` and the
     written text when it has none) at the pin's price snapshot. Free models stay free.
+    A response a contributed key paid (``key``: its model's prices) is estimated as its provider's
+    charge, OpenRouter's own part as nothing.
     """
     if role is ModelRole.CHAT_FREE:
         return
@@ -91,6 +97,20 @@ async def price_unreported(
         m for m in messages if isinstance(m, ModelResponse) and (m.provider_details or {}).get("cost") is None
     ]
     if not unpriced:
+        return
+    if key is not None:
+        for response in unpriced:
+            written = sum(estimate_tokens(p.content) for p in response.parts if isinstance(p, TextPart))
+            usd = key.turn(
+                response.usage.input_tokens or context_tokens, response.usage.output_tokens or written
+            )
+            response.provider_details = {
+                **(response.provider_details or {}),
+                "cost": 0.0,
+                "is_byok": True,
+                "upstream_inference_cost": float(usd),
+                "estimated": True,
+            }
         return
     async with db.session() as session:
         prices = await snapshot_prices(session, role, None)
@@ -126,28 +146,31 @@ async def ledger_side_call(
     chat_id: int | None = None,
     user_id: int | None = None,
     requested_model: str | None = None,
+    key: KeyRoute | None = None,
 ) -> list[ModelResponse]:
     """Ledger a model call outside a run's own turns (media notes, digests, scout probes).
 
     Every response is ledgered, failed and empty ones included, after ``price_unreported``
-    gave each paid one a cost. Returns the responses.
+    gave each paid one a cost. ``key``: the call went through a contributed key, which paid it.
+    Returns the responses.
     """
     paid = responses(messages)
     if not paid:
         return paid
-    await price_unreported(db, paid, role, context_tokens)
+    await price_unreported(db, paid, role, context_tokens, key=key.prices if key else None)
     async with db.transaction() as session:
         for response in paid:
             record_usage(
                 session,
                 response_usage(response),
                 kind=kind,
-                funding=funding,
+                funding="key" if key else funding,
                 role=role.value,
                 run_id=run_id,
                 chat_id=chat_id,
                 user_id=user_id,
                 requested_model=requested_model,
+                key_id=key.key_id if key else None,
             )
     return paid
 
@@ -164,6 +187,7 @@ async def start_run(
     trigger_message_id: int | None = None,
     wallet_id: int | None = None,
     reservation_id: int | None = None,
+    key_id: int | None = None,
 ) -> AgentRun:
     run = AgentRun(
         chat_id=chat_id,
@@ -175,6 +199,7 @@ async def start_run(
         funding=funding,
         wallet_id=wallet_id,
         reservation_id=reservation_id,
+        key_id=key_id,
         status="running",
     )
     session.add(run)
@@ -200,7 +225,8 @@ def finish_run(
 
     ``carried`` (a resumed run: the paused run's request and the turn whose call it answered) heads the
     kept history, so a replay pairs that call with its result and a second pause still resumes with
-    what was asked; the run that made them already ledgered them.
+    what was asked; the run that made them already ledgered them. A run a contributed key served
+    (``run.key_id``) ledgers its turns as the key's.
     """
     result = totals(messages)
     for response in (m for m in messages if isinstance(m, ModelResponse)):
@@ -208,11 +234,12 @@ def finish_run(
             session,
             response_usage(response),
             kind="chat",
-            funding=run.funding,
+            funding="key" if run.key_id else run.funding,
             role=run.role,
             run_id=run.id,
             chat_id=run.chat_id,
             user_id=run.user_id,
+            key_id=run.key_id,
         )
     usages = [response_usage(m) for m in messages if isinstance(m, ModelResponse)]
     run.status = status

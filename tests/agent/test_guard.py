@@ -60,7 +60,7 @@ def guard(*, deadline: float = 1e12, pin: RolePin = PIN) -> tuple[Guard, list[Ro
 
 def context(*, requests: int = 0, tool_calls: int = 0) -> RunContext[RunDeps]:
     usage = RunUsage(requests=requests, tool_calls=tool_calls)
-    deps = SimpleNamespace(funds=SimpleNamespace(reservation_id=None))  # free: no hold to reach
+    deps = SimpleNamespace(funds=SimpleNamespace(reservation_id=None, key=None))  # free: no hold to reach
     return cast(RunContext[RunDeps], SimpleNamespace(usage=usage, messages=[], deps=deps))
 
 
@@ -77,7 +77,7 @@ async def test_the_run_wraps_up_at_any_soft_cap_and_stays_wrapped(monkeypatch: p
         assert next_turn  # one more request like the latest must still fit
         return 0
 
-    monkeypatch.setattr("derp.agent.guard.hold_left", nothing_left)
+    monkeypatch.setattr("derp.agent.outputs.hold_left", nothing_left)
     assert await guard()[0].check(context())
 
 

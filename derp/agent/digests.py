@@ -107,7 +107,7 @@ async def brief(deps: RunDeps, chat_id: int, transcript: str) -> tuple[str, str]
         )
     finally:
         paid = await ledger_side_call(
-            deps.db, messages, kind="digest", funding=deps.funding.value, role=role,
+            deps.db, messages, kind="digest", funding=deps.side_funding, role=role,
             context_tokens=estimate_tokens(transcript), run_id=deps.run_id, chat_id=chat_id,
             user_id=deps.user_id,
         )  # fmt: skip

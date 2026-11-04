@@ -31,14 +31,17 @@ class ProviderCall(Base):
     run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"), index=True)
     chat_id: Mapped[int | None]
     user_id: Mapped[int | None]
-    funding: Mapped[str] = mapped_column(String(12))  # paid | sponsored | free | creator
+    funding: Mapped[str] = mapped_column(String(12))  # paid | sponsored | free | creator | key
     input_tokens: Mapped[int] = mapped_column(default=0)
     output_tokens: Mapped[int] = mapped_column(default=0)
     cache_read_tokens: Mapped[int] = mapped_column(default=0)
     reasoning_tokens: Mapped[int] = mapped_column(default=0)
     web_search_requests: Mapped[int] = mapped_column(default=0)
     units: Mapped[int] = mapped_column(default=0)  # images generated / audio seconds / characters spoken
-    cost_usd: Mapped[Decimal] = mapped_column(COST, default=Decimal(0))
+    cost_usd: Mapped[Decimal] = mapped_column(COST, default=Decimal(0))  # what OpenRouter charged Derp
+    # A call a contributed key paid (funding ``key``): what its provider charged the key's owner.
+    key_id: Mapped[int | None] = mapped_column(ForeignKey("contributed_keys.id"), index=True)
+    upstream_usd: Mapped[Decimal | None] = mapped_column(COST)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 

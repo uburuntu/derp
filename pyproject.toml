@@ -8,6 +8,7 @@ dependencies = [
     "aiogram>=3.31.0",
     "alembic>=1.20.0",
     "asyncpg>=0.31.0",
+    "cryptography>=46",
     "httpx>=0.28",
     "httpx2>=2.13",
     "logfire>=5.2.0",

@@ -49,19 +49,34 @@ class Chunks:
 
 
 class _CostedModel(FunctionModel):
-    """Streams like FunctionModel, reporting an OpenRouter-style ``cost`` and the scripted finish reason."""
+    """Streams like FunctionModel, reporting an OpenRouter-style ``cost`` and the scripted finish reason.
+
+    ``upstream``: on a contributed key's model, what its provider charged (OpenRouter's BYOK usage fields).
+    """
 
     def __init__(
-        self, *args: Any, cost: Callable[[], float], finish: Callable[[], FinishReason | None], **kwargs: Any
+        self,
+        *args: Any,
+        cost: Callable[[], float],
+        finish: Callable[[], FinishReason | None],
+        upstream: Callable[[], float] | None = None,
+        **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.cost = cost
         self.finish = finish
+        self.upstream = upstream
 
     @asynccontextmanager
     async def request_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamedResponse]:
         async with super().request_stream(*args, **kwargs) as response:
-            if cost := self.cost():
+            if self.upstream is not None:
+                response.provider_details = {
+                    "cost": self.cost(),
+                    "is_byok": True,
+                    "upstream_inference_cost": self.upstream(),
+                }
+            elif cost := self.cost():
                 response.provider_details = {"cost": cost}
             response.finish_reason = self.finish()
             yield response
@@ -76,6 +91,8 @@ class ScriptedModel:
     default: str = "ok"
     cost: float = 0.0  # USD each streamed response reports
     finish: FinishReason | None = None  # finish reason of the latest scripted response
+    upstream: float = 0.02  # USD a contributed key's provider charges per response (``key_factory``)
+    sub_keys: list[str] = field(default_factory=list[str])  # the sub-key each key model was made with
 
     def reply(self, *items: str | Responder | Chunks) -> None:
         self.replies.extend(items)
@@ -89,6 +106,20 @@ class ScriptedModel:
             profile=PROFILE,
             cost=lambda: self.cost,
             finish=lambda: self.finish,
+        )
+
+    def key_factory(self, pin: RolePin, sub_key: str) -> Model:
+        """The model of a contributed key (``Services.key_model_factory``): reports BYOK usage."""
+        self.pins.append(pin)
+        self.sub_keys.append(sub_key)
+        return _CostedModel(
+            self._respond,
+            stream_function=self._stream,
+            model_name=pin.model,
+            profile=PROFILE,
+            cost=lambda: self.cost,
+            finish=lambda: self.finish,
+            upstream=lambda: self.upstream,
         )
 
     def _next(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse | Chunks:

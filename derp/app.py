@@ -23,11 +23,13 @@ from derp.db.engine import Database
 from derp.history.members import refresh_stale_profiles
 from derp.history.middleware import CaptureMiddleware
 from derp.history.transcription import Transcriber
-from derp.inference.api import OpenRouterAPI, OpenRouterError
-from derp.inference.openrouter import ModelFactory, build_provider, chat_model
+from derp.inference.api import OpenRouterAPI, OpenRouterError, OpenRouterManagement
+from derp.inference.openrouter import KeyModelFactory, ModelFactory, build_provider, chat_model, key_model
 from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
 from derp.inference.scout import run_scout
+from derp.keys.catalog import check_key_models
+from derp.keys.sweep import sweep as sweep_keys
 from derp.money.wallets import expire_lots, release, stale_holds
 from derp.ops import observability
 from derp.ops.console import proposal_buttons
@@ -59,13 +61,19 @@ class Services:
     transcriber: Transcriber
     lookups: Lookups
     workers: WorkerPool
+    management: OpenRouterManagement | None = None  # contributed keys; None without a management key
     model_factory: ModelFactory = field(init=False)
+    key_model_factory: KeyModelFactory = field(init=False)
 
     def __post_init__(self) -> None:
         self.model_factory = self.chat_model
+        self.key_model_factory = self.key_model
 
     def chat_model(self, pin: RolePin) -> Model:
         return chat_model(pin, self.provider)
+
+    def key_model(self, pin: RolePin, sub_key: str) -> Model:
+        return key_model(pin, sub_key, self.settings)
 
     @classmethod
     def create(cls, settings: Settings, db: Database, bot: Bot) -> Services:
@@ -92,10 +100,13 @@ class Services:
             ),
             lookups=Lookups(settings),
             workers=workers,
+            management=OpenRouterManagement(settings) if settings.openrouter_management_key else None,
         )
 
     async def close(self) -> None:
         await self.api.close()
+        if self.management is not None:
+            await self.management.close()
         await self.lookups.close()
         await self.bot.session.close()
         await self.db.close()
@@ -108,6 +119,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         settings=services.settings,
         pins=services.pins,
         model_factory=services.model_factory,
+        key_model_factory=services.key_model_factory,
         gateway=services.media,
         api=services.api,
         lookups=services.lookups,
@@ -124,6 +136,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         transcriber=services.transcriber,
         api=services.api,
         pins=services.pins,
+        management=services.management,
     )
     dispatcher.update.outer_middleware(UpdateSpanMiddleware())
     dispatcher.message.outer_middleware(CaptureMiddleware())
@@ -146,6 +159,10 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
                 services.bot, services.settings, text, reply_markup=proposal_buttons(proposals)
             ),
         )
+        if notes := await check_key_models(
+            services.db, services.api, services.settings, services.model_factory
+        ):
+            await notify_owners(services.bot, services.settings, "Key models:\n" + "\n".join(notes))
 
     async def profiles() -> None:
         await refresh_stale_profiles(services.bot, services.db)
@@ -205,6 +222,9 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
         async with services.db.transaction() as session:
             await expire_lots(session)
 
+    async def keys() -> None:
+        await sweep_keys(services.db, services.bot, services.settings, services.management)
+
     return [
         asyncio.create_task(every("model-scout", 24 * 3600, scout, initial_delay=600)),
         asyncio.create_task(every("chat-profiles", 3600, profiles, initial_delay=120)),
@@ -215,6 +235,7 @@ def background_tasks(services: Services, runtime: Runtime) -> list[asyncio.Task[
         asyncio.create_task(every("expire-lots", 6 * 3600, expire, initial_delay=300)),
         asyncio.create_task(every("stars-sweep", 24 * 3600, stars, initial_delay=900)),
         asyncio.create_task(every("patron-buttons", 120, patron_buttons, initial_delay=90)),
+        asyncio.create_task(every("contributed-keys", 600, keys, initial_delay=240)),
         asyncio.create_task(
             every("error-digest", ERROR_DIGEST_SECONDS, errors, initial_delay=ERROR_DIGEST_SECONDS)
         ),

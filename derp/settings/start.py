@@ -1,7 +1,8 @@
 """/start, /help, the command menus and unknown commands.
 
 /start in private is the feature showcase with Add-to-group and Buy buttons;
-``/start buy`` (a deep link) opens the buy menu straight away. /help describes
+``/start buy`` (a deep link) opens the buy menu straight away, ``/start key-<chat ref>`` (a group's
+plug-in link) starts plugging in a key for that group (``keys.flows``). /help describes
 the chat as it is: how to call Derp, what Derp can see, the wallet that pays,
 and the commands. Menus are published per scope at startup; in groups the
 commands that show one person's information are ephemeral. A command Derp
@@ -34,6 +35,7 @@ from derp.db.engine import Database
 from derp.history.members import ADMIN_RIGHTS
 from derp.history.models import Chat
 from derp.history.render import one_line
+from derp.keys.flows import chat_from_ref, open_plug
 from derp.locales import DEFAULT, LOCALES, resolve, t
 from derp.money.command import bought_total, free_left_today
 from derp.money.wallets import balances, wallet
@@ -106,6 +108,9 @@ async def start(
                 bot, target, await help_text(db, settings, bot, chat_row, message.from_user.id, locale)
             )
         return
+    if command.args and command.args.startswith("key-"):  # a group's plug-in link
+        chat_id = chat_from_ref(settings, command.args.removeprefix("key-"))
+        return await open_plug(bot, message.from_user, db, settings, chat_id)
     if command.args == "buy":
         text, markup = await personal_menu(db, settings, message.from_user.id, locale)
     else:

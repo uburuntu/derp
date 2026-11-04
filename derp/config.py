@@ -139,6 +139,94 @@ class VoiceMessages(BaseModel, frozen=True):
         return self.prices.get(model, max(self.prices.values(), default=80.0))
 
 
+class KeyModel(BaseModel, frozen=True):
+    """A model a contributed key may run (``derp.keys``): offered when the scout last found it live."""
+
+    model: str
+    label: str
+    recommended: bool = False
+    # List price, USD per 1M tokens: the picker's price per reply and turn estimates until the scout prices it.
+    prompt: float
+    completion: float
+    cache_read: float | None = None
+
+
+class ContributedKeys(BaseModel, frozen=True):
+    """People's own OpenAI/Anthropic API keys powering the chats they plug them into (``derp.keys``).
+
+    The keys are registered on Derp's OpenRouter account (BYOK), each locked to its own OpenRouter sub-key,
+    so no other request can spend it. Turns through a key are not zero-data-retention: the provider's own
+    endpoints keep data (the subscription credits work nowhere else).
+    """
+
+    models: dict[str, tuple[KeyModel, ...]] = Field(
+        default_factory=lambda: {
+            "openai": (
+                KeyModel(
+                    model="openai/gpt-6.1-sol",
+                    label="GPT-6.1 Sol",
+                    recommended=True,
+                    prompt=2,
+                    completion=10,
+                    cache_read=0.1,
+                ),
+                KeyModel(
+                    model="openai/gpt-6.1-terra",
+                    label="GPT-6.1 Terra",
+                    prompt=1,
+                    completion=5,
+                    cache_read=0.05,
+                ),
+                KeyModel(
+                    model="openai/gpt-6-luna", label="GPT-6 Luna", prompt=0.1, completion=0.5, cache_read=0.01
+                ),
+            ),
+            "anthropic": (
+                KeyModel(
+                    model="anthropic/claude-sonnet-5.5",
+                    label="Claude Sonnet 5.5",
+                    recommended=True,
+                    prompt=2,
+                    completion=10,
+                    cache_read=0.1,
+                ),
+                KeyModel(
+                    model="anthropic/claude-opus-5.5",
+                    label="Claude Opus 5.5",
+                    prompt=4,
+                    completion=20,
+                    cache_read=0.2,
+                ),
+                KeyModel(
+                    model="anthropic/claude-fable-5.1",
+                    label="Claude Fable 5.1",
+                    prompt=10,
+                    completion=50,
+                    cache_read=0.25,
+                ),
+                KeyModel(
+                    model="anthropic/claude-haiku-5.5",
+                    label="Claude Haiku 5.5",
+                    prompt=0.1,
+                    completion=0.5,
+                    cache_read=0.01,
+                ),
+            ),
+        }
+    )
+    # The provider's image model a key draws with (providers without one: images stay on Derpcoins).
+    images: dict[str, str] = Field(default_factory=lambda: {"openai": "openai/gpt-image-2"})
+    image_price_usd: float = 0.25  # upper estimate of one such image: a key must still cover it to draw
+    caps_usd: tuple[int, ...] = (25, 50, 100, 200, 500)  # monthly cap buttons (subscription allowances)
+    max_cap_usd: int = 5_000
+    refusal_notice_hours: int = 6  # an explicit refusal is shown in the chat at most this often per key
+    dead_days: int = 7  # a key that stopped working is removed after this long
+    # Derp's own OpenRouter credits one key's sub-key may spend a month (web search fees, BYOK fees past the
+    # allowance): a backstop, never the contributor's money.
+    sub_key_limit_usd: float = 5.0
+    request_minutes: int = 30  # how long a plug-in link waits for the key (and a custom cap) in private
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -166,6 +254,10 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_app_url: str = "https://t.me/DerpRobot"
     openrouter_app_title: str = "Derp"
+    # Creates contributors' sub-keys and registers their provider keys (``derp.keys``); never makes calls.
+    openrouter_management_key: str = Field(default="", repr=False)
+    keys_secret: str = Field(default="", repr=False)  # encrypts contributors' sub-keys at rest
+    keys: ContributedKeys = ContributedKeys()
     source_url: str = "https://github.com/uburuntu/derp"
     source_revision: str = "main"  # the deployed commit, baked into the image at build
     model_pins: dict[ModelRole, RolePin] = Field(default_factory=lambda: dict(DEFAULT_PINS))

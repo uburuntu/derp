@@ -63,6 +63,14 @@ class RunDeps:
         return self.funds.funding
 
     @property
+    def side_funding(self) -> str:
+        """Who a side call on Derp's own pins (a digest) is ledgered to: the run's payer, or ``creator`` on a
+        key run with no hold behind it (a cheap call, absorbed rather than charged to nobody)."""
+        if self.funds.key is not None and self.funds.reservation_id is None:
+            return "creator"
+        return self.funding.value
+
+    @property
     def tool_outputs_left(self) -> int:
         """Visible outputs tools may still send; one slot stays free for the final text answer.
 

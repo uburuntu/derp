@@ -7,7 +7,9 @@ person's own and show only on a panel nobody else sees. In groups /settings
 is an ephemeral command, so the panel is ephemeral and its buttons edit it
 through the ephemeral edit methods; one typed out in full is public and
 leaves them out. While Telegram hides the chat from Derp,
-the panel offers the make-me-admin link.
+the panel offers the make-me-admin link. Contributed keys (``keys.flows``) show here too: in a group the
+keys plugged in, a link to plug one in privately and a keys page (admins turn keys on, pause or unplug
+them; a key's owner may unplug theirs); in private the person's own keys.
 
 Destructive changes ask first: turning context off deletes the chat's stored
 ambient history, and a shorter retention deletes older messages. A confirmation
@@ -35,6 +37,8 @@ from derp.history.models import Chat, User
 from derp.history.models import Message as StoredMessage
 from derp.history.render import chat_time, one_line
 from derp.history.retention import default_days, kept_days
+from derp.keys.flows import chat_keys, chat_keys_line, chat_keys_page, live_keys, plug_link
+from derp.keys.notices import KeyAction
 from derp.locales import day_count, resolve, t
 from derp.memory.notes import is_admin
 from derp.money.free import POLICY_VERSION, consented
@@ -172,6 +176,10 @@ async def render(
     if page == "jobs":
         text, rows = await _jobs_page(session, chat, viewer or (user.id if user else None), admin, locale)
         return text, markup(*rows, back)
+    keys = await chat_keys(session, chat.id) if group else []
+    if page == "keys":
+        text, rows = chat_keys_page(settings, keys, viewer or (user.id if user else None), admin, locale)
+        return text, markup(*rows, back)
 
     jobs = len(await live_jobs(session, chat.id))
     context = await context_state(bot, chat)
@@ -193,8 +201,12 @@ async def render(
         lines.append(t(locale, "settings.no_rules"))
     if group:
         lines.append(t(locale, "settings.free_group", state=on if chat.free_models else off))
+        lines.append(chat_keys_line(settings, keys, locale))
     else:
         lines.append(t(locale, "settings.free_private", state=on if consented(user) else off))
+    own_keys = len(await live_keys(session, user.id)) if user is not None and not group else 0
+    if not group:
+        lines.append(t(locale, "settings.keys_private", count=own_keys))
     lines.append(t(locale, "settings.jobs", count=jobs))
     personal: list[InlineKeyboardButton] = []
     if user is not None:
@@ -221,6 +233,18 @@ async def render(
     mode = t(locale, f"settings.notes_{chat.notes_mode}")
     free_on = chat.free_models if group else consented(user)
     free = t(locale, "settings.free_button", state=on if free_on else off)
+    if group:
+        plug = [
+            link(t(locale, "settings.keys_plug"), await plug_link(bot, settings, chat.id)),
+            button(t(locale, "settings.keys_button", count=len(keys)), _act("page", "keys"))
+            if keys
+            else None,
+        ]
+    else:
+        plug = [
+            button(t(locale, "settings.my_keys"), KeyAction(action="page", key=0)) if own_keys else None,
+            button(t(locale, "settings.keys_plug"), KeyAction(action="plug", key=0)),
+        ]
     keyboard = markup(
         link(t(locale, "onboarding.make_admin"), context.admin_url) if context.admin_url else None,
         [ambient, button(t(locale, "settings.retention_button", days=kept), _act("page", "retention"))],
@@ -228,6 +252,7 @@ async def render(
         button(free, _act("free", "off" if free_on else "on")),
         button(t(locale, "settings.rules_clear"), _act("rules", "clear")) if chat.rules else None,
         button(t(locale, "settings.jobs_button", count=jobs), _act("page", "jobs")) if jobs else None,
+        plug,
         *personal,
     )
     return "\n".join(lines), keyboard
@@ -320,8 +345,9 @@ async def on_action(press: Press, data: SettingsAction, db: Database, bot: Bot, 
         return
     action, value = data.action, data.value
     jobs = action in JOB_ACTIONS or (action == "page" and value == "jobs")
-    personal = jobs or action in {"spend", "named"} or (action == "page" and value == "main")
-    admin = (jobs or not personal) and await is_admin(bot, chat, press.user_id)
+    keys = action == "page" and value == "keys"  # anyone sees it; admins get the buttons
+    personal = jobs or keys or action in {"spend", "named"} or (action == "page" and value == "main")
+    admin = (jobs or keys or not personal) and await is_admin(bot, chat, press.user_id)
     if not personal and not admin:
         return await press.deny("settings.admins_alert")
     if action == "page":

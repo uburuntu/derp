@@ -39,6 +39,7 @@ from derp.history.models import Message, MessageMedia
 from derp.history.render import kind_label
 from derp.inference.openrouter import chat_settings
 from derp.inference.roles import ModelRole, RolePin
+from derp.keys.routing import KeyRoute
 from derp.telegram.media import Media, MediaGateway, MediaUnavailableError, known_type
 from derp.tools.effects import still
 from derp.tools.workers import EffectError, WorkerPool
@@ -270,8 +271,10 @@ async def note_images(
     role: ModelRole,
     chat_id: int,
     user_id: int,
+    key: KeyRoute | None = None,
 ) -> None:
-    """Describe inspected images never noted before, concurrently; each call is ledgered against the run.
+    """Describe inspected images never noted before, concurrently; each call is ledgered against the run
+    (as the contributed key's when ``key`` paid the run: the notes are made on its model).
 
     An empty description marks an image whose paid note came back empty: it renders as a bare
     placeholder and is not described (and paid for) again.
@@ -283,7 +286,7 @@ async def note_images(
     for item, (text, messages) in zip(pending, notes, strict=True):
         paid = await ledger_side_call(
             db, messages, kind="media", funding=funding, role=role, context_tokens=NOTE_INPUT_TOKENS,
-            run_id=run_id, chat_id=chat_id, user_id=user_id,
+            run_id=run_id, chat_id=chat_id, user_id=user_id, key=key,
         )  # fmt: skip
         if not text and not paid:  # nothing came back, nothing was paid: a later run may try again
             continue

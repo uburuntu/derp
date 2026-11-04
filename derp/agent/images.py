@@ -99,7 +99,12 @@ async def _references(db: Database, gateway: MediaGateway, chat_id: int, ids: Se
 
 
 async def _generate(
-    api: OpenRouterAPI, pin: RolePin, prompt: str, aspect_ratio: str, references: list[Media]
+    api: OpenRouterAPI,
+    pin: RolePin,
+    prompt: str,
+    aspect_ratio: str,
+    references: list[Media],
+    api_key: str | None,
 ) -> GeneratedImage:
     error: OpenRouterError | None = None
     for model in (pin.model, *pin.fallbacks):
@@ -111,6 +116,7 @@ async def _generate(
                 zdr=pin.zdr,
                 references=[(image.data, image.media_type) for image in references],
                 aspect_ratio=aspect_ratio,
+                api_key=api_key,
             )
         except OpenRouterError as failed:  # next model in the pin
             log.info("image model failed: %s", failed.status)
@@ -128,8 +134,11 @@ async def draw(
     chat_id: int,
     job: ImageJob,
     extra: Sequence[bytes] = (),
+    api_key: str | None = None,
 ) -> GeneratedImage:
     """Generate one image (not yet ledgered: the caller ledgers it once it knows whether it was delivered).
+
+    ``api_key``: a contributed key's sub-key, which pays for it instead of Derp's credits.
 
     ``extra`` adds reference pictures by content (a result an earlier tool of the run kept). Every
     reference reaches the model normalized (``MediaGateway.image`` / ``normalize``), in this order:
@@ -144,7 +153,7 @@ async def draw(
     ]
     references += [await gateway.normalize(data) for data in pictures]
     prompt = "\n\n".join(part for part in (job.prompt, job.cast_note(first_avatar)) if part)
-    return await _generate(api, pin, prompt, job.aspect_ratio, references)
+    return await _generate(api, pin, prompt, job.aspect_ratio, references, api_key)
 
 
 def filename(image: GeneratedImage) -> str:

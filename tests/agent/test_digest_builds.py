@@ -59,6 +59,7 @@ async def test_a_failed_merge_still_ledgers_the_parts_already_paid_for(
     pins = SimpleNamespace(get=AsyncMock(return_value=PIN))
     deps = SimpleNamespace(
         funding=Funding.SPONSORED,
+        side_funding=Funding.SPONSORED.value,
         pins=pins,
         pin=PIN,
         model=FunctionModel(respond),

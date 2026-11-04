@@ -11,6 +11,7 @@ def include_routers(dispatcher: Dispatcher) -> None:
     from derp.agent import approvals, handler, inline
     from derp.billing import command as billing
     from derp.history import members, polls, reactions
+    from derp.keys import flows as keys
     from derp.memory import command as memory
     from derp.money import command as money
     from derp.money import free
@@ -23,6 +24,7 @@ def include_routers(dispatcher: Dispatcher) -> None:
         reactions.build_router(),
         polls.build_router(),
         start.build_router(),
+        keys.build_router(),  # before anything that reads a message: a pasted API key goes no further
         pages.build_router(),
         feedback.build_router(),
         console.build_router(),
