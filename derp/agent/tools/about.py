@@ -29,8 +29,8 @@ from derp.scheduler import jobs
 from derp.settings.start import EPHEMERAL_IN_GROUPS, GROUP_COMMANDS, PRIVATE_COMMANDS
 
 Topic = Literal[
-    "overview", "groups", "money", "memory", "reminders", "privacy", "terms", "limits", "commands", "tools",
-    "source",
+    "overview", "groups", "money", "keys", "memory", "reminders", "privacy", "terms", "limits", "commands",
+    "tools", "source",
 ]  # fmt: skip
 TOPICS: tuple[Topic, ...] = get_args(Topic)
 GUIDE = Path(__file__).parents[1] / "guide.md"
@@ -111,6 +111,24 @@ def facts(
                     f"- A voice message: up to {settings.speech.max_chars} characters; the longest costs up to about "
                     f"{voice_credits} Derpcoins."
                 ),
+            ]
+        case "keys":
+            keys = settings.keys
+            models = "; ".join(
+                f"{provider}: "
+                + ", ".join(m.label + (" (recommended)" if m.recommended else "") for m in listed)
+                for provider, listed in keys.models.items()
+            )
+            return [
+                f"- Models a key can run: {models}.",
+                "- Monthly cap choices: "
+                + ", ".join(f"${cap}" for cap in keys.caps_usd)
+                + f", or any amount up to ${keys.max_cap_usd:,}.",
+                (
+                    f"- A refusal is shown at most every {keys.refusal_notice_hours} hours per key and chat; a key "
+                    f"that stays dead is removed after {keys.dead_days} days."
+                ),
+                "- OpenAI and Anthropic keep what they get through a key for up to 30 days (longer if flagged).",
             ]
         case "memory":
             return [
@@ -203,8 +221,9 @@ async def about_derp(ctx: RunContext[RunDeps], topics: list[Topic]) -> str:
     """How Derp itself works, with current prices and limits. Answer questions about Derp from this, never memory.
 
     Args:
-        topics: Sections to read — overview, groups, money (prices, packs, Derp+, who pays), memory, reminders,
-            privacy, terms, limits, commands, tools (what Derp can do, per tier), source. Pick several if unsure.
+        topics: Sections to read — overview, groups, money (prices, packs, Derp+, who pays), keys (plugging in a
+            Claude/ChatGPT API key), memory, reminders, privacy, terms, limits, commands, tools (what Derp can do,
+            per tier), source. Pick several if unsure.
     """
     from derp.agent.tools import FAMILIES  # the registry imports this module
 

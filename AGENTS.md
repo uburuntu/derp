@@ -7,7 +7,7 @@
 ## Stack and layout
 
 - Python 3.14 + uv, aiogram 3 (long polling), Pydantic AI over OpenRouter, PostgreSQL via SQLAlchemy 2 (async) + Alembic, Logfire. Versions live in `pyproject.toml`/`uv.lock`; do not repeat them in docs.
-- `derp/` is split into domain packages, each owning its models, queries and an `AGENTS.md`: `telegram/` (request policy, sending, filters), `inference/` (OpenRouter seam, model pins, provider-call ledger), `history/` (chat knowledge capture and query), `memory/` (notes, rules), `agent/` (runtime, persona, invocation, outputs), `money/` (wallets, metering, funding), `billing/` (Stars payments, subscriptions, refunds), `scheduler/`, `settings/` (chat/user policy UI), `tools/` (toolbox capabilities), `ops/` (observability, owner pings, preflight), `locales/`.
+- `derp/` is split into domain packages, each owning its models, queries and an `AGENTS.md`: `telegram/` (request policy, sending, filters), `inference/` (OpenRouter seam, model pins, provider-call ledger), `history/` (chat knowledge capture and query), `memory/` (notes, rules), `agent/` (runtime, persona, invocation, outputs), `money/` (wallets, metering, funding), `keys/` (people's own OpenAI/Anthropic API keys powering chats), `billing/` (Stars payments, subscriptions, refunds), `scheduler/`, `settings/` (chat/user policy UI), `tools/` (toolbox capabilities), `ops/` (observability, owner pings, preflight), `locales/`.
 - `derp/app.py` composes services; imports never create clients or start work. `derp/config.py` is the only configuration authority.
 - `migrations/` holds Alembic history; `tests/` mirrors `derp/`; `tools/` holds deployment and maintenance scripts.
 

@@ -114,7 +114,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   when asked.
 - When a group's wallet can no longer pay for an answer, Derp says so once, quietly, with a top-up button, and not
   again until someone tops it up; from then on each asker's own Derpcoins pay, as below.
-- Who pays — private chat: the person's paid Derpcoins (Derp+ first, as it expires, then bought packs), then
+- Who pays — a key plugged into the chat comes first (see keys). Then, private chat: the person's paid Derpcoins (Derp+ first, as it expires, then bought packs), then
   their free daily ones. Group: the group wallet, then the asker's paid Derpcoins (unless they turned off "my
   Derpcoins in groups" in /settings), then the asker's free daily ones.
 - When nobody can pay, Derp offers free models: opt-in (an admin turns them on for a group), and their providers
@@ -180,6 +180,32 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   pauses, resumes and cancels with it).
 - A scheduled prompt is paid when it fires, by the usual payer order; after several unpaid firings in a row the
   job pauses, and the note saying so has a Resume button. Removing Derp from a chat pauses its jobs.
+
+## keys
+
+- People with a ChatGPT Pro or Claude Max or Ultra plan get monthly API credits from OpenAI or Anthropic. They
+  can plug their API key into Derp ("Plug in your Claude/ChatGPT" in /settings), and chats it is on in get
+  answers from a smarter model, paid from those credits instead of Derpcoins. Derp never stores the key:
+  OpenRouter keeps it, locked so only the owner's chats can spend it.
+- Plugging in happens only in the owner's private chat: they paste the key there (Derp deletes the message at
+  once and never stores it; a key pasted in a group is deleted with a warning to revoke it), pick a monthly cap
+  and a model from a short list (each with its price per typical reply). It serves their private chat at once.
+- In a group, the "Plug in" link in /settings leads there; a key offered to a group is turned on by an admin (on
+  at once when the owner is an admin), with a public notice naming whose key it is, the model, and that what Derp
+  sends through it goes to OpenAI or Anthropic, which keep it for a while: unlike Derp's usual models, it is not
+  zero data retention. Requests run under the owner's provider account, so its usage policy applies to what
+  people ask. Owners are named as they chose for chipping in ("a mysterious patron" otherwise).
+- While a key is on, every answer in that chat runs on it (scheduled prompts too), with the usual tools; images
+  on a ChatGPT key are drawn by OpenAI and paid by the key, and PDFs are read by the key's own model. Other side
+  work (voice, video looks, effects) is paid with Derpcoins as usual. Turns a key paid cost nobody Derpcoins;
+  /info says whose key paid and what it cost. Several keys in a chat serve in the order they were turned on.
+- When a key reaches its monthly cap, runs out of credits at the provider or stops working, the chat goes back to
+  its usual funding, says so once, and the owner gets a private message with what to do. If its model refuses
+  something outright, Derp shows the refusal (at most every few hours), with buttons to pause or unplug the key
+  there, and its usual model answers instead.
+- The owner manages keys in /settings → My keys: model, cap, spend this month per chat, pause, unplug from a
+  chat, remove. Admins and the owner can pause or unplug a key in a group (its /settings keys page); leaving a
+  group unplugs the leaver's keys there. A key that stays dead is removed after a while.
 
 ## privacy
 
