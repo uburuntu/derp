@@ -39,10 +39,12 @@ from pydantic_ai.messages import (
     BinaryContent,
     FunctionToolCallEvent,
     ModelMessage,
+    ModelRequest,
     PartDeltaEvent,
     PartStartEvent,
     TextPart,
     TextPartDelta,
+    UserPromptPart,
     repair_messages,
 )
 from pydantic_ai.models import Model
@@ -52,7 +54,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.approvals import close_prompt, resumption
-from derp.agent.context import Window, build_window, messages_tokens
+from derp.agent.context import IDLE_SECONDS, IDLE_SHARE, Window, build_window, messages_tokens
 from derp.agent.decisions import Decider, Verdict
 from derp.agent.deps import RunDeps
 from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard
@@ -60,7 +62,7 @@ from derp.agent.lanes import Lanes
 from derp.agent.media import Inspected, Referenced, as_content, inspect, note_images, run_media
 from derp.agent.models import AgentRun, Approval
 from derp.agent.outputs import absorb_kept, flush, hold_left
-from derp.agent.persona import PERSONA, situation
+from derp.agent.persona import PERSONA, chat_card, situation
 from derp.agent.prefix import prefixes
 from derp.agent.progress import ActionProgress, DraftProgress, Progress, stage_for_tool
 from derp.agent.runs import finish_run, load_messages, price_unreported, record_output, start_run
@@ -98,7 +100,7 @@ from derp.inference.openrouter import (
 from derp.inference.pins import PinStore
 from derp.inference.roles import Effort, RolePin
 from derp.locales import resolve, t
-from derp.memory.notes import load_memory, notes_block
+from derp.memory.notes import chat_notes, load_memory, notes_block
 from derp.money.free import answer_unfunded, consented, note_empty_wallet
 from derp.money.funding import Funder, Funding, Funds
 from derp.money.wallets import release
@@ -113,7 +115,7 @@ from derp.tools.workers import WorkerPool
 log = logging.getLogger("derp.agent")
 
 SILENT = {"", ".", "…"}  # final answers that mean "nothing more to say"
-EARLIER_DAYS = 3  # the latest digest before the context window joins the situation if this recent
+EARLIER_DAYS = 3  # the latest digest before the context window joins the chat card if this recent
 ALBUM_SETTLE = 1.0  # seconds: album siblings arrive as separate updates; let them be stored first
 
 
@@ -140,7 +142,7 @@ class Ask:
     request: str | list[str | BinaryContent] | None
     trigger_message_id: int
     prompt: str = ""  # the current message as rendered, for the failure export
-    tokens: int = 0  # the window's estimated size
+    tokens: int = 0  # the chat card's and window's estimated size
     seen: tuple[int, ...] = ()  # messages whose images the run looks at (``RunDeps.seen``)
     unnoted: list[Inspected] = field(default_factory=list[Inspected])  # inspected images to describe after
     effort: Effort | None = None  # a deeper reasoning effort the decision asked for (paid runs)
@@ -209,9 +211,10 @@ class Runtime:
         self.decider = Decider(db, api, pins, settings.decisions)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.in_flight: set[str] = set()  # operation ids of holds a live run still owns
-        # Where each topic's last window started: kept while it fits, so consecutive runs share a cacheable prefix.
-        # Keyed by funding tier too: tiers have their own budget and model, so they'd only reset each other.
-        self.window_starts: dict[tuple[int, int | None, str], int] = {}
+        # Where each topic's last window started, and when: kept while it fits and the topic isn't idle, so
+        # consecutive runs share a cacheable prefix. Keyed by funding tier too: tiers have their own budget and
+        # model, so they'd only reset each other.
+        self.window_starts: dict[tuple[int, int | None, str], tuple[int, float]] = {}
         # A call waiting for its requester's approval ends the run with DeferredToolRequests (approvals.py).
         self.agent = Agent[RunDeps, str | DeferredToolRequests](
             output_type=[str, DeferredToolRequests],
@@ -414,9 +417,11 @@ class Runtime:
     ) -> Ask:
         """What a fresh run puts to the model for ``message``: the window before it and the request.
 
-        A ``preview`` builds the same without the decision call (as if unasked: images attached, the pin's
-        effort) and leaves the topic's remembered window start as it is. A window bounded by ``since`` (a
-        repeating job sees its period) neither keeps nor moves that start, and brings no earlier digest.
+        The chat card heads the window. After a pause (``IDLE_SECONDS`` since the topic's last window) the window
+        starts afresh, at ``IDLE_SHARE`` of the budget on tiers that pay for input. A ``preview`` builds the same
+        without the decision call (as if unasked: images attached, the pin's effort) and leaves the topic's
+        remembered window start as it is. A window bounded by ``since`` (a repeating job sees its period)
+        neither keeps nor moves that start, gets the whole budget and brings no earlier digest.
         """
         asker = message.from_user
         if asker is None:
@@ -436,21 +441,28 @@ class Runtime:
         try:
             async with self.db.session() as session:
                 topic_key = (chat.id, target.thread_id, funding.value)
+                kept = None if since else self.window_starts.get(topic_key)
+                now = asyncio.get_running_loop().time()
+                if kept is not None and now - kept[1] >= IDLE_SECONDS:
+                    kept = None  # the topic went quiet: its cached prefix is gone
+                budget = self.funder.window(funding)
+                if kept is None and since is None and funding is not Funding.FREE:  # free models cost nothing
+                    budget = int(budget * IDLE_SHARE)
                 window = await build_window(
                     session,
                     chat_id=chat.id,
                     thread_id=target.thread_id,
                     before_message_id=message.message_id or 2**62,
-                    budget=self.funder.window(funding),
+                    budget=budget,
                     tz=tz,
-                    start_at=None if since else self.window_starts.get(topic_key),
+                    start_at=kept[0] if kept else None,
                     since=since,
                 )
                 if not preview and since is None:
                     if len(self.window_starts) > WINDOW_STARTS_KEPT:
                         self.window_starts.clear()
                     if window.oldest_message_id is not None:
-                        self.window_starts[topic_key] = window.oldest_message_id
+                        self.window_starts[topic_key] = (window.oldest_message_id, now)
                 prompt = await current_prompt(session, message, window, tz, self.bot.id)
                 topic = (
                     await session.get(ForumTopic, (chat.id, target.thread_id)) if target.thread_id else None
@@ -471,6 +483,8 @@ class Runtime:
             if images.fallback and not decided.images:
                 images = Referenced([])
             inspected = await inspect(self.gateway, images.rows)
+            mode = chat.notes_mode if funding in memory_family.tiers else None
+            card = chat_card(chat=chat, notes=chat_notes(memory, mode), earlier=earlier)
             brief = situation(
                 chat=chat,
                 asker=asker.full_name,
@@ -478,20 +492,20 @@ class Runtime:
                 tz=tz,
                 topic=topic.name if topic else None,
                 rules=chat.rules,
-                notes=notes_block(
-                    memory, asker.full_name, chat.notes_mode if funding in memory_family.tiers else None
-                ),
-                earlier=earlier,
+                notes=notes_block(memory, asker.full_name, mode),
                 blind=bool(inspected) and not pin.vision,
             )
             request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
+            history = (
+                [ModelRequest(parts=[UserPromptPart(card)]), *window.messages] if card else window.messages
+            )
             return Ask(
                 # Pydantic AI normalizes history (merging adjacent turns) before the run; pre-normalizing
                 # here keeps the captured list aligned so the run's own messages slice out exactly.
-                history=repair_messages(window.messages),
+                history=repair_messages(history),
                 request=[request, *as_content(inspected)] if pin.vision and inspected else request,
                 prompt=prompt,
-                tokens=window.tokens,
+                tokens=window.tokens + (estimate_tokens(card) if card else 0),
                 trigger_message_id=message.message_id,
                 seen=tuple(dict.fromkeys(row.message_id for row in images.rows)),
                 unnoted=[item for item in inspected if item.row.message_id not in images.unnoted],

@@ -250,3 +250,63 @@ async def test_group_answers_link_cited_messages_and_see_usernames(
     async with conversation.db.session() as session:
         edited = await session.get(Message, (lounge.id, answer.message_id))
     assert edited is not None and edited.text == fixed
+
+
+async def test_the_chat_card_heads_a_cached_window_and_a_pause_starts_a_smaller_one(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    from derp.agent.context import HISTORY_OPEN, IDLE_SECONDS
+    from derp.config import ContextWindows
+    from derp.memory.models import Note
+
+    yard = Room(-1009, title="Yard")
+    conversation.settings = conversation.settings.model_copy(
+        update={"context_windows": ContextWindows(paid=600, sponsored=600, free=600)}
+    )
+    await conversation.restart()
+    conversation.meet(ANNA, yard)
+    conversation.meet(BOB, yard)
+    lines = [f"line {index}: the weekend plan is still on, bring snacks" for index in range(30)]
+    sent = [await conversation.send(BOB, yard, line) for line in lines]
+    await conversation.settle(sent[-1])
+    async with conversation.db.transaction() as session:
+        session.add(Note(chat_id=yard.id, user_id=None, text="pizza on fridays", author_id=BOB.id))
+        session.add(Note(chat_id=yard.id, user_id=ANNA.id, text="Anna hates olives", author_id=ANNA.id))
+
+    def parts(messages: list[ModelMessage]) -> list[str]:
+        return [
+            str(part.content)
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        ]
+
+    def oldest(messages: list[ModelMessage]) -> int:
+        transcript = next(text for text in parts(messages) if text.startswith(HISTORY_OPEN))
+        return int(transcript.split(" #", 1)[1].split(" ", 1)[0])
+
+    async def ask(person: Person) -> list[ModelMessage]:
+        sent = await conversation.send(
+            person, yard, "@DerpRobot plans?", entities=[{"type": "mention", "offset": 0, "length": 10}]
+        )
+        await conversation.expect_reply(sent)
+        await conversation.settle(sent)
+        return model.requests[-1]
+
+    model.reply("one", "two", "three")
+    first, second = await ask(ANNA), await ask(BOB)
+    card = parts(first)[0]
+    assert "Chat notes:" in card and "pizza on fridays" in card and "olives" not in card
+    assert parts(second)[0] == card  # the same card whoever asks: it stays in the cached prefix
+    assert "Notes about Anna" in parts(first)[-1] and "olives" not in parts(second)[-1]
+    assert oldest(second) == oldest(first)  # asked again right away: the window keeps its start
+
+    runtime = conversation.dispatcher["runtime"] if conversation.dispatcher else None
+    assert runtime is not None
+    runtime.window_starts = {
+        key: (start, at - IDLE_SECONDS - 1) for key, (start, at) in runtime.window_starts.items()
+    }  # the topic went quiet: its cached prefix is gone
+    after = await ask(ANNA)
+    assert oldest(after) > oldest(second)  # a fresh window, half the budget, from the newest messages
+    assert parts(after)[0] == card

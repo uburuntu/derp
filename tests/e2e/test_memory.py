@@ -291,7 +291,7 @@ async def test_a_corrected_fact_rewrites_its_note(conversation: Conversation, mo
         note_id = await session.scalar(select(Note.id))
 
     def correct(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        assert f"- note {note_id}: meetups are on Fridays" in str(messages[-1])
+        assert f"- note {note_id}: meetups are on Fridays" in str(messages[0])  # the chat card heads the window
         return tool_call("edit_note", note_id=note_id, text="meetups are on Thursdays")(messages, info)
 
     model.reply(correct, "fixed")

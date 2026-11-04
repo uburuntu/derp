@@ -15,7 +15,10 @@ consecutive runs in a topic share their prefix and the provider's prompt cache
 serves it; past that it starts afresh within the budget. For the same reason
 the transcript leaves out reaction totals (they change old lines whenever
 someone reacts; history tools still show them) and replayed runs are clipped
-deterministically.
+deterministically. A topic quiet for ``IDLE_SECONDS`` has lost its cached
+prefix anyway, so the runtime starts its next window afresh, at ``IDLE_SHARE``
+of the budget where input is paid for: after a pause every token is paid in
+full, and the window grows back while the conversation goes on.
 """
 
 from dataclasses import dataclass, field, replace
@@ -51,6 +54,9 @@ from derp.history.render import (
 
 SCAN_LIMIT = 400  # rows read per window; budgets run out long before this
 STICKY_SLACK = 1.5  # a kept window may grow to this multiple of the budget before it starts afresh
+# OpenRouter keeps a conversation on one provider, whose cache holds its prefix, for 10 idle minutes.
+IDLE_SECONDS = 600
+IDLE_SHARE = 0.5  # of the budget, for the first paid window after a pause
 TOOL_RESULT_LIMIT = 1500  # characters of a replayed tool result
 TOOL_ARG_LIMIT = 500  # characters of one string argument of a replayed tool call (code, image prompts)
 REPLAYABLE = ("completed",)

@@ -13,6 +13,7 @@ from derp.memory.notes import (
     NoteChange,
     add_note,
     budgeted,
+    chat_notes,
     decide,
     load_memory,
     matching,
@@ -39,9 +40,10 @@ async def test_notes_are_validated_capped_and_scoped(database: Database) -> None
         assert len(memory.my_notes) == USER_NOTES_CAP
         other = await load_memory(session, -1, 8, include_proposed=True)
         assert [n.state for n in other.chat_notes] == ["proposed", "active"] and other.my_notes == []
-    block = notes_block(memory, "Ann")
-    assert block is not None and block.startswith("<notes")
-    assert "Chat notes:\n- note " in block and "Notes about Ann:" in block and "other chat" not in block
+    card, block = chat_notes(memory), notes_block(memory, "Ann")
+    assert card is not None and card.startswith("<notes") and "Chat notes:\n- note " in card
+    assert block is not None and block.startswith("<notes") and "Notes about Ann:" in block
+    assert "Notes about" not in card and "Chat notes" not in block and "other chat" not in card + block
 
 
 @pytest.mark.parametrize(
@@ -61,7 +63,8 @@ def test_the_notes_part_states_the_chat_notes_policy(mode: str, says: str) -> No
 
 def test_runs_without_memory_tools_get_no_notes_policy() -> None:
     note = Note(id=42, chat_id=-5, user_id=None, text="pizza on fridays", author_id=1, state="active")
-    text = notes_block(Memory([note], []), "Ann")
+    assert notes_block(Memory([note], []), "Ann") is None  # no policy, and the asker has no notes
+    text = chat_notes(Memory([note], []))
     assert text is not None and not any(policy in text for policy in NOTES_POLICY.values())
     assert "- note 42: pizza on fridays" in text  # never "#42": that would be a message reference
 
@@ -73,29 +76,34 @@ def _note(note_id: int, text: str, user_id: int | None = None) -> Note:
 def test_a_personal_note_survives_a_full_chat_notes_budget() -> None:
     chat = [_note(100 + i, "c" * 290) for i in range(CHAT_NOTES_CAP)]
     memory = Memory(chat, [_note(7, "Ann is allergic to nuts", user_id=1)])
-    block = notes_block(memory, "Ann", "auto")
+    block, card = notes_block(memory, "Ann", "auto"), chat_notes(memory, "auto")
     assert block is not None and "- note 7: Ann is allergic to nuts" in block
-    assert "older not shown; find_notes searches them):" in block  # the chat notes that didn't fit
+    assert (
+        card is not None and "older not shown; find_notes searches them):" in card
+    )  # chat notes that didn't fit
 
 
-def test_an_unused_share_goes_to_the_other_kind() -> None:
+def test_chat_notes_keep_their_share_whoever_asks() -> None:
     lines = [f"- note {i}: " + "x" * 290 for i in range(20)]
-    chat, mine = budgeted(lines, [])
-    assert mine == [] and sum(map(len, chat)) > PROMPT_CHARS - 300  # chat notes fill the whole budget
+    alone, mine = budgeted(lines, [])
+    assert mine == [] and PROMPT_CHARS - MY_SHARE - 300 < sum(map(len, alone)) <= PROMPT_CHARS - MY_SHARE
     chat, mine = budgeted([], lines)
-    assert chat == [] and sum(map(len, mine)) > PROMPT_CHARS - 300  # and so do the asker's own
+    assert (
+        chat == [] and sum(map(len, mine)) > PROMPT_CHARS - 300
+    )  # the asker's own take what chat notes leave
     chat, mine = budgeted(lines, lines)
-    assert sum(map(len, mine)) <= MY_SHARE < sum(map(len, mine)) + len(lines[0])  # each kind its share
+    assert chat == alone  # the same chat notes for every asker: the chat card stays cached
+    assert sum(map(len, mine)) <= PROMPT_CHARS - sum(map(len, chat)) < sum(map(len, mine)) + len(lines[0])
     assert mine == lines[: len(mine)] and chat == lines[: len(chat)]  # newest first, no gaps
 
 
 def test_left_out_notes_are_counted_and_searchable_only_with_the_tools() -> None:
-    memory = Memory([_note(100 + i, "c" * 488) for i in range(15)], [])  # 500-char lines: 10 fit
-    with_tools, without = notes_block(memory, "Ann", "members"), notes_block(memory, "Ann")
+    memory = Memory([_note(100 + i, "c" * 488) for i in range(15)], [])  # 500-char lines: 7 fit their share
+    with_tools, without = chat_notes(memory, "members"), chat_notes(memory)
     assert with_tools is not None and without is not None
-    assert "Chat notes (5 older not shown; find_notes searches them):" in with_tools
-    assert "Chat notes (5 older not shown):" in without
-    assert "older not shown" not in str(notes_block(Memory(memory.chat_notes[:3], []), "Ann"))
+    assert "Chat notes (8 older not shown; find_notes searches them):" in with_tools
+    assert "Chat notes (8 older not shown):" in without
+    assert "older not shown" not in str(chat_notes(Memory(memory.chat_notes[:3], [])))
 
 
 def test_matching_ranks_by_words_found_then_newest() -> None:
