@@ -142,6 +142,16 @@ def test_the_media_pin_is_priced_from_its_standard_routes_only() -> None:
     assert change.price == (Decimal("0.3"), Decimal("2.5"))
 
 
+def test_an_ignored_host_neither_keeps_a_model_live_nor_prices_it() -> None:
+    glm = "z-ai/glm-5.3-flash"
+    pins = {ModelRole.CHAT: RolePin(model=glm)}
+    cheap = route(glm, "0.00000001", "0.00000001") | {"tag": "open-inference/fp4"}
+    fair = route(glm, "0.0000001", "0.0000004") | {"tag": "wafer/us"}
+    (change,) = plan(pins, build_catalog([], [cheap, fair], []), allowlist=ALLOW, windows=WINDOWS)
+    assert change.reason == "price snapshot" and change.price == (Decimal("0.1"), Decimal("0.4"))
+    assert not build_catalog([], [cheap], []).live_routes(glm)
+
+
 def scripted(*, russian: str, call_tool: bool) -> FunctionModel:
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         last = str(messages[-1].parts[-1])

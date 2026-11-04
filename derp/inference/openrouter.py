@@ -29,7 +29,7 @@ from pydantic_ai.native_tools import AbstractNativeTool, WebFetchTool
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from derp.config import Settings
-from derp.inference.roles import EFFORTS, Effort, RolePin
+from derp.inference.roles import EFFORTS, IGNORED_HOSTS, Effort, RolePin
 
 
 def build_provider(settings: Settings, http_client: httpx2.AsyncClient | None = None) -> OpenRouterProvider:
@@ -80,6 +80,8 @@ def provider_config(pin: RolePin) -> OpenRouterProviderConfig:
         config["data_collection"] = "deny"
     if only := sorted({host for model in pin.models for host in pin.only.get(model, ())}):
         config["only"] = cast(Any, only)  # one list for the whole request, fallbacks included
+    if ignore := sorted({host for model in pin.models for host in IGNORED_HOSTS.get(model, ())}):
+        config["ignore"] = ignore  # likewise for the whole request: the host is skipped for every model
     if pin.fast:  # documented provider fields Pydantic AI's TypedDict doesn't list yet; passed through as is
         extra = cast(dict[str, Any], config)
         extra["preferred_min_throughput"] = MIN_THROUGHPUT

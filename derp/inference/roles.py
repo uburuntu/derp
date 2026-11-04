@@ -20,6 +20,14 @@ class ModelRole(StrEnum):
     MEDIA = "media"
 
 
+# Hosts that serve a model badly, skipped whatever pin it is in (base provider slugs, every variant). A fact
+# about a route, not a choice: owner and scout pins get it too, and the scout neither prices nor proposes it.
+IGNORED_HOSTS: dict[str, tuple[str, ...]] = {
+    # Spends the whole output budget on reasoning at effort "low": 20-30 s turns that run into the time cap.
+    "z-ai/glm-5.3-flash": ("open-inference",),
+}
+
+
 class RolePin(BaseModel, frozen=True):
     """A role's primary model plus ordered fallbacks; ``zdr`` is sent per request."""
 
@@ -63,7 +71,7 @@ class RolePin(BaseModel, frozen=True):
 
 DEFAULT_PINS: dict[ModelRole, RolePin] = {
     # A dated snapshot, so behaviour doesn't shift under us; its cache reads cost a tenth of GLM's.
-    # GLM's reasoning can't be disabled, but at "low" it emits next to none.
+    # GLM's reasoning can't be disabled, but at "low" it emits next to none (on the hosts it isn't kept off).
     ModelRole.CHAT: RolePin(
         model="deepseek/deepseek-v4.1-flash-1017", fallbacks=("z-ai/glm-5.3-flash",), fast=True
     ),

@@ -27,7 +27,7 @@ from derp.inference.api import OpenRouterAPI
 from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
 from derp.inference.openrouter import ModelFactory, chat_settings, responses
 from derp.inference.pins import PinStore, apply_pin
-from derp.inference.roles import ModelRole, RolePin
+from derp.inference.roles import IGNORED_HOSTS, ModelRole, RolePin
 
 log = logging.getLogger("derp.scout")
 MIN_UPTIME = 95.0
@@ -119,9 +119,12 @@ def build_catalog(
             continue
         if endpoint.get("service_tier") in OPT_IN_TIERS:
             continue
-        catalog.zdr.setdefault(str(endpoint["model_id"]), []).append(
+        model_id, tag = str(endpoint["model_id"]), str(endpoint.get("tag") or "")
+        if tag.split("/")[0] in IGNORED_HOSTS.get(model_id, ()):
+            continue  # requests skip it, so it neither keeps a model live nor sets its price
+        catalog.zdr.setdefault(model_id, []).append(
             Route(
-                tag=str(endpoint.get("tag") or ""),
+                tag=tag,
                 prompt=per_million(pricing.get("prompt")),
                 completion=per_million(pricing.get("completion")),
                 uptime=endpoint.get("uptime_last_1d"),

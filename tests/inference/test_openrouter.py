@@ -25,7 +25,7 @@ from derp.inference.roles import DEFAULT_PINS, ModelRole, RolePin
 
 
 def test_zdr_is_per_request_except_free() -> None:
-    assert provider_config(DEFAULT_PINS[ModelRole.CHAT_SPONSORED]) == {"zdr": True, "data_collection": "deny"}
+    assert provider_config(RolePin(model="a/b")) == {"zdr": True, "data_collection": "deny"}
     assert provider_config(DEFAULT_PINS[ModelRole.CHAT_FREE]) == {}
 
 
@@ -35,6 +35,13 @@ def test_a_pins_provider_allowlist_narrows_its_zdr_routes() -> None:
         "data_collection": "deny",
         "only": ["google-vertex"],
     }
+
+
+def test_a_host_that_serves_a_model_badly_is_skipped_in_any_pin_carrying_it() -> None:
+    owner_choice = RolePin(model="z-ai/glm-5.3-flash", fallbacks=("deepseek/deepseek-v4.1-flash-1017",))
+    assert provider_config(owner_choice).get("ignore") == ["open-inference"]
+    assert provider_config(owner_choice.rotated()).get("ignore") == ["open-inference"]  # as a fallback too
+    assert "ignore" not in provider_config(RolePin(model="deepseek/deepseek-v4.1-flash-1017"))
 
 
 def completion(text: str) -> dict[str, Any]:
