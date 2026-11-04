@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from typing import cast
@@ -39,6 +40,45 @@ async def test_long_days_are_summarized_in_parts_then_merged() -> None:
     text = await digests.summarize(FunctionModel(respond), PIN, transcript, messages)
     assert len(seen) == 4 and "Part 1 of 3" in seen[0] and "summary 1" in seen[-1]
     assert text == "summary 4" and len(responses(messages)) == 4  # each one is ledgered
+
+
+async def test_parts_are_summarized_at_once_without_reasoning() -> None:
+    running, most = 0, 0
+    reasoning: list[object] = []
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal running, most
+        reasoning.append((info.model_settings or {}).get("openrouter_reasoning"))
+        running += 1
+        most = max(most, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return ModelResponse(parts=[TextPart("summary")])
+
+    transcript = "\n".join("y" * 1000 for _ in range(90))  # ~3 chunks
+    await digests.summarize(FunctionModel(respond), PIN, transcript, [])
+    assert most == 3  # the parts overlap; the merge follows them
+    assert reasoning == [{"enabled": False}] * 4  # the pin reasons at "low"; a summary doesn't
+
+
+async def test_a_failed_part_cancels_the_others_and_raises_its_own_error() -> None:
+    cancelled: list[bool] = []
+
+    async def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        if "Part 2 of 3" in str(messages[-1]):
+            raise RuntimeError("provider down")
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+        return ModelResponse(parts=[TextPart("summary")])
+
+    transcript = "\n".join("y" * 1000 for _ in range(90))
+    paid: list[ModelMessage] = []
+    with pytest.raises(RuntimeError, match="provider down"):
+        await digests.summarize(FunctionModel(respond), PIN, transcript, paid)
+    assert cancelled == [True, True] and paid  # nothing keeps running; what was sent is kept for the ledger
 
 
 async def test_a_failed_merge_still_ledgers_the_parts_already_paid_for(

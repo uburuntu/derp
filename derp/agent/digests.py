@@ -3,11 +3,13 @@
 Summaries use a cheap model (the sponsored pin; the free pin on free runs),
 resolved when one is actually made, and are ledgered against the run that
 asked, so the asker's funding pays for them like any other part of the answer.
-A stretch too long for one call is summarized in parts and the parts merged;
-extremely busy days are sampled. Only whole days are cached (``build``); the
+A stretch too long for one call is summarized in parts at once and the parts
+merged; extremely busy days are sampled. Summaries don't reason: the pin's
+reasoning would spend the summary's output budget and most of the run's time. Only whole days are cached (``build``); the
 rest of a day after a message is summarized fresh each time (``brief``).
 """
 
+import asyncio
 from datetime import date
 
 from pydantic_ai import Agent, capture_run_messages
@@ -66,7 +68,8 @@ def sample(parts: list[str]) -> list[str]:
 
 async def _ask(model: Model, pin: RolePin, prompt: str, text: str, paid: list[ModelMessage]) -> str:
     """One summarizing call; what it exchanged joins ``paid`` even when it fails."""
-    agent = Agent(model, instructions=prompt, model_settings=chat_settings(pin, max_tokens=SUMMARY_TOKENS))
+    settings = chat_settings(pin.model_copy(update={"reasoning": "none"}), max_tokens=SUMMARY_TOKENS)
+    agent = Agent(model, instructions=prompt, model_settings=settings)
     with capture_run_messages() as captured:
         try:
             result = await agent.run(text)
@@ -76,15 +79,27 @@ async def _ask(model: Model, pin: RolePin, prompt: str, text: str, paid: list[Mo
 
 
 async def summarize(model: Model, pin: RolePin, transcript: str, paid: list[ModelMessage]) -> str:
-    """The stretch's summary; every call's messages are added to ``paid``, those before a failure too."""
+    """The stretch's summary; every call's messages are added to ``paid``, those of a failed one too.
+
+    Parts are summarized at once; one failing cancels the rest, so none is still running (and unledgered)
+    once this returns.
+    """
     every = chunks(transcript)
     parts = sample(every)
-    summaries: list[str] = []
-    for index, part in enumerate(parts, 1):
-        label = f"Part {index} of {len(parts)}.\n" if len(parts) > 1 else ""
-        summaries.append(
-            await _ask(model, pin, DIGEST_PROMPT, f"{label}<chat_history>\n{part}\n</chat_history>", paid)
-        )
+    labels = [
+        f"Part {index} of {len(parts)}.\n" if len(parts) > 1 else "" for index in range(1, len(parts) + 1)
+    ]
+    try:
+        async with asyncio.TaskGroup() as group:
+            asked = [
+                group.create_task(
+                    _ask(model, pin, DIGEST_PROMPT, f"{label}<chat_history>\n{part}\n</chat_history>", paid)
+                )
+                for label, part in zip(labels, parts, strict=True)
+            ]
+    except ExceptionGroup as failed:
+        raise failed.exceptions[0] from None  # callers handle the provider's error, not the group
+    summaries = [task.result() for task in asked]
     text = summaries[0]
     if len(summaries) > 1:
         text = await _ask(model, pin, MERGE_PROMPT, "\n\n".join(summaries), paid)
