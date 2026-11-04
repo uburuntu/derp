@@ -40,6 +40,16 @@ async def test_stats_show_spend_revenue_and_decide_proposals(conversation: Conve
     conversation.meet(PAT, YARD)
     await conversation.settle(await conversation.send(PAT, YARD, "hello yard"))
     async with conversation.db.transaction() as session:
+        run = AgentRun(chat_id=YARD.id, user_id=PAT.id, trigger="message", role="chat", funding="paid")
+        session.add(run)
+        await session.flush()
+        session.add_all(  # a run's two chat calls: the second resends the first one's prompt
+            ProviderCall(
+                kind="chat", role="chat", model="deepseek/flash", downstream_provider="Wafer", run_id=run.id,
+                chat_id=YARD.id, funding="paid", input_tokens=tokens, cache_read_tokens=cached,
+            )
+            for tokens, cached in ((1000, 400), (1100, 1000))
+        )  # fmt: skip
         session.add_all(
             [
                 ProviderCall(
@@ -72,6 +82,9 @@ async def test_stats_show_spend_revenue_and_decide_proposals(conversation: Conve
     assert "| Provider cost | $0.32 | $0.32 | $0.32 |" in text and "| Revenue | 50⭐ |" in text
     assert "paid $0.30" in text and "creator $0.02" in text
     assert "| Yard | `-1040` | $0.30 |" in text and "**OpenRouter key:** $12.50 left of $50.00" in text
+    assert (
+        "| `flash` | Wafer | 2 | 67% | 91% |" in text
+    )  # prompt cache: all calls, then those after a run's first
     assert "**Proposal 1** · chat: `old/model` → `new/model`  \ncheaper" in text
     apply, _ = reply["reply_markup"]["inline_keyboard"][0]
     assert apply["callback_data"] == ConsoleAction(action="apply", key="1").pack()

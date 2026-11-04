@@ -17,7 +17,7 @@ from typing import Any
 from pydantic_ai import Agent, capture_run_messages
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models import Model
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.runs import ledger_side_call
@@ -284,6 +284,65 @@ async def cached_share(session: AsyncSession, days: int = 7) -> float:
     ).one()
     total, cached = row
     return float(cached or 0) / float(total) if total else 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class CacheUse:
+    """One provider's chat calls for one model lately, and the share of their input read from its prompt cache."""
+
+    model: str
+    provider: str
+    calls: int
+    cached: float
+    # Calls after a run's first resend the previous call's prompt seconds later: how well the provider keeps it.
+    in_run: float | None
+
+
+async def cache_by_provider(session: AsyncSession, days: int = 7) -> list[CacheUse]:
+    """Paid and sponsored chat calls per model and provider, busiest first (the owners' /stats)."""
+    since = datetime.now(UTC) - timedelta(days=days)
+    step = func.row_number().over(partition_by=ProviderCall.run_id, order_by=ProviderCall.id)
+    calls = (
+        select(
+            ProviderCall.model,
+            ProviderCall.downstream_provider,
+            ProviderCall.input_tokens,
+            ProviderCall.cache_read_tokens,
+            step.label("step"),
+        )
+        .where(
+            ProviderCall.kind == "chat",
+            ProviderCall.role.in_([role.value for role in CHAT_ROLES]),
+            ProviderCall.run_id.is_not(None),
+            ProviderCall.input_tokens > 0,
+            ProviderCall.created_at >= since,
+        )
+        .subquery()
+    )
+    later = calls.c.step > 1
+    rows = await session.execute(
+        select(
+            calls.c.model,
+            calls.c.downstream_provider,
+            func.count(),
+            func.sum(calls.c.cache_read_tokens),
+            func.sum(calls.c.input_tokens),
+            func.sum(case((later, calls.c.cache_read_tokens), else_=0)),
+            func.sum(case((later, calls.c.input_tokens), else_=0)),
+        )
+        .group_by(calls.c.model, calls.c.downstream_provider)
+        .order_by(func.count().desc())
+    )
+    return [
+        CacheUse(
+            model,
+            provider or "?",
+            count,
+            float(cached) / float(total),
+            float(later_cached) / float(later_total) if later_total else None,
+        )
+        for model, provider, count, cached, total, later_cached, later_total in rows
+    ]
 
 
 async def run_scout(

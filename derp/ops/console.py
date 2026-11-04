@@ -2,8 +2,9 @@
 
 /stats shows provider spend (the provider-call ledger only; Derp's own fees are
 counted apart), Stars revenue, runs, the busiest chats, the OpenRouter key's
-remaining limit, the live model pins (with Roll back) and the model scout's
-open proposals (Apply / Ignore). Anyone else's command falls through to the
+remaining limit, how much chat input each provider served from its prompt
+cache, the live model pins (with Roll back) and the model scout's open
+proposals (Apply / Ignore). Anyone else's command falls through to the
 unknown-command reply, so the console doesn't announce itself. Owner copy is
 plain English, not localized.
 
@@ -34,6 +35,7 @@ from derp.inference.api import OpenRouterAPI, OpenRouterError
 from derp.inference.models import ModelPin, ProviderCall, ScoutProposal
 from derp.inference.pins import PinStore, apply_pin, rollback_pin
 from derp.inference.roles import ModelRole, RolePin
+from derp.inference.scout import cache_by_provider
 from derp.locales import resolve, t
 from derp.money.models import CreditLot, RunFee
 from derp.money.wallets import balance, credit, wallet
@@ -46,6 +48,7 @@ from derp.telegram.text import literal
 WINDOWS = ((1, "24 h"), (7, "7 d"), (30, "30 d"))
 FUNDINGS = ("paid", "sponsored", "free", "creator")
 TOP_CHATS = 5
+CACHE_ROWS = 8
 MAX_GRANT = 1_000_000
 
 SCOUT_PING = "Model scout:"
@@ -128,6 +131,7 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
                 select(ScoutProposal).where(ScoutProposal.status == "open").order_by(ScoutProposal.id)
             )
         )
+        cache = await cache_by_provider(session)
         blocked = await session.scalar(select(func.count()).where(User.blocked_at.is_not(None)))
         blocked_chats = await session.scalar(select(func.count()).where(Chat.blocked_at.is_not(None)))
 
@@ -157,6 +161,22 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
             ["Chat", "ID", "Cost"],
             "llr",
             [[literal(one_line(title or "—")), f"`{chat_id}`", _usd(c)] for chat_id, title, c in top],
+        )
+    if cache:
+        lines += ["", "### Prompt cache (7 d)"]
+        lines += _table(
+            ["Model", "Provider", "Calls", "Cached", "In run"],
+            "llrrr",
+            [
+                [
+                    f"`{use.model.rpartition('/')[2]}`",
+                    literal(use.provider),
+                    str(use.calls),
+                    f"{use.cached:.0%}",
+                    f"{use.in_run:.0%}" if use.in_run is not None else "—",
+                ]
+                for use in cache[:CACHE_ROWS]
+            ],
         )
     buttons: list[InlineKeyboardButton | list[InlineKeyboardButton]] = []
     if pins:
