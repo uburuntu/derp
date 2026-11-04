@@ -71,11 +71,10 @@ class _CostedModel(FunctionModel):
     async def request_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamedResponse]:
         async with super().request_stream(*args, **kwargs) as response:
             if self.upstream is not None:
-                response.provider_details = {
-                    "cost": self.cost(),
-                    "is_byok": True,
-                    "upstream_inference_cost": self.upstream(),
-                }
+                # Like Pydantic AI: OpenRouter's own part, usually 0 on a key, is left out when it is 0.
+                response.provider_details = {"is_byok": True, "upstream_inference_cost": self.upstream()}
+                if cost := self.cost():
+                    response.provider_details["cost"] = cost
             elif cost := self.cost():
                 response.provider_details = {"cost": cost}
             response.finish_reason = self.finish()

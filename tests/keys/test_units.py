@@ -104,3 +104,12 @@ def test_a_keys_provider_charge_is_kept_apart_from_openrouters() -> None:
         "0.12"
     )
     assert upstream_cost({"cost": 0.1}) is None and upstream_cost(None) is None
+
+
+def test_a_keys_turn_with_nothing_owed_to_openrouter_still_counts_as_priced() -> None:
+    from derp.agent.runs import unreported
+
+    free_fee = ModelResponse(parts=[], provider_details={"is_byok": True, "upstream_inference_cost": 0.02})
+    assert not unreported(free_fee)
+    assert unreported(ModelResponse(parts=[], provider_details={"downstream_provider": "OpenAI"}))
+    assert not unreported(ModelResponse(parts=[], provider_details={"cost": 0.0}))

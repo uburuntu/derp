@@ -73,6 +73,13 @@ def totals(messages: Sequence[ModelMessage]) -> RunTotals:
     )
 
 
+def unreported(response: ModelResponse) -> bool:
+    """No cost came back: neither OpenRouter's ``usage.cost`` nor, for a contributed key, its provider's charge
+    (OpenRouter's own part of a key's call is often 0, which Pydantic AI leaves out)."""
+    details = response.provider_details or {}
+    return details.get("cost") is None and not details.get("is_byok")
+
+
 async def price_unreported(
     db: Database,
     messages: Sequence[ModelMessage],
@@ -93,9 +100,7 @@ async def price_unreported(
     """
     if role is ModelRole.CHAT_FREE:
         return
-    unpriced = [
-        m for m in messages if isinstance(m, ModelResponse) and (m.provider_details or {}).get("cost") is None
-    ]
+    unpriced = [m for m in messages if isinstance(m, ModelResponse) and unreported(m)]
     if not unpriced:
         return
     if key is not None:
