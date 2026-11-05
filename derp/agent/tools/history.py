@@ -16,6 +16,8 @@ from sqlalchemy import func, select
 from derp.agent.deps import RunDeps
 from derp.agent.digests import brief, build
 from derp.agent.media import CLIPS, IMAGE_LIKE, SOUNDS, as_content, inspect, note_images, referenced_media
+from derp.agent.outputs import Refused
+from derp.agent.tools.sources import MESSAGE, THIS, SourceArg, replied_to, source_of
 from derp.agent.toolsets import Family
 from derp.agent.watch import medium, watch
 from derp.history.digests import (
@@ -40,6 +42,7 @@ from derp.history.queries import (
 )
 from derp.history.render import describe_time, load_views, render_transcript
 from derp.money.funding import Funding, run_cost
+from derp.telegram.media import MediaUnavailableError
 
 log = logging.getLogger("derp.digests")
 toolset = FunctionToolset[RunDeps]()
@@ -189,22 +192,30 @@ async def chat_info(ctx: RunContext[RunDeps]) -> str:
 
 @toolset.tool(sequential=True)  # a look's price check and its call must not interleave with another's
 async def inspect_media(
-    ctx: RunContext[RunDeps], message_id: int, question: str = ""
+    ctx: RunContext[RunDeps], source: SourceArg = None, question: str = ""
 ) -> list[str | BinaryContent] | str:
-    """Open a stored message's media: pictures (photo, sticker, image file, album); videos, GIFs and video messages watched whole with sound; audio and voice listened to; PDFs read.
+    """Open media: pictures, profile and chat photos; videos, GIFs and video messages watched whole with sound;
+    audio and voice listened to; PDFs read.
 
-    Clips, audio and PDFs come back as notes with timestamps or page numbers; when a file can't be
-    watched (tier, length, size, money) the result says why and shows a still frame or preview instead.
+    Clips, audio and PDFs come back as notes with timestamps or page numbers; what can't be watched (tier,
+    length, size, money) says why and shows a still frame or preview instead.
 
     Args:
-        message_id: The message id shown as #id in the history.
         question: What to look or listen for, e.g. "what does he say at the end?"; empty for a general look.
     """
     deps = ctx.deps
+    text = (source or "").strip()
+    if text.lower() not in THIS and not MESSAGE.fullmatch(text):
+        return await _picture(deps, text)
+    found = MESSAGE.fullmatch(text)
+    message_id = int(found.group(1)) if found else deps.trigger_message_id
+    reply_to = None if found else await replied_to(deps)
     async with deps.db.session() as session:
-        rows = await referenced_media(session, deps.chat.id, message_id, None, (*IMAGE_LIKE, *CLIPS, *SOUNDS))
+        rows = await referenced_media(
+            session, deps.chat.id, message_id, reply_to, (*IMAGE_LIKE, *CLIPS, *SOUNDS)
+        )
     if not rows:
-        return "That message has no picture, video, audio or PDF I can open."
+        return "No picture, video, audio or PDF there that I can open."
     looks = [await watch(ctx, row, kind, question) for row in rows if (kind := medium(row))]
     watched = {(look.row.message_id, look.row.idx) for look in looks if look.notes}
     rest = [  # the still frame or preview picture of what wasn't watched; a voice message has neither
@@ -226,6 +237,7 @@ async def inspect_media(
         role=deps.funding.role,
         chat_id=deps.chat.id,
         user_id=deps.user_id,
+        key=deps.funds.key,
     )
     notes = [
         *lines,
@@ -237,6 +249,24 @@ async def inspect_media(
     if not deps.pin.vision:
         return "\n".join(notes)
     return [*notes, *as_content(inspected)]
+
+
+async def _picture(deps: RunDeps, source: str) -> list[str | BinaryContent] | str:
+    """A profile photo, the chat photo or a picture kept earlier in this answer, to see."""
+    if not deps.pin.vision:
+        return "This model can't see images."
+    try:
+        found = await source_of(deps, source, ("photo", "sticker", "document"))
+        image = await deps.gateway.normalize(found.data)
+    except Refused as refused:
+        return str(refused)
+    except MediaUnavailableError:
+        return "That isn't a picture I can open."
+    what = {"profile_photo": f"{found.owner or 'their'} profile photo", "chat_photo": "the chat photo"}
+    return [
+        f"({what.get(found.type, 'kept result')})",
+        BinaryContent(image.data, media_type=image.media_type),
+    ]
 
 
 PAID_BUILDS = 7  # summaries a paid run may make per call; other runs make one

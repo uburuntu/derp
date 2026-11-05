@@ -105,7 +105,7 @@ async def test_inspect_media_tool_opens_an_older_image(
 
     def call(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         return ModelResponse(
-            parts=[ToolCallPart("inspect_media", {"message_id": posted.message_id}, tool_call_id="m1")]
+            parts=[ToolCallPart("inspect_media", {"source": f"#{posted.message_id}"}, tool_call_id="m1")]
         )
 
     def answer(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
@@ -285,7 +285,7 @@ async def test_inspect_media_watches_a_clip_with_its_sound_and_keeps_a_one_line_
         assert images_in(messages) == []  # notes, not a still frame
         return ModelResponse(parts=[TextPart("he wants his sandwich back")])
 
-    model.reply(tool_call("inspect_media", message_id=posted.message_id, question="what does he shout?"))
+    model.reply(tool_call("inspect_media", source=f"#{posted.message_id}", question="what does he shout?"))
     model.reply(watcher, answer)
     asked = await conversation.send(DORA, group, f"derp what's going on in #{posted.message_id}?")
     reply = await conversation.expect_reply(asked)
@@ -331,7 +331,7 @@ async def test_a_pdf_past_the_free_allowance_pages_or_a_pricey_look_says_why_and
         assert f"#{posted.message_id} (preview)" in result and len(images_in(messages)) == 1
         return ModelResponse(parts=[TextPart("too long for me today")])
 
-    model.reply(tool_call("inspect_media", message_id=posted.message_id), "a title page", answer)
+    model.reply(tool_call("inspect_media", source=f"#{posted.message_id}"), "a title page", answer)
     asked = await conversation.send(DORA, group, f"derp summarize #{posted.message_id}")
     await conversation.expect_reply(asked)
     await conversation.settle(asked)
@@ -353,7 +353,7 @@ async def test_a_pdf_past_the_free_allowance_pages_or_a_pricey_look_says_why_and
         assert "Derpcoins, more than this answer has left" in result
         return ModelResponse(parts=[TextPart("can't afford reading it")])
 
-    model.reply(tool_call("inspect_media", message_id=memo.message_id), broke)
+    model.reply(tool_call("inspect_media", source=f"#{memo.message_id}"), broke)
     asked = await conversation.send(DORA, group, f"derp read #{memo.message_id}")
     await conversation.expect_reply(asked)
     await conversation.settle(asked)
@@ -387,7 +387,7 @@ async def test_a_failed_listen_says_so_instead_of_guessing(
         assert result == f"#{posted.message_id} (audio 0:05): not listened to — the viewer failed."
         return ModelResponse(parts=[TextPart("couldn't hear it")])
 
-    model.reply(tool_call("inspect_media", message_id=posted.message_id), deaf, answer)
+    model.reply(tool_call("inspect_media", source=f"#{posted.message_id}"), deaf, answer)
     asked = await conversation.send(DORA, group, f"derp what's playing in #{posted.message_id}?")
     reply = await conversation.expect_reply(asked)
     assert reply["rich_message"]["markdown"] == "couldn't hear it"

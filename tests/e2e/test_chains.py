@@ -59,8 +59,8 @@ async def test_draw_cut_out_and_sticker_posts_only_the_sticker(
     model.reply(
         tool_call("send_dice"),  # one slot taken first: the chain still fits in the one left
         tool_call("generate_image", prompt="a cat", final=False),
-        tool_call("remove_background", from_result="r1", final=False),
-        tool_call("make_sticker", from_result="r2"),
+        tool_call("media_effect", effect="cutout", source="r1", final=False),
+        tool_call("media_effect", effect="sticker", source="r2"),
         ".",
     )
     asked = await conversation.send(JO, text="draw a cat, cut it out, make it a sticker")
@@ -70,8 +70,9 @@ async def test_draw_cut_out_and_sticker_posts_only_the_sticker(
     assert Image.open(io.BytesIO(sticker.attachments[0].data)).mode == "RGBA"
     for method in ("sendPhoto", "sendDocument", "sendRichMessage"):
         assert conversation.api.calls_of(method, after=asked.after) == [], method
-    assert 'Kept it as result "r1"' in results_of(model, "generate_image")[0]
-    assert results_of(model, "make_sticker")[0].startswith("Sent it as #")
+    assert 'Kept it as "r1"' in results_of(model, "generate_image")[0]
+    cut, stuck = results_of(model, "media_effect")
+    assert cut.startswith('Kept it as "r2"') and stuck.startswith("Sent it as #")
     fee = conversation.settings.effect_credits
     async with conversation.db.session() as session:
         assert sorted(await session.scalars(select(RunOutput.kind))) == ["dice", "sticker"]
@@ -110,13 +111,13 @@ async def test_a_step_that_fails_mid_chain_still_posts_what_was_made(
     _images, _wallet = await drawing(conversation)
     model.reply(
         tool_call("generate_image", prompt="a cat", final=False),
-        tool_call("remove_background", from_result="r1"),
+        tool_call("media_effect", effect="cutout", source="r1"),
         ".",
     )
     asked = await conversation.send(JO, text="draw a cat and cut it out")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
-    assert "nothing was charged" in results_of(model, "remove_background")[0]
+    assert "nothing was charged" in results_of(model, "media_effect")[0]
     assert conversation.api.calls_of("sendRichMessage", after=asked.after) == []  # the photo is the answer
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun))
@@ -131,13 +132,13 @@ async def test_a_refused_end_result_leaves_its_source_to_be_posted(
     conversation.api.fail_next("sendSticker", error_code=400, description="Bad Request: STICKER_INVALID")
     model.reply(
         tool_call("generate_image", prompt="a cat", final=False),
-        tool_call("make_sticker", from_result="r1"),
+        tool_call("media_effect", effect="sticker", source="r1"),
         ".",
     )
     asked = await conversation.send(JO, text="a cat sticker")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
-    assert 'Result "r1" is still kept' in results_of(model, "make_sticker")[0]
+    assert 'Result "r1" is still kept' in results_of(model, "media_effect")[0]
     async with conversation.db.session() as session:
         assert list(await session.scalars(select(RunOutput.kind))) == ["image"]
         run = await session.scalar(select(AgentRun))
@@ -169,13 +170,13 @@ async def test_an_unconfirmed_end_result_uses_up_its_source(
     conversation.api.fail_next("sendSticker", error_code=502, description="Bad Gateway")
     model.reply(
         tool_call("generate_image", prompt="a cat", final=False),
-        tool_call("make_sticker", from_result="r1"),
+        tool_call("media_effect", effect="sticker", source="r1"),
         "sent, probably",
     )
     asked = await conversation.send(JO, text="a cat sticker")
     await conversation.expect_reply(asked)
     await conversation.settle(asked)
-    assert "didn't confirm" in results_of(model, "make_sticker")[0]
+    assert "didn't confirm" in results_of(model, "media_effect")[0]
     assert conversation.api.calls_of("sendPhoto", after=asked.after) == []  # it may have arrived: no repost
     async with conversation.db.session() as session:
         [call] = await session.scalars(select(ProviderCall).where(ProviderCall.kind == "image"))
@@ -185,9 +186,9 @@ async def test_an_unconfirmed_end_result_uses_up_its_source(
 @pytest.mark.parametrize(
     ("step", "method", "fees"),
     [
-        (tool_call("make_meme", text="Monday", from_result="r1"), "sendPhoto", []),
-        (tool_call("make_sticker", from_result="r1"), "sendSticker", []),
-        (tool_call("remove_background", from_result="r1"), "sendDocument", ["cutout"]),
+        (tool_call("make_meme", text="Monday", source="r1"), "sendPhoto", []),
+        (tool_call("media_effect", effect="sticker", source="r1"), "sendSticker", []),
+        (tool_call("media_effect", effect="cutout", source="r1"), "sendDocument", ["cutout"]),
     ],
     ids=["caption", "sticker", "cutout"],
 )
@@ -219,7 +220,7 @@ async def test_an_approved_image_finishes_the_chain_it_was_part_of(
     assert int(result["reply_parameters"]["message_id"]) == asked.message_id and images.prompts == ["a frog"]
     for other in {"sendPhoto", "sendSticker", "sendDocument", "sendRichMessage"} - {method}:
         assert conversation.api.calls_of(other, after=after) == [], other  # only the end result is posted
-    assert 'Kept it as result "r1"' in results_of(model, "generate_image")[0]
+    assert 'Kept it as "r1"' in results_of(model, "generate_image")[0]
     [deleted] = conversation.api.calls_of("deleteMessage", after=after)
     assert int(deleted["message_id"]) == prompt_id
     fee = conversation.settings.effect_credits * len(fees)

@@ -23,12 +23,17 @@ from pydantic_ai.toolsets import FunctionToolset
 from derp.agent.approvals import ask, needs_approval
 from derp.agent.deps import RunDeps
 from derp.agent.images import SHEET, ImageJob, Portrait, draw, filename
+from derp.agent.media import referenced_media
 from derp.agent.outputs import Made, Pending, Refused, afford, check_budget, deliver, emit, key_left, settle
 from derp.agent.tools.sources import (
-    avatar_source,
+    CHAT_PHOTO,
+    MESSAGE,
+    THIS,
+    Final,
+    author_of,
     chat_photo_source,
+    kept_ref,
     kept_source,
-    photo_owner,
     resolve_person,
 )
 from derp.agent.toolsets import Family
@@ -49,38 +54,29 @@ IMAGES = ("photo", "document", "sticker")  # kept results an edit can start from
 async def generate_image(
     ctx: RunContext[RunDeps],
     prompt: str,
-    edit: bool = False,
-    edit_message_id: int | None = None,
-    profile_photo: bool = False,
-    chat_photo: bool = False,
-    people: Annotated[list[str], Field(max_length=4)] | None = None,
+    images: Annotated[list[str], Field(max_length=4)] | None = None,
     aspect_ratio: Literal["1:1", "16:9", "9:16", "4:3", "3:4"] = "1:1",
     animate: bool = False,
-    from_result: str | None = None,
-    final: bool = True,
+    final: Final = True,
 ) -> str:
-    """Draw one image, or edit an existing one, and send it to the chat.
-
-    For several steps (draw → cut out → sticker) pass final=False to every step but the last: each returns an
-    id like r1 for the next tool's from_result, and only the end result is posted.
+    """Draw a picture, or change existing ones, and send it.
 
     Args:
-        prompt: What to draw, or what to change, in detail (English works best).
-        edit: Edit the image this message is about: sent with it, replied to, or the asker's photo just before.
-        edit_message_id: Edit the image of this stored message instead (e.g. one you just sent).
-        profile_photo: Edit a profile photo: edit_message_id's sender, else the person replied to, else the asker.
-        chat_photo: Edit this chat's photo.
-        people: Draw these members from their profile photos, in this order (names or @usernames, "me" for
-            the asker; up to 4), e.g. a group portrait. Say in the prompt who is who ("Anya as the rogue").
-        aspect_ratio: Shape of the picture.
-        animate: A short looping animation (a GIF, square) instead of a still; describe the motion in the prompt.
-        from_result: Edit a result kept earlier in this answer (e.g. r1).
-        final: False keeps the image for a next step instead of posting it.
+        prompt: What to draw or change, in detail (English works best). For people drawn from their profile
+            photos, say who is who ("Anya as the rogue").
+        images: Pictures to start from, up to 4, named as sources are: "#id" (a message's image, else its author's
+            profile photo), "r1", a name, @username or "me" (their profile photo: the likeness stays theirs),
+            "chat".
+        animate: A short looping GIF (square) instead of a still; describe the motion.
     """
     deps = ctx.deps
+    refs = list(dict.fromkeys(ref.strip() for ref in images or () if ref.strip()))
+    kept = [ref for ref in refs if kept_ref(ref)]
     try:
-        check_budget(deps, using=from_result)
-        source = kept_source(deps, from_result, IMAGES) if from_result else None
+        if len(kept) > 1:
+            raise Refused("Start from one kept result at a time.")
+        check_budget(deps, using=kept_ref(kept[0]) if kept else None)
+        source = kept_source(deps, kept_ref(kept[0]) or "", IMAGES) if kept else None
     except Refused as refused:
         return str(refused)
     price = deps.settings.credits_for_usd(deps.settings.image_price_usd)
@@ -94,17 +90,7 @@ async def generate_image(
         job = ImageJob.from_args(ctx.tool_call_metadata or {})
     else:
         try:
-            job = await _job(
-                deps,
-                prompt,
-                edit,
-                edit_message_id,
-                profile_photo,
-                chat_photo,
-                people or [],
-                aspect_ratio,
-                animate,
-            )
+            job = await _job(deps, prompt, [ref for ref in refs if ref not in kept], aspect_ratio, animate)
         except Refused as refused:
             return str(refused)
         if drawn_by is None and deps.funds.wallet_id is not None:
@@ -116,7 +102,7 @@ async def generate_image(
             if source is not None:
                 return (
                     "This image costs enough that they must confirm the price first, so it can't start from a "
-                    "kept result: draw it without from_result, or edit a posted image by its id."
+                    "kept result: draw it without it, or start from a posted image by its id."
                 )
             prompt_card = lambda: ask(
                 deps.db, deps.bot, deps.settings, deps.target,
@@ -178,45 +164,45 @@ async def generate_image(
     return result
 
 
-async def _job(
-    deps: RunDeps,
-    prompt: str,
-    edit: bool,
-    edit_message_id: int | None,
-    profile_photo: bool,
-    chat_photo: bool,
-    people: list[str],
-    aspect_ratio: str,
-    animate: bool,
-) -> ImageJob:
+async def _job(deps: RunDeps, prompt: str, refs: list[str], aspect_ratio: str, animate: bool) -> ImageJob:
     """What to draw, its references resolved now; ``Refused`` when one can't be.
 
-    Named people are drawn from their profile photos, or from the description when they have none;
-    ``profile_photo`` alone edits one photo, which must exist.
+    "#id" edits that message's image ("this": the images the run looks at), or draws its author when it has
+    none; "chat" edits the chat photo; anything else names a person. People are drawn from their profile
+    photos, or from the description when they have none.
     """
+    references: list[int] = []
+    people: list[Portrait] = []
+    for ref in refs:
+        if found := MESSAGE.fullmatch(ref):
+            message_id = int(found.group(1))
+            async with deps.db.session() as session:
+                pictured = await referenced_media(session, deps.chat.id, message_id, None)
+            if pictured:
+                references.append(message_id)
+            else:
+                people.append(await author_of(deps, message_id))
+        elif ref.lower() in THIS:
+            references.extend(deps.seen)
+        elif ref.lower() in CHAT_PHOTO:
+            await chat_photo_source(deps)  # no photo fails early
+        else:
+            people.append(await resolve_person(deps, ref))
     portraits: list[Portrait] = []
     faceless: list[str] = []
-    for name in people:
-        member = await resolve_person(deps, name)
+    for member in dict.fromkeys(people):
         if member.user_id in {p.user_id for p in portraits}:
             continue
         try:
             await profile_photo_bytes(deps.bot, deps.gateway, member.user_id)  # warms the cache for draw
             portraits.append(member)
         except MediaUnavailableError:
-            faceless.append(member.name or name)
-    owner_photo = profile_photo and not people  # edit_message_id then names whose photo, not an image
-    if owner_photo:
-        await avatar_source(deps, edit_message_id)  # no photo fails early (and warms the cache)
-        portraits.append(await photo_owner(deps, edit_message_id))
-    if chat_photo:
-        await chat_photo_source(deps)
-    edits_message = (edit or edit_message_id is not None) and not owner_photo
-    references = ((edit_message_id,) if edit_message_id is not None else deps.seen) if edits_message else ()
+            faceless.append(member.name or "someone")
+    chat_photo = any(ref.lower() in CHAT_PHOTO for ref in refs)
     return ImageJob(
         prompt[:2000],
         aspect_ratio,
-        references,
+        tuple(dict.fromkeys(references)),
         tuple(portraits),
         tuple(dict.fromkeys(faceless)),
         chat_photo,

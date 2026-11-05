@@ -431,7 +431,7 @@ async def test_a_chatgpt_key_draws_gifs_and_quick_edits_on_gpt_image_2_6(
     assert image.upstream_usd == Decimal("0.05")
 
     conversation.api.register_file(f"chatphoto-{CREW.id}", jpeg("purple"))
-    key_model.reply(tool_call("generate_image", prompt="give it a santa hat", chat_photo=True), ".")
+    key_model.reply(tool_call("generate_image", prompt="give it a santa hat", images=["chat"]), ".")
     edit = await conversation.send(BO, CREW, "@DerpRobot santa hat on our chat picture", entities=MENTION)
     await conversation.expect_reply(edit, method="sendPhoto")
     await conversation.settle(edit)

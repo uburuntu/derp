@@ -90,7 +90,7 @@ async def test_an_image_meme_is_free_and_goes_out_as_a_photo(
     conversation.meet(LIV, PUB)
     picture = await ambient(conversation, "pic", jpeg(), photo=photo("pic", jpeg()))
     model.reply(
-        tool_call("make_meme", text="когда тесты зелёные", style="demotivator", message_id=picture),
+        tool_call("make_meme", text="когда тесты зелёные", style="demotivator", source=f"#{picture}"),
         ".",
     )
     asked = await conversation.send(LIV, PUB, "derp make a demotivator of that")
@@ -107,19 +107,23 @@ async def test_an_image_meme_is_free_and_goes_out_as_a_photo(
 async def test_a_profile_photo_meme(conversation: Conversation, model: ScriptedModel) -> None:
     conversation.meet(LIV, PUB)
     conversation.api.register_file(f"profile-{LIV.id}", jpeg("orange"))
+    said = await conversation.send(LIV, PUB, "hi all")  # a message without a picture stands for its author
+    await conversation.settle(said)
     model.reply(
-        tool_call("make_meme", text="me", style="lobster", profile_photo=True),
+        tool_call("make_meme", text="me", style="lobster", source="me"),
+        tool_call("make_meme", text="her", source=f"#{said.message_id}"),
         ".",
     )
-    asked = await conversation.send(LIV, PUB, "derp meme my avatar")
+    asked = await conversation.send(LIV, PUB, "derp meme my avatar twice")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
+    assert len(conversation.api.calls_of("sendPhoto", after=asked.after)) == 2
 
 
 async def test_a_chat_photo_meme(conversation: Conversation, model: ScriptedModel) -> None:
     conversation.meet(LIV, PUB)
     conversation.api.register_file(f"chatphoto-{PUB.id}", jpeg("navy"))
-    model.reply(tool_call("make_meme", text="us", chat_photo=True), ".")
+    model.reply(tool_call("make_meme", text="us", source="chat"), ".")
     asked = await conversation.send(LIV, PUB, "derp meme our chat picture")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
@@ -129,7 +133,7 @@ async def test_a_missing_chat_photo_is_explained_to_the_model(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
     conversation.meet(LIV, PUB)
-    model.reply(tool_call("make_meme", text="us", chat_photo=True), "no picture here")
+    model.reply(tool_call("make_meme", text="us", source="chat"), "no picture here")
     asked = await conversation.send(LIV, PUB, "derp meme our chat picture")
     await conversation.settle(asked)
     assert any("No chat photo" in result for result in results_of(model, "make_meme"))
@@ -147,7 +151,7 @@ async def test_a_video_meme_costs_the_flat_fee_on_paid_runs(
     data = clip("video")
     moving = await ambient(conversation, "vid", data, video=video("vid", data))
     model.reply(
-        tool_call("make_meme", text="this is fine", message_id=moving),
+        tool_call("make_meme", text="this is fine", source=f"#{moving}"),
         ".",
     )
     asked = await conversation.send(LIV, PUB, "derp meme the video")
@@ -171,7 +175,7 @@ async def test_sponsored_heavy_effects_stop_at_the_daily_count(
             )
     moving = await ambient(conversation, "vid2", b"\x00" * 64, video=video("vid2", b"\x00" * 64))
     model.reply(
-        tool_call("make_meme", text="again", message_id=moving),
+        tool_call("make_meme", text="again", source=f"#{moving}"),
         "out of them",
     )
     asked = await conversation.send(LIV, PUB, "derp one more video meme")
@@ -187,7 +191,7 @@ async def test_a_replied_voice_note_is_reversed(conversation: Conversation, mode
     data = clip("voice")
     voice = {"file_id": "vn", "file_unique_id": "u-vn", "duration": 2, "file_size": len(data)}
     spoken = await ambient(conversation, "vn", data, voice=voice)
-    model.reply(tool_call("reverse_media"), ".")
+    model.reply(tool_call("media_effect", effect="reverse"), ".")
     asked = await conversation.send(LIV, PUB, "derp play this backwards", reply_to=spoken)
     sent = await conversation.expect_reply(asked, method="sendVoice", timeout=30)
     await conversation.settle(asked, timeout=30)
@@ -216,19 +220,19 @@ async def test_song_and_anime_recognition(
     data = clip("video")
     moving = await ambient(conversation, "vid3", data, video=video("vid3", data))
     model.reply(
-        tool_call("identify_song", message_id=moving),
-        tool_call("identify_anime", message_id=moving),
+        tool_call("identify", what="song", source=f"#{moving}"),
+        tool_call("identify", what="anime", source=f"#{moving}"),
         "It's Rick.",
     )
     asked = await conversation.send(LIV, PUB, "derp what song and what anime is this?")
     await conversation.expect_reply(asked, timeout=30)
     await conversation.settle(asked, timeout=30)
-    assert results_of(model, "identify_song") == ["Rick Astley — Never Gonna Give You Up\n(ACRCloud)"]
-    [anime] = results_of(model, "identify_anime")
+    song, anime = results_of(model, "identify")
+    assert song == "Rick Astley — Never Gonna Give You Up\n(ACRCloud)"
     assert anime.startswith("Cowboy Bebop, episode 5 at 1:23, similarity 95% https://anilist.co/anime/1")
 
 
-async def test_keyed_and_model_backed_effects_hide_when_unavailable(
+async def test_effects_without_their_keys_or_weights_say_so(
     conversation: Conversation, model: ScriptedModel, tmp_path: Path
 ) -> None:
     conversation.settings = conversation.settings.model_copy(
@@ -236,11 +240,11 @@ async def test_keyed_and_model_backed_effects_hide_when_unavailable(
     )
     await conversation.restart()
     conversation.meet(LIV, PUB)
-    model.reply("none")
-    asked = await conversation.send(LIV, PUB, "derp cut out the background")
+    model.reply(tool_call("media_effect", effect="cutout"), tool_call("identify", what="song"), "none")
+    asked = await conversation.send(LIV, PUB, "derp cut out the background and name the song")
     await conversation.settle(asked)
-    found = {tool.name for tool in model.infos[-1].function_tools}
-    assert "make_meme" in found and "remove_background" not in found and "identify_song" not in found
+    assert results_of(model, "media_effect") == ["Cutouts aren't available here."]
+    assert results_of(model, "identify") == ["Song recognition isn't set up here."]
 
 
 VASYA = Person(1802, "Vasya", username="vasya_k")
@@ -261,10 +265,10 @@ async def test_a_member_named_by_the_asker_is_the_source_in_one_call(
     await regulars(conversation, VASYA, VASILISA)
     conversation.api.register_file(f"profile-{VASYA.id}", jpeg("red"))
     model.reply(
-        tool_call("make_meme", text="кто", person="vas"),
-        tool_call("make_meme", text="кто", person="Petya"),
-        tool_call("make_meme", text="король", person="@vasya_k"),
-        tool_call("reverse_media", person="Vasya"),
+        tool_call("make_meme", text="кто", source="vas"),
+        tool_call("make_meme", text="кто", source="Petya"),
+        tool_call("make_meme", text="король", source="@vasya_k"),
+        tool_call("media_effect", effect="reverse", source="Vasya"),
         ".",
     )
     asked = await conversation.send(LIV, PUB, "derp meme @vasya_k's avatar and mirror it")
@@ -274,7 +278,7 @@ async def test_a_member_named_by_the_asker_is_the_source_in_one_call(
     assert sent.startswith("Sent it as #")
     assert "Vasya @vasya_k" in ambiguous and "Vasilisa" in ambiguous
     assert "No one called 'Petya' here" in missing
-    assert results_of(model, "reverse_media")[0].startswith("Sent it as #")
+    assert results_of(model, "media_effect")[0].startswith("Sent it as #")
 
 
 async def test_a_cutout_becomes_a_transparent_sticker(
@@ -291,13 +295,13 @@ async def test_a_cutout_becomes_a_transparent_sticker(
         "file_size": len(cutout),
     }
     posted = await ambient(conversation, "cut", cutout, document=document)
-    model.reply(tool_call("make_sticker", message_id=posted), ".")
+    model.reply(tool_call("media_effect", effect="sticker", source=f"#{posted}"), ".")
     asked = await conversation.send(LIV, PUB, "derp make that a sticker")
     sent = await conversation.expect_reply(asked, method="sendSticker")
     await conversation.settle(asked)
     sticker = Image.open(io.BytesIO(sent.attachments[0].data))
     assert sticker.format == "WEBP" and sticker.size == (512, 341) and sticker.mode == "RGBA"
-    assert results_of(model, "make_sticker")[0].startswith("Sent it as #")
+    assert results_of(model, "media_effect")[0].startswith("Sent it as #")
     async with conversation.db.session() as session:
         assert await session.scalar(select(RunOutput.kind)) == "sticker"
 
@@ -312,9 +316,9 @@ async def test_clips_too_long_to_watch_are_seen_through_a_frame_and_say_why(
     note = {"file_id": "vnote", "file_unique_id": "u-vnote", "length": 240, "duration": 90}
     round_note = await ambient(conversation, "vnote", data, video_note=note)
     model.reply(
-        tool_call("inspect_media", message_id=gif),
+        tool_call("inspect_media", source=f"#{gif}"),
         "a test pattern",
-        tool_call("inspect_media", message_id=round_note),
+        tool_call("inspect_media", source=f"#{round_note}"),
         "a test pattern again",
         "colour bars, twice",
     )

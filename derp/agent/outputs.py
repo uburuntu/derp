@@ -14,7 +14,7 @@ charged. Any other refusal raises ``Refused``. Both carry text for the model.
 Chains ("draw a cat, cut it out, make it a sticker") post only the end
 result. Media tools take ``final`` (default true: post it); with
 ``final=False`` the result is *kept* on the run as ``r1``, ``r2``… and the next
-tool takes it as ``from_result``. Keeping is opt-in so a single step stays
+tool takes it as its source (``tools.sources``). Keeping is opt-in so a single step stays
 immediate (posted at once, its message id or refusal reported back) and a
 model that skips the flag still answers, every step posted. Whatever was kept
 and never used is posted when the run ends (``flush``, before the text
@@ -311,8 +311,8 @@ async def emit(deps: RunDeps, made: Made, *, final: bool, source: Kept | None = 
         ref = f"r{len(deps.kept) + 1}"
         deps.kept[ref] = Kept(ref, made)
         return (
-            f'Kept it as result "{ref}" without posting it: pass from_result="{ref}" to the next tool. '
-            "Anything kept and not used is posted when you finish."
+            f'Kept it as "{ref}" without posting it: give "{ref}" to the next tool as its source (or among '
+            "generate_image's images). Anything kept and not used is posted when you finish."
         )
     try:
         [sent] = await deliver(

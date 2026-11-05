@@ -159,7 +159,7 @@ async def test_a_kept_voice_message_can_be_played_backwards(
     await fund(conversation, 650)
     model.reply(
         tool_call("speak", script="[laughs] ха-ха", voice="jessica", final=False),
-        tool_call("reverse_media", from_result="r1"),
+        tool_call("media_effect", effect="reverse", source="r1"),
         ".",
     )
     asked = await conversation.send(MAX, text="laugh, but backwards")
@@ -186,7 +186,7 @@ async def test_derps_own_voice_message_is_read_from_its_script_never_listened_to
     await conversation.settle(asked, timeout=30)
     async with conversation.db.session() as session:
         voice_id = await session.scalar(select(MessageMedia.message_id).where(MessageMedia.type == "voice"))
-    model.reply(tool_call("inspect_media", message_id=voice_id, question="what did you yell?"), "that")
+    model.reply(tool_call("inspect_media", source=f"#{voice_id}", question="what did you yell?"), "that")
     again = await conversation.send(MAX, text="wait, what did you yell?")
     await conversation.expect_reply(again)
     await conversation.settle(again)

@@ -27,6 +27,7 @@ from pydantic_ai import RunContext
 from derp.agent.deps import RunDeps
 from derp.agent.outputs import Made, Pending, Refused, check_budget, emit, settle
 from derp.agent.tools.effects import heavy_allowed
+from derp.agent.tools.sources import Final
 from derp.history.capture import Spoken
 from derp.inference.api import OpenRouterError, Speech
 from derp.inference.ledger import record_usage, simple_usage
@@ -97,7 +98,7 @@ async def _perform(deps: RunDeps, prices: Rates, script: str, voice: str) -> Spe
     raise error
 
 
-async def speak(ctx: RunContext[RunDeps], script: str, voice: Voice = "callum", final: bool = True) -> str:
+async def speak(ctx: RunContext[RunDeps], script: str, voice: Voice = "callum", final: Final = True) -> str:
     """Act a short line out as a voice message. Only when someone asks to hear Derp: yell, whisper, sing, laugh,
     do an accent or a sound effect. Never as a plain reading of an answer.
 
@@ -111,7 +112,6 @@ async def speak(ctx: RunContext[RunDeps], script: str, voice: Voice = "callum", 
         voice: callum: gravelly trickster (m). harry: rough and fierce, made for yelling (m). bill: grumpy old
             man (m). charlie: hyped Aussie bloke (m). jessica: bright, playful, giggly (f). lily: velvety and
             theatrical, great at whispers (f).
-        final: False keeps the voice message for a next step (e.g. reverse_media) instead of posting it.
     """
     deps = ctx.deps
     text = script.strip()

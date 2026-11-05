@@ -32,4 +32,4 @@ async def test_group_action_follows_the_stage_at_once() -> None:
 
 
 def test_drawing_tools_show_the_drawing_stage() -> None:
-    assert {stage_for_tool(name) for name in ("make_quote", "make_meme", "make_sticker")} == {"drawing"}
+    assert {stage_for_tool(name) for name in ("make_quote", "make_meme", "media_effect")} == {"drawing"}

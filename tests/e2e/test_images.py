@@ -282,7 +282,7 @@ async def test_a_profile_photo_gets_an_ai_edit_in_one_call(
     await fund(conversation, 650)
     avatar = jpeg("orange")
     conversation.api.register_file(f"profile-{JO.id}", avatar)
-    model.reply(tool_call("generate_image", prompt="add a fun party hat", profile_photo=True), ".")
+    model.reply(tool_call("generate_image", prompt="add a fun party hat", images=["me"]), ".")
     asked = await conversation.send(JO, text="add me a fun hat to my profile picture")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
@@ -305,7 +305,7 @@ async def test_a_photo_then_make_it_a_cat_edits_that_photo(
                                                        "width": 64, "height": 64}])  # fmt: skip
     await conversation.settle(posted)
     # The edit starts from the photo the run is about (sent just before), not a blank canvas.
-    model.reply(tool_call("generate_image", prompt="make the dog a cat", edit=True), ".", "a brown dog")
+    model.reply(tool_call("generate_image", prompt="make the dog a cat", images=["this"]), ".", "a brown dog")
     asked = await conversation.send(JO, club, "derp make it a cat")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
@@ -323,7 +323,7 @@ async def test_a_member_is_drawn_by_name(conversation: Conversation, model: Scri
     await conversation.settle(await conversation.send(vasya, club, "привет"))
     avatar = jpeg("green")
     conversation.api.register_file(f"profile-{vasya.id}", avatar)
-    model.reply(tool_call("generate_image", prompt="this person as a knight", people=["Вася"]), ".")
+    model.reply(tool_call("generate_image", prompt="this person as a knight", images=["Вася"]), ".")
     asked = await conversation.send(JO, club, "дерп нарисуй Васю рыцарем")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
@@ -351,7 +351,7 @@ async def test_two_members_are_drawn_together_each_from_their_photo(
     conversation.api.register_file(f"profile-{ann.id}", jpeg("green"))
     conversation.api.register_file(f"profile-{bob.id}", jpeg("blue"))
     prompt = "Ann and Bob as knights, Ann with a sword, Bob with a shield"
-    model.reply(tool_call("generate_image", prompt=prompt, people=["@a", "@b"]), ".")
+    model.reply(tool_call("generate_image", prompt=prompt, images=["@a", "@b"]), ".")
     asked = await conversation.send(JO, club, "derp draw @a and @b as knights")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
@@ -375,7 +375,7 @@ async def test_a_member_joins_a_photo_from_the_chat(conversation: Conversation, 
     posted = await conversation.send(JO, club, photo=[{"file_id": "dog", "file_unique_id": "u-dog",
                                                        "width": 64, "height": 64}])  # fmt: skip
     await conversation.settle(posted)
-    call = tool_call("generate_image", prompt="Ann walking this dog", edit=True, people=["Ann"])
+    call = tool_call("generate_image", prompt="Ann walking this dog", images=["this", "Ann"])
     model.reply(call, ".", "a brown dog")
     asked = await conversation.send(JO, club, "derp draw Ann walking this dog")
     await conversation.expect_reply(asked, method="sendPhoto")
@@ -399,7 +399,7 @@ async def test_a_group_portrait_draws_someone_without_a_photo_from_the_descripti
     conversation.api.register_file(f"profile-{JO.id}", jpeg("orange"))
     party = "a dysfunctional dungeon party: Anya the rogue, Bob the bard, Jo the wizard"
     model.reply(
-        tool_call("generate_image", prompt=party, people=["Anya", "Bob", "me"]), "Bob has no photo, so."
+        tool_call("generate_image", prompt=party, images=["Anya", "Bob", "me"]), "Bob has no photo, so."
     )
     asked = await conversation.send(JO, club, "derp draw Anya, Bob and me as our dysfunctional dungeon party")
     await conversation.expect_reply(asked, method="sendPhoto")
@@ -416,27 +416,45 @@ async def test_a_group_portrait_draws_someone_without_a_photo_from_the_descripti
 async def test_a_forward_is_drawn_as_its_original_author(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
+    """By the forward's id (a message without a picture stands for its author) or by the author's name, though
+    Lev isn't in this chat; a hidden account's forward stands for whoever forwarded it."""
     images = FakeImages()
     conversation.overrides["api"] = images
     await conversation.restart()
-    await fund(conversation, 1300)
+    await fund(conversation, 2000)
     club, kim = Room(-1506, title="Club"), Person(1507, "Kim")
     conversation.meet(JO, club)
     conversation.meet(kim, club)
     author = {"id": 1508, "is_bot": False, "first_name": "Lev"}  # not in this chat
     conversation.api.register_file(f"profile-{kim.id}", jpeg("red"))
     conversation.api.register_file(f"profile-{author['id']}", jpeg("blue"))
-    shown = {"type": "user", "date": 1_700_000_000, "sender_user": author}
-    hidden = {"type": "hidden_user", "date": 1_700_000_000, "sender_user_name": "Ghost"}
-    for origin, painted in ((shown, jpeg("blue")), (hidden, jpeg("red"))):
-        forwarded = await conversation.send(kim, club, "look what he wrote", forward_origin=origin)
-        await conversation.settle(forwarded)
-        model.reply(tool_call("generate_image", prompt="this person as a knight", profile_photo=True), ".")
-        asked = await conversation.send(JO, club, "derp draw him as a knight", reply_to=forwarded.message_id)
-        await conversation.expect_reply(asked, method="sendPhoto")
-        await conversation.settle(asked)
-        # A visible original author is the one drawn; a hidden one leaves the person who forwarded it.
-        assert [data for data, _ in images.references[-1]] == [normalize(painted).data]
+    shown = await conversation.send(
+        kim,
+        club,
+        "look what he wrote",
+        forward_origin={"type": "user", "date": 1_700_000_000, "sender_user": author},
+    )
+    hidden = await conversation.send(
+        kim,
+        club,
+        "and this",
+        forward_origin={"type": "hidden_user", "date": 1_700_000_000, "sender_user_name": "Ghost"},
+    )
+    await conversation.settle(hidden)
+    knight = "this person as a knight"
+    model.reply(
+        tool_call("generate_image", prompt=knight, images=[f"#{shown.message_id}"]),
+        tool_call("generate_image", prompt=knight, images=["Lev"]),
+        ".",
+    )
+    asked = await conversation.send(JO, club, "derp draw him as a knight, twice", reply_to=shown.message_id)
+    await conversation.settle(asked)
+    model.reply(tool_call("generate_image", prompt=knight, images=[f"#{hidden.message_id}"]), ".")
+    again = await conversation.send(JO, club, "derp and this one", reply_to=hidden.message_id)
+    await conversation.settle(again)
+    drawn = [[data for data, _ in refs] for refs in images.references]
+    blue, red = normalize(jpeg("blue")).data, normalize(jpeg("red")).data
+    assert drawn == [[blue], [blue], [red]]
 
 
 async def test_the_chat_photo_is_a_source_for_edits(conversation: Conversation, model: ScriptedModel) -> None:
@@ -448,7 +466,7 @@ async def test_the_chat_photo_is_a_source_for_edits(conversation: Conversation, 
     conversation.meet(JO, club)
     logo = jpeg("purple")
     conversation.api.register_file(f"chatphoto-{club.id}", logo)
-    model.reply(tool_call("generate_image", prompt="give it a santa hat", chat_photo=True), ".")
+    model.reply(tool_call("generate_image", prompt="give it a santa hat", images=["chat"]), ".")
     asked = await conversation.send(JO, club, "derp put a santa hat on our chat picture")
     await conversation.expect_reply(asked, method="sendPhoto")
     await conversation.settle(asked)
@@ -465,7 +483,7 @@ def meme_of_the_sent_image(messages: list[ModelMessage], _info: AgentInfo) -> Mo
     )
     match = re.search(r"#(\d+)", sent)
     assert match, sent
-    args = {"text": "me after the party", "message_id": int(match.group(1))}
+    args = {"text": "me after the party", "source": f"#{match.group(1)}"}
     return ModelResponse(parts=[ToolCallPart("make_meme", args, tool_call_id="meme-call")])
 
 

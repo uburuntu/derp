@@ -44,9 +44,6 @@ FAMILIES: tuple[Family, ...] = (
     utilities.wolfram_family,
     utilities.code_family,
     effects.family,
-    effects.background_family,
-    effects.song_family,
-    effects.profile_family,
 )
 
 
