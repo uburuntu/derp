@@ -22,11 +22,11 @@ from derp.history.queries import terms
 from derp.history.render import neutralize, one_line
 from derp.memory.models import Note
 
-NOTE_CHARS = 500  # room for a list kept as one note
+NOTE_CHARS = 1000  # room for a list kept as one note
 CHAT_NOTES_CAP = 50
 USER_NOTES_CAP = 20
 RULES_CHARS = 2000
-PROMPT_CHARS = 5000  # notes shown to the model per run, newest first: ten full ones
+PROMPT_CHARS = 5000  # notes shown to the model per run, newest first: five full ones
 # Of those, kept for the asker's own notes. Chat notes get the rest whoever asks, so the chat card (and the cached
 # prompt behind it) is the same for everyone; the asker's notes also take what chat notes leave.
 MY_SHARE = 1500
@@ -145,8 +145,8 @@ def _invalid(text: str) -> str | None:
         return "empty note"
     if len(text) > NOTE_CHARS:
         return (
-            f"too long (max {NOTE_CHARS} characters); shorten it, and a list that outgrew one note drops "
-            "its struck items or goes on in a second list note"
+            f"too long ({len(text)} characters, max {NOTE_CHARS}); cut {len(text) - NOTE_CHARS}: a list that "
+            "outgrew one note drops its struck items or goes on in a second list note"
         )
     return None
 

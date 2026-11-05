@@ -45,7 +45,7 @@ async def remember(ctx: RunContext[RunDeps], text: str, about: Literal["chat", "
     games) as one note that you edit to add or strike items, not as many tiny notes.
 
     Args:
-        text: The fact in a sentence or two, or the whole list (max 500 characters).
+        text: The fact in a sentence or two, or the whole list (max 1000 characters).
         about: "chat" for a chat note, "me" for a note about the current person.
     """
     deps = ctx.deps
@@ -101,7 +101,7 @@ async def edit_note(ctx: RunContext[RunDeps], note_id: int, text: str) -> str:
 
     Args:
         note_id: The number of "note 42".
-        text: The note's full new text (max 500 characters).
+        text: The note's full new text (max 1000 characters).
     """
     deps = ctx.deps
     admin = await _admin(deps)

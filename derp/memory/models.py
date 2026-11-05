@@ -14,7 +14,7 @@ class Note(Base):
     __tablename__ = "notes"
     __table_args__ = (
         CheckConstraint("state in ('active', 'proposed')", name="state"),
-        CheckConstraint("char_length(text) between 1 and 500", name="text_length"),
+        CheckConstraint("char_length(text) between 1 and 1000", name="text_length"),
         Index("ix_notes_chat_user", "chat_id", "user_id"),
         Index("ix_notes_replaces_id", "replaces_id"),
     )

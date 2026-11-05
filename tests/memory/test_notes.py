@@ -6,6 +6,7 @@ from derp.memory.models import Note
 from derp.memory.notes import (
     CHAT_NOTES_CAP,
     MY_SHARE,
+    NOTE_CHARS,
     NOTES_POLICY,
     PROMPT_CHARS,
     USER_NOTES_CAP,
@@ -27,7 +28,9 @@ from derp.memory.notes import (
 async def test_notes_are_validated_capped_and_scoped(database: Database) -> None:
     async with database.transaction() as session:
         assert await add_note(session, -1, "   ", user_id=None, author_id=1) == "empty note"
-        assert str(await add_note(session, -1, "x" * 501, user_id=None, author_id=1)).startswith("too long")
+        too_long = await add_note(session, -1, "x" * (NOTE_CHARS + 1), user_id=None, author_id=1)
+        assert isinstance(too_long, str) and too_long.startswith("too long") and "cut 1:" in too_long
+        assert isinstance(await add_note(session, -3, "x" * NOTE_CHARS, user_id=None, author_id=1), Note)
         for index in range(USER_NOTES_CAP):
             await add_note(session, -1, f"fact {index}", user_id=7, author_id=7)
         assert str(await add_note(session, -1, "one more", user_id=7, author_id=7)).startswith("full")
@@ -224,7 +227,7 @@ async def test_a_direct_edit_discards_the_older_proposed_edit(database: Database
 @pytest.mark.db
 async def test_a_list_that_outgrows_its_note_is_told_what_to_do(database: Database) -> None:
     async with database.transaction() as session:
-        films = "Films: " + ", ".join(f"Film {i}" for i in range(60))
+        films = "Films: " + ", ".join(f"Film {i}" for i in range(130))
         reason = await add_note(session, -1, films, user_id=None, author_id=ME)
         assert isinstance(reason, str) and "struck items" in reason and "second list note" in reason
-        assert isinstance(await add_note(session, -1, films[:500], user_id=None, author_id=ME), Note)
+        assert isinstance(await add_note(session, -1, films[:NOTE_CHARS], user_id=None, author_id=ME), Note)
