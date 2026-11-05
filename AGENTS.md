@@ -9,7 +9,7 @@
 - Python 3.14 + uv, aiogram 3 (long polling), Pydantic AI over OpenRouter, PostgreSQL via SQLAlchemy 2 (async) + Alembic, Logfire. Versions live in `pyproject.toml`/`uv.lock`; do not repeat them in docs.
 - `derp/` is split into domain packages, each owning its models, queries and an `AGENTS.md`: `telegram/` (request policy, sending, filters), `inference/` (OpenRouter seam, model pins, provider-call ledger), `history/` (chat knowledge capture and query), `memory/` (notes, rules), `agent/` (runtime, persona, invocation, outputs), `money/` (wallets, metering, funding), `keys/` (people's own OpenAI/Anthropic API keys powering chats), `billing/` (Stars payments, subscriptions, refunds), `scheduler/`, `settings/` (chat/user policy UI), `tools/` (toolbox capabilities), `ops/` (observability, owner pings, preflight), `locales/`.
 - `derp/app.py` composes services; imports never create clients or start work. `derp/config.py` is the only configuration authority.
-- `migrations/` holds Alembic history; `tests/` mirrors `derp/`; `tools/` holds deployment and maintenance scripts.
+- `migrations/` holds Alembic history; `tests/` mirrors `derp/`; `tools/` holds deployment, measurement and live-eval scripts.
 
 ## Commands
 
@@ -27,7 +27,7 @@
 ## Working rules
 
 - Verify Telegram, aiogram, Pydantic AI and OpenRouter behavior in `references/` (upstream checkouts + scraped docs, gitignored) instead of memory.
-- Tests use synthetic data and never touch the network; `live`-marked tests are opt-in and spend real money. User-facing features land with an e2e journey through the fake Bot API (`tests/e2e/`).
+- Tests use synthetic data and never touch the network; `live`-marked tests are opt-in and spend real money. User-facing features land with an e2e journey through the fake Bot API (`tests/e2e/`). Changes to tools or the persona are A/B-tested live with `tools/eval` (three or more runs a side).
 - Integrate, don't append: build a feature or fix into the concept that already owns it (the model, the transcript format, the persona's rules, the shared helper), so it reads as if it had always been designed in. Don't add it beside that concept as an extra query, prompt line, special case or wrapper. When it replaces a path, delete the old one.
 - Keep modules small and direct; prefer a plain function to a new abstraction until the third repetition.
 - A change people would notice (feature, command, payer rule, privacy) updates `derp/agent/guide.md` in the same change; Derp answers questions about itself from it. Numbers never go there: they are generated from settings in `agent/tools/about.py`.

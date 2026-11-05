@@ -170,3 +170,6 @@ Thumbs.db
 .local/
 *.dump
 *.sql.gz
+
+# Live eval results and recorded request bodies
+tools/eval/out/
