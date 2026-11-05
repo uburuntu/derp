@@ -38,15 +38,13 @@ toolset = FunctionToolset[RunDeps]()
 async def remember(ctx: RunContext[RunDeps], text: str, about: Literal["chat", "me"] = "chat") -> str:
     """Save a short fact for future conversations in this chat.
 
-    Use "me" for facts about the person talking to you (their preferences, plans), "chat" for things
-    the whole chat should know. Chat notes follow the chat notes policy in the situation; personal
-    notes are saved when asked, or when something about the person is clearly worth keeping.
-    A correction of a saved fact is edit_note, not a second note. Keep a list (films to watch, places,
-    games) as one note that you edit to add or strike items, not as many tiny notes.
+    Chat notes follow the chat notes policy in the situation; personal notes are saved when asked, or when
+    something about the person is clearly worth keeping. A correction is edit_note, not a second note; a
+    list (films to watch, places, games) is one note you edit to add or strike items.
 
     Args:
         text: The fact in a sentence or two, or the whole list (max 1000 characters).
-        about: "chat" for a chat note, "me" for a note about the current person.
+        about: "me": about the person talking to you (preferences, plans); "chat": for the whole chat.
     """
     deps = ctx.deps
     owner = deps.user_id if about == "me" else None
@@ -160,7 +158,7 @@ def _refusal(note: Note, verb: str) -> str:
 
 @toolset.tool(sequential=True)
 async def set_chat_rules(ctx: RunContext[RunDeps], rules: str) -> str:
-    """Replace this chat's rules — standing instructions for how you behave here. Admins only.
+    """Replace this chat's rules — standing instructions for how you behave here (admins only; the tool checks).
 
     Rules quoted word for word from the admin's current message apply at once; anything you reworded
     (or clearing the rules) is shown to the admin with Apply/Cancel buttons first.

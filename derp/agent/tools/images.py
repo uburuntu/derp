@@ -29,7 +29,7 @@ from derp.agent.tools.sources import (
     CHAT_PHOTO,
     MESSAGE,
     THIS,
-    Final,
+    FinalArg,
     author_of,
     chat_photo_source,
     kept_ref,
@@ -57,7 +57,7 @@ async def generate_image(
     images: Annotated[list[str], Field(max_length=4)] | None = None,
     aspect_ratio: Literal["1:1", "16:9", "9:16", "4:3", "3:4"] = "1:1",
     animate: bool = False,
-    final: Final = True,
+    final: FinalArg = True,
 ) -> str:
     """Draw a picture, or change existing ones, and send it.
 

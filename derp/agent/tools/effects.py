@@ -22,7 +22,7 @@ from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
 from derp.agent.outputs import Made, Pending, Sendable, afford, check_budget, emit, pending_cost
-from derp.agent.tools.sources import SOUND, VISUAL, Final, Refused, SourceArg, kept_ref, source_of
+from derp.agent.tools.sources import SOUND, VISUAL, FinalArg, Refused, SourceArg, kept_ref, source_of
 from derp.agent.toolsets import Family
 from derp.money.funding import Funding
 from derp.money.models import RunFee
@@ -68,7 +68,7 @@ async def make_meme(
     text: str,
     style: Literal["demotivator", "lobster", "panel"] = "demotivator",
     source: SourceArg = None,
-    final: Final = True,
+    final: FinalArg = True,
 ) -> str:
     """Caption a picture, GIF, sticker or video as a meme and send it.
 
@@ -108,7 +108,7 @@ async def media_effect(
     ctx: RunContext[RunDeps],
     effect: Literal["sticker", "reverse", "cutout"],
     source: SourceArg = None,
-    final: Final = True,
+    final: FinalArg = True,
 ) -> str:
     """Make media into a sticker, play it backwards, or cut a picture's subject out, and send it.
 

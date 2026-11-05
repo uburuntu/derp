@@ -252,7 +252,8 @@ async def leave_feedback(
 ) -> str:
     """Send feedback to Derp's makers: report a bug, suggest a feature, pass on praise.
 
-    Use when someone asks to report or suggest something, in their words (lightly cleaned up).
+    Use when someone asks to report or suggest something, in their words (lightly cleaned up); file it
+    right away, without investigating first.
 
     Args:
         text: The feedback, self-contained.

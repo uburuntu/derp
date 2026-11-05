@@ -34,9 +34,10 @@ SOURCE = (
     'answer; a name, @username or "me": their profile photo; "chat": the chat photo. Default: the media this '
     "message is about."
 )
-type SourceArg = Annotated[str | None, Field(description=SOURCE)]  # a tool's ``source`` argument
+# Argument aliases are plain assignments: a ``type`` alias would sit behind a $ref in each tool's schema.
+SourceArg = Annotated[str | None, Field(description=SOURCE)]  # a tool's ``source`` argument
 # Chains: a media tool's result kept unposted ("r1") is the next tool's source, posted only if nothing uses it.
-type Final = Annotated[
+FinalArg = Annotated[
     bool, Field(description="False keeps the result unposted for a next step, as its source.")
 ]
 MESSAGE = re.compile(r"#?(\d+)")

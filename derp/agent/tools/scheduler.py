@@ -42,9 +42,9 @@ from derp.scheduler.jobs import (
 from derp.scheduler.models import Job
 
 toolset = FunctionToolset[RunDeps]()
-type Repeat = Literal["once", "daily", "weekdays", "weekly", "monthly"]
-type Kind = Literal["reminder", "prompt"]  # a reminder posts its text; Derp answers a prompt when it fires
-type Minutes = Annotated[int, Field(ge=1)]
+Repeat = Literal["once", "daily", "weekdays", "weekly", "monthly"]
+Kind = Literal["reminder", "prompt"]  # a reminder posts its text; Derp answers a prompt when it fires
+Minutes = Annotated[int, Field(ge=1)]
 KINDS: dict[Kind, Literal["message", "prompt"]] = {"reminder": "message", "prompt": "prompt"}  # as stored
 NO_ZONE = (
     "This chat's time zone isn't set, so a wall-clock time can't be placed. Ask once where they are, set it "

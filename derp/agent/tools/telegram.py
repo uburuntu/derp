@@ -40,7 +40,7 @@ REACTIONS = (
 )  # fmt: skip
 
 
-type MessageId = Annotated[int, Field(ge=1)]
+MessageId = Annotated[int, Field(ge=1)]
 
 
 async def reply_target(deps: RunDeps, reply_to: int | None) -> int | None:

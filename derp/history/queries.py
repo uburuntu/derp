@@ -284,9 +284,9 @@ async def id_range(
     return list(rows)
 
 
+# A structured question about this chat's stored history (``chat_query`` takes its fields as arguments; no
+# docstring, so the schema carries no description repeating the tool's).
 class ChatQuery(BaseModel):
-    """A structured question about this chat's stored history."""
-
     preset: (
         Literal[
             "reaction_leaderboard",

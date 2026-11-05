@@ -197,8 +197,8 @@ async def inspect_media(
     """Open media: pictures, profile and chat photos; videos, GIFs and video messages watched whole with sound;
     audio and voice listened to; PDFs read.
 
-    Clips, audio and PDFs come back as notes with timestamps or page numbers; what can't be watched (tier,
-    length, size, money) says why and shows a still frame or preview instead.
+    Clips, audio and PDFs come back as notes with timestamps or page numbers; what can't be watched says
+    why and shows a still frame or preview instead.
 
     Args:
         question: What to look or listen for, e.g. "what does he say at the end?"; empty for a general look.
