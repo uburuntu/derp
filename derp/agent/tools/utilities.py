@@ -1,9 +1,12 @@
 """Utility tools: time zones, weather, rates and reference lookups. Free on every tier.
 
-All are deferred (found through tool search). Arithmetic lives in the Python
-sandbox (``derp.agent.tools.code``). WolframAlpha and the remote program runner
-appear only when their keys are configured.
+All are deferred (found through tool search on free runs). Arithmetic lives in the
+Python sandbox (``derp.agent.tools.code``). ``lookup`` asks one of several reference
+sources; WolframAlpha answers only when its key is configured, and the remote program
+runner appears only with its key.
 """
+
+from typing import Literal
 
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
@@ -14,7 +17,6 @@ from derp.tools import lookups
 from derp.tools.timezones import TimeZoneError, convert_time
 
 toolset = FunctionToolset[RunDeps]()
-wolfram_tools = FunctionToolset[RunDeps]()
 code_tools = FunctionToolset[RunDeps]()
 
 
@@ -66,55 +68,33 @@ async def exchange_rate(ctx: RunContext[RunDeps], base: str, quote: str, amount:
 
 
 @toolset.tool
-async def wiki(ctx: RunContext[RunDeps], query: str) -> str:
-    """The Wikipedia summary of the best-matching article (Russian Wikipedia for Cyrillic queries).
+async def lookup(
+    ctx: RunContext[RunDeps], source: Literal["wikipedia", "urban_dictionary", "arxiv", "wolfram"], query: str
+) -> str:
+    """Look something up: wikipedia (the best article's summary; Russian Wikipedia for Cyrillic), urban_dictionary
+    (slang, crowd-written and crude), arxiv (papers: authors, year, link, the abstract's start) or wolfram
+    (WolframAlpha's short answer: maths, units, science, dates; ask in English).
 
     Args:
-        query: What to look up.
+        source: Where to look.
+        query: What to look up, e.g. "integrate x^2 sin x" for wolfram.
     """
+    client = ctx.deps.lookups
+    match source:
+        case "wikipedia":
+            name, call = "Wikipedia", client.wiki
+        case "urban_dictionary":
+            name, call = "Urban Dictionary", client.urban
+        case "arxiv":
+            name, call = "arXiv", client.arxiv
+        case "wolfram":
+            if not ctx.deps.settings.wolfram_app_id:
+                return "WolframAlpha isn't set up here; use run_code or the web."
+            name, call = "WolframAlpha", client.wolfram
     try:
-        return await ctx.deps.lookups.wiki(query)
+        return await call(query)
     except lookups.LookupError as error:
-        return _failed("Wikipedia", error)
-
-
-@toolset.tool
-async def urban_dictionary(ctx: RunContext[RunDeps], term: str) -> str:
-    """Slang definitions from Urban Dictionary (crowd-written, often crude).
-
-    Args:
-        term: The slang word or phrase.
-    """
-    try:
-        return await ctx.deps.lookups.urban(term)
-    except lookups.LookupError as error:
-        return _failed("Urban Dictionary", error)
-
-
-@toolset.tool
-async def arxiv_search(ctx: RunContext[RunDeps], query: str) -> str:
-    """Search arXiv papers: titles, authors, year, link and the start of the abstract.
-
-    Args:
-        query: Topic or title words.
-    """
-    try:
-        return await ctx.deps.lookups.arxiv(query)
-    except lookups.LookupError as error:
-        return _failed("arXiv", error)
-
-
-@wolfram_tools.tool
-async def wolfram(ctx: RunContext[RunDeps], query: str) -> str:
-    """WolframAlpha short answer: math, units, science, dates, facts with computation.
-
-    Args:
-        query: A question in English, like `distance from Moscow to Paris` or `integrate x^2 sin x`.
-    """
-    try:
-        return await ctx.deps.lookups.wolfram(query)
-    except lookups.LookupError as error:
-        return _failed("WolframAlpha", error)
+        return _failed(name, error)
 
 
 @code_tools.tool
@@ -136,14 +116,7 @@ family = Family(
     "utilities",
     toolset,
     deferred=True,
-    detached="lookups (weather, exchange rates, time zones, Wikipedia and the like)",
-)
-wolfram_family = Family(
-    "wolfram",
-    wolfram_tools,
-    deferred=True,
-    available=lambda deps: bool(deps.settings.wolfram_app_id),
-    detached="WolframAlpha",
+    detached="lookups (weather, exchange rates, time zones, Wikipedia, WolframAlpha and the like)",
 )
 code_family = Family(
     "code",

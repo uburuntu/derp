@@ -78,10 +78,13 @@ async def test_an_outage_is_reported_to_the_model(conversation: Conversation, mo
     ]
 
 
-async def test_keyed_tools_hide_without_keys(conversation: Conversation, model: ScriptedModel) -> None:
+async def test_keyed_lookups_say_when_they_are_not_set_up(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
     conversation.meet(KIM, DORM)
-    model.reply("None here.")
+    model.reply(tool_call("lookup", source="wolfram", query="integrate x^2"), "None here.")
     asked = await conversation.send(KIM, DORM, "derp ask wolfram")
     await conversation.settle(asked)
     found = {tool.name for tool in model.infos[-1].function_tools}
-    assert "urban_dictionary" in found and "wolfram" not in found and "run_program" not in found
+    assert "lookup" in found and "run_program" not in found  # the program runner needs its key to appear
+    assert results_of(model, "lookup") == ["WolframAlpha isn't set up here; use run_code or the web."]

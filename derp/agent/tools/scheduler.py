@@ -15,8 +15,9 @@ an explicit offset need no zone.
 """
 
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Annotated, Literal
 
+from pydantic import Field
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
@@ -41,6 +42,10 @@ from derp.scheduler.jobs import (
 from derp.scheduler.models import Job
 
 toolset = FunctionToolset[RunDeps]()
+type Repeat = Literal["once", "daily", "weekdays", "weekly", "monthly"]
+type Kind = Literal["reminder", "prompt"]  # a reminder posts its text; Derp answers a prompt when it fires
+type Minutes = Annotated[int, Field(ge=1)]
+KINDS: dict[Kind, Literal["message", "prompt"]] = {"reminder": "message", "prompt": "prompt"}  # as stored
 NO_ZONE = (
     "This chat's time zone isn't set, so a wall-clock time can't be placed. Ask once where they are, set it "
     "with change_setting(time_zone, <IANA zone>), then try again. If they said UTC, give `at` with +00:00."
@@ -81,19 +86,18 @@ async def schedule(
     ctx: RunContext[RunDeps],
     text: str,
     at: str | None = None,
-    in_minutes: int | None = None,
-    repeat: Literal["daily", "weekdays", "weekly", "monthly"] | None = None,
-    answer_it: bool = False,
+    in_minutes: Minutes | None = None,
+    repeat: Repeat = "once",
+    kind: Kind = "reminder",
 ) -> str:
-    """Schedule a reminder (posts the text) or a prompt Derp answers at that time (answer_it).
+    """Schedule a reminder (posts the text) or a prompt Derp answers when it fires ("every morning, tell us the
+    weather").
 
     Args:
-        text: The reminder text, or the request Derp should answer when it fires.
-        at: Local date-time in the chat's time zone, ISO like 2026-10-20 09:00 (add +00:00 only if they
-            said UTC).
-        in_minutes: Alternatively, minutes from now.
-        repeat: Repeat at the same local time (repeating jobs in groups need an admin).
-        answer_it: True for "every morning, tell us the weather"-style requests.
+        text: The reminder, or the request to answer when it fires.
+        at: Local date-time in the chat's time zone, ISO like 2026-10-20 09:00 (+00:00 only if they said UTC).
+        in_minutes: Or minutes from now.
+        repeat: At the same local time each day, weekday, week or month (repeats in groups: admins).
     """
     deps = ctx.deps
     if refusal := _firing(deps):
@@ -103,7 +107,7 @@ async def schedule(
         return "Give `at` (ISO local date-time) or `in_minutes`."
     if isinstance(when, str):
         return when
-    if repeat and not await is_admin(deps.bot, deps.chat, deps.user_id):
+    if repeat != "once" and not await is_admin(deps.bot, deps.chat, deps.user_id):
         return "Only admins can schedule repeating jobs in this group; one-off reminders are fine."
     async with deps.db.transaction() as session:
         if not await has_room(session, deps.chat.id, deps.user_id):
@@ -112,21 +116,21 @@ async def schedule(
             chat_id=deps.chat.id,
             thread_id=deps.target.thread_id,
             creator_id=deps.user_id,
-            kind="prompt" if answer_it else "message",
+            kind=KINDS[kind],
             text=_text(text),
-            repeat=repeat,
+            repeat=None if repeat == "once" else repeat,
             next_at=when,
             anchor_at=when,
         )
         session.add(job)
         await session.flush()
-    paid = " Each run is paid like a normal answer from their Derpcoins." if answer_it else ""
+    paid = " Each run is paid like a normal answer from their Derpcoins." if kind == "prompt" else ""
     return f"Scheduled job {job.id} for {show_time(when, deps.tz)}{_repeats(job)}.{paid} Show the time exactly as given."
 
 
 @toolset.tool
 async def list_jobs(ctx: RunContext[RunDeps]) -> str:
-    """Scheduled reminders and prompts in this chat."""
+    """This chat's scheduled reminders and prompts."""
     deps = ctx.deps
     async with deps.db.session() as session:
         rows = await live_jobs(session, deps.chat.id)
@@ -160,7 +164,7 @@ async def _act(deps: RunDeps, job_id: int, action: JobAction | Change) -> Job | 
                 "change how often it runs; admins can still move, pause or cancel it."
             )
         case "passed":
-            return "That one-off's time has passed; give it a new time with edit_job."
+            return "That one-off's time has passed; give it a new time."
         case "admins":
             return "Only admins can have a job repeat in this group; it can stay a one-off."
         case "full":
@@ -170,59 +174,45 @@ async def _act(deps: RunDeps, job_id: int, action: JobAction | Change) -> Job | 
 
 
 @toolset.tool
-async def cancel_job(ctx: RunContext[RunDeps], job_id: int) -> str:
-    """Cancel a scheduled job of this chat (your own, or any if you're an admin).
-
-    Args:
-        job_id: The job number from list_jobs.
-    """
-    outcome = await _act(ctx.deps, job_id, "cancel")
-    return outcome if isinstance(outcome, str) else f"Cancelled job {job_id}."
-
-
-@toolset.tool
-async def resume_job(ctx: RunContext[RunDeps], job_id: int) -> str:
-    """Resume a paused scheduled job of this chat (its creator or an admin).
-
-    Args:
-        job_id: The job number from list_jobs.
-    """
-    outcome = await _act(ctx.deps, job_id, "resume")
-    if isinstance(outcome, str):
-        return outcome
-    return f"Resumed job {job_id}; next run {show_time(outcome.next_at, ctx.deps.tz)}."
-
-
-@toolset.tool
 async def edit_job(
     ctx: RunContext[RunDeps],
     job_id: int,
+    action: Literal["pause", "resume", "cancel"] | None = None,
     at: str | None = None,
-    in_minutes: int | None = None,
+    in_minutes: Minutes | None = None,
     text: str | None = None,
-    repeat: Literal["once", "daily", "weekdays", "weekly", "monthly"] | None = None,
-    answer_it: bool | None = None,
+    repeat: Repeat | None = None,
+    kind: Kind | None = None,
 ) -> str:
-    """Change a scheduled job of this chat in place: move it, reword it or change how it repeats.
+    """Pause, resume or cancel one of this chat's scheduled jobs, or move, reword or re-repeat it in place.
 
     Args:
-        job_id: The job number from schedule or list_jobs.
+        job_id: The number of "job 12".
+        action: pause, resume or cancel; leave out to change the job instead.
         at: A new local date-time, as in schedule; a paused job or a one-off that already fired comes back on.
-        in_minutes: Alternatively, a new time in minutes from now.
-        text: New reminder text or request; leave out to keep it.
-        repeat: A new repeat rule at the job's local time, or "once" to stop repeating; leave out to keep it.
-        answer_it: True to make it a prompt Derp answers, false a plain reminder; leave out to keep it.
+        in_minutes: Or a new time in minutes from now.
+        text: New text or request.
+        repeat: A new repeat rule; "once" stops repeating.
+        kind: reminder or prompt.
     """
     deps = ctx.deps
     if refusal := _firing(deps):
         return refusal
+    if action is not None:
+        outcome = await _act(deps, job_id, action)
+        if isinstance(outcome, str):
+            return outcome
+        if action == "resume":
+            return f"Resumed job {job_id}; next run {show_time(outcome.next_at, deps.tz)}."
+        return f"{'Paused' if action == 'pause' else 'Cancelled'} job {job_id}."
     when = _when(deps, at, in_minutes)
     if isinstance(when, str):
         return when
-    kind = None if answer_it is None else "prompt" if answer_it else "message"
-    change = Change(at=when, text=_text(text) if text else None, kind=kind, repeat=repeat)
+    change = Change(
+        at=when, text=_text(text) if text else None, kind=KINDS[kind] if kind else None, repeat=repeat
+    )
     if change == Change():
-        return "Nothing to change: give a new time, text, repeat or answer_it."
+        return "Nothing to change: give an action, or a new time, text, repeat or kind."
     outcome = await _act(deps, job_id, change)
     if isinstance(outcome, str):
         return outcome
@@ -233,4 +223,4 @@ async def edit_job(
     )
 
 
-family = Family("scheduler", toolset, deferred=("list_jobs", "edit_job", "cancel_job", "resume_job"))
+family = Family("scheduler", toolset, deferred=("list_jobs", "edit_job"))

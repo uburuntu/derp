@@ -77,6 +77,26 @@ async def test_a_reminder_moves_in_place_and_fires_at_the_new_time(
     assert [c["rich_message"]["markdown"] for c in posted] == ["⏰ Reminder from Lee: bins and recycling"]
 
 
+async def test_a_job_pauses_resumes_and_cancels_on_request(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(LEE, YARD)
+    model.reply(tool_call("schedule", text="stretch", in_minutes=30), "Will do.")
+    await conversation.settle(await conversation.send(LEE, YARD, "derp remind me to stretch in 30 min"))
+    async with conversation.db.session() as session:
+        job_id = await session.scalar(select(Job.id))
+    for action, state, said in (
+        ("pause", "paused", f"Paused job {job_id}."),
+        ("resume", "active", f"Resumed job {job_id}; next run !["),
+        ("cancel", "cancelled", f"Cancelled job {job_id}."),
+    ):
+        model.reply(tool_call("edit_job", job_id=job_id, action=action), "Done.")
+        await conversation.settle(await conversation.send(LEE, YARD, f"derp {action} my stretch reminder"))
+        assert said in str(model.requests[-1][-1])
+        async with conversation.db.session() as session:
+            assert await session.scalar(select(Job.state)) == state
+
+
 def last_reminder(conversation: Conversation, chat_id: int) -> tuple[int, list[str]]:
     """The newest message with buttons in a chat and its buttons' callback data."""
     message_id, message = max(
@@ -169,7 +189,7 @@ async def test_a_scheduled_prompt_is_answered_and_paused_when_unfunded(
     async with conversation.db.transaction() as session:
         await credit(session, (await wallet(session, "user", LEE.id)).id, "stars:lee", 650, "purchase")
     model.reply(
-        tool_call("schedule", text="tell me a joke", in_minutes=5, repeat="daily", answer_it=True), "Set."
+        tool_call("schedule", text="tell me a joke", in_minutes=5, repeat="daily", kind="prompt"), "Set."
     )
     asked = await conversation.send(LEE, text="every day tell me a joke")
     await conversation.settle(asked)
@@ -201,9 +221,7 @@ async def test_a_chat_that_refuses_derp_pauses_its_jobs(
     conversation.meet(LEE, YARD, status="administrator")
     async with conversation.db.transaction() as session:
         await credit(session, (await wallet(session, "user", LEE.id)).id, "stars:lee2", 650, "purchase")
-    model.reply(
-        tool_call("schedule", text="daily fact", in_minutes=5, repeat="daily", answer_it=True), "Set."
-    )
+    model.reply(tool_call("schedule", text="daily fact", in_minutes=5, repeat="daily", kind="prompt"), "Set.")
     asked = await conversation.send(LEE, YARD, "derp every day tell us a fact")
     await conversation.settle(asked)
     model.reply("cats sleep a lot")
@@ -284,7 +302,7 @@ async def test_a_scheduled_prompt_stays_its_creators_and_a_firing_never_edits_it
     async with conversation.db.transaction() as session:
         await credit(session, (await wallet(session, "user", LEE.id)).id, "stars:lee", 650, "purchase")
     model.reply(
-        tool_call("schedule", text="tell us a joke", in_minutes=30, repeat="daily", answer_it=True), "Set."
+        tool_call("schedule", text="tell us a joke", in_minutes=30, repeat="daily", kind="prompt"), "Set."
     )
     await conversation.settle(await conversation.send(LEE, YARD, "derp every day tell us a joke"))
     async with conversation.db.session() as session:

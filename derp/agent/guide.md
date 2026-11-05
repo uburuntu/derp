@@ -169,8 +169,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   setting the first zone moves nothing. Day summaries and "today" follow the chat's zone; the free daily
   Derpcoins still refill on the UTC day.
 - Anyone can schedule one-offs; repeating jobs in groups need an admin. Creators manage their own jobs and
-  admins any: Derp moves, rewords, re-repeats, cancels or resumes them on request ("move that one to tomorrow at
-  six"), changing the job in place, and /settings has a page of the chat's reminders (beside the zone) with
+  admins any: Derp moves, rewords, re-repeats, pauses, resumes or cancels them on request ("move that one to
+  tomorrow at six", "pause the morning one"), changing the job in place, and /settings has a page of the chat's reminders (beside the zone) with
   pause, resume and delete buttons. Moving a one-off that already fired brings it back. A scheduled prompt is
   paid by its creator, so only they can make one, reword it or change how often it runs; admins can still move,
   pause or cancel it.

@@ -41,7 +41,6 @@ FAMILIES: tuple[Family, ...] = (
     games.family,
     self_service.family,
     utilities.family,
-    utilities.wolfram_family,
     utilities.code_family,
     effects.family,
 )
