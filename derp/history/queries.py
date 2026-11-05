@@ -88,6 +88,23 @@ async def resolve_members(session: AsyncSession, chat_id: int, names: Sequence[s
     return sorted(ids)
 
 
+async def members_named(session: AsyncSession, chat_id: int, names: Sequence[str]) -> dict[str, int]:
+    """The names that are exactly one person's here (first name, full name or @username, any case): name → id.
+
+    Unlike ``resolve_members`` nothing partial matches: "No" is nobody, not Nora."""
+    wanted = {name: name.strip().lstrip("@").casefold() for name in names}
+    rows = await session.execute(
+        select(User.id, User.first_name, User.last_name, User.username)
+        .join(ChatMember, ChatMember.user_id == User.id)
+        .where(ChatMember.chat_id == chat_id)
+    )
+    holders: dict[str, set[int]] = {}
+    for user_id, first, last, username in rows:
+        for key in {first, f"{first} {last}" if last else first, username or ""} - {""}:
+            holders.setdefault(key.casefold(), set()).add(user_id)
+    return {name: next(iter(ids)) for name, key in wanted.items() if len(ids := holders.get(key, set())) == 1}
+
+
 STOP_WORDS = frozenset(
     "a an and are as at be by did do does for from had has have how i in is it its me my of on or our "  # noqa: SIM905
     "said say says so that the their them they this to us was we were what when where which who whom "

@@ -56,6 +56,8 @@ async def test_a_quiz_scores_first_answers_into_the_leaderboard(
     assert [p["type"] for p in sent] == ["quiz", "quiz", "regular"]
     assert all(str(p["is_anonymous"]).lower() == "false" and int(p["open_period"]) == 120 for p in sent)
     assert str(sent[2]["allows_multiple_answers"]).lower() == "true" and "explanation" not in sent[2].fields
+    assert [str(p.fields.get("shuffle_options")).lower() for p in sent] == ["true", "true", "none"]
+    assert [str(p.fields.get("allow_adding_options")).lower() for p in sent] == ["none", "none", "true"]
     assert result_of(model, "post_polls").startswith("Posted 3 of 3 (#")
 
     for update in (
@@ -78,6 +80,40 @@ async def test_a_quiz_scores_first_answers_into_the_leaderboard(
     board = await conversation.send(CY, QUIZ_ROOM, "derp who's winning?")
     await conversation.settle(board)
     assert result_of(model, "chat_query") == "Ben: 2"
+
+
+async def test_members_named_in_a_poll_show_their_profile_photos(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    for person in (ADA, BEN, CY):
+        conversation.meet(person, QUIZ_ROOM)
+        await conversation.settle(await conversation.send(person, QUIZ_ROOM, "hi"))
+    conversation.api.register_file(f"profile-{ADA.id}", b"ada's face")  # Ben shows no profile photo
+    poll = {"question": "Who's most likely to be late?", "options": ["Ada", "ben", "Ad", "Nobody"]}
+    model.reply(tool_call("post_polls", polls=[poll], blind=True), ".")
+    asked = await conversation.send(CY, QUIZ_ROOM, "derp poll: who's most likely to be late?")
+    await conversation.settle(asked)
+    [sent] = conversation.api.calls_of("sendPoll", after=asked.after)
+    faces = [(option.get("media") or {}).get("media") for option in sent["options"]]
+    assert faces == [f"profile-{ADA.id}", None, None, None]  # "Ad" is nobody's name, not part of Ada's
+    assert str(sent["hide_results_until_closes"]).lower() == "true"
+
+
+async def test_a_photo_telegram_rejects_on_an_option_is_dropped(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    for person in (ADA, BEN):
+        conversation.meet(person, QUIZ_ROOM)
+        await conversation.settle(await conversation.send(person, QUIZ_ROOM, "hi"))
+    conversation.api.register_file(f"profile-{BEN.id}", b"ben's face")
+    conversation.api.fail_next("sendPoll", error_code=400, description="Bad Request: MEDIA_INVALID")
+    model.reply(tool_call("post_polls", polls=[{"question": "Captain?", "options": ["Ada", "Ben"]}]), ".")
+    asked = await conversation.send(ADA, QUIZ_ROOM, "derp poll who's captain")
+    await conversation.settle(asked)
+    rejected, posted = conversation.api.calls_of("sendPoll", after=asked.after)
+    assert rejected["options"][1]["media"]["media"] == f"profile-{BEN.id}"
+    assert all("media" not in option for option in posted["options"])
+    assert result_of(model, "post_polls").startswith("Posted 1 of 1 (#")
 
 
 async def test_an_unconfirmed_poll_stops_the_series_without_a_resend(

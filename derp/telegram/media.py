@@ -28,6 +28,7 @@ import aiohttp
 import pillow_heif
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
+from aiogram.types import PhotoSize
 from PIL import Image, ImageOps
 
 from derp.tools.workers import DEFAULTS, EffectError, check_dimensions
@@ -213,9 +214,7 @@ class MediaGateway:
             self._cached_bytes -= len(evicted)
 
 
-async def profile_photo_bytes(
-    bot: Bot, gateway: MediaGateway, user_id: int, side: int | None = None
-) -> bytes:
+async def profile_photo_size(bot: Bot, user_id: int, side: int | None = None) -> PhotoSize:
     """A person's current profile photo: the largest size, or the smallest at least ``side`` px wide.
 
     Raises when Telegram doesn't share one.
@@ -227,7 +226,14 @@ async def profile_photo_bytes(
     if not photos.photos:
         raise MediaUnavailableError("no profile photo visible to Derp")
     sizes = photos.photos[0]
-    chosen = next((s for s in sizes if side and s.width >= side), sizes[-1])
+    return next((s for s in sizes if side and s.width >= side), sizes[-1])
+
+
+async def profile_photo_bytes(
+    bot: Bot, gateway: MediaGateway, user_id: int, side: int | None = None
+) -> bytes:
+    """The bytes of ``profile_photo_size``'s pick."""
+    chosen = await profile_photo_size(bot, user_id, side)
     return await gateway.fetch(
         chosen.file_id, bot_id=bot.id, key=chosen.file_unique_id, size_hint=chosen.file_size
     )
