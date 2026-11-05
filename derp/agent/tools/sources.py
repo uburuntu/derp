@@ -209,6 +209,17 @@ async def _forwarded(deps: RunDeps, wanted: str) -> Portrait | None:
     return None
 
 
+async def person_of(deps: RunDeps, source: str) -> Portrait | None:
+    """The person a source names: a name, @username or "me", or "#id" for that message's author (a message with
+    nothing to open); None for a kept result, the chat photo or the media the message is about."""
+    text = source.strip()
+    if kept_ref(text) or text.lower() in THIS or text.lower() in CHAT_PHOTO:
+        return None
+    if found := MESSAGE.fullmatch(text):
+        return await author_of(deps, int(found.group(1)))
+    return await resolve_person(deps, text)
+
+
 async def avatar_source(deps: RunDeps, name: str) -> Source:
     return await photo_of(deps, await resolve_person(deps, name))
 

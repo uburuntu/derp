@@ -126,6 +126,10 @@ class FakeBotAPI:
         self.profile: dict[
             tuple[str, str], str
         ] = {}  # (name | description | short_description, language) → text
+        self.profile_audios: dict[int, list[JsonObject]] = {}  # user id → the Audio objects on their profile
+        self.personal_posts: dict[
+            int, list[JsonObject]
+        ] = {}  # user id → their profile channel's latest posts
         self.handlers: dict[str, Callable[[JsonObject], Any]] = {}
         self._runner: web.AppRunner | None = None
         self.base_url = ""
@@ -590,6 +594,13 @@ class FakeBotAPI:
             return {"total_count": 0, "photos": []}
         size = {"file_id": file_id, "file_unique_id": f"u-{file_id}", "width": 640, "height": 640}
         return {"total_count": 1, "photos": [[size]]}
+
+    def _m_getUserProfileAudios(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        audios = self.profile_audios.get(int(fields["user_id"]), [])
+        return {"total_count": len(audios), "audios": audios[: int(fields.get("limit") or 100)]}
+
+    def _m_getUserPersonalChatMessages(self, fields: JsonObject) -> list[JsonObject]:  # noqa: N802
+        return self.personal_posts.get(int(fields["user_id"]), [])[: int(fields["limit"])]
 
     def _m_sendSticker(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         file_id = f"f-sticker-{len(self.calls)}" if self.calls[-1].attachments else str(fields["sticker"])

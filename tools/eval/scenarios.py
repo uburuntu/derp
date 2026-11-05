@@ -159,6 +159,9 @@ SCENARIOS: list[Scenario] = [
     Scenario("avatar_look", "дерп, что у Лены на аватарке?",
              lambda r, s: ok(r.called("inspect_media", source=has("лен")) or r.called("inspect_media", source=has("lena")),
                              "looks at Lena's avatar"), tags=("media",)),
+    Scenario("profile_songs", "дерп, что за песни у Лены в профиле?",
+             lambda r, s: ok(any(t == "inspect_media" and "Земфира" in out for t, out in r.returns),
+                             "reads Lena's profile songs"), tags=("media",)),
     # memory
     Scenario("remember_fact", "derp remember that Bob is allergic to cats",
              lambda r, s: ok(r.called("remember", text=has("bob")), "remember chat"), tags=("memory",)),

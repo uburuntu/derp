@@ -270,6 +270,15 @@ async def seed(world: World, room: Room, *, admins: tuple[Person, ...] = (JO,), 
     """The group with its history stored directly, members known to the fake Bot API, its wallet funded."""
     for person in PEOPLE:
         world.conv.meet(person, room, status="administrator" if person in admins else "member")
+    world.api.profile_audios[LENA.id] = [
+        {
+            "file_id": "song-1",
+            "file_unique_id": "u-song-1",
+            "duration": 215,
+            "performer": "Земфира",
+            "title": "Хочешь?",
+        }
+    ]
     out = Seeded(room)
     for minutes, who, line, key in FACTS:
         message_id = await world.store(world.payload(room, who, minutes, text=line))

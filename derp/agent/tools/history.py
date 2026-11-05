@@ -5,21 +5,25 @@ run. Scope always comes from the run: the current chat, and the current forum
 topic unless the model asks for the whole chat.
 """
 
+import contextlib
 import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal, get_args
 
+from aiogram.exceptions import TelegramAPIError
 from pydantic_ai import BinaryContent, RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import func, select
 
 from derp.agent.deps import RunDeps
 from derp.agent.digests import brief, build
+from derp.agent.images import Portrait
 from derp.agent.media import CLIPS, IMAGE_LIKE, SOUNDS, as_content, inspect, note_images, referenced_media
 from derp.agent.outputs import Refused
-from derp.agent.tools.sources import MESSAGE, THIS, SourceArg, replied_to, source_of
+from derp.agent.tools.sources import MESSAGE, THIS, SourceArg, person_of, photo_of, replied_to, source_of
 from derp.agent.toolsets import Family
 from derp.agent.watch import medium, watch
+from derp.history.capture import classify
 from derp.history.digests import (
     aimed_at,
     day_bounds,
@@ -40,7 +44,7 @@ from derp.history.queries import (
     run_query,
     search,
 )
-from derp.history.render import describe_time, load_views, render_transcript
+from derp.history.render import describe_time, kind_label, load_views, one_line, render_transcript
 from derp.money.funding import Funding, run_cost
 from derp.telegram.media import MediaUnavailableError
 
@@ -62,6 +66,7 @@ async def _render(ctx: RunContext[RunDeps], rows: list[Message]) -> str:
 
 SEARCH_HITS = 8  # best matches shown, each with the messages around it
 SEARCH_CONTEXT = 2  # messages shown before and after each match
+PROFILE_SONGS, CHANNEL_POSTS = 10, 5  # of a person's profile, shown with their photo
 
 
 @toolset.tool
@@ -194,8 +199,9 @@ async def chat_info(ctx: RunContext[RunDeps]) -> str:
 async def inspect_media(
     ctx: RunContext[RunDeps], source: SourceArg = None, question: str = ""
 ) -> list[str | BinaryContent] | str:
-    """Open media: pictures (those shown with the message are already seen), profile and chat photos; videos,
-    GIFs and video messages watched whole with sound; audio and voice listened to; PDFs read.
+    """Open media: pictures (those shown with the message are already seen), a person's profile (photo, songs,
+    their channel's latest posts), the chat photo; videos, GIFs and video messages watched whole with sound;
+    audio and voice listened to; PDFs read.
 
     Clips, audio and PDFs come back as notes with timestamps or page numbers; what can't be watched says
     why and shows a still frame or preview instead.
@@ -254,7 +260,12 @@ async def inspect_media(
 
 
 async def _picture(deps: RunDeps, source: str) -> list[str | BinaryContent] | str:
-    """A profile photo, the chat photo or a picture kept earlier in this answer, to see."""
+    """A person's profile, the chat photo or a picture kept earlier in this answer, to see."""
+    try:
+        if (owner := await person_of(deps, source)) is not None:
+            return await _profile(deps, owner)
+    except Refused as refused:
+        return str(refused)
     if not deps.pin.vision:
         return "This model can't see images."
     try:
@@ -269,6 +280,46 @@ async def _picture(deps: RunDeps, source: str) -> list[str | BinaryContent] | st
         f"({what.get(found.type, 'kept result')})",
         BinaryContent(image.data, media_type=image.media_type),
     ]
+
+
+async def _profile(deps: RunDeps, owner: Portrait) -> list[str | BinaryContent] | str:
+    """What a person shows on their profile: the photo (to see, when the model sees), songs and channel posts."""
+    who = owner.name or "them"
+    lines = await _profile_lines(deps, owner.user_id)
+    try:
+        photo = await photo_of(deps, owner)
+        image = await deps.gateway.normalize(photo.data) if deps.pin.vision else None
+    except Refused as refused:
+        return "\n".join([str(refused), *lines])
+    except MediaUnavailableError:
+        return "\n".join([f"The profile photo of {who} isn't a picture I can open.", *lines])
+    if image is None:
+        return "\n".join(["(This model can't see their profile photo.)", *lines])
+    return [f"({who}'s profile photo)", *lines, BinaryContent(image.data, media_type=image.media_type)]
+
+
+async def _profile_lines(deps: RunDeps, user_id: int) -> list[str]:
+    """The songs on a person's profile and the latest posts of the channel they show there; what Telegram doesn't
+    share is left out."""
+    lines: list[str] = []
+    with contextlib.suppress(TelegramAPIError):
+        if audios := (await deps.bot.get_user_profile_audios(user_id=user_id, limit=PROFILE_SONGS)).audios:
+            songs = (
+                " — ".join(p for p in (a.performer, a.title) if p) or a.file_name or "untitled"
+                for a in audios
+            )
+            lines.append("Profile songs: " + "; ".join(one_line(song, 80) for song in songs))
+    with contextlib.suppress(TelegramAPIError):
+        if posts := await deps.bot.get_user_personal_chat_messages(user_id=user_id, limit=CHANNEL_POSTS):
+            channel = posts[0].chat
+            name = one_line(channel.title or "") + (f" @{channel.username}" if channel.username else "")
+            said = " | ".join(
+                f"{post.date.astimezone(deps.tz):%d %b}: "
+                + one_line(post.text or post.caption or f"[{kind_label(classify(post))}]", 200)
+                for post in posts
+            )
+            lines.append(f"Their channel {name}, latest posts: {said}")
+    return lines
 
 
 PAID_BUILDS = 7  # summaries a paid run may make per call; other runs make one
