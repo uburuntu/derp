@@ -22,7 +22,7 @@ from derp.history.models import Chat, ForumTopic, Message, MessageMedia, Sticker
 from derp.history.polls import upsert_poll
 from derp.history.render import MessageView, media_note, sender_label
 from derp.keys.pasted import redact
-from derp.telegram.media import TGS
+from derp.telegram.media import BOT_API_DOWNLOAD_LIMIT, TGS
 from derp.telegram.text import plain_emoji
 
 TYPED_KINDS = {
@@ -136,19 +136,33 @@ def _sticker_mime(sticker: Any) -> str:
     return TGS if sticker.is_animated else "video/webm" if sticker.is_video else "image/webp"
 
 
+def _fetchable(item: Any) -> Any:
+    """The encode of a file bots can download: a video past the limit as its largest other quality within it
+    (``Video.qualities``; H.264 first, which every decoder reads), else the file itself."""
+    if (getattr(item, "file_size", None) or 0) <= BOT_API_DOWNLOAD_LIMIT:
+        return item
+    fitting = [
+        quality
+        for quality in getattr(item, "qualities", None) or ()
+        if quality.file_size and quality.file_size <= BOT_API_DOWNLOAD_LIMIT
+    ]
+    return max(fitting, key=lambda quality: (quality.codec == "h264", quality.file_size), default=item)
+
+
 def _file(kind: str, item: Any) -> dict[str, Any]:
     """A media row's columns for one Telegram file, with its preview picture when Telegram made one."""
     sticker = kind == "sticker"
     side = getattr(item, "length", None)  # video notes are square
     thumb = getattr(item, "thumbnail", None)
+    file = _fetchable(item)
     return {
         "type": kind,
-        "file_id": item.file_id,
-        "file_unique_id": item.file_unique_id,
-        "file_size": getattr(item, "file_size", None),
+        "file_id": file.file_id,
+        "file_unique_id": file.file_unique_id,
+        "file_size": getattr(file, "file_size", None),
         "mime_type": _sticker_mime(item) if sticker else getattr(item, "mime_type", None),
-        "width": getattr(item, "width", None) or side,
-        "height": getattr(item, "height", None) or side,
+        "width": getattr(file, "width", None) or side,
+        "height": getattr(file, "height", None) or side,
         "duration": getattr(item, "duration", None),
         "file_name": getattr(item, "file_name", None),
         "sticker_emoji": item.emoji if sticker else None,

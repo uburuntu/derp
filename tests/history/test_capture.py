@@ -117,6 +117,32 @@ def test_media_keeps_the_preview_picture_of_what_isnt_one(
     assert (row["thumb_file_id"], row["thumb_unique_id"]) == (f"t-{kind}", f"ut-{kind}")
 
 
+def test_a_video_too_big_to_download_is_kept_as_an_encode_that_isnt() -> None:
+    mb = 1024 * 1024
+    qualities = [
+        {"file_id": "av1", "file_unique_id": "u-av1", "width": 1280, "height": 720, "codec": "av01", "file_size": 15 * mb},
+        {"file_id": "small", "file_unique_id": "u-small", "width": 640, "height": 360, "codec": "h264", "file_size": 9 * mb},
+        {"file_id": "hd", "file_unique_id": "u-hd", "width": 1920, "height": 1080, "codec": "h264", "file_size": 60 * mb},
+    ]  # fmt: skip
+    big = CLIP | {
+        "file_id": "orig",
+        "file_unique_id": "u-orig",
+        "file_size": 300 * mb,
+        "qualities": qualities,
+    }
+    (row,) = media_rows(tg(video=big), BOT_ID)
+    assert (row["file_id"], row["file_unique_id"], row["file_size"], row["width"]) == (
+        "small",
+        "u-small",
+        9 * mb,
+        640,
+    )
+    (row,) = media_rows(tg(video=big | {"file_size": 12 * mb}), BOT_ID)
+    assert row["file_id"] == "orig"  # one that fits stays as sent
+    (row,) = media_rows(tg(video=big | {"qualities": qualities[2:]}), BOT_ID)
+    assert row["file_id"] == "orig"  # nothing fits: the original, which says it's too big
+
+
 def size(name: str, side: int) -> dict[str, Any]:
     return {"file_id": name, "file_unique_id": f"u-{name}", "width": side, "height": side}
 

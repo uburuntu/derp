@@ -20,7 +20,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   messages and video notes are transcribed (in groups, ones nobody asked about only up to a daily limit; past it,
   when someone calls Derp in reply to one), and so are short audio files (forwarded memos, recordings) and the
   speech in videos when someone calls Derp with one or in reply to one. Recordings over the length limit, files too
-  big for Telegram to hand bots and videos without sound aren't transcribed, and Derp says so instead of guessing.
+  big for Telegram to hand bots and videos without sound aren't transcribed, and Derp says so instead of guessing;
+  a video that big is still watched and heard through a smaller version when Telegram has one that fits.
   Asked about a video, GIF, video note, audio file, voice message or PDF, it opens the whole thing on a separate
   model that keeps nothing: watches clips with their sound, listens to audio and reads PDFs, and answers with what
   happens when (timestamps, page numbers, quoted speech). That costs a little extra, and paid answers take longer
