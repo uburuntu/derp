@@ -45,7 +45,7 @@ class RunCaps(BaseModel, frozen=True):
     tool_calls: int = 8
     visible_outputs: int = 3
     output_tokens: int = 2_000
-    timeout_seconds: float = 120
+    timeout_seconds: float = 180
     credits: int = 200
 
 
