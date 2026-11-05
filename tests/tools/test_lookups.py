@@ -14,21 +14,21 @@ def make(settings: Settings, handler: Handler) -> Lookups:
     return Lookups(settings, client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
 
-async def test_crypto_and_fiat_rates(settings: Settings) -> None:
+async def test_json_answers_are_kept_for_their_ttl(settings: Settings) -> None:
     seen: list[httpx.URL] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
         seen.append(request.url)
-        if request.url.host == "api.coingecko.com":
-            return httpx.Response(200, json={"bitcoin": {"usd": 100000, "usd_24h_change": -2.25}})
-        return httpx.Response(200, json={"result": "success", "rates": {"RUB": 80.5}})
+        return httpx.Response(200, json={"asked": len(seen)})
 
     tools = make(settings, handle)
-    assert await tools.exchange_rate("btc", "usd", 0.5) == "0.5 BTC = 50,000 USD (-2.2% in 24h) (CoinGecko)"
-    assert await tools.exchange_rate("USD", "btc", 1000) == "1000 USD = 0.01 BTC (-2.2% in 24h) (CoinGecko)"
-    assert await tools.exchange_rate("usd", "rub", 2) == "2 USD = 161 RUB (open.er-api.com, daily)"
-    await tools.exchange_rate("usd", "rub", 3)
-    assert len(seen) == 2  # the inverse coin price and the repeated fiat rate came from the cache
+    assert await tools.json("https://x.example/a", params={"q": 1}, ttl=60) == {"asked": 1}
+    assert await tools.json("https://x.example/a", params={"q": 1}, ttl=60) == {"asked": 1}
+    assert await tools.json("https://x.example/a", params={"q": 2}, ttl=60) == {"asked": 2}
+    assert await tools.json("https://x.example/a", params={"q": 1}) == {"asked": 3}  # no ttl: asked again
+    garbled = make(settings, lambda _r: httpx.Response(200, content=b"<html>"))
+    with pytest.raises(lookups.LookupError, match="unexpected response"):
+        await garbled.json("https://x.example/a")
     await tools.close()
 
 

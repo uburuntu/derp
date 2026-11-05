@@ -113,19 +113,23 @@ CHAT_TOOLS = {
 async def test_an_inline_answer_can_use_lookups_and_is_charged(
     conversation: Conversation, model: ScriptedModel, web: dict[str, Any]
 ) -> None:
-    web["/v6/latest/USD"] = {"result": "success", "rates": {"RUB": 81.5}}
+    web["/v8/finance/chart/USDRUB=X"] = {
+        "chart": {"result": [{"meta": {"symbol": "USDRUB=X", "regularMarketPrice": 81.5}}]}
+    }
     async with conversation.db.transaction() as session:
         wallet_id = (await wallet(session, "user", NIA.id)).id
         await credit(session, wallet_id, "stars:nia", 650, "purchase")
         prices = {"price_prompt": Decimal(1), "price_completion": Decimal(4)}  # USD per 1M tokens
         session.add(ModelPin(role="chat", pin=DEFAULT_PINS[ModelRole.CHAT].model_dump(mode="json"), **prices))
-    model.reply(tool_call("exchange_rate", base="USD", quote="RUB", amount=100), "≈8150 ₽")
+    model.reply(tool_call("market", base="USD", quote="RUB", amount=100, chart=True), "≈8150 ₽")
     inline_id = await ask_inline(conversation, NIA, "100 usd in rub", "iq-rate")
     assert conversation.api.inline_messages[inline_id]["rich_message"]["markdown"].endswith("≈8150 ₽")
     returned = [str(p.content) for m in model.requests[-1] for p in m.parts if isinstance(p, ToolReturnPart)]
-    assert returned == ["100 USD = 8,150 RUB (open.er-api.com, daily)"]
+    assert returned == [  # an inline answer is text only
+        "100 USD = 8,150.00 RUB. USD/RUB (Yahoo Finance): 81.50 RUB. (Charts can't be posted here.)"
+    ]
     names = {tool.name for tool in model.infos[-1].function_tools}
-    assert {"exchange_rate", "weather", "about_derp", "read_source", "run_code"} <= names
+    assert {"market", "weather", "about_derp", "read_source", "run_code"} <= names
     assert not names & CHAT_TOOLS and "profile_photo" not in names
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun))

@@ -10,9 +10,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - Private chat: Derp answers every message. Groups: only when called (see groups).
 - Inline mode: type @username and a question in any chat; the answer is edited into the sent message.
 - Guest mode: a mention in a chat Derp isn't a member of gets one reply. Inline and guest answers see no chat
-  history and nothing from them is stored except accounting. They can still look things up (weather, exchange
-  rates, time zones, Wikipedia and the like), calculate, answer about Derp itself and, beyond free models, search
-  the web; they can't draw, post polls or stickers, or set reminders.
+  history and nothing from them is stored except accounting. They can still look things up (weather, prices and
+  odds, time zones, Wikipedia and the like), calculate, answer about Derp itself and, beyond free models, search
+  the web; they can't draw, post charts, polls or stickers, or set reminders.
 - It looks at pictures in any image format (photos, iPhone HEIC files, image files), stickers and albums, photos
   inside rich messages and in messages quoted from another chat, and it opens links. A photo someone sent just
   before calling Derp comes along with the question ("make it a cat" edits it), and a reply to Derp's answer about
@@ -41,6 +41,12 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   Only the end result is posted (no trail of in-between pictures), and the drawing and the cutout are paid for
   only if something made from them arrives.
   Stickers are sent one by one; Derp doesn't make sticker packs.
+- Prices and bets: currencies and conversions, crypto (exchange-listed coins with their perpetual funding and open
+  interest, on-chain DEX tokens), stocks, funds, indices and commodities (Moscow Exchange shares too), with the
+  move, range and simple trading stats over a day, a week, a month, three months, a year or five years; and
+  Polymarket's betting odds on events, or the events most bet on right now. Any of it can come as a chart picture
+  (the likeliest outcomes of a bet as separate lines), which can be memed like any picture. Quotes are free public
+  data and may lag (stocks by up to a quarter of an hour); Derp can't trade or place bets.
 - Quote stickers: "derp, quote this" (in reply), "quote the last few messages" or "quote the funniest moment today"
   turn chat messages into a Telegram-looking sticker — names in their colours, avatars (initials without a visible
   photo), reply bars, formatting, emoji and pictures — or a picture on request. A quote too long to read as a

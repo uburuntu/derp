@@ -58,6 +58,7 @@ class RunDeps:
     riders: int = 0  # delivered messages that went out in another one's slot (a poll series' later polls)
     kept: dict[str, Kept] = field(default_factory=dict[str, "Kept"])  # results kept for the next tool, by ref
     reacted: set[int] = field(default_factory=set[int])  # messages Derp reacted to with the react tool
+    detached: bool = False  # an inline or guest answer: text only, nothing is posted
 
     @property
     def funding(self) -> Funding:

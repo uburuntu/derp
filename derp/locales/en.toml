@@ -10,8 +10,8 @@ _“what's in this photo?” · “sum up this link” · “translate this, but
 
 <details><summary>🔎 Search and lookups</summary>
 
-Fresh news from the web, weather, exchange rates, time zones, Wikipedia, slang, papers — and a Python sandbox for exact math.
-_“weather in Tbilisi tomorrow” · “100 USD in euros” · “what does ‘rizz’ mean?”_
+Fresh news from the web, weather, prices with charts (currencies, crypto, stocks), betting odds, time zones, Wikipedia, slang, papers — and a Python sandbox for exact math.
+_“weather in Tbilisi tomorrow” · “bitcoin chart for the week” · “odds on the Champions League”_
 </details>
 
 <details><summary>🎨 Pictures and memes</summary>
@@ -271,7 +271,7 @@ Messages that invoke me, and — while a group allows it — other group message
 
 <details><summary>Who processes it</summary>
 
-To answer, messages go to AI providers through OpenRouter. Paid answers and the free daily ones use providers that keep nothing. Free models — only if you, or an admin for a group, turned them on — may store what they get. In a chat where someone plugged in their own Claude or ChatGPT key (an admin turned it on in a group, with a notice), answers go to Anthropic or OpenAI under that person's account, which keep what they get for up to 30 days (longer if it's flagged); OpenRouter holds the key itself, and I never store it. When I search the web or open a link, the query or address goes to a search or fetch service that may log it. Some tools send only what they need to their own service: weather, exchange rates, Wikipedia, Urban Dictionary and arXiv get the search words; WolframAlpha the question; JDoodle code to run; ACRCloud a short audio clip to name a song; trace.moe a frame to find an anime scene. Memes, cutouts and other effects are made on Derp's own server. Feedback you send is read by Derp's developer.
+To answer, messages go to AI providers through OpenRouter. Paid answers and the free daily ones use providers that keep nothing. Free models — only if you, or an admin for a group, turned them on — may store what they get. In a chat where someone plugged in their own Claude or ChatGPT key (an admin turned it on in a group, with a notice), answers go to Anthropic or OpenAI under that person's account, which keep what they get for up to 30 days (longer if it's flagged); OpenRouter holds the key itself, and I never store it. When I search the web or open a link, the query or address goes to a search or fetch service that may log it. Some tools send only what they need to their own service: weather, market data (Binance, Moscow Exchange, Yahoo Finance, CoinGecko, GeckoTerminal, Polymarket), Wikipedia, Urban Dictionary and arXiv get the search words; WolframAlpha the question; JDoodle code to run; ACRCloud a short audio clip to name a song; trace.moe a frame to find an anime scene. Memes, cutouts and other effects are made on Derp's own server. Feedback you send is read by Derp's developer.
 </details>
 
 <details><summary>Your controls</summary>

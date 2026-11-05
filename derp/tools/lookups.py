@@ -1,10 +1,10 @@
-"""Web lookups for the toolbox: weather, rates, Wikipedia, Urban Dictionary, arXiv, Wolfram, code, song and anime ID.
+"""Web lookups for the toolbox: weather, Wikipedia, Urban Dictionary, arXiv, Wolfram, code, song and anime ID.
 
 Every call has a deadline and a response-size cap and returns compact text for
 the model. Keyless public APIs are used where possible; Wolfram and the code
 runner (and ACRCloud song recognition) need keys and their tools hide themselves
-without them. Results that
-change slowly are cached in memory for a while. URLs, queries and response
+without them. Market data (``derp.tools.markets``) comes through ``json``. Results
+that change slowly are cached in memory for a while. URLs, queries and response
 bodies are never logged.
 """
 
@@ -33,11 +33,6 @@ WEATHER = {
     66: "freezing rain", 67: "heavy freezing rain", 71: "light snow", 73: "snow", 75: "heavy snow", 77: "snow grains",
     80: "light showers", 81: "showers", 82: "violent showers", 85: "snow showers", 86: "heavy snow showers",
     95: "thunderstorm", 96: "thunderstorm with hail", 99: "thunderstorm with heavy hail",
-}  # fmt: skip
-COINS = {
-    "btc": "bitcoin", "eth": "ethereum", "ton": "the-open-network", "sol": "solana", "usdt": "tether",
-    "bnb": "binancecoin", "xrp": "ripple", "doge": "dogecoin", "ada": "cardano", "trx": "tron", "ltc": "litecoin",
-    "not": "notcoin", "usdc": "usd-coin",
 }  # fmt: skip
 ATOM = "{http://www.w3.org/2005/Atom}"
 ANIME_SIMILARITY = 0.87  # trace.moe hits below this are usually wrong
@@ -78,10 +73,17 @@ class Lookups:
         await self._client.aclose()
 
     async def _get(
-        self, url: str, *, params: dict[str, Any] | None = None, cache: bool = False
+        self,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        cache: bool | float = False,
+        max_bytes: int = MAX_BYTES,
     ) -> httpx.Response:
+        """``cache``: keep the answer for ``CACHE_SECONDS``, or for that many seconds."""
+        ttl = CACHE_SECONDS if cache is True else float(cache)
         key = url + repr(sorted((params or {}).items()))
-        if cache and (hit := self._cache.get(key)) and time.monotonic() - hit[0] < CACHE_SECONDS:
+        if ttl and (hit := self._cache.get(key)) and time.monotonic() < hit[0]:
             return hit[1]
         try:
             response = await self._client.get(url, params=params)
@@ -89,13 +91,22 @@ class Lookups:
             raise LookupError(type(error).__name__) from None
         if response.status_code >= 400:
             raise LookupError(f"HTTP {response.status_code}")
-        if len(response.content) > MAX_BYTES:
+        if len(response.content) > max_bytes:
             raise LookupError("response too large")
-        if cache:
+        if ttl:
             if len(self._cache) >= CACHE_ENTRIES:  # drop the oldest; dicts keep insertion order
                 self._cache.pop(next(iter(self._cache)))
-            self._cache[key] = (time.monotonic(), response)
+            self._cache[key] = (time.monotonic() + ttl, response)
         return response
+
+    async def json(
+        self, url: str, *, params: dict[str, Any] | None = None, ttl: float = 0, max_bytes: int = MAX_BYTES
+    ) -> Any:
+        """A service's JSON answer (``derp.tools.markets``), kept for ``ttl`` seconds."""
+        try:
+            return (await self._get(url, params=params, cache=ttl, max_bytes=max_bytes)).json()
+        except ValueError:
+            raise LookupError("unexpected response") from None
 
     async def _post(self, url: str, **kwargs: Any) -> httpx.Response:
         try:
@@ -151,37 +162,6 @@ class Lookups:
                 f"{WEATHER.get(daily['weather_code'][i], 'unknown')}, rain {daily['precipitation_probability_max'][i]}%"
             )
         return "\n".join(lines) + "\n(Open-Meteo)"
-
-    @_parsed
-    async def exchange_rate(self, base: str, quote_currency: str, amount: float) -> str:
-        base, quote_currency = base.strip().lower(), quote_currency.strip().lower()
-        if base in COINS or quote_currency in COINS:
-            coin, fiat, invert = (
-                (base, quote_currency, False) if base in COINS else (quote_currency, base, True)
-            )
-            data = (
-                await self._get(
-                    "https://api.coingecko.com/api/v3/simple/price",
-                    params={"ids": COINS[coin], "vs_currencies": fiat, "include_24hr_change": "true"},
-                    cache=True,
-                )
-            ).json()
-            prices = data.get(COINS[coin]) or {}
-            if fiat not in prices:
-                return f"No {coin.upper()} price in {fiat.upper()}."
-            price = float(prices[fiat])
-            change = prices.get(f"{fiat}_24h_change")
-            rate = 1 / price if invert else price
-            moved = f" ({change:+.1f}% in 24h)" if isinstance(change, int | float) else ""
-            return f"{amount:g} {base.upper()} = {amount * rate:,.6g} {quote_currency.upper()}{moved} (CoinGecko)"
-        data = (
-            await self._get(f"https://open.er-api.com/v6/latest/{quote(base.upper(), safe='')}", cache=True)
-        ).json()
-        rates = data.get("rates") or {}
-        if data.get("result") != "success" or quote_currency.upper() not in rates:
-            return f"No rate for {base.upper()} → {quote_currency.upper()}."
-        rate = float(rates[quote_currency.upper()])
-        return f"{amount:g} {base.upper()} = {amount * rate:,.6g} {quote_currency.upper()} (open.er-api.com, daily)"
 
     @_parsed
     async def wiki(self, query: str) -> str:

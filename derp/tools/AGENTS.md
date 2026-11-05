@@ -2,7 +2,8 @@
 
 Plain capabilities behind the agent's utility tools (`derp/agent/tools/utilities.py`); no aiogram or Pydantic AI here.
 
-- `lookups.py`: `Lookups`, one shared HTTPX client created and closed by `Services`. Keyless public APIs (Open-Meteo, CoinGecko, open.er-api.com, Wikipedia, Urban Dictionary, arXiv) plus WolframAlpha and JDoodle when their keys are configured.
+- `lookups.py`: `Lookups`, one shared HTTPX client created and closed by `Services`. Keyless public APIs (Open-Meteo, Wikipedia, Urban Dictionary, arXiv) plus WolframAlpha and JDoodle when their keys are configured; `json` serves other modules' JSON calls (deadline, size cap, a per-call cache time).
+- `markets.py`: `find` prices a name as a `Quote` (price now, a series over the period, facts) from keyless sources in an order that suits it: Binance spot (+ futures funding and open interest), the Moscow Exchange's ISS, Yahoo Finance's chart API (stocks, funds, indices, futures, currency pairs), CoinGecko, GeckoTerminal (DEX pools), Polymarket (Gamma events, CLOB history: odds in percent, up to four outcome `lines`); open.er-api.com is the daily fallback rate. A source that doesn't know the name answers None (HTTP 400/404) and the next is asked; an outage or a broken shape is a `LookupError`. `describe` is the model's text (move, range, RSI, volatility, moving averages, facts). `charts.py` draws a `Quote` as a PNG with Pillow (dark card, one area line or an outcome line each with a legend; glyphs Noto Sans lacks come from Liberation Sans); pure, run in a thread.
 - Every call has a deadline and a response-size cap and returns compact text for the model; slow-moving answers are cached in memory for a few minutes.
 - Failures raise `LookupError` whose `reason` is safe to show (an exception class or HTTP status, never URLs, queries or bodies). Nothing here logs requests.
 - Keys are sent only to their own service.

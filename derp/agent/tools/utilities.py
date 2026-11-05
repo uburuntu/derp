@@ -1,19 +1,24 @@
-"""Utility tools: time zones, weather, rates and reference lookups. Free on every tier.
+"""Utility tools: time zones, weather, markets and reference lookups. Free on every tier.
 
 All are deferred (found through tool search on free runs). Arithmetic lives in the
-Python sandbox (``derp.agent.tools.code``). ``lookup`` asks one of several reference
-sources; WolframAlpha answers only when its key is configured, and the remote program
-runner appears only with its key.
+Python sandbox (``derp.agent.tools.code``). ``market`` prices anything traded
+(``derp.tools.markets``) and can post a chart (``derp.tools.charts``) as a media result,
+which a detached answer (inline, guest) can't take. ``lookup`` asks one of several
+reference sources; WolframAlpha answers only when its key is configured, and the remote
+program runner appears only with its key.
 """
 
+import asyncio
 from typing import Literal
 
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.deps import RunDeps
+from derp.agent.outputs import Made, Refused, emit
+from derp.agent.tools.sources import FinalArg
 from derp.agent.toolsets import Family
-from derp.tools import lookups
+from derp.tools import charts, lookups, markets
 from derp.tools.timezones import TimeZoneError, convert_time
 
 toolset = FunctionToolset[RunDeps]()
@@ -52,19 +57,52 @@ async def weather(ctx: RunContext[RunDeps], place: str) -> str:
         return _failed("Weather", error)
 
 
-@toolset.tool
-async def exchange_rate(ctx: RunContext[RunDeps], base: str, quote: str, amount: float = 1) -> str:
-    """Convert money: fiat currencies (ISO codes like USD, RUB) and major crypto (BTC, ETH, TON…).
+@toolset.tool(sequential=True)  # a chart's slot check and its send must not interleave with another output's
+async def market(
+    ctx: RunContext[RunDeps],
+    base: str,
+    quote: str | None = None,
+    amount: float = 1,
+    period: markets.Period = "1d",
+    kind: markets.Kind = None,
+    chart: bool = False,
+    final: FinalArg = True,
+) -> str:
+    """Prices: currencies, crypto, DEX tokens, stocks, funds, indices, commodities (gold, Brent, gas), with the
+    move, range and stats over a period (coins: perpetual funding, open interest), and conversions; or betting
+    odds on events (Polymarket). `chart` posts a chart.
 
     Args:
-        base: Currency to convert from.
-        quote: Currency to convert to.
-        amount: How much of the base currency.
+        base: What to price: a ticker, coin, currency or name ("BTC", "AAPL", "SBER", "EUR", "gold", "DOGS"); for
+            odds, the event ("fed december", "champions league") or "popular" (the most bet-on now).
+        quote: The currency to price it in; default its own (crypto: USDT).
+        amount: How much of base, to convert.
+        period: The span of the move, range, stats and chart.
+        kind: prediction for odds; else only for an ambiguous name: crypto (exchanges), dex (on-chain tokens),
+            stock (stocks, funds, indices, commodities).
+        chart: Post a chart of the period.
     """
+    deps = ctx.deps
     try:
-        return await ctx.deps.lookups.exchange_rate(base, quote, amount)
+        found = await markets.find(deps.lookups, base, quote, period, kind)
     except lookups.LookupError as error:
-        return _failed("Exchange rates", error)
+        return _failed("Market data", error)
+    if found is None:
+        if kind == "prediction":
+            return f"No open Polymarket event matches {base!r}; try other words."
+        return f"No market knows {base!r}; try its ticker, or say which kind it is."
+    text = markets.describe(found, period, amount)
+    if not chart:
+        return text
+    if deps.detached:
+        return f"{text} (Charts can't be posted here.)"
+    if len(found.series) < 2:
+        return f"{text} Too few prices for a chart."
+    png = await asyncio.to_thread(charts.render, found, markets.SPANS[period].label, deps.tz)
+    try:
+        return f"{text}\n{await emit(deps, Made('photo', png, 'chart.png', 'chart'), final=final)}"
+    except Refused as refused:
+        return f"{text}\nNo chart: {refused}"
 
 
 @toolset.tool
@@ -116,7 +154,7 @@ family = Family(
     "utilities",
     toolset,
     deferred=True,
-    detached="lookups (weather, exchange rates, time zones, Wikipedia, WolframAlpha and the like)",
+    detached="lookups (weather, prices of currencies, crypto and stocks, time zones, Wikipedia, WolframAlpha and the like)",
 )
 code_family = Family(
     "code",

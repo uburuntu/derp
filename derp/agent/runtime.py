@@ -785,7 +785,7 @@ class Runtime:
                 user_id=asker.id, locale=resolve(asker.language_code),
                 trigger_message_id=0, run_id=run.id, funds=funds, target=Target(asker.id), tz=tz,
                 gateway=self.gateway, pin=pin, model=model, model_factory=self.model_factory, api=self.api, pins=self.pins, lookups=self.lookups,
-                workers=self.workers,
+                workers=self.workers, detached=True,
             )  # fmt: skip
             families = offered(deps, FAMILIES, detached=True)
             tools = [  # the web and the sandbox are run-wide capabilities; the rest are the families offered
