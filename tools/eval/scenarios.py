@@ -235,8 +235,8 @@ SCENARIOS: list[Scenario] = [
     Scenario("chart_meme", "derp make a meme of this week's bitcoin chart: 'HODL'",
              lambda r, s: ok(r.called("market", chart=True, final=False) and r.called("make_meme", source="r1"),
                              "chart kept, then memed"), tags=("market",)),
-    Scenario("math", "дерп, сколько будет 17% от 23 450, плюс НДС 20% сверху?",
-             lambda r, s: ok(r.says("4[  ]?783"), "4783.8"), tags=("utilities",)),
+    Scenario("math", "дерп, сколько будет 17% от 23 450, если на эти 17% ещё накинуть НДС 20%?",
+             lambda r, s: ok(r.says(r"4(?:[  ]|\\,|\{,\})?783"), "4783.8"), tags=("utilities",)),  # LaTeX too
     Scenario("urban", "дерп, глянь в урбан дикшенери, что такое rizz",
              lambda r, s: ok(r.called("lookup", source="urban_dictionary"), "urban dictionary"), tags=("utilities",)),
     Scenario("about_price", "derp how much does a picture cost?",
