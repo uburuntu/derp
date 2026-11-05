@@ -238,7 +238,7 @@ async def test_group_answers_link_cited_messages_and_see_usernames(
 
     # Edits link the same way; notes and jobs have their own numbers and never become links.
     fixed = f"#{chatter.message_id} wants pizza (note {chatter.message_id}, job {chatter.message_id})"
-    model.reply(tool_call("edit_own_message", message_id=answer.message_id, new_text=fixed), "done")
+    model.reply(tool_call("message_action", action="edit", message_id=answer.message_id, text=fixed), "done")
     again = await conversation.send(
         kim, lounge, "@DerpRobot fix it", entities=[{"type": "mention", "offset": 0, "length": 10}]
     )

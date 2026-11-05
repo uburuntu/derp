@@ -25,8 +25,8 @@ async def test_quiz_and_dice_go_out_as_recorded_outputs(
         return ModelResponse(
             parts=[
                 ToolCallPart(
-                    "send_poll",
-                    {"question": "2+2?", "options": ["3", "4"], "correct_option": 1},
+                    "post_polls",
+                    {"polls": [{"question": "2+2?", "options": ["3", "4"], "correct": 1}]},
                     tool_call_id="p",
                 ),
                 ToolCallPart("send_dice", {"emoji": "🎯"}, tool_call_id="d"),
@@ -35,7 +35,9 @@ async def test_quiz_and_dice_go_out_as_recorded_outputs(
 
     def wrap(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         results = tool_results(messages)
-        assert any("Poll posted" in r for r in results) and any("landed on 4" in r for r in results), results
+        assert any("Posted 1 of 1" in r for r in results) and any("landed on 4" in r for r in results), (
+            results
+        )
         return ModelResponse(parts=[TextPart("quiz time")])
 
     model.reply(both, wrap)
@@ -94,7 +96,7 @@ async def test_unconfirmed_outputs_are_never_called_refused_or_resent(
         assert list(await session.scalars(select(RunOutput.kind))) == ["message"]
 
 
-async def test_sticker_from_the_chat_replying_to_a_person(
+async def test_sticker_from_the_chat_replying_to_a_message(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
     conversation.meet(KATE, PARTY)
@@ -105,7 +107,7 @@ async def test_sticker_from_the_chat_replying_to_a_person(
     await conversation.settle(posted)
 
     model.reply(
-        tool_call("send_sticker", emoji="😂", reply_to_person="@leo"),
+        tool_call("send_sticker", emoji="😂", reply_to=posted.message_id),
         tool_call("send_sticker", emoji="🦖"),
         ".",
     )

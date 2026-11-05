@@ -102,7 +102,7 @@ async def ask_inline(conversation: Conversation, person: Person, query: str, que
 CHAT_TOOLS = {
     "search_history",
     "read_messages",
-    "send_poll",
+    "post_polls",
     "react",
     "schedule",
     "generate_image",

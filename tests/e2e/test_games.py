@@ -56,7 +56,7 @@ async def test_a_quiz_scores_first_answers_into_the_leaderboard(
     assert [p["type"] for p in sent] == ["quiz", "quiz", "regular"]
     assert all(str(p["is_anonymous"]).lower() == "false" and int(p["open_period"]) == 120 for p in sent)
     assert str(sent[2]["allows_multiple_answers"]).lower() == "true" and "explanation" not in sent[2].fields
-    assert result_of(model, "post_polls").startswith("Posted 3 of 3 polls (#")
+    assert result_of(model, "post_polls").startswith("Posted 3 of 3 (#")
 
     for update in (
         answer("poll-1", BEN, 1),  # right
@@ -99,7 +99,7 @@ async def test_an_unconfirmed_poll_stops_the_series_without_a_resend(
     # The second poll is not replayed and the third never goes.
     assert len(api.calls_of("sendPoll", after=asked.after)) == 2
     result = result_of(model, "post_polls")
-    assert result.startswith("Posted 1 of 3 polls (#") and "didn't confirm the next poll" in result
+    assert result.startswith("Posted 1 of 3 (#") and "didn't confirm the next poll" in result
     assert "refused" not in result
 
 
@@ -126,22 +126,25 @@ async def test_quoted_arguments_are_repaired(conversation: Conversation, model: 
     assert retries == [] and result_of(model, "chat_query")
 
 
-async def test_most_likely_polls_use_active_members(conversation: Conversation, model: ScriptedModel) -> None:
-    for person in (ADA, BEN, CY):
+async def test_a_series_rides_in_one_output_slot(conversation: Conversation, model: ScriptedModel) -> None:
+    for person in (ADA, BEN):
         conversation.meet(person, QUIZ_ROOM)
-    for person, text in ((BEN, "morning"), (CY, "hey"), (BEN, "coffee?")):
-        await conversation.settle(await conversation.send(person, QUIZ_ROOM, text))
+    six = [{"question": f"Q{n}?", "options": ["a", "b"], "correct": n % 2} for n in range(6)]
     model.reply(
-        tool_call("most_likely_poll", question="Who's most likely to oversleep?"),
+        tool_call("post_polls", polls=six),
+        tool_call("post_polls", polls=[{"question": "Pizza or sushi?", "options": ["Pizza", "Sushi"]}], anonymous=True),
+        tool_call("send_dice"),
         ".",
     )
-    asked = await conversation.send(ADA, QUIZ_ROOM, "derp make a most-likely-to poll about oversleeping")
+    asked = await conversation.send(ADA, QUIZ_ROOM, "derp six questions, then a poll and a dice")
     await conversation.settle(asked)
-    [poll] = conversation.api.calls_of("sendPoll", after=asked.after)
-    assert [o["text"] for o in poll["options"]] == ["Ben", "Ada", "Cy"] or {
-        o["text"] for o in poll["options"]
-    } == {"Ben", "Ada", "Cy"}
-    assert str(poll["is_anonymous"]).lower() == "false"
+    polls = conversation.api.calls_of("sendPoll", after=asked.after)
+    assert len(polls) == 7 and str(polls[-1]["is_anonymous"]).lower() == "true"
+    results = [
+        str(p.content) for m in model.requests[-1] for p in m.parts if isinstance(p, ToolReturnPart)
+    ]
+    assert results[0].startswith("Posted 6 of 6") and results[1].startswith("Posted 1 of 1")
+    assert "output limit" in results[2] and not conversation.api.calls_of("sendDice", after=asked.after)
 
 
 async def test_a_title_of_the_day_sticks_for_the_day_and_counts(

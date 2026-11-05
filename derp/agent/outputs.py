@@ -103,14 +103,17 @@ async def deliver(
     *,
     history: bool = True,
     budget: bool = True,
+    rides: bool = False,
     spoken: Spoken | None = None,
 ) -> list[TgMessage]:
     """Send one output and record it; raises ``Refused`` / ``Unconfirmed`` with the model's text.
 
     ``history=False`` is for button cards (confirmations, approvals): outputs, but UI copy rather
-    than conversation. ``budget=False`` skips the slot check for items already counted.
+    than conversation. ``budget=False`` skips the slot check for a slot the caller already checked or
+    holds (a kept result). ``rides`` sends it in the slot an earlier output of the same call took (a poll
+    series' later polls): neither checked nor counted against the budget.
     """
-    if budget:
+    if budget and not rides:
         check_budget(deps)
     try:
         result = await send()
@@ -123,6 +126,8 @@ async def deliver(
         raise Refused(f"Telegram refused the {what} ({type(error).__name__}).") from None
     sent = [result] if isinstance(result, TgMessage) else result
     await record(deps, sent, kind, history=history, spoken=spoken)
+    if rides:
+        deps.riders += len(sent)
     return sent
 
 

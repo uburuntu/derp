@@ -55,6 +55,7 @@ class RunDeps:
     delivered: list[tuple[int, str]] = field(
         default_factory=list[tuple[int, str]]
     )  # (message id, kind) so far
+    riders: int = 0  # delivered messages that went out in another one's slot (a poll series' later polls)
     kept: dict[str, Kept] = field(default_factory=dict[str, "Kept"])  # results kept for the next tool, by ref
     reacted: set[int] = field(default_factory=set[int])  # messages Derp reacted to with the react tool
 
@@ -77,4 +78,5 @@ class RunDeps:
         A kept result holds a slot: it is posted at the end unless a tool uses it.
         """
         waiting = sum(not kept.used for kept in self.kept.values())
-        return self.settings.run_caps.visible_outputs - 1 - len(self.delivered) - waiting
+        taken = len(self.delivered) - self.riders
+        return self.settings.run_caps.visible_outputs - 1 - taken - waiting

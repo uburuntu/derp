@@ -1,10 +1,9 @@
-"""Chat games: poll series with scored quizzes, "who's most likely to…" polls and titles of the day.
+"""Chat games: polls and scored quizzes, and titles of the day.
 
-A series mixes regular polls and quizzes. Quizzes are Derp's own non-anonymous
-quiz polls, so answers arrive as ``poll_answer`` updates and score the chat's
-quiz leaderboard (see ``derp.history.polls``; read it with the
-``quiz_leaderboard`` chat query). A whole series takes one output slot however
-many polls it has. Titles of the day are drawn and kept by ``derp.history.titles``.
+One poll or a series goes out as one output (its later polls ride in the first one's slot:
+``outputs.deliver``). Quizzes are Derp's own non-anonymous quiz polls, so answers arrive as
+``poll_answer`` updates and score the chat's quiz leaderboard (see ``derp.history.polls``; read it with
+the ``quiz_leaderboard`` chat query). Titles of the day are drawn and kept by ``derp.history.titles``.
 """
 
 from datetime import UTC, datetime
@@ -19,60 +18,57 @@ from derp.agent.outputs import Refused, Unconfirmed, check_budget, deliver, unco
 from derp.agent.tools.telegram import reply_parameters
 from derp.agent.toolsets import Family
 from derp.history.models import User
-from derp.history.queries import ChatQuery, Scope, run_query
 from derp.history.titles import crown, leaderboard, normalize
 
 toolset = FunctionToolset[RunDeps]()
-MAX_POLLS = 5
-ACTIVE_DAYS = 30
+MAX_POLLS = 10
 DAY_MINUTES = 24 * 60
 MAX_MINUTES_OPEN = 30 * DAY_MINUTES  # Telegram closes a poll at most 2628000 s (about a month) out
 
 
-class SeriesPoll(BaseModel):
+class Poll(BaseModel):
     question: str = Field(max_length=300)
     options: list[str] = Field(min_length=2, max_length=10, description="Up to 100 characters each.")
-    correct: int | None = Field(
-        default=None, ge=0, description="0-based index of the right option; makes it a scored quiz."
-    )
+    correct: int | None = Field(default=None, ge=0, description="Index of the right option: a scored quiz.")
     explanation: str | None = Field(
         default=None, max_length=200, description="Quiz only: shown after answering."
     )
-    multiple_answers: bool = Field(default=False, description="Regular polls only: allow several choices.")
+    multiple_answers: bool = Field(default=False, description="Regular polls only.")
 
 
 @toolset.tool(sequential=True)
 async def post_polls(
-    ctx: RunContext[RunDeps], polls: list[SeriesPoll], minutes_open: int = DAY_MINUTES
+    ctx: RunContext[RunDeps], polls: list[Poll], minutes_open: int = DAY_MINUTES, anonymous: bool = False
 ) -> str:
-    """Post a series of up to 5 polls: quizzes (with `correct`) and/or regular polls, all non-anonymous.
+    """Post a poll, or a series of up to 10 as one output: regular polls and/or quizzes (with `correct`).
 
-    Quiz answers score the chat's quiz leaderboard: +1 right, −1 wrong (daily floor 0). Write the questions
-    yourself, on a topic or from this chat's history (search it first); keep options short and vary the
-    position of the right one. For a single regular poll, send_poll is enough.
+    Quizzes score the chat's quiz leaderboard (+1 right, −1 wrong, daily floor 0). Write the questions
+    yourself (a quiz about the chat: from its history); vary where the right answer is. "Who's most likely
+    to…" polls take members' names as options.
 
     Args:
-        polls: 1–5 polls.
-        minutes_open: How long each poll stays open, 1–43200 minutes. Chats are asynchronous and most people
-            are offline at any moment, so a day (the default) is the right start; go shorter only for a live
-            game everyone is playing right now, or when asked.
+        polls: The polls, in order.
+        minutes_open: How long each stays open, 1–43200. People drop in later, so a day fits unless it's a
+            live game or they asked.
+        anonymous: Hide who voted (regular polls; quizzes are never anonymous).
     """
     deps = ctx.deps
     try:
         check_budget(deps)
         if not 1 <= len(polls) <= MAX_POLLS:
-            raise Refused(f"Not posted: a series has 1–{MAX_POLLS} polls.")
+            raise Refused(f"Not posted: 1–{MAX_POLLS} polls at a time.")
         for number, item in enumerate(polls, 1):
             if item.correct is not None and item.correct >= len(item.options):
                 raise Refused(f"Not posted: poll {number}: correct must point at one of its options.")
     except Refused as refused:
         return str(refused)
     period = max(1, min(minutes_open, MAX_MINUTES_OPEN)) * 60
+    hidden = anonymous and deps.chat.type != "private"
     posted: list[int] = []
     unsure = False
     for item in polls:
         quiz = item.correct is not None
-        try:  # the whole series takes one slot: only the first poll is checked against the budget
+        try:
             [sent] = await deliver(
                 deps,
                 "poll",
@@ -83,18 +79,18 @@ async def post_polls(
                     question=item.question[:300],
                     options=[InputPollOption(text=option[:100]) for option in item.options],
                     type="quiz" if quiz else "regular",
-                    is_anonymous=False,
+                    is_anonymous=hidden and not quiz,
                     allows_multiple_answers=item.multiple_answers and not quiz,
                     correct_option_ids=[item.correct] if item.correct is not None else None,
                     explanation=item.explanation[:200] if item.explanation and quiz else None,
                     open_period=period,
                     reply_parameters=reply_parameters(deps.target.reply_to) if not posted else None,
                 ),
-                budget=False,
+                rides=bool(posted),
             )
         except Unconfirmed as refused:
             if not posted:
-                return f"{refused} Don't post the rest of the series either."
+                return f"{refused} Don't post the rest either."
             unsure = True
             break
         except Refused as refused:
@@ -104,59 +100,20 @@ async def post_polls(
         posted.append(sent.message_id)
     ids = ", ".join(f"#{message_id}" for message_id in posted)
     note = (
-        " Quiz points count on the quiz leaderboard; don't reveal the answers."
+        " Quiz points count on the leaderboard; don't reveal the answers."
         if any(p.correct is not None for p in polls)
         else ""
     )
     if unsure:
         note += f" {unconfirmed('next poll')} Don't post the rest either."
-    return f"Posted {len(posted)} of {len(polls)} polls ({ids}).{note}"
-
-
-@toolset.tool(sequential=True)
-async def most_likely_poll(ctx: RunContext[RunDeps], question: str) -> str:
-    """A "who's most likely to…" poll with this chat's most active members as the options.
-
-    Args:
-        question: Like "Who's most likely to oversleep the exam?"
-    """
-    deps = ctx.deps
-    if deps.chat.type == "private":
-        return "That needs a group."
-    try:
-        check_budget(deps)
-    except Refused as refused:
-        return str(refused)
-    query = ChatQuery(preset="member_activity", days=ACTIVE_DAYS, whole_chat=True, limit=10)
-    async with deps.db.session() as session:
-        result = await run_query(session, Scope(deps.chat.id, tz=deps.tz), query)
-    names = list(dict.fromkeys(label[:100] for label, _count in result.groups if label != "anonymous"))
-    if len(names) < 2:
-        return "Not enough active members in the stored history for that poll."
-    try:
-        [sent] = await deliver(
-            deps,
-            "poll",
-            "poll",
-            lambda: deps.bot.send_poll(
-                chat_id=deps.chat.id,
-                message_thread_id=deps.target.thread_id,
-                question=question[:300],
-                options=[InputPollOption(text=name) for name in names],
-                is_anonymous=False,
-                reply_parameters=reply_parameters(deps.target.reply_to),
-            ),
-        )
-    except Refused as refused:
-        return str(refused)
-    return f"Poll posted as #{sent.message_id} with {len(names)} members."
+    return f"Posted {len(posted)} of {len(polls)} ({ids}).{note}"
 
 
 @toolset.tool
 async def title_of_the_day(ctx: RunContext[RunDeps], title: str) -> str:
-    """Name today's "<title> of the day" (e.g. красавчик дня), drawn at random among the group's active members.
+    """Name today's "<title> of the day" (e.g. красавчик дня) at random among the group's active members.
 
-    The same title asked again today gives the same winner. Announce it in your own words.
+    Asked again today, the same title gives the same winner. Announce it in your own words.
 
     Args:
         title: The title alone, in the chat's language (e.g. "красавчик").
@@ -182,4 +139,4 @@ async def title_of_the_day(ctx: RunContext[RunDeps], title: str) -> str:
     return f"{key} of the day: {name}{handle}, {when}. All-time: {wins}."
 
 
-family = Family("games", toolset, deferred=True)
+family = Family("games", toolset, deferred=("title_of_the_day",))

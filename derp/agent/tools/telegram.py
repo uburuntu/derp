@@ -1,18 +1,18 @@
-"""Telegram-native outputs (polls, dice, stickers, reactions) and Derp's own-message ops.
+"""Telegram-native outputs (dice, stickers, reactions) and actions on messages (edit, delete, pin).
 
-Every output may reply to any stored message of this chat (validated here) or
-to someone's latest message by name; the default is the trigger. Tools may send
-up to ``visible_outputs - 1`` items so the final text answer always has a slot;
-budget, send and record go through ``derp.agent.outputs.deliver``. Output
-tools run sequentially: the budget check and the send must not interleave, and
-outputs keep the order the model chose.
+Every output may reply to any stored message of this chat (validated here); the default is the
+trigger. Tools may send up to ``visible_outputs - 1`` items so the final text answer always has a slot;
+budget, send and record go through ``derp.agent.outputs.deliver``. Output tools run sequentially: the
+budget check and the send must not interleave, and outputs keep the order the model chose. Polls are
+``games.post_polls``.
 """
 
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import InputPollOption, ReactionTypeEmoji, ReplyParameters
+from aiogram.types import ReactionTypeEmoji, ReplyParameters
+from pydantic import Field
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import func, select
@@ -24,7 +24,6 @@ from derp.agent.toolsets import ALL_TIERS, Family
 from derp.history.digests import mark_stale
 from derp.history.links import message_links
 from derp.history.models import Message, MessageMedia, Sticker
-from derp.history.queries import resolve_members
 from derp.memory.notes import is_admin
 from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import rich, sanitize_untrusted
@@ -41,35 +40,24 @@ REACTIONS = (
 )  # fmt: skip
 
 
-async def reply_target(deps: RunDeps, reply_to: int | None, reply_to_person: str | None) -> int | None:
-    """The message an output replies to: a stored message of this chat, someone's latest one, or the trigger."""
-    if reply_to is None and not reply_to_person:
+type MessageId = Annotated[int, Field(ge=1)]
+
+
+async def reply_target(deps: RunDeps, reply_to: int | None) -> int | None:
+    """The message an output replies to: a stored message of this chat, else the trigger."""
+    if reply_to is None:
         return deps.target.reply_to
     async with deps.db.session() as session:
-        if reply_to is not None:
-            found = await session.scalar(
-                select(Message.message_id).where(
-                    Message.chat_id == deps.chat.id,
-                    Message.message_id == reply_to,
-                    Message.deleted_at.is_(None),
-                )
+        found = await session.scalar(
+            select(Message.message_id).where(
+                Message.chat_id == deps.chat.id,
+                Message.message_id == reply_to,
+                Message.deleted_at.is_(None),
             )
-            if found is None:
-                raise Refused(f"Message #{reply_to} isn't in this chat's history.")
-            return found
-        users = await resolve_members(session, deps.chat.id, [reply_to_person or ""])
-        latest = (
-            await session.scalar(
-                select(func.max(Message.message_id)).where(
-                    Message.chat_id == deps.chat.id, Message.user_id.in_(users), Message.deleted_at.is_(None)
-                )
-            )
-            if users
-            else None
         )
-        if latest is None:
-            raise Refused(f"I have no stored message from {reply_to_person!r} to reply to.")
-        return latest
+    if found is None:
+        raise Refused(f"Message #{reply_to} isn't in this chat's history.")
+    return found
 
 
 def reply_parameters(message_id: int | None) -> ReplyParameters | None:
@@ -77,74 +65,18 @@ def reply_parameters(message_id: int | None) -> ReplyParameters | None:
 
 
 @toolset.tool(sequential=True)
-async def send_poll(
-    ctx: RunContext[RunDeps],
-    question: str,
-    options: list[str],
-    correct_option: int | None = None,
-    multiple_answers: bool = False,
-    anonymous: bool = False,
-    reply_to: int | None = None,
-    reply_to_person: str | None = None,
-) -> str:
-    """Post a native Telegram poll, or a quiz when `correct_option` is given.
-
-    Args:
-        question: Up to 300 characters.
-        options: 2–10 answer options, up to 100 characters each.
-        correct_option: 0-based index of the right answer; makes it a quiz.
-        multiple_answers: Allow choosing several options (not for quizzes).
-        anonymous: Hide who voted (Derp then can't see the votes).
-        reply_to: Message id to reply to (default: the message that invoked you).
-        reply_to_person: Reply to this person's latest message instead (name or @username).
-    """
-    deps = ctx.deps
-    quiz = correct_option is not None
-    try:
-        check_budget(deps)
-        if not 2 <= len(options) <= 10:
-            raise Refused("Not sent: a poll needs 2–10 options.")
-        if correct_option is not None and not 0 <= correct_option < len(options):
-            raise Refused("Not sent: correct_option must point at one of the options.")
-        target = await reply_target(deps, reply_to, reply_to_person)
-        [sent] = await deliver(
-            deps,
-            "poll",
-            "poll",
-            lambda: deps.bot.send_poll(
-                chat_id=deps.chat.id,
-                message_thread_id=deps.target.thread_id,
-                question=question[:300],
-                options=[InputPollOption(text=option[:100]) for option in options],
-                type="quiz" if quiz else "regular",
-                is_anonymous=anonymous and deps.chat.type != "private",
-                allows_multiple_answers=multiple_answers and not quiz,
-                correct_option_ids=[correct_option] if correct_option is not None else None,
-                reply_parameters=reply_parameters(target),
-            ),
-        )
-    except Refused as refused:
-        return str(refused)
-    return f"Poll posted as #{sent.message_id}."
-
-
-@toolset.tool(sequential=True)
 async def send_dice(
-    ctx: RunContext[RunDeps],
-    emoji: DiceEmoji = "🎲",
-    reply_to: int | None = None,
-    reply_to_person: str | None = None,
+    ctx: RunContext[RunDeps], emoji: DiceEmoji = "🎲", reply_to: MessageId | None = None
 ) -> str:
-    """Throw an animated Telegram dice (🎲 1–6, 🎯 🏀 ⚽ 🎳 hit/miss scores, 🎰 slot machine) and learn the result.
+    """Throw an animated dice and learn the result: 🎲 1–6; 🎯 🏀 ⚽ 🎳 score hits; 🎰 a slot machine.
 
     Args:
         emoji: Which dice.
-        reply_to: Message id to reply to (default: the message that invoked you).
-        reply_to_person: Reply to this person's latest message instead.
+        reply_to: The #id to reply to (default: the current message).
     """
     deps = ctx.deps
     try:
-        target = await reply_target(deps, reply_to, reply_to_person)
+        target = await reply_target(deps, reply_to)
         [sent] = await deliver(
             deps,
             "dice",
@@ -237,20 +169,17 @@ async def sticker_emojis(session: AsyncSession, chat_id: int, bot_id: int) -> li
 
 
 @toolset.tool(sequential=True)
-async def send_sticker(
-    ctx: RunContext[RunDeps], emoji: str, reply_to: int | None = None, reply_to_person: str | None = None
-) -> str:
-    """Send a sticker matching an emoji or its mood (😂 also finds 🤣 stickers), preferring this chat's own.
+async def send_sticker(ctx: RunContext[RunDeps], emoji: str, reply_to: MessageId | None = None) -> str:
+    """Send a sticker for an emoji's mood (😂 finds 🤣 stickers too), this chat's favourites first.
 
     Args:
-        emoji: The mood as one emoji, e.g. 😂, 👍, 😢, 🔥.
-        reply_to: Message id to reply to (default: the message that invoked you).
-        reply_to_person: Reply to this person's latest message instead.
+        emoji: The mood as one emoji, e.g. 😂 👍 😢 🔥.
+        reply_to: The #id to reply to (default: the current message).
     """
     deps = ctx.deps
     try:
         check_budget(deps)
-        target = await reply_target(deps, reply_to, reply_to_person)
+        target = await reply_target(deps, reply_to)
     except Refused as refused:
         return str(refused)
     async with deps.db.session() as session:
@@ -280,20 +209,19 @@ async def send_sticker(
 
 
 @toolset.tool(sequential=True)
-async def react(ctx: RunContext[RunDeps], emoji: str, message_id: int | None = None) -> str:
-    """React to a message (default: the one that invoked you). Uses no output slot; a reaction alone can be the
-    whole answer (then end with ".").
+async def react(ctx: RunContext[RunDeps], emoji: str, message_id: MessageId | None = None) -> str:
+    """React to a message; takes no output slot. A reaction alone can be the whole answer (then end with ".").
 
     Args:
-        emoji: One of Telegram's standard reaction emoji (e.g. 👍 🔥 😁 🤔 🤯 🎉 💩 🤡 🗿 👀 ❤).
-        message_id: Message id in this chat.
+        emoji: A standard Telegram reaction: 👍 🔥 😁 🤔 🤯 🎉 💩 🤡 🗿 👀 ❤ and the like.
+        message_id: The #id to react to (default: the current message).
     """
     deps = ctx.deps
     emoji = plain_emoji(emoji)  # "❤️" is Telegram's "❤"
     if emoji not in REACTIONS:
         return "Not a reaction Telegram allows; pick a standard one like 👍 🔥 😁 🤔 🎉."
     try:
-        target = await reply_target(deps, message_id, None)
+        target = await reply_target(deps, message_id)
     except Refused as refused:
         return str(refused)
     if target is None:
@@ -308,25 +236,40 @@ async def react(ctx: RunContext[RunDeps], emoji: str, message_id: int | None = N
     return f"Reacted {emoji} to #{target}."
 
 
+@ops.tool
+async def message_action(
+    ctx: RunContext[RunDeps], action: Literal["edit", "delete", "pin"], message_id: MessageId, text: str = ""
+) -> str:
+    """Edit or delete one of your own messages, or pin a message (admins' asks; the tool checks).
+
+    Args:
+        action: edit (your text message, rewritten as `text`), delete (yours) or pin (any message).
+        message_id: The message's #id.
+        text: For edit: the full new text (Markdown).
+    """
+    deps = ctx.deps
+    match action:
+        case "edit":
+            return await _edit(deps, message_id, text)
+        case "delete":
+            return await _delete(deps, message_id)
+        case "pin":
+            return await _pin(deps, message_id)
+
+
 async def _own_message(deps: RunDeps, message_id: int) -> Message | None:
     async with deps.db.session() as session:
         row = await session.get(Message, (deps.chat.id, message_id))
     return row if row is not None and row.is_derp and row.deleted_at is None else None
 
 
-@ops.tool
-async def edit_own_message(ctx: RunContext[RunDeps], message_id: int, new_text: str) -> str:
-    """Replace the text of one of Derp's own earlier text messages in this chat.
-
-    Args:
-        message_id: The id of Derp's message.
-        new_text: The full new text (Markdown).
-    """
-    deps = ctx.deps
+async def _edit(deps: RunDeps, message_id: int, new_text: str) -> str:
     row = await _own_message(deps, message_id)
     if row is None or row.kind != "text":
         return "I can only edit my own text messages that are still stored."
     text = sanitize_untrusted(new_text)[:30000]
+    if not text.strip():
+        return "Give the full new text to edit it to."
     async with deps.db.session() as session:  # "#id" references open the message, as in answers
         links = await message_links(session, deps.chat, text)
     try:
@@ -342,14 +285,7 @@ async def edit_own_message(ctx: RunContext[RunDeps], message_id: int, new_text: 
     return f"Edited #{message_id}."
 
 
-@ops.tool
-async def delete_own_message(ctx: RunContext[RunDeps], message_id: int) -> str:
-    """Delete one of Derp's own messages in this chat.
-
-    Args:
-        message_id: The id of Derp's message.
-    """
-    deps = ctx.deps
+async def _delete(deps: RunDeps, message_id: int) -> str:
     if await _own_message(deps, message_id) is None:
         return "I can only delete my own messages that are still stored."
     try:
@@ -365,18 +301,11 @@ async def delete_own_message(ctx: RunContext[RunDeps], message_id: int) -> str:
     return f"Deleted #{message_id}."
 
 
-@ops.tool
-async def pin_message(ctx: RunContext[RunDeps], message_id: int) -> str:
-    """Pin a message in this chat. Needs Derp to be an admin with pin rights and the asker to be an admin.
-
-    Args:
-        message_id: The message to pin.
-    """
-    deps = ctx.deps
+async def _pin(deps: RunDeps, message_id: int) -> str:
     if deps.chat.type != "private" and not await is_admin(deps.bot, deps.chat, deps.user_id):
         return "Only chat admins can ask me to pin."
     try:
-        target = await reply_target(deps, message_id, None)
+        target = await reply_target(deps, message_id)
     except Refused as refused:
         return str(refused)
     if target is None:

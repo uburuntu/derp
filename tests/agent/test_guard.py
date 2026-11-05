@@ -26,7 +26,7 @@ def test_a_reply_with_nothing_to_act_on_is_unanswered() -> None:
     assert not unanswered(ModelResponse(parts=[ThinkingPart("hmm"), TextPart("hi")]))
     assert not unanswered(ModelResponse(parts=[ToolCallPart("react", {"emoji": "🔥"})]))
     assert not unanswered(ModelResponse(parts=[TextPart("cut off mid-sent")], finish_reason="length"))
-    cut = ToolCallPart("send_poll", '{"question": "best ca', tool_call_id="p")
+    cut = ToolCallPart("post_polls", '{"polls": [{"question": "best ca', tool_call_id="p")
     assert unanswered(ModelResponse(parts=[ThinkingPart("long"), cut], finish_reason="length"))
     whole = ToolCallPart("react", '{"emoji": "🔥"}', tool_call_id="r")
     assert not unanswered(ModelResponse(parts=[whole], finish_reason="length"))
