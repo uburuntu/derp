@@ -86,14 +86,18 @@ async def check_key_models(
                     row.price_cache_read = per_million(cache) if cache is not None else None
             if live != was_live:
                 notes.append(f"key model {listed.model}: {'back' if live else 'no longer offered'}")
-    if management is not None:  # the list may have changed with a deploy: registrations follow it
-        async with db.session() as session:
-            keys = list(
-                await session.scalars(select(ContributedKey).where(ContributedKey.removed_at.is_(None)))
-            )
-        for key in keys:
-            try:
-                await allow_models(settings, management, key)
-            except OpenRouterError as error:
-                log.info("re-registering a key's models failed: %s", error.status)
+    if management is not None:
+        await sync_registrations(db, settings, management)
     return notes
+
+
+async def sync_registrations(db: Database, settings: Settings, management: OpenRouterManagement) -> None:
+    """Keep every key registered for today's models. Runs at startup, before polling: a model a deploy added
+    that a key isn't registered for would be served on OpenRouter's shared capacity, on Derp's credits."""
+    async with db.session() as session:
+        keys = list(await session.scalars(select(ContributedKey).where(ContributedKey.removed_at.is_(None))))
+    for key in keys:
+        try:
+            await allow_models(settings, management, key)
+        except OpenRouterError as error:
+            log.info("re-registering a key's models failed: %s", error.status)

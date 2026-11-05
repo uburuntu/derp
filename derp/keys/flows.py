@@ -41,7 +41,17 @@ from derp.keys.models import ContributedKey, KeyChat, KeyRequest
 from derp.keys.notices import KeyAction, brand, model_label, owner_name, when
 from derp.keys.pasted import pasted_key
 from derp.keys.register import Refused, allow_models, plug_in, take_out
-from derp.keys.routing import Prices, cycle_start, next_cycle, offered_models, pause, prices, resume, spent
+from derp.keys.routing import (
+    Prices,
+    candidates,
+    cycle_start,
+    next_cycle,
+    offered_models,
+    pause,
+    prices,
+    resume,
+    spent,
+)
 from derp.locales import resolve, t
 from derp.memory.notes import is_admin
 from derp.money.free import offer_continues
@@ -700,6 +710,18 @@ def my_keys(keys: list[ContributedKey], locale: str) -> tuple[str, InlineKeyboar
     return t(locale, "keys.mine" if keys else "keys.mine_none"), markup(*rows, plug)
 
 
+async def _chat_state(
+    session: AsyncSession, key: ContributedKey, link: KeyChat, locale: str, now: datetime
+) -> str:
+    """A key's state in one chat; on but idle when a key turned on earlier answers there first."""
+    first = next(iter(await candidates(session, link.chat_id, now)), None) if link.state == "on" else None
+    if first is None or first.id == key.id:
+        return t(locale, f"keys.chat_{link.state}")
+    if first.user_id == key.user_id:
+        return t(locale, "keys.chat_waiting_own", label=literal(first.label))
+    return t(locale, "keys.chat_waiting", who=owner_name(await session.get(User, first.user_id), locale))
+
+
 async def key_page(
     session: AsyncSession,
     settings: Settings,
@@ -752,7 +774,7 @@ async def key_page(
                 "keys.chat_line",
                 title=title,
                 spent=f"{await spent(session, key, now, chat.id):.2f}",
-                state=t(locale, f"keys.chat_{row.state}"),
+                state=await _chat_state(session, key, row, locale, now),
             )
         )
         unplug.append(

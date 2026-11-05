@@ -28,7 +28,7 @@ from derp.inference.openrouter import KeyModelFactory, ModelFactory, build_provi
 from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
 from derp.inference.scout import run_scout
-from derp.keys.catalog import check_key_models
+from derp.keys.catalog import check_key_models, sync_registrations
 from derp.keys.sweep import sweep as sweep_keys
 from derp.money.wallets import expire_lots, release, stale_holds
 from derp.ops import observability
@@ -249,6 +249,8 @@ async def run(settings: Settings) -> None:
     tasks: list[asyncio.Task[None]] = []
     try:
         await services.pins.seed()
+        if services.management is not None:  # a deploy may have changed the keys' models
+            await sync_registrations(db, settings, services.management)
         dispatcher = build_dispatcher(services)
         me = await services.bot.get_me()
         log.info("polling as bot %s", me.id)

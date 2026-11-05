@@ -8,8 +8,11 @@ from sqlalchemy import select
 from derp.agent.runs import start_run
 from derp.config import Settings
 from derp.db.engine import Database
+from derp.history.models import Chat, User
 from derp.inference.api import Credential, OpenRouterError, SubKey
 from derp.inference.models import ProviderCall
+from derp.keys.catalog import sync_registrations
+from derp.keys.flows import key_page
 from derp.keys.models import ContributedKey, KeyChat
 from derp.keys.register import Refused, plug_in, take_out
 from derp.keys.routing import next_cycle
@@ -105,6 +108,23 @@ async def test_keys_serve_in_the_order_they_were_turned_on_until_their_cap_is_sp
         assert paused.paused_until == next_cycle(date(2026, 11, 1), NOW)
 
 
+async def test_a_key_behind_another_says_which_answers_first(database: Database, keyed: Settings) -> None:
+    funder = Funder(database, keyed)
+    first = await add_key(database, keyed, 7, chats=(GROUP,), enabled=datetime(2026, 11, 1, tzinfo=UTC))
+    second = await add_key(database, keyed, 9, chats=(GROUP,), enabled=datetime(2026, 11, 2, tzinfo=UTC))
+    async with database.transaction() as session:
+        session.add_all([Chat(id=GROUP, type="supergroup", title="Crew"), User(id=7, first_name="Ana")])
+    async with database.session() as session:
+        waiting, _ = await key_page(
+            session, keyed, funder, await session.get_one(ContributedKey, second), "en"
+        )
+        serving, _ = await key_page(
+            session, keyed, funder, await session.get_one(ContributedKey, first), "en"
+        )
+    assert "Crew: $0.00 · on, waiting: **Ana**'s key answers here first" in waiting
+    assert "Crew: $0.00 · on\n" in serving + "\n"
+
+
 async def test_the_owners_key_serves_their_private_chat_and_nobody_elses(
     database: Database, keyed: Settings
 ) -> None:
@@ -192,6 +212,18 @@ async def test_plugging_in_registers_the_key_behind_its_own_sub_key(
     assert row is not None and unseal(keyed.keys_secret, row.sub_key) == "sk-or-v1-sub"
     assert [(link.chat_id, link.state) for link in links] == [(7, "on")]
     assert row.model == "openai/gpt-6.1-sol"  # the recommended one until they pick
+
+
+async def test_startup_registers_every_live_key_for_todays_models(
+    database: Database, keyed: Settings
+) -> None:
+    live = await add_key(database, keyed, 7)
+    gone = await add_key(database, keyed, 9)
+    async with database.transaction() as session:
+        (await session.get_one(ContributedKey, gone)).removed_at = NOW
+    management = FakeManagement()
+    await sync_registrations(database, keyed, management)  # type: ignore[arg-type]
+    assert management.calls == [("allow_models", f"cred{7}")] and live
 
 
 @pytest.mark.parametrize(("status", "why"), [(401, "rejected"), (402, "no_credits"), (502, "unavailable")])
