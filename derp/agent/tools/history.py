@@ -194,8 +194,8 @@ async def chat_info(ctx: RunContext[RunDeps]) -> str:
 async def inspect_media(
     ctx: RunContext[RunDeps], source: SourceArg = None, question: str = ""
 ) -> list[str | BinaryContent] | str:
-    """Open media: pictures, profile and chat photos; videos, GIFs and video messages watched whole with sound;
-    audio and voice listened to; PDFs read.
+    """Open media: pictures (those shown with the message are already seen), profile and chat photos; videos,
+    GIFs and video messages watched whole with sound; audio and voice listened to; PDFs read.
 
     Clips, audio and PDFs come back as notes with timestamps or page numbers; what can't be watched says
     why and shows a still frame or preview instead.
@@ -379,8 +379,8 @@ async def digest(
     Lead with what concerns the asker (questions waiting for them first), then the rest, briefly.
 
     Args:
-        period: today, yesterday, last_7_days, one date (YYYY-MM-DD), since_my_last_message (everything after
-            the asker's last message here), or since_message (everything after message_id).
+        period: since_my_last_message ("what did I miss?": everything after the asker's last message here),
+            today, yesterday, last_7_days, one date (YYYY-MM-DD), or since_message (everything after message_id).
         message_id: For since_message: the #id to start after; by default the message the asker replied to.
         whole_chat: Summarize all forum topics instead of the current one.
     """
