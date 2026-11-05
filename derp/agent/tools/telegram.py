@@ -117,6 +117,14 @@ MOODS: tuple[tuple[str, ...], ...] = (
     ("👏", "🙌"),  # applause
 )  # fmt: skip
 MOOD_OF = {emoji: mood for mood in MOODS for emoji in mood}
+
+
+def reaction_for(emoji: str) -> str | None:
+    """The emoji as a reaction Telegram allows, else the first allowed one of its mood ("😂" → "🤣")."""
+    plain = plain_emoji(emoji)  # "❤️" is Telegram's "❤"
+    return next((e for e in (plain, *MOOD_OF.get(plain, ())) if e in REACTIONS), None)
+
+
 EMOJIS_SHOWN = 10  # emojis listed when nothing matches, so the model can pick one that works
 
 
@@ -217,8 +225,8 @@ async def react(ctx: RunContext[RunDeps], emoji: str, message_id: MessageId | No
         message_id: The #id to react to (default: the current message).
     """
     deps = ctx.deps
-    emoji = plain_emoji(emoji)  # "❤️" is Telegram's "❤"
-    if emoji not in REACTIONS:
+    reaction = reaction_for(emoji)
+    if reaction is None:
         return "Not a reaction Telegram allows; pick a standard one like 👍 🔥 😁 🤔 🎉."
     try:
         target = await reply_target(deps, message_id)
@@ -227,13 +235,15 @@ async def react(ctx: RunContext[RunDeps], emoji: str, message_id: MessageId | No
     if target is None:
         return "Nothing to react to."
     try:
-        await deps.bot.set_message_reaction(deps.chat.id, target, reaction=[ReactionTypeEmoji(emoji=emoji)])
+        await deps.bot.set_message_reaction(
+            deps.chat.id, target, reaction=[ReactionTypeEmoji(emoji=reaction)]
+        )
     except AMBIGUOUS:
         return unconfirmed("reaction")
     except TelegramAPIError as error:
         return f"Telegram refused the reaction ({type(error).__name__}); reactions may be restricted here."
     deps.reacted.add(target)
-    return f"Reacted {emoji} to #{target}."
+    return f"Reacted {reaction} to #{target}."
 
 
 @ops.tool

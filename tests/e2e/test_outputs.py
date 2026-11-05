@@ -138,13 +138,21 @@ async def test_emoji_match_however_they_are_spelled(conversation: Conversation, 
     async with conversation.db.session() as session:
         assert await session.scalar(select(Sticker.emoji)) == "❤"  # indexed plain, once
 
-    model.reply(tool_call("send_sticker", emoji="❤"), tool_call("react", emoji="❤️"), ".")
+    model.reply(
+        tool_call("send_sticker", emoji="❤"),
+        tool_call("react", emoji="❤️"),
+        tool_call("react", emoji="😂"),
+        ".",
+    )
     asked = await conversation.send(KATE, PARTY, "derp show leo some love")
     await conversation.settle(asked)
     (call,) = conversation.api.calls_of("sendSticker", after=asked.after)
     assert call["sticker"] == "stk-love"
     reactions = [c["reaction"] for c in conversation.api.calls_of("setMessageReaction", after=asked.after)]
-    assert reactions == [[{"type": "emoji", "emoji": "❤"}]]  # Telegram's spelling, not a refusal
+    assert reactions == [  # Telegram's spelling, and for 😂, which it lacks, its laughing mood's 🤣
+        [{"type": "emoji", "emoji": "❤"}],
+        [{"type": "emoji", "emoji": "🤣"}],
+    ]
 
 
 async def test_group_progress_is_a_chat_action_so_the_react_tool_sets_the_only_reaction(
