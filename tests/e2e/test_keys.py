@@ -79,7 +79,7 @@ class FakeKeysAPI:
     ) -> GeneratedImage:
         self.drawn.append({"model": model, "prompt": prompt, "references": len(references), **options})
         buffer = io.BytesIO()
-        Image.new("RGB", (384, 384), "green").save(buffer, format="PNG")
+        Image.new("RGB", (1024, 1024), "green").save(buffer, format="PNG")
         return GeneratedImage(buffer.getvalue(), "image/png", model, Decimal(0), upstream_usd=Decimal("0.05"))
 
     async def close(self) -> None:

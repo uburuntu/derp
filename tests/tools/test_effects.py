@@ -154,15 +154,15 @@ async def test_reversing_and_its_limits() -> None:
 
 @needs_ffmpeg
 async def test_a_sprite_sheet_becomes_a_loop_of_its_frames_in_reading_order(tmp_path: Path) -> None:
-    colors = ["red", "orange", "yellow", "green", "blue", "purple"]
-    sheet = Image.new("RGB", (384, 256))
+    colors = ["red", "orange", "yellow", "green", "blue", "purple", "white", "gray", "cyan"]
+    sheet = Image.new("RGB", (386, 386))  # like 1024 px, not a multiple of the grid: trimmed first
     for i, color in enumerate(colors):
         x, y = i % 3 * 128, i // 3 * 128
         sheet.paste(color, (x, y, x + 128, y + 128))
     buffer = io.BytesIO()
     sheet.save(buffer, format="PNG")
     loop = tmp_path / "loop.mp4"
-    loop.write_bytes(await effects.animate(POOL, buffer.getvalue(), 3, 2))
+    loop.write_bytes(await effects.animate(POOL, buffer.getvalue(), 3, 3))
     for n in range(len(colors)):
         frame = ffmpeg(
             "-i", str(loop), "-vf", f"select=eq(n\\,{n})", "-frames:v", "1", "-c:v", "png", "-f", "image2"
@@ -172,7 +172,7 @@ async def test_a_sprite_sheet_becomes_a_loop_of_its_frames_in_reading_order(tmp_
         assert picture.size == (128, 128)
         assert max(abs(a - b) for a, b in zip(picture.getpixel((64, 64)), expected, strict=True)) < 40  # type: ignore[arg-type]
     with pytest.raises(EffectError):
-        await effects.animate(POOL, b"not a picture", 3, 2)
+        await effects.animate(POOL, b"not a picture", 3, 3)
 
 
 @needs_ffmpeg

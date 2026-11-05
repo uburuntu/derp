@@ -245,13 +245,17 @@ async def still(pool: WorkerPool, data: bytes) -> bytes:
 
 
 async def animate(pool: WorkerPool, sheet: bytes, columns: int, rows: int, fps: int = 6) -> bytes:
-    """A sprite sheet's frames (left to right, top to bottom) as one silent MP4 loop, Telegram's GIF."""
+    """A sprite sheet's frames (left to right, top to bottom) as one silent MP4 loop, Telegram's GIF.
+
+    The sheet is first trimmed to a multiple of the grid (a 1024 px side doesn't split in three).
+    """
     async with _workspace(pool, sheet) as source:
         info = await probe(pool, source)
         if not info.video:
             raise EffectError("no picture in that file")
         graph = (
-            f"untile={columns}x{rows},setpts=N/({fps}*TB),scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"
+            f"crop=iw-mod(iw\\,{columns}):ih-mod(ih\\,{rows}):0:0,untile={columns}x{rows},"
+            f"setpts=N/({fps}*TB),scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"
         )
         args = ["-vf", graph, "-r", str(fps), "-an", *VIDEO_OUT]
         return await _render(pool, source, "animation.mp4", args, what="animation")
