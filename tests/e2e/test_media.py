@@ -122,6 +122,39 @@ async def test_inspect_media_tool_opens_an_older_image(
         assert media is not None and media.description == "a meme with a frog"
 
 
+async def test_inspect_media_sees_profile_and_chat_photos(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    group = Room(-1034, title="Faces")
+    conversation.meet(DORA, group)
+    conversation.api.register_file(f"profile-{DORA.id}", png("orange"))
+    conversation.api.register_file(f"chatphoto-{group.id}", png("navy"))
+    said = await conversation.send(DORA, group, "hi all")  # nothing to open: it stands for its author
+    await conversation.settle(said)
+
+    def answer(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        labels = [
+            str(part.content)
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart) and part.tool_name == "inspect_media"
+        ]
+        assert ["Dora profile photo" in labels[0], "Dora profile photo" in labels[1]] == [True, True], labels
+        assert "the chat photo" in labels[2] and len(images_in(messages)) == 3
+        return ModelResponse(parts=[TextPart("orange, orange, navy")])
+
+    model.reply(
+        tool_call("inspect_media", source="me"),
+        tool_call("inspect_media", source=f"#{said.message_id}"),
+        tool_call("inspect_media", source="chat"),
+        answer,
+    )
+    asked = await conversation.send(DORA, group, "дерп, что у меня на аватарке и на фото чата?")
+    reply = await conversation.expect_reply(asked)
+    assert reply["rich_message"]["markdown"] == "orange, orange, navy"
+    await conversation.settle(asked)
+
+
 async def test_replying_to_a_photo_derp_never_kept_still_shows_it(
     conversation: Conversation, model: ScriptedModel
 ) -> None:

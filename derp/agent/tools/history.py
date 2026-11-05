@@ -214,6 +214,8 @@ async def inspect_media(
         rows = await referenced_media(
             session, deps.chat.id, message_id, reply_to, (*IMAGE_LIKE, *CLIPS, *SOUNDS)
         )
+    if not rows and found:  # a message with nothing to open stands for its author (``sources.message_media``)
+        return await _picture(deps, text)
     if not rows:
         return "No picture, video, audio or PDF there that I can open."
     looks = [await watch(ctx, row, kind, question) for row in rows if (kind := medium(row))]

@@ -64,9 +64,9 @@ async def generate_image(
     Args:
         prompt: What to draw or change, in detail (English works best). For people drawn from their profile
             photos, say who is who ("Anya as the rogue").
-        images: Pictures to start from, up to 4, named as sources are: "#id" (a message's image, else its author's
-            profile photo), "r1", a name, @username or "me" (their profile photo: the likeness stays theirs),
-            "chat".
+        images: Pictures to start from, up to 4: "this" (the picture this message is about), "#id" (that
+            message's image, else its author's profile photo), "r1", a name, @username or "me" (their profile
+            photo: the likeness stays theirs), "chat". None: a new picture.
         animate: A short looping GIF (square) instead of a still; describe the motion.
     """
     deps = ctx.deps
