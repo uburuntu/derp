@@ -1,14 +1,17 @@
 """Tool arguments as some models send them: everything quoted.
 
-GLM serializes every argument as a string: arrays and objects as JSON text,
-numbers as "30", unused optional arguments as "". It also fills every optional
-argument with a placeholder (0 under a minimum of 1, [] for a single choice) and
-sends one item where a list is wanted. Pydantic coerces numbers and booleans but
-rejects the rest, the model repeats the mistake on its retry, and the run fails.
-``Lenient`` repairs arguments against each tool's JSON schema before the tool's
-own validator sees them: JSON text where the schema wants an array or object is
-parsed, a lone item where it wants an array becomes a list of one, and "" or a
-placeholder the schema rejects ([], {}, 0, null) for an optional argument means
+GLM and DeepSeek serialize arguments as strings: arrays and objects as JSON text,
+numbers as "30", unused optional arguments as "". They also fill every optional
+argument with a placeholder (0 or -1 under a minimum, [] or "[]" for a single
+choice, false for a choice that isn't a yes/no), send one item where a list is
+wanted (or several joined by commas), and slip on an enum's case or number
+("users" for "user"). Pydantic coerces numbers and booleans but rejects the rest,
+the model repeats the mistake on its retry, and the run fails. ``Lenient`` repairs
+arguments against each tool's JSON schema before the tool's own validator sees
+them: JSON text where the schema wants an array or object is parsed, a lone item
+where it wants an array becomes a list of one (comma-joined numbers or choices
+become a list), an enum value differing only in case or a plural "s" becomes the
+value, and "" or a placeholder the schema rejects for an optional argument means
 "not given". Arguments that already fit pass through unchanged.
 
 The run's other repair layer, Harness ``RepairToolArguments`` (``tools.CAPABILITIES``),
@@ -68,8 +71,10 @@ def _kinds(schema: Schema) -> set[str]:
 
 
 def _accepts(schema: Schema, value: Any) -> bool:
-    """Whether one schema branch takes a placeholder ([], {}, 0 or null) as it is."""
+    """Whether one schema branch takes a placeholder ([], {}, 0, -1, false, null or "[]"-like text) as it is."""
     kinds = _kinds(schema)
+    if isinstance(value, str):  # placeholder text: only free text takes it
+        return "string" in kinds and not {"enum", "const", "format", "pattern"} & schema.keys()
     if not kinds:
         return "enum" not in schema and "const" not in schema
     if value == [] or value == {}:
@@ -78,17 +83,46 @@ def _accepts(schema: Schema, value: Any) -> bool:
         return "null" in kinds
     return (
         bool(kinds & _json_types(value))
-        and schema.get("minimum", 0) <= 0
-        and schema.get("exclusiveMinimum", -1) < 0
-        and schema.get("maximum", 0) >= 0
+        and schema.get("minimum", value) <= value
+        and schema.get("exclusiveMinimum", value - 1) < value
+        and schema.get("maximum", value) >= value
         and value in schema.get("enum", [value])
     )
 
 
+PLACEHOLDER_TEXT = frozenset({"[]", "{}", "null", "none", "undefined"})
+
+
 def _unset(value: Any, schema: Schema, defs: Schema) -> bool:
     """An optional argument the model filled only to fill it: a placeholder its schema rejects."""
-    placeholder = value is None or value == [] or value == {} or (type(value) is int and value == 0)
+    placeholder = (
+        value is None
+        or value is False
+        or value == []
+        or value == {}
+        or (type(value) is int and value in (0, -1))
+        or (isinstance(value, str) and value.strip().lower() in PLACEHOLDER_TEXT)
+    )
     return placeholder and not any(_accepts(b, value) for b in _branches(schema, defs))
+
+
+def _choice(value: str, schema: Schema, defs: Schema) -> str:
+    """An enum value the model wrote in another case or number ("Users" for "user"), else ``value``."""
+    choices = [c for b in _branches(schema, defs) for c in b.get("enum", ()) if isinstance(c, str)]
+    if not choices or value in choices:
+        return value
+    wanted = value.strip().casefold()
+    near = {wanted, wanted.removesuffix("s"), f"{wanted}s"}
+    found = [c for c in choices if c.casefold() in near]
+    return found[0] if len(found) == 1 else value
+
+
+def _listed(value: str, items: Schema, defs: Schema) -> list[Any] | None:
+    """Comma-joined numbers or choices ("971098,971099", "text,photo") as a list; free text never splits."""
+    countable = all(_kinds(b) & {"integer", "number"} or "enum" in b for b in _branches(items, defs))
+    if "," not in value or not countable:
+        return None
+    return [part.strip() for part in value.split(",") if part.strip()]
 
 
 def repair(value: Any, schema: Schema, defs: Schema) -> Any:
@@ -96,18 +130,23 @@ def repair(value: Any, schema: Schema, defs: Schema) -> Any:
     if isinstance(value, str) and not _branch(schema, defs, "string"):
         with contextlib.suppress(ValueError):
             value = json.loads(value)
+    array = _branch(schema, defs, "array")
+    if isinstance(value, str) and array and (parts := _listed(value, array.get("items", {}), defs)):
+        value = parts
     if (
         value is not None
         and not isinstance(value, list)
-        and _branch(schema, defs, "array")
+        and array
         and not any(_kinds(b) & _json_types(value) for b in _branches(schema, defs))
     ):
         value = [value]
-    if isinstance(value, list) and (array := _branch(schema, defs, "array")):
+    if isinstance(value, list) and array:
         items: Schema = array.get("items", {})
         return [repair(item, items, defs) for item in cast(list[Any], value)]
     if isinstance(value, dict) and (shape := _branch(schema, defs, "object")):
         return repair_object(cast(dict[str, Any], value), shape, defs)
+    if isinstance(value, str):
+        return _choice(value, schema, defs)
     return cast(Any, value)
 
 

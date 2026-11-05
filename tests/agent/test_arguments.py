@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from derp.agent.arguments import repair_object
 
@@ -63,3 +63,38 @@ def test_a_lone_item_becomes_a_list_and_accepted_zeroes_stay() -> None:
         "kinds": ["text"],
         "days": 0,
     }
+
+
+class Slips(BaseModel):
+    group_by: Literal["user", "day"] | None = None
+    since: datetime | None = None
+    correct: Annotated[int, Field(ge=0)] | None = None
+    reply_to: Annotated[int, Field(ge=1)] | None = None
+    kind: Literal["reminder", "prompt"] | None = None
+    ids: list[int] | None = None
+    kinds: list[Literal["text", "photo"]] | None = None
+    names: list[str] | None = None
+    shift: int = 0
+
+
+SLIPS = Slips.model_json_schema()
+
+
+def slip(args: dict[str, object]) -> dict[str, object]:
+    return repair_object(args, SLIPS, SLIPS.get("$defs", {}))
+
+
+def test_placeholder_text_and_sentinels_mean_not_given() -> None:
+    sent = {"group_by": "[]", "since": "null", "correct": -1, "reply_to": 0, "kind": False, "shift": -1}
+    assert slip(sent) == {"shift": -1}  # -1 where the schema takes it is a value
+
+
+def test_enum_slips_and_joined_lists_are_read() -> None:
+    fixed = slip({"group_by": "Users", "ids": "971098, 971099", "kinds": "text,photo", "names": "Ann, Bo"})
+    assert fixed == {
+        "group_by": "user",
+        "ids": [971098, 971099],
+        "kinds": ["text", "photo"],
+        "names": ["Ann, Bo"],
+    }
+    Slips.model_validate(fixed)
