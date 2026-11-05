@@ -1,4 +1,5 @@
-"""Media effects on bytes: captioned memes (images and video), quotes, reversing, background removal, samples, OGG/Opus.
+"""Media effects on bytes: captioned memes (images and video), quotes, reversing, animated sprite sheets,
+background removal, samples, OGG/Opus.
 
 Each public function takes a slot of the given worker pool (whose limits it
 follows), works in a throwaway directory and returns the result's bytes. ffmpeg only ever reads local files of whitelisted
@@ -241,6 +242,19 @@ async def still(pool: WorkerPool, data: bytes) -> bytes:
         seek = ["-ss", "1"] if info.seconds > 2 else []
         args = [*seek, "-frames:v", "1", "-vf", "scale='min(1280,iw)':-2", "-c:v", "mjpeg", "-f", "image2"]
         return await _render(pool, source, "still.jpg", args, what="frame")
+
+
+async def animate(pool: WorkerPool, sheet: bytes, columns: int, rows: int, fps: int = 6) -> bytes:
+    """A sprite sheet's frames (left to right, top to bottom) as one silent MP4 loop, Telegram's GIF."""
+    async with _workspace(pool, sheet) as source:
+        info = await probe(pool, source)
+        if not info.video:
+            raise EffectError("no picture in that file")
+        graph = (
+            f"untile={columns}x{rows},setpts=N/({fps}*TB),scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"
+        )
+        args = ["-vf", graph, "-r", str(fps), "-an", *VIDEO_OUT]
+        return await _render(pool, source, "animation.mp4", args, what="animation")
 
 
 async def audio_sample(pool: WorkerPool, data: bytes) -> bytes:

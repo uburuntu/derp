@@ -196,8 +196,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   zero data retention. Requests run under the owner's provider account, so its usage policy applies to what
   people ask. Owners are named as they chose for chipping in ("a mysterious patron" otherwise).
 - While a key is on, every answer in that chat runs on it (scheduled prompts too), with the usual tools; images
-  on a ChatGPT key are drawn by OpenAI and paid by the key, and PDFs are read by the key's own model. Other side
-  work (voice, video looks, effects) is paid with Derpcoins as usual. Turns a key paid cost nobody Derpcoins;
+  on a ChatGPT key are drawn by OpenAI and paid by the key, and PDFs are read by the key's own model. Only on a
+  ChatGPT key Derp also draws short looping GIFs ("make a gif of a dancing frog"); elsewhere it offers a still
+  picture instead. Other side work (voice, video looks, effects) is paid with Derpcoins as usual. Turns a key paid cost nobody Derpcoins;
   /info says whose key paid and what it cost. Several keys in a chat serve in the order they were turned on.
 - When a key reaches its monthly cap, runs out of credits at the provider or stops working, the chat goes back to
   its usual funding, says so once, and the owner gets a private message with what to do. If its model refuses

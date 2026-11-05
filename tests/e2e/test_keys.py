@@ -1,11 +1,15 @@
 """Contributed keys: plugging a ChatGPT key in privately, an admin turning it on, the key answering the group,
 and the chat falling back to its usual funding when the key refuses or stops working."""
 
+import io
+import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
 import pytest
+from PIL import Image
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
@@ -14,14 +18,15 @@ from sqlalchemy import select
 from derp.agent.models import AgentRun
 from derp.config import Settings
 from derp.history.models import Message as StoredMessage
-from derp.inference.api import Credential, OpenRouterError, SubKey
+from derp.inference.api import Credential, GeneratedImage, OpenRouterError, SubKey
 from derp.inference.models import ProviderCall
 from derp.keys.flows import chat_ref
 from derp.keys.models import ContributedKey, KeyChat
 from derp.money.wallets import credit, wallet
 from tests.e2e.fake_api import Call, Failure
 from tests.e2e.harness import Conversation, Person, Room
-from tests.e2e.model import ScriptedModel
+from tests.e2e.model import ScriptedModel, tool_call
+from tests.e2e.test_effects import jpeg
 
 ANA = Person(1701, "Ana")  # an admin of the group
 BO = Person(1702, "Bo")  # has a ChatGPT Pro plan
@@ -59,13 +64,23 @@ class FakeManagement:
 
 @dataclass
 class FakeKeysAPI:
-    """Stands in for OpenRouterAPI: the plug-in ping succeeds unless ``status`` says otherwise."""
+    """Stands in for OpenRouterAPI: the plug-in ping succeeds unless ``status`` says otherwise; images drawn on
+    a key cost its owner $0.05 each and are recorded in ``drawn``."""
 
     status: int | None = None
+    drawn: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
 
     async def ping(self, model: str, provider: str, *, api_key: str) -> None:
         if self.status:
             raise OpenRouterError(self.status, "no")
+
+    async def generate_image(
+        self, model: str, prompt: str, *, references: Sequence[tuple[bytes, str]] = (), **options: Any
+    ) -> GeneratedImage:
+        self.drawn.append({"model": model, "prompt": prompt, "references": len(references), **options})
+        buffer = io.BytesIO()
+        Image.new("RGB", (384, 256), "green").save(buffer, format="PNG")
+        return GeneratedImage(buffer.getvalue(), "image/png", model, Decimal(0), upstream_usd=Decimal("0.05"))
 
     async def close(self) -> None:
         return None
@@ -389,3 +404,35 @@ async def test_a_reply_to_a_pasted_key_never_shows_the_key_to_the_model(
         assert (
             await session.scalar(select(StoredMessage).where(StoredMessage.text.contains("sk-proj"))) is None
         )
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+async def test_a_chatgpt_key_draws_gifs_and_quick_edits_on_gpt_image_2_6(
+    keyed: tuple[Conversation, ScriptedModel, FakeManagement], model: ScriptedModel
+) -> None:
+    conversation, key_model, _ = keyed
+    key_id = await plug_into_crew(conversation)
+    api = conversation.overrides["api"]
+    assert isinstance(api, FakeKeysAPI)
+
+    key_model.reply(tool_call("generate_image", prompt="a frog dancing on a lily pad", animate=True), ".")
+    asked = await conversation.send(BO, CREW, "@DerpRobot make a gif of a dancing frog", entities=MENTION)
+    animation = await conversation.expect_reply(asked, method="sendAnimation")
+    await conversation.settle(asked)
+    [drawn] = api.drawn
+    assert drawn["model"] == "openai/gpt-image-2.6-flare" and drawn["api_key"] == "sk-or-v1-bo"
+    assert drawn["only"] == ("openai",) and drawn["aspect_ratio"] == "3:2" and drawn["complexity"] is None
+    assert "sprite sheet" in drawn["prompt"] and animation.attachments
+    async with conversation.db.session() as session:
+        run = await session.scalar(select(AgentRun).order_by(AgentRun.id.desc()))
+        image = await session.scalar(select(ProviderCall).where(ProviderCall.kind == "image"))
+    assert run is not None and run.charged_credits == 0 and not model.requests  # no Derpcoins, no Derp model
+    assert image is not None and (image.funding, image.key_id, image.run_id) == ("key", key_id, run.id)
+    assert image.upstream_usd == Decimal("0.05")
+
+    conversation.api.register_file(f"chatphoto-{CREW.id}", jpeg("purple"))
+    key_model.reply(tool_call("generate_image", prompt="give it a santa hat", chat_photo=True), ".")
+    edit = await conversation.send(BO, CREW, "@DerpRobot santa hat on our chat picture", entities=MENTION)
+    await conversation.expect_reply(edit, method="sendPhoto")
+    await conversation.settle(edit)
+    assert api.drawn[-1]["complexity"] == "low" and api.drawn[-1]["aspect_ratio"] == "1:1"  # a quick edit

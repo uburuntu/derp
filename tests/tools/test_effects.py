@@ -153,6 +153,29 @@ async def test_reversing_and_its_limits() -> None:
 
 
 @needs_ffmpeg
+async def test_a_sprite_sheet_becomes_a_loop_of_its_frames_in_reading_order(tmp_path: Path) -> None:
+    colors = ["red", "orange", "yellow", "green", "blue", "purple"]
+    sheet = Image.new("RGB", (384, 256))
+    for i, color in enumerate(colors):
+        x, y = i % 3 * 128, i // 3 * 128
+        sheet.paste(color, (x, y, x + 128, y + 128))
+    buffer = io.BytesIO()
+    sheet.save(buffer, format="PNG")
+    loop = tmp_path / "loop.mp4"
+    loop.write_bytes(await effects.animate(POOL, buffer.getvalue(), 3, 2))
+    for n in range(len(colors)):
+        frame = ffmpeg(
+            "-i", str(loop), "-vf", f"select=eq(n\\,{n})", "-frames:v", "1", "-c:v", "png", "-f", "image2"
+        )
+        picture = Image.open(io.BytesIO(frame)).convert("RGB")
+        expected = Image.new("RGB", (1, 1), colors[n]).getpixel((0, 0))
+        assert picture.size == (128, 128)
+        assert max(abs(a - b) for a, b in zip(picture.getpixel((64, 64)), expected, strict=True)) < 40  # type: ignore[arg-type]
+    with pytest.raises(EffectError):
+        await effects.animate(POOL, b"not a picture", 3, 2)
+
+
+@needs_ffmpeg
 async def test_frames_and_samples_for_recognition() -> None:
     assert Image.open(io.BytesIO(await effects.still(POOL, clip()))).format == "JPEG"
     assert (await effects.audio_sample(POOL, clip()))[:4] == b"RIFF"

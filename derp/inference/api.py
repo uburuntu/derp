@@ -161,14 +161,21 @@ class OpenRouterAPI:
         zdr: bool = True,
         references: Sequence[tuple[bytes, str]] = (),
         aspect_ratio: str | None = None,
+        complexity: str | None = None,
         api_key: str | None = None,
     ) -> GeneratedImage:
-        """``api_key``: a contributor's sub-key, so their provider key pays for the image."""
+        """``api_key``: a contributor's sub-key, so their provider key pays for the image.
+
+        ``complexity`` is how much planning OpenAI's GPT Image 2.6+ puts into the scene ("low" suits quick edits):
+        an OpenAI passthrough option, so it goes out only on requests pinned to OpenAI.
+        """
         if zdr and not only:
             raise ValueError(f"no ZDR host pinned for {model}; refusing an unrestricted image request")
         body: Json = {"model": model, "prompt": prompt}
         if only:
             body["provider"] = {"only": list(only), "allow_fallbacks": False}
+            if complexity and "openai" in only:
+                body["provider"]["options"] = {"openai": {"complexity": complexity}}
         if references:
             body["input_references"] = [
                 {"type": "image_url", "image_url": {"url": _data_url(data, mime)}}

@@ -163,11 +163,17 @@ async def test_generate_image_pins_providers_and_decodes() -> None:
 
     api = api_with(httpx.MockTransport(handle))
     image = await api.generate_image(
-        "m/x", "a cat", only=("google-vertex",), references=[(b"ref", "image/jpeg")]
+        "m/x", "a cat", only=("google-vertex",), references=[(b"ref", "image/jpeg")], complexity="low"
     )
     assert image.data == b"PNG" and image.cost_usd == Decimal("0.039") and image.media_type == "image/png"
-    assert seen["provider"] == {"only": ["google-vertex"], "allow_fallbacks": False}
+    assert seen["provider"] == {"only": ["google-vertex"], "allow_fallbacks": False}  # complexity is OpenAI's
     assert seen["input_references"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,")  # type: ignore[index]
+    await api.generate_image(
+        "openai/gpt-image-2.6-flare", "a cat", only=("openai",), zdr=False, complexity="low"
+    )
+    assert seen["provider"] == {
+        "only": ["openai"], "allow_fallbacks": False, "options": {"openai": {"complexity": "low"}}
+    }  # fmt: skip
     with pytest.raises(ValueError, match="no ZDR host"):
         await api.generate_image("m/y", "a dog")
 

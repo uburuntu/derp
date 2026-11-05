@@ -8,6 +8,9 @@ images of stored messages in the same chat, members' profile photos or the
 chat photo as references. The prompt says whose each profile photo is, in the
 order they are sent, so every likeness lands on its own character, and names
 the members without a photo so they are drawn from the description.
+
+An animation is GPT Image 2.6's way to a GIF: one picture holding the frames as a
+sprite sheet (``SHEET``), which ``tools.effects.animate`` cuts apart and loops.
 """
 
 import logging
@@ -25,6 +28,14 @@ from derp.telegram.media import Media, MediaGateway, chat_photo_bytes, profile_p
 
 log = logging.getLogger("derp.images")
 ASPECT_RATIOS = ("1:1", "16:9", "9:16", "4:3", "3:4")
+SHEET = (3, 2)  # columns, rows: square frames on a 3:2 picture
+SHEET_BRIEF = (
+    f"Draw it as a single animation sprite sheet for a seamless looping GIF: exactly {SHEET[0] * SHEET[1]} "
+    f"sequential frames in a precise {SHEET[0]}-column by {SHEET[1]}-row grid, read left to right, then top to "
+    "bottom, every panel the same size. Fixed camera; the same characters, outfits, background and style in "
+    "every frame, with clear incremental motion; the last frame leads smoothly back into the first. No "
+    "captions, words, panel labels, borders or gutters."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +61,7 @@ class ImageJob:
     avatar_of: tuple[Portrait, ...] = ()  # whose profile photos are references, in order
     faceless: tuple[str, ...] = ()  # members in the picture without a profile photo
     chat_photo: bool = False  # edit this chat's photo
+    animated: bool = False  # a looping animation drawn as a sprite sheet (``SHEET``)
 
     def as_args(self) -> dict[str, object]:
         return {
@@ -59,6 +71,7 @@ class ImageJob:
             "avatar_of": [portrait.as_arg() for portrait in self.avatar_of],
             "faceless": list(self.faceless),
             "chat_photo": self.chat_photo,
+            "animated": self.animated,
         }
 
     @classmethod
@@ -73,6 +86,7 @@ class ImageJob:
             avatar_of=tuple(Portrait.from_arg(avatar) for avatar in avatars),
             faceless=tuple(str(name) for name in cast(list[object], args.get("faceless") or [])),
             chat_photo=bool(args.get("chat_photo")),
+            animated=bool(args.get("animated")),
         )
 
     def cast_note(self, first: int) -> str:
@@ -104,6 +118,7 @@ async def _generate(
     prompt: str,
     aspect_ratio: str,
     references: list[Media],
+    complexity: str | None,
     api_key: str | None,
 ) -> GeneratedImage:
     error: OpenRouterError | None = None
@@ -116,6 +131,7 @@ async def _generate(
                 zdr=pin.zdr,
                 references=[(image.data, image.media_type) for image in references],
                 aspect_ratio=aspect_ratio,
+                complexity=complexity,
                 api_key=api_key,
             )
         except OpenRouterError as failed:  # next model in the pin
@@ -136,7 +152,8 @@ async def draw(
     extra: Sequence[bytes] = (),
     api_key: str | None = None,
 ) -> GeneratedImage:
-    """Generate one image (not yet ledgered: the caller ledgers it once it knows whether it was delivered).
+    """Generate one image, or an animation's sprite sheet (not yet ledgered: the caller ledgers it once it
+    knows whether it was delivered). A still edit of a picture asks for low complexity, as OpenAI suggests.
 
     ``api_key``: a contributed key's sub-key, which pays for it instead of Derp's credits.
 
@@ -152,8 +169,12 @@ async def draw(
         *([await chat_photo_bytes(bot, gateway, chat_id)] if job.chat_photo else []),
     ]
     references += [await gateway.normalize(data) for data in pictures]
-    prompt = "\n\n".join(part for part in (job.prompt, job.cast_note(first_avatar)) if part)
-    return await _generate(api, pin, prompt, job.aspect_ratio, references, api_key)
+    brief = SHEET_BRIEF if job.animated else ""
+    prompt = "\n\n".join(part for part in (job.prompt, brief, job.cast_note(first_avatar)) if part)
+    aspect_ratio = f"{SHEET[0]}:{SHEET[1]}" if job.animated else job.aspect_ratio
+    edits = bool(job.references or extra or job.chat_photo)  # a picture changed, not a scene drawn from faces
+    complexity = "low" if edits and not job.animated else None
+    return await _generate(api, pin, prompt, aspect_ratio, references, complexity, api_key)
 
 
 def filename(image: GeneratedImage) -> str:

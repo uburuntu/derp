@@ -212,6 +212,20 @@ async def test_images_need_paid_derpcoins(conversation: Conversation, model: Scr
         assert await session.scalar(select(ProviderCall.id).where(ProviderCall.kind == "image")) is None
 
 
+async def test_animations_need_a_chatgpt_key(conversation: Conversation, model: ScriptedModel) -> None:
+    images = FakeImages()
+    conversation.overrides["api"] = images
+    await conversation.restart()
+    await fund(conversation, 650)
+    model.reply(
+        tool_call("generate_image", prompt="a dancing frog", animate=True), "No GIFs here, want a still?"
+    )
+    asked = await conversation.send(JO, text="make a gif of a dancing frog")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    assert images.prompts == [] and "ChatGPT key" in results_of(model, "generate_image")[0]
+
+
 async def test_cancelling_an_expensive_image_charges_nothing_for_it(
     conversation: Conversation, model: ScriptedModel
 ) -> None:

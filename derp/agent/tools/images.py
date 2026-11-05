@@ -8,7 +8,8 @@ a chain (caption it, make it a sticker, cut it out) carries on from the image.
 
 On a run a contributed key pays whose provider draws (``settings.keys.images``), the key draws it with
 its provider's image model instead: no Derpcoins and no approval (the key's monthly cap is its owner's
-limit), only while what is left of the cap covers one.
+limit), only while what is left of the cap covers one. Only such a key draws animations (``animate``): a
+sprite sheet looped into a silent MP4, which Telegram shows as a GIF.
 """
 
 from dataclasses import replace
@@ -21,8 +22,8 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.approvals import ask, needs_approval
 from derp.agent.deps import RunDeps
-from derp.agent.images import ImageJob, Portrait, draw, filename
-from derp.agent.outputs import Made, Pending, Refused, afford, check_budget, deliver, emit, key_left
+from derp.agent.images import SHEET, ImageJob, Portrait, draw, filename
+from derp.agent.outputs import Made, Pending, Refused, afford, check_budget, deliver, emit, key_left, settle
 from derp.agent.tools.sources import (
     avatar_source,
     chat_photo_source,
@@ -37,6 +38,8 @@ from derp.keys.routing import key_pin
 from derp.money.funding import PAID_SOURCES, Funding
 from derp.money.wallets import balance
 from derp.telegram.media import MediaUnavailableError, profile_photo_bytes
+from derp.tools import effects
+from derp.tools.workers import EffectError
 
 toolset = FunctionToolset[RunDeps]()
 IMAGES = ("photo", "document", "sticker")  # kept results an edit can start from
@@ -52,6 +55,7 @@ async def generate_image(
     chat_photo: bool = False,
     people: Annotated[list[str], Field(max_length=4)] | None = None,
     aspect_ratio: Literal["1:1", "16:9", "9:16", "4:3", "3:4"] = "1:1",
+    animate: bool = False,
     from_result: str | None = None,
     final: bool = True,
 ) -> str:
@@ -69,6 +73,7 @@ async def generate_image(
         people: Draw these members from their profile photos, in this order (names or @usernames, "me" for
             the asker; up to 4), e.g. a group portrait. Say in the prompt who is who ("Anya as the rogue").
         aspect_ratio: Shape of the picture.
+        animate: A short looping animation (a GIF, square) instead of a still; describe the motion in the prompt.
         from_result: Edit a result kept earlier in this answer (e.g. r1).
         final: False keeps the image for a next step instead of posting it.
     """
@@ -81,6 +86,8 @@ async def generate_image(
     price = deps.settings.credits_for_usd(deps.settings.image_price_usd)
     key = deps.funds.key
     drawn_by = deps.settings.keys.images.get(key.provider) if key is not None else None
+    if animate and drawn_by is None:
+        return "Animations are drawn only in chats running on someone's ChatGPT key; offer a still picture."
     if drawn_by is None and (deps.funding is not Funding.PAID or deps.funds.wallet_id is None):
         return "Images need Derpcoins (the free daily ones don't cover one). Tell them /buy gets some."
     if ctx.tool_call_approved:  # they pressed Make it: exactly the job the prompt priced
@@ -88,7 +95,15 @@ async def generate_image(
     else:
         try:
             job = await _job(
-                deps, prompt, edit, edit_message_id, profile_photo, chat_photo, people or [], aspect_ratio
+                deps,
+                prompt,
+                edit,
+                edit_message_id,
+                profile_photo,
+                chat_photo,
+                people or [],
+                aspect_ratio,
+                animate,
             )
         except Refused as refused:
             return str(refused)
@@ -142,7 +157,15 @@ async def generate_image(
         image = replace(
             image, key_id=key.key_id, upstream_usd=upstream
         )  # the key's from here on, sent or not
-    made = Made("photo", image.data, filename(image), "image", Pending(calls=[image]))
+    if job.animated:
+        try:
+            clip = await effects.animate(deps.workers, image.data, *SHEET)
+        except EffectError as failed:
+            await settle(deps, Pending(calls=[image]), delivered=False)
+            return f"The animation couldn't be put together ({failed.reason})."
+        made = Made("animation", clip, "derp.mp4", "animation", Pending(calls=[image]))
+    else:
+        made = Made("photo", image.data, filename(image), "image", Pending(calls=[image]))
     try:  # the image is charged with the run only once it (or a result made from it) reached Telegram
         result = await emit(deps, made, final=final, source=source.kept if source else None)
     except Refused as refused:
@@ -161,6 +184,7 @@ async def _job(
     chat_photo: bool,
     people: list[str],
     aspect_ratio: str,
+    animate: bool,
 ) -> ImageJob:
     """What to draw, its references resolved now; ``Refused`` when one can't be.
 
@@ -187,7 +211,13 @@ async def _job(
     edits_message = (edit or edit_message_id is not None) and not owner_photo
     references = ((edit_message_id,) if edit_message_id is not None else deps.seen) if edits_message else ()
     return ImageJob(
-        prompt[:2000], aspect_ratio, references, tuple(portraits), tuple(dict.fromkeys(faceless)), chat_photo
+        prompt[:2000],
+        aspect_ratio,
+        references,
+        tuple(portraits),
+        tuple(dict.fromkeys(faceless)),
+        chat_photo,
+        animate,
     )
 
 

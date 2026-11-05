@@ -9,6 +9,7 @@ def test_a_job_round_trips_through_its_stored_args() -> None:
         avatar_of=(Portrait(1, "Anya"), Portrait(2, "Jo @jo")),
         faceless=("Bob",),
         chat_photo=True,
+        animated=True,
     )
     assert ImageJob.from_args(job.as_args()) == job
 
