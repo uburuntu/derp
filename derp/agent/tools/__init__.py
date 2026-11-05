@@ -54,8 +54,15 @@ def _clamp(chars: int) -> list[Band]:
     return [Band(over=chars, action=Truncate(max_chars=chars, strategy=TruncationStrategy.head))]
 
 
+class _Clamps(ToolOutputLimits[RunDeps]):
+    """Truncation only: nothing is ever spilled, so the harness's ``read_tool_result`` would find nothing."""
+
+    def get_toolset(self) -> None:
+        return None
+
+
 # Tool results that can grow with the chat or the code are clamped once, when produced.
-OUTPUT_LIMITS = ToolOutputLimits[RunDeps](
+OUTPUT_LIMITS = _Clamps(
     bands=[],
     per_tool={
         "run_code": _clamp(4000),
