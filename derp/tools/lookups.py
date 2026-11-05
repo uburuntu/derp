@@ -86,7 +86,7 @@ class Lookups:
         if ttl and (hit := self._cache.get(key)) and time.monotonic() < hit[0]:
             return hit[1]
         try:
-            response = await self._client.get(url, params=params)
+            response = await self._fetch(url, params)
         except httpx.HTTPError as error:
             raise LookupError(type(error).__name__) from None
         if response.status_code >= 400:
@@ -98,6 +98,14 @@ class Lookups:
                 self._cache.pop(next(iter(self._cache)))
             self._cache[key] = (time.monotonic() + ttl, response)
         return response
+
+    async def _fetch(self, url: str, params: dict[str, Any] | None) -> httpx.Response:
+        """A GET, asked once more after a timeout or a dropped connection (a GET changes nothing; a service's
+        HTTP error is an answer, never retried)."""
+        try:
+            return await self._client.get(url, params=params)
+        except httpx.TimeoutException, httpx.NetworkError:
+            return await self._client.get(url, params=params)
 
     async def json(
         self, url: str, *, params: dict[str, Any] | None = None, ttl: float = 0, max_bytes: int = MAX_BYTES

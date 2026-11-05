@@ -32,6 +32,30 @@ async def test_json_answers_are_kept_for_their_ttl(settings: Settings) -> None:
     await tools.close()
 
 
+async def test_a_blip_is_asked_once_more_and_an_http_error_never(settings: Settings) -> None:
+    seen: list[int] = []
+
+    def flaky(failures: int, status: int = 200) -> Handler:
+        def handle(request: httpx.Request) -> httpx.Response:
+            seen.append(1)
+            if len(seen) <= failures:
+                raise httpx.ReadTimeout("slow", request=request)
+            return httpx.Response(status, json={"ok": True})
+
+        return handle
+
+    assert await make(settings, flaky(1)).json("https://x.example/a") == {"ok": True}
+    assert len(seen) == 2
+    seen.clear()
+    with pytest.raises(lookups.LookupError, match="ReadTimeout"):
+        await make(settings, flaky(2)).json("https://x.example/a")
+    assert len(seen) == 2
+    seen.clear()
+    with pytest.raises(lookups.LookupError, match="HTTP 503"):
+        await make(settings, flaky(0, status=503)).json("https://x.example/a")
+    assert len(seen) == 1
+
+
 async def test_wikipedia_picks_the_language_by_script(settings: Settings) -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "ru.wikipedia.org"
