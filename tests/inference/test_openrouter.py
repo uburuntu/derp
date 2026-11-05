@@ -172,8 +172,37 @@ async def test_generate_image_pins_providers_and_decodes() -> None:
         "openai/gpt-image-2.6-flare", "a cat", only=("openai",), zdr=False, complexity="low"
     )
     assert seen["provider"] == {
-        "only": ["openai"], "allow_fallbacks": False, "options": {"openai": {"complexity": "low"}}
+        "only": ["openai"], "allow_fallbacks": False,
+        "options": {"openai": {"moderation": "low", "complexity": "low"}},
     }  # fmt: skip
+
+
+async def test_image_errors_carry_a_loggable_code_and_say_when_the_provider_refused() -> None:
+    raw = json.dumps(
+        {"error": {"code": "moderation_blocked", "message": "Your request was rejected: it shows X"}}
+    )
+    bodies = [
+        (400, {"error": {"code": 400, "message": "Provider returned error",
+                         "metadata": {"raw": raw, "provider_name": "OpenAI"}}}),
+        (403, {"error": {"code": 403, "message": "Input was flagged by moderation", "metadata": {"reasons": []}}}),
+        (400, {"error": {"code": 400, "message": "Your prompt mentions Bob Smith", "metadata": {"raw": "not json"}}}),
+    ]  # fmt: skip
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        status, body = bodies.pop(0)
+        return httpx.Response(status, json=body)
+
+    api = api_with(httpx.MockTransport(handle))
+    found: list[tuple[int, str | None, str | None, bool]] = []
+    for _ in range(3):
+        with pytest.raises(OpenRouterError) as caught:
+            await api.generate_image("openai/gpt-image-2.6-flare", "a cat", only=("openai",), zdr=False)
+        found.append((caught.value.status, caught.value.code, caught.value.provider, caught.value.refused))
+    assert found == [
+        (400, "moderation_blocked", "OpenAI", True),
+        (403, None, None, True),
+        (400, None, None, False),
+    ]
     with pytest.raises(ValueError, match="no ZDR host"):
         await api.generate_image("m/y", "a dog")
 

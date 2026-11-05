@@ -16,6 +16,7 @@ sprite sheet (``SHEET``), which ``tools.effects.animate`` cuts apart and loops.
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import cast
 
 from aiogram import Bot
@@ -28,7 +29,7 @@ from derp.telegram.media import Media, MediaGateway, chat_photo_bytes, profile_p
 
 log = logging.getLogger("derp.images")
 ASPECT_RATIOS = ("1:1", "16:9", "9:16", "4:3", "3:4")
-SHEET = (3, 2)  # columns, rows: square frames on a 3:2 picture
+SHEET = (3, 3)  # columns, rows: square frames on a square picture
 SHEET_BRIEF = (
     f"Draw it as a single animation sprite sheet for a seamless looping GIF: exactly {SHEET[0] * SHEET[1]} "
     f"sequential frames in a precise {SHEET[0]}-column by {SHEET[1]}-row grid, read left to right, then top to "
@@ -135,7 +136,7 @@ async def _generate(
                 api_key=api_key,
             )
         except OpenRouterError as failed:  # next model in the pin
-            log.info("image model failed: %s", failed.status)
+            log.info("image model failed: %s %s", failed.status, failed.code or "")
             error = failed
     raise error or OpenRouterError(502, "no image model")
 
@@ -171,7 +172,8 @@ async def draw(
     references += [await gateway.normalize(data) for data in pictures]
     brief = SHEET_BRIEF if job.animated else ""
     prompt = "\n\n".join(part for part in (job.prompt, brief, job.cast_note(first_avatar)) if part)
-    aspect_ratio = f"{SHEET[0]}:{SHEET[1]}" if job.animated else job.aspect_ratio
+    shape = Fraction(*SHEET)  # the sheet's shape when every frame is square
+    aspect_ratio = f"{shape.numerator}:{shape.denominator}" if job.animated else job.aspect_ratio
     edits = bool(job.references or extra or job.chat_photo)  # a picture changed, not a scene drawn from faces
     complexity = "low" if edits and not job.animated else None
     return await _generate(api, pin, prompt, aspect_ratio, references, complexity, api_key)

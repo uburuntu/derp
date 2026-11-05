@@ -5,6 +5,7 @@ and the management API for contributed keys (``OpenRouterManagement``).
 
 import base64
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -17,14 +18,47 @@ from derp.config import Settings
 type Json = dict[str, Any]
 
 
+REFUSAL_CODES = frozenset({"moderation_blocked", "content_policy_violation", "content_filter"})
+_CODE = re.compile(r"[a-z][a-z0-9_]{2,47}")
+
+
 class OpenRouterError(Exception):
-    def __init__(self, status: int, message: str) -> None:
+    """``code`` is a short machine code (``moderation_blocked``) safe to log, never the message; ``provider``
+    names the host that returned the error when OpenRouter passed one on."""
+
+    def __init__(
+        self, status: int, message: str, *, code: str | None = None, provider: str | None = None
+    ) -> None:
         self.status = status
+        self.code = code
+        self.provider = provider
+        self.refused = code in REFUSAL_CODES or (
+            status == 403 and any(word in message.lower() for word in ("moderation", "flagged"))
+        )
         super().__init__(f"OpenRouter {status}: {message}")
 
     @property
     def retryable(self) -> bool:
         return self.status in {408, 429, 500, 502, 503, 504, 529}
+
+
+def _error_code(error: Mapping[str, Any]) -> str | None:
+    """The provider's own error code when OpenRouter passed its raw body on, else OpenRouter's (when a word)."""
+    metadata = error.get("metadata")
+    raw = metadata.get("raw") if isinstance(metadata, Mapping) else None
+    candidates: list[object] = []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = None
+    if isinstance(raw, Mapping):
+        inner = raw.get("error")
+        candidates += (
+            [inner.get("code"), inner.get("type")] if isinstance(inner, Mapping) else [raw.get("code")]
+        )
+    candidates.append(error.get("code"))
+    return next((c for c in candidates if isinstance(c, str) and _CODE.fullmatch(c)), None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,10 +121,18 @@ async def _send(client: httpx.AsyncClient, method: str, path: str, **kwargs: Any
         raise OpenRouterError(0, type(error).__name__) from None
     if response.status_code >= 400:
         try:
-            message = str(response.json().get("error", {}).get("message", ""))[:200]
+            error = response.json().get("error") or {}
         except ValueError:
-            message = ""
-        raise OpenRouterError(response.status_code, message or response.reason_phrase)
+            error = {}
+        error = cast(Mapping[str, Any], error) if isinstance(error, Mapping) else {}
+        metadata = error.get("metadata")
+        provider = metadata.get("provider_name") if isinstance(metadata, Mapping) else None
+        raise OpenRouterError(
+            response.status_code,
+            str(error.get("message", ""))[:200] or response.reason_phrase,
+            code=_error_code(error),
+            provider=str(provider)[:40] if provider else None,
+        )
     return response
 
 
@@ -166,16 +208,18 @@ class OpenRouterAPI:
     ) -> GeneratedImage:
         """``api_key``: a contributor's sub-key, so their provider key pays for the image.
 
-        ``complexity`` is how much planning OpenAI's GPT Image 2.6+ puts into the scene ("low" suits quick edits):
-        an OpenAI passthrough option, so it goes out only on requests pinned to OpenAI.
+        On requests pinned to OpenAI (contributed keys: the owner's account and usage policy) moderation is
+        "low", OpenAI's less strict setting, and ``complexity`` is how much planning GPT Image 2.6+ puts into
+        the scene ("low" suits quick edits); both are OpenAI passthrough options other hosts never see.
         """
         if zdr and not only:
             raise ValueError(f"no ZDR host pinned for {model}; refusing an unrestricted image request")
         body: Json = {"model": model, "prompt": prompt}
         if only:
             body["provider"] = {"only": list(only), "allow_fallbacks": False}
-            if complexity and "openai" in only:
-                body["provider"]["options"] = {"openai": {"complexity": complexity}}
+            if "openai" in only:
+                options: Json = {"moderation": "low"} | ({"complexity": complexity} if complexity else {})
+                body["provider"]["options"] = {"openai": options}
         if references:
             body["input_references"] = [
                 {"type": "image_url", "image_url": {"url": _data_url(data, mime)}}

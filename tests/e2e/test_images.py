@@ -212,6 +212,27 @@ async def test_images_need_paid_derpcoins(conversation: Conversation, model: Scr
         assert await session.scalar(select(ProviderCall.id).where(ProviderCall.kind == "image")) is None
 
 
+async def test_a_refused_image_says_who_refused_and_charges_nothing(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    class Refusing(FakeImages):
+        async def generate_image(self, model: str, prompt: str, **_: object) -> GeneratedImage:
+            raise OpenRouterError(400, "rejected", code="moderation_blocked", provider="Google")
+
+    conversation.overrides["api"] = Refusing()
+    await conversation.restart()
+    wallet_id = await fund(conversation, 650)
+    model.reply(tool_call("generate_image", prompt="something spicy"), "Google wouldn't draw that one.")
+    asked = await conversation.send(JO, text="draw something spicy")
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    [said] = results_of(model, "generate_image")
+    assert said.startswith("Google wouldn't draw that one") and "rephrase" in said
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(ProviderCall.id).where(ProviderCall.kind == "image")) is None
+        assert await balance(session, wallet_id) > 650 - 48  # only the turn, never the image
+
+
 async def test_animations_need_a_chatgpt_key(conversation: Conversation, model: ScriptedModel) -> None:
     images = FakeImages()
     conversation.overrides["api"] = images

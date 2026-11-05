@@ -146,6 +146,9 @@ async def generate_image(
             extra=extra, api_key=sub_key,
         )  # fmt: skip
     except OpenRouterError as error:
+        if error.refused:
+            who = error.provider or "The image model"
+            return f"{who} wouldn't draw that one (its content rules); nothing was charged. Say so: they can rephrase."
         return f"The image failed ({error.status}); nothing was charged for it."
     except MediaUnavailableError as unavailable:
         return f"A reference picture can't be used ({unavailable.reason}); nothing was charged."

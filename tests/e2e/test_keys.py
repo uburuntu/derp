@@ -79,7 +79,7 @@ class FakeKeysAPI:
     ) -> GeneratedImage:
         self.drawn.append({"model": model, "prompt": prompt, "references": len(references), **options})
         buffer = io.BytesIO()
-        Image.new("RGB", (384, 256), "green").save(buffer, format="PNG")
+        Image.new("RGB", (384, 384), "green").save(buffer, format="PNG")
         return GeneratedImage(buffer.getvalue(), "image/png", model, Decimal(0), upstream_usd=Decimal("0.05"))
 
     async def close(self) -> None:
@@ -421,7 +421,7 @@ async def test_a_chatgpt_key_draws_gifs_and_quick_edits_on_gpt_image_2_6(
     await conversation.settle(asked)
     [drawn] = api.drawn
     assert drawn["model"] == "openai/gpt-image-2.6-flare" and drawn["api_key"] == "sk-or-v1-bo"
-    assert drawn["only"] == ("openai",) and drawn["aspect_ratio"] == "3:2" and drawn["complexity"] is None
+    assert drawn["only"] == ("openai",) and drawn["aspect_ratio"] == "1:1" and drawn["complexity"] is None
     assert "sprite sheet" in drawn["prompt"] and animation.attachments
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun).order_by(AgentRun.id.desc()))
