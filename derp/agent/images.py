@@ -9,8 +9,9 @@ chat photo as references. The prompt says whose each profile photo is, in the
 order they are sent, so every likeness lands on its own character, and names
 the members without a photo so they are drawn from the description.
 
-An animation is GPT Image 2.6's way to a GIF: one picture holding the frames as a
-sprite sheet (``SHEET``), which ``tools.effects.animate`` cuts apart and loops.
+OpenRouter doesn't pass GPT Image 2.6's native GIF output on yet, so an animation is
+one picture holding the frames as a sprite sheet (``SHEET``), which
+``tools.effects.animate`` cuts apart and loops (``keys.catalog`` notes when that changes).
 """
 
 import logging

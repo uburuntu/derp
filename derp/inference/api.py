@@ -172,6 +172,9 @@ class OpenRouterAPI:
     async def image_models(self) -> list[Json]:
         return (await self._request("GET", "images/models"))["data"]
 
+    async def image_endpoints(self, model: str) -> list[Json]:
+        return (await self._request("GET", f"images/models/{model}/endpoints"))["endpoints"]
+
     async def key_info(self) -> Json:
         return (await self._request("GET", "key"))["data"]
 

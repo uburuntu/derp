@@ -6,6 +6,9 @@ that endpoint: a cent or so). Its price is taken from that endpoint, for the pic
 A model that drops out disappears from the picker, and keys picked on it serve on their provider's
 recommended model until their owner picks another (``routing.serving_model``); the change lands in the
 scout's note. Every live key is then re-registered for today's list, which a deploy may have changed.
+
+Animations are cut from a sprite sheet only because OpenRouter doesn't pass GPT Image 2.6's native GIF
+output on; the note says so each day once a key's image model offers it, until animations switch over.
 """
 
 import logging
@@ -86,8 +89,33 @@ async def check_key_models(
                     row.price_cache_read = per_million(cache) if cache is not None else None
             if live != was_live:
                 notes.append(f"key model {listed.model}: {'back' if live else 'no longer offered'}")
+    notes += await native_gif_notes(api, settings)
     if management is not None:
         await sync_registrations(db, settings, management)
+    return notes
+
+
+async def native_gif_notes(api: OpenRouterAPI, settings: Settings) -> list[str]:
+    """A note for each key image model whose OpenRouter endpoint now outputs GIFs itself."""
+    notes: list[str] = []
+    for model in settings.keys.images.values():
+        try:
+            endpoints = await api.image_endpoints(model)
+        except OpenRouterError as error:
+            log.info("image model lookup failed: %s", error.status)
+            continue
+        formats = [
+            value
+            for endpoint in endpoints
+            for value in ((endpoint.get("supported_parameters") or {}).get("output_format") or {}).get(
+                "values"
+            )
+            or []
+        ]
+        if "gif" in formats:
+            notes.append(
+                f"key image model {model} outputs GIFs natively now: animations can drop the sprite sheet"
+            )
     return notes
 
 
