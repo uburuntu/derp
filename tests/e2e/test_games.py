@@ -110,7 +110,7 @@ async def test_quoted_arguments_are_repaired(conversation: Conversation, model: 
     polls = [{"question": "2+2?", "options": ["3", "4"], "correct": 1}]
     quoted_query = {
         "preset": "top_messages", "kinds": "[\"text\"]", "users": "[]", "days": "30", "since": "", "until": "",
-        "media_type": "", "contains": "", "reaction": "", "min_reactions": "", "from_derp": "false",
+        "contains": "", "reaction": "", "min_reactions": "", "from_derp": "false",
         "group_by": "", "limit": 20, "whole_chat": True, "order": "count",
     }  # fmt: skip
     model.reply(
@@ -132,7 +132,11 @@ async def test_a_series_rides_in_one_output_slot(conversation: Conversation, mod
     six = [{"question": f"Q{n}?", "options": ["a", "b"], "correct": n % 2} for n in range(6)]
     model.reply(
         tool_call("post_polls", polls=six),
-        tool_call("post_polls", polls=[{"question": "Pizza or sushi?", "options": ["Pizza", "Sushi"]}], anonymous=True),
+        tool_call(
+            "post_polls",
+            polls=[{"question": "Pizza or sushi?", "options": ["Pizza", "Sushi"]}],
+            anonymous=True,
+        ),
         tool_call("send_dice"),
         ".",
     )
@@ -140,9 +144,7 @@ async def test_a_series_rides_in_one_output_slot(conversation: Conversation, mod
     await conversation.settle(asked)
     polls = conversation.api.calls_of("sendPoll", after=asked.after)
     assert len(polls) == 7 and str(polls[-1]["is_anonymous"]).lower() == "true"
-    results = [
-        str(p.content) for m in model.requests[-1] for p in m.parts if isinstance(p, ToolReturnPart)
-    ]
+    results = [str(p.content) for m in model.requests[-1] for p in m.parts if isinstance(p, ToolReturnPart)]
     assert results[0].startswith("Posted 6 of 6") and results[1].startswith("Posted 1 of 1")
     assert "output limit" in results[2] and not conversation.api.calls_of("sendDice", after=asked.after)
 

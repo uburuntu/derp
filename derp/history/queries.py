@@ -11,10 +11,10 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import ColumnElement, String, and_, case, cast, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +24,6 @@ from derp.history.models import (
     GameScore,
     MemberEvent,
     Message,
-    MessageMedia,
     Poll,
     Reaction,
     ReactionCount,
@@ -312,23 +311,30 @@ class ChatQuery(BaseModel):
         default=None, description="Only messages from these people (names or @usernames)."
     )
     days: float | None = Field(default=None, gt=0, description="Only the last N days.")
-    since: datetime | None = Field(default=None, description="Local time in the chat's time zone.")
-    until: datetime | None = Field(default=None, description="Local time in the chat's time zone.")
+    since: datetime | date | None = Field(default=None, description="From this local date or date-time.")
+    until: datetime | date | None = Field(
+        default=None, description="Up to this local date (all of it) or date-time."
+    )
     whole_chat: bool = Field(default=False, description="Search every forum topic, not only the current one.")
-    media_type: (
-        Literal["photo", "video", "voice", "video_note", "audio", "document", "sticker", "animation"] | None
-    ) = None
     contains: str | None = Field(
         default=None, description="Case-insensitive substring of the text or transcript."
     )
     reaction: str | None = Field(default=None, description="Only messages that got this reaction emoji.")
     min_reactions: int | None = Field(default=None, ge=1)
-    from_derp: bool | None = Field(
-        default=None, description="True: only Derp's messages; false: exclude them."
+    from_derp: Literal["only", "exclude"] | None = Field(
+        default=None, description="only: just Derp's messages; exclude: leave Derp's out."
     )
     group_by: Literal["user", "day", "kind", "topic", "reaction"] | None = None
     order: Literal["newest", "oldest", "reactions", "count"] = "newest"
     limit: int = Field(default=20, ge=1, le=MAX_ROWS)
+
+    @field_validator("since", "until", mode="before")
+    @classmethod
+    def _whole_day(cls, value: object) -> object:
+        """A bare "2026-11-03" is that day; lax parsing (a tool call's arguments) would read its midnight."""
+        if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+            return date.fromisoformat(value.strip())
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,13 +362,15 @@ def _reaction_total() -> Any:
 
 
 def _period(query: ChatQuery, tz: tzinfo) -> tuple[datetime | None, datetime | None]:
-    def local(moment: datetime | None) -> datetime | None:
-        return moment.replace(tzinfo=tz) if moment is not None and moment.tzinfo is None else moment
+    def local(moment: datetime | date | None, *, end: bool = False) -> datetime | None:
+        if moment is None or isinstance(moment, datetime):
+            return moment.replace(tzinfo=tz) if moment is not None and moment.tzinfo is None else moment
+        return datetime.combine(moment, time.max if end else time.min, tzinfo=tz)  # a date: the whole day
 
     since = local(query.since)
     if query.days is not None:
         since = datetime.now(UTC) - timedelta(days=query.days)
-    return since, local(query.until)
+    return since, local(query.until, end=True)
 
 
 def _day(moment: datetime | None, tz: tzinfo) -> Any:
@@ -385,16 +393,6 @@ async def _message_filters(
         if not user_ids:
             return None
         filters.append(Message.user_id.in_(user_ids))
-    if query.media_type:
-        filters.append(
-            select(MessageMedia.message_id)
-            .where(
-                MessageMedia.chat_id == Message.chat_id,
-                MessageMedia.message_id == Message.message_id,
-                MessageMedia.type == query.media_type,
-            )
-            .exists()
-        )
     if query.contains:
         pattern = f"%{query.contains.lower()}%"
         filters.append(
@@ -422,7 +420,7 @@ async def _message_filters(
     if query.min_reactions:
         filters.append(_reaction_total() >= query.min_reactions)
     if query.from_derp is not None:
-        filters.append(Message.is_derp.is_(query.from_derp))
+        filters.append(Message.is_derp.is_(query.from_derp == "only"))
     return filters
 
 
@@ -430,11 +428,13 @@ async def run_query(session: AsyncSession, scope: Scope, query: ChatQuery) -> Qu
     empty = QueryResult("messages", [], [], [], [])
     match query.preset:
         case "reaction_leaderboard":
-            query = query.model_copy(update={"group_by": "user", "order": "reactions", "from_derp": False})
+            query = query.model_copy(
+                update={"group_by": "user", "order": "reactions", "from_derp": "exclude"}
+            )
         case "top_messages":
             query = query.model_copy(update={"group_by": None, "order": "reactions", "min_reactions": 1})
         case "member_activity":
-            query = query.model_copy(update={"group_by": "user", "order": "count", "from_derp": False})
+            query = query.model_copy(update={"group_by": "user", "order": "count", "from_derp": "exclude"})
         case "quiz_leaderboard":
             return QueryResult("groups", [], await _quiz_points(session, scope, query), [], [])
         case "title_leaderboard":

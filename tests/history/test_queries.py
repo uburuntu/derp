@@ -173,6 +173,10 @@ async def test_days_follow_the_chats_time_zone(database: Database) -> None:
         assert (await run_query(session, moscow, by_day)).groups == [("2026-10-16", 1), ("2026-10-17", 1)]
         today = ChatQuery(since=datetime(2026, 10, 17, 0, 0))  # local midnight, no offset
         assert [m.message_id for m in (await run_query(session, moscow, today)).messages] == [1]
+        on_the_16th = ChatQuery.model_validate(
+            {"since": "2026-10-16", "until": "2026-10-16"}
+        )  # as tools pass it
+        assert [m.message_id for m in (await run_query(session, moscow, on_the_16th)).messages] == [2]
 
 
 def test_name_forms_are_a_russian_names_cases_and_other_names_as_terms() -> None:

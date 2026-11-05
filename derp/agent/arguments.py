@@ -90,7 +90,7 @@ def _accepts(schema: Schema, value: Any) -> bool:
     )
 
 
-PLACEHOLDER_TEXT = frozenset({"[]", "{}", "null", "none", "undefined"})
+PLACEHOLDER_TEXT = frozenset({"[]", "{}", "null", "none", "undefined", "false", "0"})
 
 
 def _unset(value: Any, schema: Schema, defs: Schema) -> bool:

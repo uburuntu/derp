@@ -51,9 +51,7 @@ def test_placeholders_the_schema_rejects_mean_not_given() -> None:
         "group_by": [], "from_derp": False, "whole_chat": False, "limit": 20, "contains": "",
     }  # fmt: skip
     fixed = repair_object(sent, schema, schema.get("$defs", {}))
-    assert fixed == {
-        "kinds": ["text"], "users": [], "since": None, "from_derp": False, "whole_chat": False, "limit": 20,
-    }  # fmt: skip
+    assert fixed == {"kinds": ["text"], "users": [], "since": None, "whole_chat": False, "limit": 20}
     ChatQuery.model_validate(fixed)
 
 
@@ -85,7 +83,7 @@ def slip(args: dict[str, object]) -> dict[str, object]:
 
 
 def test_placeholder_text_and_sentinels_mean_not_given() -> None:
-    sent = {"group_by": "[]", "since": "null", "correct": -1, "reply_to": 0, "kind": False, "shift": -1}
+    sent = {"group_by": "[]", "since": "null", "correct": -1, "reply_to": 0, "kind": "false", "shift": -1}
     assert slip(sent) == {"shift": -1}  # -1 where the schema takes it is a value
 
 
