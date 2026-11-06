@@ -8,8 +8,8 @@ a chain (caption it, make it a sticker, cut it out) carries on from the image.
 
 On a run a contributed key pays whose provider draws (``settings.keys.images``), the key draws it with
 its provider's image model instead: no Derpcoins and no approval (the key's monthly cap is its owner's
-limit), only while what is left of the cap covers one. Only such a key draws animations (``animate``): a
-sprite sheet looped into a silent MP4, which Telegram shows as a GIF.
+limit), only while what is left of the cap covers one. Only such a key draws animations (``animate``): its
+image model's own looping GIF, sent as the silent MP4 Telegram shows as a GIF.
 """
 
 from dataclasses import replace
@@ -22,7 +22,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.approvals import ask, needs_approval
 from derp.agent.deps import RunDeps
-from derp.agent.images import SHEET, ImageJob, Portrait, draw, filename
+from derp.agent.images import ImageJob, Portrait, draw, filename
 from derp.agent.media import referenced_media
 from derp.agent.outputs import Made, Pending, Refused, afford, check_budget, deliver, emit, key_left, settle
 from derp.agent.tools.sources import (
@@ -67,7 +67,7 @@ async def generate_image(
         images: Pictures to start from, up to 4: "this" (the picture this message is about), "#id" (that
             message's image, else its author's profile photo), "r1", a name, @username or "me" (their profile
             photo: the likeness stays theirs), "chat". None: a new picture.
-        animate: A short looping GIF (square) instead of a still; describe the motion.
+        animate: A short looping GIF instead of a still; describe the motion.
     """
     deps = ctx.deps
     refs = list(dict.fromkeys(ref.strip() for ref in images or () if ref.strip()))
@@ -148,7 +148,7 @@ async def generate_image(
         )  # the key's from here on, sent or not
     if job.animated:
         try:
-            clip = await effects.animate(deps.workers, image.data, *SHEET)
+            clip = await effects.animate(deps.workers, image.data)
         except EffectError as failed:
             await settle(deps, Pending(calls=[image]), delivered=False)
             return f"The animation couldn't be put together ({failed.reason})."

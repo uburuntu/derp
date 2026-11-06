@@ -15,6 +15,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
+from derp.agent.images import GIF
 from derp.agent.models import AgentRun
 from derp.config import Settings
 from derp.history.models import Message as StoredMessage
@@ -65,7 +66,7 @@ class FakeManagement:
 @dataclass
 class FakeKeysAPI:
     """Stands in for OpenRouterAPI: the plug-in ping succeeds unless ``status`` says otherwise; images drawn on
-    a key cost its owner $0.05 each and are recorded in ``drawn``."""
+    a key (an animation: a GIF) cost its owner $0.05 each and are recorded in ``drawn``."""
 
     status: int | None = None
     drawn: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
@@ -79,8 +80,13 @@ class FakeKeysAPI:
     ) -> GeneratedImage:
         self.drawn.append({"model": model, "prompt": prompt, "references": len(references), **options})
         buffer = io.BytesIO()
-        Image.new("RGB", (1024, 1024), "green").save(buffer, format="PNG")
-        return GeneratedImage(buffer.getvalue(), "image/png", model, Decimal(0), upstream_usd=Decimal("0.05"))
+        if options.get("gif"):
+            frames = [Image.new("RGB", (1024, 1024), color) for color in ("green", "yellow")]
+            frames[0].save(buffer, format="GIF", save_all=True, append_images=frames[1:], loop=0)
+        else:
+            Image.new("RGB", (1024, 1024), "green").save(buffer, format="PNG")
+        kind = "image/gif" if options.get("gif") else "image/png"
+        return GeneratedImage(buffer.getvalue(), kind, model, Decimal(0), upstream_usd=Decimal("0.05"))
 
     async def close(self) -> None:
         return None
@@ -415,14 +421,19 @@ async def test_a_chatgpt_key_draws_gifs_and_quick_edits_on_gpt_image_2_6(
     api = conversation.overrides["api"]
     assert isinstance(api, FakeKeysAPI)
 
-    key_model.reply(tool_call("generate_image", prompt="a frog dancing on a lily pad", animate=True), ".")
+    frog = tool_call(
+        "generate_image", prompt="a frog dancing on a lily pad", animate=True, aspect_ratio="16:9"
+    )
+    key_model.reply(frog, ".")
     asked = await conversation.send(BO, CREW, "@DerpRobot make a gif of a dancing frog", entities=MENTION)
     animation = await conversation.expect_reply(asked, method="sendAnimation")
     await conversation.settle(asked)
     [drawn] = api.drawn
     assert drawn["model"] == "openai/gpt-image-2.6-flare" and drawn["api_key"] == "sk-or-v1-bo"
-    assert drawn["only"] == ("openai",) and drawn["aspect_ratio"] == "1:1" and drawn["complexity"] is None
-    assert "sprite sheet" in drawn["prompt"] and animation.attachments
+    assert drawn["only"] == ("openai",) and drawn["aspect_ratio"] == "16:9" and drawn["complexity"] is None
+    assert drawn["gif"] == GIF and drawn["prompt"] == "a frog dancing on a lily pad"
+    [clip] = animation.attachments  # the model's own GIF as an MP4: Telegram would shrink a GIF
+    assert clip.filename == "derp.mp4" and clip.data[4:8] == b"ftyp"
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun).order_by(AgentRun.id.desc()))
         image = await session.scalar(select(ProviderCall).where(ProviderCall.kind == "image"))

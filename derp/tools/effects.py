@@ -1,4 +1,4 @@
-"""Media effects on bytes: captioned memes (images and video), quotes, reversing, animated sprite sheets,
+"""Media effects on bytes: captioned memes (images and video), quotes, reversing, GIFs as MP4 loops,
 background removal, samples, OGG/Opus.
 
 Each public function takes a slot of the given worker pool (whose limits it
@@ -244,20 +244,12 @@ async def still(pool: WorkerPool, data: bytes) -> bytes:
         return await _render(pool, source, "still.jpg", args, what="frame")
 
 
-async def animate(pool: WorkerPool, sheet: bytes, columns: int, rows: int, fps: int = 6) -> bytes:
-    """A sprite sheet's frames (left to right, top to bottom) as one silent MP4 loop, Telegram's GIF.
-
-    The sheet is first trimmed to a multiple of the grid (a 1024 px side doesn't split in three).
-    """
-    async with _workspace(pool, sheet) as source:
-        info = await probe(pool, source)
-        if not info.video:
+async def animate(pool: WorkerPool, gif: bytes) -> bytes:
+    """A GIF as one silent MP4 loop at full size, Telegram's GIF (Telegram shrinks an uploaded GIF to 320 px)."""
+    async with _workspace(pool, gif) as source:
+        if not (await probe(pool, source)).video:
             raise EffectError("no picture in that file")
-        graph = (
-            f"crop=iw-mod(iw\\,{columns}):ih-mod(ih\\,{rows}):0:0,untile={columns}x{rows},"
-            f"setpts=N/({fps}*TB),scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"
-        )
-        args = ["-vf", graph, "-r", str(fps), "-an", *VIDEO_OUT]
+        args = ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", "-an", *VIDEO_OUT]
         return await _render(pool, source, "animation.mp4", args, what="animation")
 
 

@@ -9,7 +9,6 @@ from derp.agent.guard import refusal
 from derp.config import Settings
 from derp.inference.api import upstream_cost
 from derp.inference.openrouter import response_usage
-from derp.keys.catalog import native_gif_notes
 from derp.keys.failures import classify
 from derp.keys.flows import chat_from_ref, chat_ref
 from derp.keys.pasted import pasted_key, redact
@@ -122,18 +121,3 @@ def test_a_keys_turn_with_nothing_owed_to_openrouter_still_counts_as_priced() ->
     assert not unreported(free_fee)
     assert unreported(ModelResponse(parts=[], provider_details={"downstream_provider": "OpenAI"}))
     assert not unreported(ModelResponse(parts=[], provider_details={"cost": 0.0}))
-
-
-async def test_the_scout_notes_when_a_key_image_model_outputs_gifs_natively(settings: Settings) -> None:
-    class Catalog:
-        def __init__(self) -> None:
-            self.formats = ["png", "jpeg", "webp"]
-
-        async def image_endpoints(self, model: str) -> list[dict[str, object]]:
-            return [{"supported_parameters": {"output_format": {"type": "enum", "values": self.formats}}}]
-
-    api = Catalog()
-    assert await native_gif_notes(api, settings) == []  # type: ignore[arg-type]
-    api.formats = [*api.formats, "gif"]
-    [note] = await native_gif_notes(api, settings)  # type: ignore[arg-type]
-    assert settings.keys.images["openai"] in note and "natively" in note

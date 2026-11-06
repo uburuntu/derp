@@ -159,13 +159,15 @@ async def test_generate_image_pins_providers_and_decodes() -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         seen.update(json.loads(request.content))
         image = base64.b64encode(b"PNG").decode()
-        return httpx.Response(200, json={"data": [{"b64_json": image}], "usage": {"cost": 0.039}})
+        kind = {"media_type": "image/gif"} if seen.get("output_format") == "gif" else {}
+        return httpx.Response(200, json={"data": [{"b64_json": image, **kind}], "usage": {"cost": 0.039}})
 
     api = api_with(httpx.MockTransport(handle))
     image = await api.generate_image(
         "m/x", "a cat", only=("google-vertex",), references=[(b"ref", "image/jpeg")], complexity="low"
     )
     assert image.data == b"PNG" and image.cost_usd == Decimal("0.039") and image.media_type == "image/png"
+    assert "output_format" not in seen  # a still leaves the format to the provider
     assert seen["provider"] == {"only": ["google-vertex"], "allow_fallbacks": False}  # complexity is OpenAI's
     assert seen["input_references"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,")  # type: ignore[index]
     await api.generate_image(
@@ -175,6 +177,12 @@ async def test_generate_image_pins_providers_and_decodes() -> None:
         "only": ["openai"], "allow_fallbacks": False,
         "options": {"openai": {"moderation": "low", "complexity": "low"}},
     }  # fmt: skip
+    gif = await api.generate_image(
+        "openai/gpt-image-2.6-flare", "a frog", only=("openai",), zdr=False, gif=(9, 160)
+    )
+    assert (seen["output_format"], seen["frame_count"], seen["frame_duration_ms"]) == ("gif", 9, 160)
+    assert seen["background"] == "opaque"  # Telegram's MP4 animations have no transparency
+    assert gif.media_type == "image/gif"
 
 
 async def test_image_errors_carry_a_loggable_code_and_say_when_the_provider_refused() -> None:

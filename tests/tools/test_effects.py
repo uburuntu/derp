@@ -153,26 +153,25 @@ async def test_reversing_and_its_limits() -> None:
 
 
 @needs_ffmpeg
-async def test_a_sprite_sheet_becomes_a_loop_of_its_frames_in_reading_order(tmp_path: Path) -> None:
+async def test_a_gif_becomes_a_silent_full_size_loop_of_its_frames(tmp_path: Path) -> None:
     colors = ["red", "orange", "yellow", "green", "blue", "purple", "white", "gray", "cyan"]
-    sheet = Image.new("RGB", (386, 386))  # like 1024 px, not a multiple of the grid: trimmed first
-    for i, color in enumerate(colors):
-        x, y = i % 3 * 128, i // 3 * 128
-        sheet.paste(color, (x, y, x + 128, y + 128))
+    frames = [Image.new("RGB", (129, 128), color) for color in colors]  # H.264 needs even sides
     buffer = io.BytesIO()
-    sheet.save(buffer, format="PNG")
+    frames[0].save(buffer, format="GIF", save_all=True, append_images=frames[1:], loop=0, duration=160)
     loop = tmp_path / "loop.mp4"
-    loop.write_bytes(await effects.animate(POOL, buffer.getvalue(), 3, 3))
-    for n in range(len(colors)):
+    loop.write_bytes(await effects.animate(POOL, buffer.getvalue()))
+    for n, color in enumerate(colors):
         frame = ffmpeg(
             "-i", str(loop), "-vf", f"select=eq(n\\,{n})", "-frames:v", "1", "-c:v", "png", "-f", "image2"
         )
         picture = Image.open(io.BytesIO(frame)).convert("RGB")
-        expected = Image.new("RGB", (1, 1), colors[n]).getpixel((0, 0))
+        expected = Image.new("RGB", (1, 1), color).getpixel((0, 0))
         assert picture.size == (128, 128)
         assert max(abs(a - b) for a, b in zip(picture.getpixel((64, 64)), expected, strict=True)) < 40  # type: ignore[arg-type]
+    info = await effects.probe(POOL, loop)
+    assert abs(info.seconds - 1.44) < 0.1 and not info.audio  # the GIF's own timing, no sound
     with pytest.raises(EffectError):
-        await effects.animate(POOL, b"not a picture", 3, 3)
+        await effects.animate(POOL, b"not a picture")
 
 
 @needs_ffmpeg

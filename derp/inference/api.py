@@ -172,9 +172,6 @@ class OpenRouterAPI:
     async def image_models(self) -> list[Json]:
         return (await self._request("GET", "images/models"))["data"]
 
-    async def image_endpoints(self, model: str) -> list[Json]:
-        return (await self._request("GET", f"images/models/{model}/endpoints"))["endpoints"]
-
     async def key_info(self) -> Json:
         return (await self._request("GET", "key"))["data"]
 
@@ -207,6 +204,7 @@ class OpenRouterAPI:
         references: Sequence[tuple[bytes, str]] = (),
         aspect_ratio: str | None = None,
         complexity: str | None = None,
+        gif: tuple[int, int] | None = None,
         api_key: str | None = None,
     ) -> GeneratedImage:
         """``api_key``: a contributor's sub-key, so their provider key pays for the image.
@@ -214,6 +212,7 @@ class OpenRouterAPI:
         On requests pinned to OpenAI (contributed keys: the owner's account and usage policy) moderation is
         "low", OpenAI's less strict setting, and ``complexity`` is how much planning GPT Image 2.6+ puts into
         the scene ("low" suits quick edits); both are OpenAI passthrough options other hosts never see.
+        ``gif`` (frames, milliseconds each) asks a model that animates (GPT Image 2.6+) for a looping GIF.
         """
         if zdr and not only:
             raise ValueError(f"no ZDR host pinned for {model}; refusing an unrestricted image request")
@@ -230,6 +229,9 @@ class OpenRouterAPI:
             ]
         if aspect_ratio:
             body["aspect_ratio"] = aspect_ratio
+        if gif:  # opaque: Telegram plays animations as MP4, which has no transparency
+            body |= {"output_format": "gif", "background": "opaque"}
+            body["frame_count"], body["frame_duration_ms"] = gif
         result = await self._request("POST", "images", json=body, headers=_as(api_key))
         images = result.get("data") or []
         if not images:
