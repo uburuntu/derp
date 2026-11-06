@@ -217,7 +217,7 @@ class ContributedKeys(BaseModel, frozen=True):
     # The provider's image model a key draws with (providers without one: images stay on Derpcoins). Flare is
     # GPT Image 2.6's speed tier, priced per token like Sunburst; a provider here also draws animations.
     images: dict[str, str] = Field(default_factory=lambda: {"openai": "openai/gpt-image-2.6-flare"})
-    image_price_usd: float = 0.1  # upper estimate of one such image: a key must still cover it to draw
+    image_price_usd: float = 0.2  # a high estimate of one such image: a key must still cover it to draw
     caps_usd: tuple[int, ...] = (25, 50, 100, 200, 500)  # monthly cap buttons (subscription allowances)
     max_cap_usd: int = 5_000
     refusal_notice_hours: int = 6  # an explicit refusal is shown in the chat at most this often per key
