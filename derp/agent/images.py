@@ -130,7 +130,10 @@ async def _generate(
                 api_key=api_key,
             )
         except OpenRouterError as failed:  # next model in the pin
-            log.info("image model failed: %s %s", failed.status, failed.code or "")
+            log.info(
+                "image model failed: %s code=%s provider=%s refused=%s",
+                failed.status, failed.code, failed.provider, failed.refused,
+            )  # fmt: skip
             error = failed
     raise error or OpenRouterError(502, "no image model")
 

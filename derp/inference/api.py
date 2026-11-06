@@ -24,7 +24,9 @@ _CODE = re.compile(r"[a-z][a-z0-9_]{2,47}")
 
 class OpenRouterError(Exception):
     """``code`` is a short machine code (``moderation_blocked``) safe to log, never the message; ``provider``
-    names the host that returned the error when OpenRouter passed one on."""
+    names the host that returned the error when OpenRouter passed one on. ``refused``: a content refusal, by
+    its code, OpenRouter's moderation (a 403) or OpenAI's safety system, told by its message where OpenRouter
+    drops the code (the Images API passes only the message and the provider)."""
 
     def __init__(
         self, status: int, message: str, *, code: str | None = None, provider: str | None = None
@@ -32,8 +34,11 @@ class OpenRouterError(Exception):
         self.status = status
         self.code = code
         self.provider = provider
-        self.refused = code in REFUSAL_CODES or (
-            status == 403 and any(word in message.lower() for word in ("moderation", "flagged"))
+        lowered = message.lower()
+        self.refused = (
+            code in REFUSAL_CODES
+            or (status == 403 and any(word in lowered for word in ("moderation", "flagged")))
+            or (status in (400, 403) and "safety system" in lowered)
         )
         super().__init__(f"OpenRouter {status}: {message}")
 

@@ -194,6 +194,10 @@ async def test_image_errors_carry_a_loggable_code_and_say_when_the_provider_refu
                          "metadata": {"raw": raw, "provider_name": "OpenAI"}}}),
         (403, {"error": {"code": 403, "message": "Input was flagged by moderation", "metadata": {"reasons": []}}}),
         (400, {"error": {"code": 400, "message": "Your prompt mentions Bob Smith", "metadata": {"raw": "not json"}}}),
+        (400, {"error": {"code": 400, "message": "Your request was rejected by the safety system. Request ID req_1.",
+                         "metadata": {"provider_name": "OpenAI"}}}),  # the Images API drops OpenAI's own code
+        (400, {"error": {"code": 400, "message": "Invalid value for moderation: 'lowest'.",
+                         "metadata": {"provider_name": "OpenAI"}}}),
     ]  # fmt: skip
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -202,7 +206,7 @@ async def test_image_errors_carry_a_loggable_code_and_say_when_the_provider_refu
 
     api = api_with(httpx.MockTransport(handle))
     found: list[tuple[int, str | None, str | None, bool]] = []
-    for _ in range(3):
+    for _ in range(5):
         with pytest.raises(OpenRouterError) as caught:
             await api.generate_image("openai/gpt-image-2.6-flare", "a cat", only=("openai",), zdr=False)
         found.append((caught.value.status, caught.value.code, caught.value.provider, caught.value.refused))
@@ -210,6 +214,8 @@ async def test_image_errors_carry_a_loggable_code_and_say_when_the_provider_refu
         (400, "moderation_blocked", "OpenAI", True),
         (403, None, None, True),
         (400, None, None, False),
+        (400, None, "OpenAI", True),
+        (400, None, "OpenAI", False),  # a parameter named moderation is no refusal
     ]
     with pytest.raises(ValueError, match="no ZDR host"):
         await api.generate_image("m/y", "a dog")
