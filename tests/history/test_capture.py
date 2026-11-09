@@ -48,6 +48,15 @@ def test_a_message_never_stored_renders_like_a_stored_one() -> None:
     assert line == f"[22:13] Bob Lee @bob (fwd from Ghost) «{'x' * 199}…»: what is this [photo]"
 
 
+def test_a_quote_chosen_from_a_rich_message_keeps_its_text() -> None:
+    quote = {
+        "text": "",
+        "position": 0,
+        "rich_texts": [["Pay ", {"type": "bold", "text": "$5"}], {"type": "italic", "text": "or don't"}],
+    }
+    assert message_values(tg(text="why", quote=quote), capture="ambient")["quote"] == "Pay $5\nor don't"
+
+
 def test_classify_and_payloads() -> None:
     dice = tg(dice={"emoji": "🎲", "value": 6})
     assert classify(dice) == "dice"

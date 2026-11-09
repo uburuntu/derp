@@ -8,10 +8,12 @@ messages are never stored.
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from aiogram.types import Chat as TgChat
 from aiogram.types import Message as TgMessage
+from aiogram.types import TextQuote
 from aiogram.types import User as TgUser
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -184,16 +186,20 @@ def _rich_blocks(message: TgMessage) -> Iterator[Any]:
 
 
 def _visible(text: Any) -> str:
-    """What a reader sees of rich text: never the URL, user or emoji id behind it."""
+    """What a reader sees of rich text: never the URL, user or emoji id behind it.
+
+    Rich text in a field aiogram doesn't model yet (a quote's ``rich_texts``) arrives as dicts, read the same.
+    """
     if text is None or isinstance(text, str):
         return text or ""
     if isinstance(text, list):
         return "".join(_visible(part) for part in text)  # pyright: ignore[reportUnknownVariableType]
+    if isinstance(text, dict):
+        text = SimpleNamespace(**text)
     for field in ("text", "alternative_text", "expression"):
         if (value := getattr(text, field, None)) is not None:
             return _visible(value)
-    button = getattr(text, "button", None)
-    return button.text if button is not None else ""
+    return _visible(getattr(text, "button", None))
 
 
 def _rich_text(message: TgMessage) -> str | None:
@@ -208,6 +214,11 @@ def _rich_text(message: TgMessage) -> str | None:
         ]
         lines.append(" ".join(part for part in parts if part))
     return "\n".join(line for line in lines if line) or None
+
+
+def _quoted(quote: TextQuote) -> str:
+    """The quoted part of the message replied to; one chosen from a rich message is a line per quoted block."""
+    return quote.text or "\n".join(_visible(part) for part in getattr(quote, "rich_texts", None) or ())
 
 
 def media_rows(message: TgMessage, bot_id: int) -> list[dict[str, Any]]:
@@ -284,7 +295,7 @@ def message_values(message: TgMessage, *, capture: str) -> dict[str, Any]:
         "reply_to_message_id": reply.message_id
         if reply is not None and reply.chat.id == message.chat.id
         else None,
-        "quote": redact(message.quote.text) if message.quote else None,
+        "quote": redact(_quoted(message.quote)) if message.quote else None,
         "forward_origin": _dump(message.forward_origin) if message.forward_origin else None,
         "media_group_id": message.media_group_id,
         "via_bot_id": message.via_bot.id if message.via_bot else None,
