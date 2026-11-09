@@ -24,7 +24,6 @@ Callback data carries only ids (and a snooze its firing and length).
 from datetime import UTC, datetime
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
@@ -57,6 +56,7 @@ from derp.scheduler.jobs import (
 )
 from derp.settings.privacy import switch_context
 from derp.telegram.buttons import Press, button, link, markup, on_press
+from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
 from derp.tools.timezones import TimeZoneError, iana

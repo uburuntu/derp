@@ -23,12 +23,20 @@ SETTINGS = Settings(_env_file=None, source_revision="abc123")  # pyright: ignore
 
 def render(*topics: str, settings: Settings = SETTINGS) -> str:
     return guide(
-        cast(Any, topics), settings=settings, username="DerpRobot", families=FAMILIES, voice_credits=9
+        cast(Any, topics),
+        settings=settings,
+        usernames=["DerpRobot", "DerpAgent"],
+        families=FAMILIES,
+        voice_credits=9,
     )
 
 
 def context(settings: Settings = SETTINGS) -> RunContext[RunDeps]:
     return cast(RunContext[RunDeps], SimpleNamespace(deps=SimpleNamespace(settings=settings)))
+
+
+def test_the_overview_names_every_username() -> None:
+    assert "- This bot: @DerpRobot, @DerpAgent (any of them calls it)." in render("overview")
 
 
 def test_the_written_guide_holds_no_numbers_so_values_cannot_go_stale() -> None:

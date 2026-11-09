@@ -11,7 +11,7 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import CommandObject
 from aiogram.types import BotSubscriptionUpdated, InlineKeyboardButton, Message, PreCheckoutQuery
 from sqlalchemy import select
 
@@ -38,6 +38,7 @@ from derp.money.funding import Funder
 from derp.money.wallets import balance
 from derp.ops.owner import notify_owners
 from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_markdown, send_privately
 from derp.telegram.text import literal
 

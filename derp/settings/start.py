@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import CommandObject
 from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
@@ -42,6 +42,7 @@ from derp.money.wallets import balances, wallet
 from derp.settings.onboarding import context_line
 from derp.telegram.bot import bot_username
 from derp.telegram.buttons import answer_stale, link, markup
+from derp.telegram.filters import Command, CommandStart
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
 

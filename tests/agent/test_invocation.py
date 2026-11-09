@@ -18,7 +18,7 @@ def msg(text: str = "", chat: dict[str, Any] | None = None, **extra: Any) -> Mes
 
 
 def kind(message: Message) -> TriggerKind | None:
-    trigger = detect_trigger(message, bot_id=BOT, bot_username="DerpRobot")
+    trigger = detect_trigger(message, bot_id=BOT, usernames={"derprobot", "derpagent"})
     return trigger.kind if trigger else None
 
 
@@ -64,6 +64,12 @@ def test_mention_reply_private_and_commands() -> None:
     assert kind(msg("/help", entities=command)) is TriggerKind.COMMAND
     other = [{"type": "bot_command", "offset": 0, "length": 14}]
     assert kind(msg("/help@OtherBot", entities=other)) is None
+    secondary = [{"type": "bot_command", "offset": 0, "length": 15}]
+    assert kind(msg("/help@DerpAgent", entities=secondary)) is TriggerKind.COMMAND
+    assert (
+        kind(msg("@DerpAgent hi", entities=[{"type": "mention", "offset": 0, "length": 10}]))
+        is TriggerKind.MENTION
+    )
 
 
 def test_bots_never_trigger_but_anonymous_admins_do() -> None:

@@ -27,6 +27,7 @@ from derp.memory import notes
 from derp.money.funding import Funding
 from derp.scheduler import jobs
 from derp.settings.start import EPHEMERAL_IN_GROUPS, GROUP_COMMANDS, PRIVATE_COMMANDS
+from derp.telegram.bot import bot_usernames
 
 Topic = Literal[
     "overview", "groups", "money", "keys", "memory", "reminders", "privacy", "terms", "limits", "commands",
@@ -74,13 +75,13 @@ def _minutes(seconds: int) -> str:
 
 
 def facts(
-    topic: Topic, settings: Settings, username: str, families: Sequence[Family], voice_credits: int
+    topic: Topic, settings: Settings, usernames: Sequence[str], families: Sequence[Family], voice_credits: int
 ) -> list[str]:
     """The current values for a topic, generated from what is running (``voice_credits``: the longest voice
     line at most, ``voice.rates``)."""
     match topic:
         case "overview":
-            return [f"- This bot: @{username}."]
+            return [f"- This bot: {', '.join(f'@{name}' for name in usernames)} (any of them calls it)."]
         case "money":
             plan = settings.plan
             return [
@@ -180,7 +181,7 @@ def facts(
         case "commands":
             private = [f"- /{name} — {t('en', f'commands.{name}')}" for name in PRIVATE_COMMANDS]
             group = [
-                f"- /{name}@{username} — {t('en', f'commands.{name}')}"
+                f"- /{name}@{usernames[0] if usernames else ''} — {t('en', f'commands.{name}')}"
                 + (" (ephemeral)" if name in EPHEMERAL_IN_GROUPS else "")
                 for name in GROUP_COMMANDS
             ]
@@ -202,13 +203,13 @@ def guide(
     topics: Sequence[Topic],
     *,
     settings: Settings,
-    username: str,
+    usernames: Sequence[str],
     families: Sequence[Family],
     voice_credits: int,
 ) -> str:
     parts: list[str] = []
     for topic in dict.fromkeys(topics or TOPICS):
-        body = [guide_sections().get(topic, ""), *facts(topic, settings, username, families, voice_credits)]
+        body = [guide_sections().get(topic, ""), *facts(topic, settings, usernames, families, voice_credits)]
         parts.append(f"## {topic}\n" + "\n".join(line for line in body if line))
     return "\n\n".join(parts)
 
@@ -228,11 +229,10 @@ async def about_derp(ctx: RunContext[RunDeps], topics: list[Topic]) -> str:
     from derp.agent.tools import FAMILIES  # the registry imports this module
 
     deps = ctx.deps
-    me = await deps.bot.me()
     families = [family for family in FAMILIES if family.available(deps)]
     longest = (await voice.rates(deps)).most(deps.settings.speech.max_chars)
     return guide(
-        topics, settings=deps.settings, username=me.username or "", families=families,
+        topics, settings=deps.settings, usernames=await bot_usernames(deps.bot), families=families,
         voice_credits=deps.settings.credits_for_usd(float(longest)),
     )  # fmt: skip
 

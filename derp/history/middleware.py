@@ -17,6 +17,7 @@ from derp.history.transcription import Transcriber
 from derp.keys.pasted import pasted_key
 from derp.ops.feedback import details_for
 from derp.ops.owner import is_blocked
+from derp.telegram.bot import bot_usernames
 
 
 class CaptureMiddleware(BaseMiddleware):
@@ -62,7 +63,7 @@ class CaptureMiddleware(BaseMiddleware):
         trigger = (
             None
             if self.edits or secret
-            else detect_trigger(event, bot_id=me.id, bot_username=me.username or "")
+            else detect_trigger(event, bot_id=me.id, usernames=await bot_usernames(bot))
         )
         command = starts_with_command(event) or secret  # edits too: an edited command is still a command
         async with db.transaction() as session:

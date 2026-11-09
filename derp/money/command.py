@@ -10,7 +10,6 @@ also see who spent the chat's Derpcoins in the last 30 days.
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, Router
-from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +31,7 @@ from derp.money.models import CreditLot, Wallet
 from derp.money.wallets import balances, wallet
 from derp.ops.feedback import report_button
 from derp.telegram.buttons import markup
+from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_markdown, send_privately
 from derp.telegram.text import literal
 

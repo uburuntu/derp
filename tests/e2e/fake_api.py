@@ -12,7 +12,7 @@ import json
 import time
 import typing
 from collections import defaultdict, deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -96,9 +96,17 @@ class Failure:
 
 
 class FakeBotAPI:
-    def __init__(self, *, token: str, bot_user: Mapping[str, Any], long_poll_cap: float = 0.2) -> None:
+    def __init__(
+        self,
+        *,
+        token: str,
+        bot_user: Mapping[str, Any],
+        secondary_usernames: Sequence[str] = (),
+        long_poll_cap: float = 0.2,
+    ) -> None:
         self.token = token
         self.bot_user = dict(bot_user)
+        self.secondary_usernames = list(secondary_usernames)
         self.long_poll_cap = long_poll_cap
         self.condition = asyncio.Condition()
         self.calls: list[Call] = []
@@ -729,6 +737,20 @@ class FakeBotAPI:
     def _m_getChat(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         """The chat as registered, with a photo when a ``chatphoto-<chat id>`` file is registered."""
         chat_id = int(fields["chat_id"])
+        if chat_id == int(self.bot_user["id"]):  # the bot itself: the one place its usernames are all listed
+            me = self.bot_user
+            usernames = [me["username"], *self.secondary_usernames]
+            chat = {
+                "id": chat_id,
+                "type": "private",
+                "first_name": me["first_name"],
+                "username": me["username"],
+            }
+            return (
+                {"accent_color_id": 0, "max_reaction_count": 11, "accepted_gift_types": _NO_GIFTS}
+                | chat
+                | {"active_usernames": usernames}
+            )
         chat = dict(self.chats[chat_id])
         if (file_id := f"chatphoto-{chat_id}") in self.files:
             chat["photo"] = {

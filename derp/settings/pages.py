@@ -1,13 +1,14 @@
 """/terms, /privacy and /paysupport: short plain pages, and a line to the owner for payment trouble."""
 
 from aiogram import Bot, Router
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import CommandObject
 from aiogram.types import Message
 
 from derp.config import Settings
 from derp.history.render import one_line
 from derp.locales import resolve, t
 from derp.ops.owner import notify_owners
+from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_markdown
 
 SUPPORT_CHARS = 1000

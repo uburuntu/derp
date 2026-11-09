@@ -29,6 +29,7 @@ async def api(settings: Settings) -> AsyncIterator[FakeBotAPI]:
             "supports_inline_queries": True,
             "has_topics_enabled": False,
         },
+        secondary_usernames=["DerpAgent"],
     )
     await server.start()
     try:

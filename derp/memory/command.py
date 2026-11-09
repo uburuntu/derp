@@ -3,7 +3,6 @@
 import hashlib
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, Message
 
@@ -13,6 +12,7 @@ from derp.locales import resolve, t
 from derp.memory.models import Note
 from derp.memory.notes import decide, is_admin, load_memory, may_change
 from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_markdown
 
 

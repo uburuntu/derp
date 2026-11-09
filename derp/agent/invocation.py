@@ -11,6 +11,7 @@ invocation.
 """
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -69,15 +70,16 @@ def from_human(message: Message) -> bool:
     return True
 
 
-def detect_trigger(message: Message, *, bot_id: int, bot_username: str) -> Trigger | None:
+def detect_trigger(message: Message, *, bot_id: int, usernames: Collection[str]) -> Trigger | None:
+    """``usernames``: every @username of the bot (``telegram.bot.bot_usernames``)."""
+    usernames = {name.casefold() for name in usernames}
     if not from_human(message) or message.guest_query_id:
         return None
     text = message_text(message)
     entities = _entities(message)
-    username = bot_username.casefold()
     if entities and entities[0].type == "bot_command" and entities[0].offset == 0:
         target = _command_target(message, entities[0])
-        if target is None or target.casefold() == username:
+        if target is None or target.casefold() in usernames:
             return Trigger(TriggerKind.COMMAND)
         return None
     if message.chat.type == "private":
@@ -85,7 +87,7 @@ def detect_trigger(message: Message, *, bot_id: int, bot_username: str) -> Trigg
     for entity in entities:
         if (
             entity.type == "mention"
-            and text[entity.offset + 1 : entity.offset + entity.length].casefold() == username
+            and text[entity.offset + 1 : entity.offset + entity.length].casefold() in usernames
         ):
             return Trigger(TriggerKind.MENTION)
         if entity.type == "text_mention" and entity.user is not None and entity.user.id == bot_id:

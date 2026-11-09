@@ -42,7 +42,7 @@ def tg(message_id: int, text: str) -> TgMessage:
 @pytest.mark.parametrize("case", MENTIONS, ids=lambda case: case["text"][:30])
 def test_the_synthetic_mentions_are_all_name_only_triggers(case: dict[str, Any]) -> None:
     """The live probe's set (tests/live) only holds messages the name pattern actually invokes Derp for."""
-    trigger = detect_trigger(tg(5, case["text"]), bot_id=42, bot_username="DerpRobot")
+    trigger = detect_trigger(tg(5, case["text"]), bot_id=42, usernames={"derprobot", "derpagent"})
     assert trigger is not None and trigger.kind is TriggerKind.NAME
 
 

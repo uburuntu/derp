@@ -94,6 +94,24 @@ async def test_group_mention_replies_in_topic_and_ambient_is_context(
     assert chatter.message_id < asked.message_id
 
 
+async def test_a_secondary_username_reaches_derp_like_its_own(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(BOB, GROUP)
+    model.reply("here")
+    asked = await conversation.send(
+        BOB, GROUP, "@derpagent you there?", entities=[{"type": "mention", "offset": 0, "length": 10}]
+    )
+    assert (await conversation.expect_reply(asked))["rich_message"]["markdown"] == "here"
+    await conversation.settle(asked)
+    helped = await conversation.send(BOB, GROUP, "/help@DerpAgent")
+    assert "/settings" in (await conversation.expect_reply(helped))["rich_message"]["markdown"]
+    await conversation.settle(helped)
+    elsewhere = await conversation.send(BOB, GROUP, "/help@OtherBot")
+    await conversation.settle(elsewhere)
+    assert conversation.api.calls_of("sendRichMessage", after=elsewhere.after) == []
+
+
 async def test_model_failure_apologizes_and_records_failed_run(
     conversation: Conversation, model: ScriptedModel
 ) -> None:

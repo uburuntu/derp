@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import CommandObject
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReactionTypeEmoji
 from sqlalchemy import ColumnElement, func, select, update
@@ -40,6 +40,7 @@ from derp.locales import resolve, t
 from derp.ops.models import FEEDBACK_KINDS, REPORT_KINDS, Feedback
 from derp.ops.owner import from_owner, is_blocked
 from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.filters import Command
 from derp.telegram.sender import Target, sanitize_untrusted, send_markdown, send_privately
 from derp.telegram.text import literal
 

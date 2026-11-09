@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import CommandObject
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import distinct, func, select
@@ -42,6 +42,7 @@ from derp.money.wallets import balance, credit, wallet
 from derp.ops.context import render
 from derp.ops.owner import from_owner, owner_here
 from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_document, send_markdown, send_privately
 from derp.telegram.text import literal
 

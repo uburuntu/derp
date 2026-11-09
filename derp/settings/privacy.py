@@ -12,7 +12,6 @@ quote what was forgotten are dropped as well; usage and charges stay.
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, Message
 from sqlalchemy import delete, func, select
@@ -30,6 +29,7 @@ from derp.memory.models import Note
 from derp.memory.notes import is_admin
 from derp.scheduler.models import Job
 from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
 
