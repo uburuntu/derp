@@ -92,6 +92,15 @@ def test_failures_blame_the_key_only_for_its_providers_errors() -> None:
     assert classify(error(503)) == "failed" and classify(TimeoutError()) == "failed"
 
 
+def test_a_relayed_out_of_credit_error_exhausts_the_key() -> None:
+    def relayed(message: str) -> ModelHTTPError:  # seen live: OpenAI's billing refusal, no provider name
+        body = {"message": message, "code": 502, "metadata": {"error_type": "provider_unavailable"}}
+        return ModelHTTPError(status_code=502, model_name="m", body=body)
+
+    assert classify(relayed("You have no credits remaining. Add credits to continue")) == "exhausted"
+    assert classify(relayed("Provider returned error")) == "failed"  # an ordinary outage
+
+
 def test_explicit_refusals_are_told_apart_from_answers() -> None:
     said = ModelResponse(parts=[], finish_reason="content_filter", provider_details={"refusal": " Nope. "})
     assert refusal(said) == "Nope."
