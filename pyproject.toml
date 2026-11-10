@@ -3,6 +3,8 @@ name = "derp"
 version = "2.0.0.dev0"
 description = "Derp — a fun, group-first Telegram AI bot"
 readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
 dependencies = [
     "aiogram>=3.31.0",
