@@ -1,6 +1,7 @@
 import React from "react";
 import { AbsoluteFill, Easing, Img, interpolate, spring, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
 import { Phone } from "./Chat";
+import { Sound } from "./Sound";
 import { DURATION, INTRO, OUTRO_AT, captions } from "./script";
 import { brand, font } from "./theme";
 
@@ -212,6 +213,7 @@ export const Demo: React.FC = () => {
         <Phone />
       </div>
       <Outro />
+      <Sound />
       <AbsoluteFill style={{ background: brand.yellow, opacity: fadeOut }} />
     </AbsoluteFill>
   );
