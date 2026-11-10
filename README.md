@@ -4,7 +4,7 @@
 
 # Derp
 
-**The sharp friend already in your Telegram chat.**
+**One of the group. Remembers everything, roasts accordingly.**
 
 Quiet until called, it keeps up with the conversation, handles text, pictures and voice, and is honest about money.
 

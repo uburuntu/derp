@@ -1,5 +1,6 @@
 import React from "react";
 import { Composition, Img, Still, staticFile } from "remotion";
+import { ASK_FRAMES, ASKS, BotFatherLoop, BotFatherStill } from "./BotFather";
 import { Backdrop, Demo } from "./Demo";
 import { DURATION } from "./script";
 import { brand, font, FPS } from "./theme";
@@ -12,8 +13,10 @@ const Social: React.FC = () => (
       <Img src={staticFile("derp.jpg")} style={{ width: 300, height: 300, borderRadius: 82, boxShadow: "0 24px 60px rgba(90,60,0,0.3)" }} />
       <div>
         <div style={{ fontSize: 132, fontWeight: 700, letterSpacing: -4, lineHeight: 1 }}>Derp</div>
-        <div style={{ marginTop: 18, fontSize: 44, lineHeight: 1.2, color: brand.inkSoft, maxWidth: 760 }}>
-          The sharp friend already in your Telegram chat.
+        <div style={{ marginTop: 18, fontSize: 42, lineHeight: 1.2, color: brand.inkSoft }}>
+          One of the group.
+          <br />
+          Remembers everything, roasts accordingly.
         </div>
         <div style={{ marginTop: 34, display: "flex", gap: 44, fontSize: 30, color: brand.inkSoft, fontFamily: font.mono }}>
           <span>t.me/DerpRobot</span>
@@ -28,5 +31,14 @@ export const Root: React.FC = () => (
   <>
     <Composition id="Demo" component={Demo} durationInFrames={DURATION} fps={FPS} width={1920} height={1080} />
     <Still id="Social" component={Social} width={1280} height={640} />
+    <Still id="BotFather" component={BotFatherStill} width={1280} height={720} />
+    <Composition
+      id="BotFatherLoop"
+      component={BotFatherLoop}
+      durationInFrames={ASK_FRAMES * ASKS.length}
+      fps={FPS}
+      width={1280}
+      height={720}
+    />
   </>
 );

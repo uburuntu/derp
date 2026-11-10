@@ -70,7 +70,7 @@ const Intro: React.FC = () => {
           transform: `translateY(${(1 - line) * 16}px)`,
         }}
       >
-        The sharp friend already in your Telegram chat.
+        One of the group. Remembers everything, roasts accordingly.
       </div>
     </AbsoluteFill>
   );
