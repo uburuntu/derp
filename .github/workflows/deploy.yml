@@ -39,9 +39,13 @@ jobs:
         id: current
         env:
           GH_TOKEN: ${{ github.token }}
+        # A newer main supersedes this run only if it deploys itself: commits that touch only the
+        # paths-ignore'd files above start no deploy, so they must not cancel this one.
         run: |
           current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
-          if [ "$current" = "$GITHUB_SHA" ]; then
+          deployable=$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...$current" --jq '.files[].filename' \
+            | grep -Ev '^(README\.md|LICENSE|demo/.*|\.github/assets/.*)$' || true)
+          if [ "$current" = "$GITHUB_SHA" ] || [ -z "$deployable" ]; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Deploy with automatic rollback
