@@ -6,8 +6,11 @@ previous firing) begins. Members' messages become transcript blocks framed as
 untrusted data; Derp's own replies come back as the model turns that produced
 them, tool calls and (clipped) tool results included, so the model remembers
 what it looked up. Runs are kept whole or dropped whole; the window always
-starts with members' messages. The current message is never part of it: only
-messages with a smaller id are read.
+starts with members' messages. The current message is never part of it: members'
+messages are read only below its id. Derp's own messages are read whatever their
+id: a trigger sent while Derp was still answering someone else in the topic is
+older than that answer, and its run (queued behind it, ``lanes``) must see the
+answer, or it takes the earlier ask as unanswered and does it again.
 
 Given the previous window's start (``start_at``), the window keeps it while
 everything from there still fits in ``STICKY_SLACK`` × the budget, so
@@ -37,7 +40,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.models import AgentRun, RunOutput
@@ -191,7 +194,7 @@ async def build_window(
 ) -> Window:
     scope = select(Message).where(
         Message.chat_id == chat_id,
-        Message.message_id < before_message_id,
+        or_(Message.message_id < before_message_id, Message.is_derp),
         Message.deleted_at.is_(None),
         Message.thread_id == thread_id if thread_id is not None else Message.thread_id.is_(None),
     )

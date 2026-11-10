@@ -257,3 +257,41 @@ async def test_reactions_never_change_the_window_transcript(database: Database) 
 
     assert transcripts(after) == transcripts(before)
     assert "#1 Ann: anyone seen cats?\n" in transcripts(after)[0]  # no reaction totals on old lines
+
+
+@pytest.mark.db
+async def test_a_queued_trigger_sees_the_answer_it_waited_behind(database: Database) -> None:
+    # Bob's message (9) arrived while Derp was still answering Ann's (8), so Derp's answer got a
+    # larger id (10). Bob's run starts after that answer: it must see it, or it does Ann's ask again.
+    await seed(database)
+    async with database.transaction() as session:
+        session.add_all(
+            [
+                message(8, 1, "derp, make two memes", capture="invocation"),
+                message(9, 2, "derp, what about the path?", capture="invocation"),
+                message(10, None, "two memes, done", capture="derp", is_derp=True),
+                message(11, 1, "later member message"),
+            ]
+        )
+        await session.flush()
+        run = await start_run(
+            session,
+            chat_id=CHAT,
+            user_id=1,
+            trigger="message",
+            role="chat",
+            funding="paid",
+            trigger_message_id=8,
+        )
+        finish_run(session, run, [ModelResponse(parts=[TextPart("two memes, done")])], status="completed")
+        record_output(session, run, 10, "message")
+    async with database.session() as session:
+        window = await build_window(
+            session, chat_id=CHAT, thread_id=None, before_message_id=9, budget=10_000, tz=UTC_TZ
+        )
+    last = window.messages[-1]
+    assert isinstance(last, ModelResponse) and "two memes, done" in str(last.parts[0])
+    assert "derp, make two memes" in str(window.messages)
+    assert "what about the path" not in str(window.messages)  # the current message stays out
+    assert "later member message" not in str(window.messages)  # members' later messages too
+    assert 10 in window.ids
