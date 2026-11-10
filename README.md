@@ -13,9 +13,9 @@ Quiet until called, it keeps up with the conversation, handles text, pictures an
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 ![Python 3.14](https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white)
 
-<img src=".github/assets/demo.gif" width="860" alt="Demo: Derp in a group chat settles a dinner argument, catches someone up, draws the friends as a dungeon party, turns a message into a quote sticker, names the красавчик дня, runs a poll and shows what an answer cost">
+https://github.com/user-attachments/assets/55aed172-18d0-400a-b9b3-5bae24ed6c37
 
-<sub>A scripted demo of real features. The chat and the people in it are made up.</sub>
+<sub>A scripted demo of real features (sound on). The chat and the people in it are made up.</sub>
 
 </div>
 
@@ -69,7 +69,7 @@ Built with Python 3.14, [aiogram](https://github.com/aiogram/aiogram), [Pydantic
 - [`AGENTS.md`](AGENTS.md): how the code is laid out and the rules it keeps. Every package has its own.
 - [`deploy/README.md`](deploy/README.md): a push to `main` ships over SSH with preflight checks, migrations and
   automatic rollback.
-- [`demo/`](demo/): the Remotion project behind the video above.
+- [`demo/`](demo/): the Remotion project behind the video above and the social card.
 
 ## License
 
