@@ -7,6 +7,8 @@ name: Deploy
 on:
   push:
     branches: [main]
+    # Pushes that only touch the repository's public face don't redeploy the bot.
+    paths-ignore: [README.md, LICENSE, "demo/**", ".github/assets/**"]
   workflow_dispatch:
 
 permissions:
