@@ -145,3 +145,4 @@ tests
 .local
 *.dump
 *.sql.gz
+demo

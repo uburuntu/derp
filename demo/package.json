@@ -1,0 +1,24 @@
+{
+  "name": "derp-demo",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.10.1",
+  "scripts": {
+    "studio": "remotion studio --browser=Safari",
+    "typecheck": "tsc --noEmit",
+    "render": "remotion render Demo out/derp-demo.mp4 --codec=h264 --crf=20",
+    "still": "remotion still Social out/social-preview.png"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.539",
+    "@remotion/fonts": "4.0.539",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.539",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "typescript": "7.0.2"
+  }
+}

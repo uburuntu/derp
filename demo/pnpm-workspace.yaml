@@ -1,0 +1,13 @@
+packages:
+  - .
+
+# Supply-chain guardrails: a week's release age, no exotic sub-dependencies, no trust downgrades,
+# build scripts only where allowed.
+minimumReleaseAge: 10080
+blockExoticSubdeps: true
+trustPolicy: no-downgrade
+trustPolicyExclude:
+  - semver@6.3.1
+
+allowBuilds:
+  esbuild: true

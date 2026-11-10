@@ -173,3 +173,7 @@ Thumbs.db
 
 # Live eval results and recorded request bodies
 tools/eval/out/
+
+# Demo video project (demo/): dependencies and renders
+node_modules/
+demo/out/
