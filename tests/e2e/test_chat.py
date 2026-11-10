@@ -6,8 +6,8 @@ from derp.agent.models import AgentRun, RunOutput
 from derp.agent.persona import PERSONA
 from derp.history.models import Message
 from derp.inference.roles import DEFAULT_PINS, ModelRole
-from tests.e2e.harness import Conversation, Person, Room
-from tests.e2e.model import ScriptedModel, tool_call
+from tests.e2e.harness import Conversation, Person, Room, Sent
+from tests.e2e.model import Chunks, ScriptedModel, tool_call
 from tests.e2e.test_media import PNG, images_in
 
 ANNA = Person(501, "Anna", language_code="ru")
@@ -92,6 +92,47 @@ async def test_group_mention_replies_in_topic_and_ambient_is_context(
     assert int(reply["message_thread_id"]) == 9
     assert reply["reply_parameters"]["message_id"] == asked.message_id
     assert chatter.message_id < asked.message_id
+
+
+async def test_a_trigger_queued_behind_an_answer_sees_that_answer(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    # Bob calls Derp while it is still answering Anna, so his message is older than her answer.
+    # His run waits its turn in the topic, and then it must see that answer, or it redoes her ask.
+    conversation.meet(ANNA, GROUP)
+    conversation.meet(BOB, GROUP)
+    mention = [{"type": "mention", "offset": 0, "length": 10}]
+    queued: list[Sent] = []
+
+    async def bob_asks(_chunk: int) -> None:
+        if not queued:
+            queued.append(
+                await conversation.send(
+                    BOB, GROUP, "@DerpRobot what about the path?", thread_id=9, entities=mention
+                )
+            )
+
+    seen: list[bool] = []
+
+    def check(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(any(isinstance(m, ModelResponse) and "two memes, done" in str(m.parts) for m in messages))
+        assert "what about the path?" in prompt_text(messages[-1:])  # his message is the current one
+        return ModelResponse(parts=[TextPart("the path picks you")])
+
+    model.reply(Chunks(["two memes", ", done"], between=bob_asks), check)
+    asked = await conversation.send(ANNA, GROUP, "@DerpRobot make two memes", thread_id=9, entities=mention)
+    await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    assert queued, "Bob asked while Derp was answering Anna"
+    second = await conversation.expect_reply(queued[0])
+    await conversation.settle(queued[0])
+    async with conversation.db.session() as session:
+        answer = await session.scalar(
+            select(Message.message_id).where(Message.is_derp).order_by(Message.message_id)
+        )
+    assert answer is not None and queued[0].message_id < answer  # his trigger is older than her answer
+    assert second["rich_message"]["markdown"] == "the path picks you"
+    assert seen == [True]
 
 
 async def test_a_secondary_username_reaches_derp_like_its_own(
