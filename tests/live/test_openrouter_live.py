@@ -66,20 +66,29 @@ async def test_image_pin_generates_on_its_zdr_host() -> None:
     assert image.cost_usd <= settings.image_price_usd
 
 
-async def test_speech_pin_speaks_mp3_under_zdr() -> None:
+@pytest.mark.parametrize(
+    "script", ["[whispers] Okay, between us.", "[laughs] Ладно."], ids=["direction", "sound-russian"]
+)
+async def test_speech_pin_voices_each_line_on_a_model_able_to_act_it_under_zdr(script: str) -> None:
+    from derp.agent.tools.voice import line_for, voicing
     from derp.inference.api import OpenRouterAPI
 
     settings = Settings()
     pin = settings.model_pins[ModelRole.SPEECH]
+    model = voicing(settings.speech, pin, script)[0]
+    spec = settings.speech.model(model)
+    line = line_for(spec, script, "callum")
     api = OpenRouterAPI(settings)
     try:
         speech = await api.speak(
-            pin.model, "[laughs] Okay.", "callum", cost_usd=Decimal("0.0006"), zdr=pin.zdr
-        )
+            model, line.text, line.voice, cost_usd=Decimal("0.0006"), zdr=pin.zdr,
+            instructions=line.instructions, audio=spec.audio,
+        )  # fmt: skip
     finally:
         await api.close()
     print(speech.model, len(speech.data), speech.cost_usd, speech.generation_id)
-    assert speech.data[:3] == b"ID3" or speech.data[:2] in (b"\xff\xfb", b"\xff\xf3")
+    mp3 = speech.data[:3] == b"ID3" or speech.data[:2] in (b"\xff\xfb", b"\xff\xf3")
+    assert mp3 if spec.audio == "mp3" else speech.data[:4] == b"RIFF"
     assert speech.cost_usd > 0 and speech.generation_id
 
 

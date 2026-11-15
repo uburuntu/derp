@@ -1,5 +1,7 @@
 import base64
+import io
 import json
+import wave
 from decimal import Decimal
 from typing import Any
 
@@ -281,6 +283,28 @@ async def test_speak_returns_mp3_priced_per_character_under_zdr() -> None:
     assert caught.value.status == 400 and not caught.value.retryable
     with pytest.raises(OpenRouterError, match="no audio"):
         await api.speak("elevenlabs/eleven-v4-turbo", "x", "mute", cost_usd=Decimal("0.00002"))
+
+
+async def test_speak_sends_a_delivery_note_and_wraps_raw_pcm_as_wav() -> None:
+    seen: dict[str, Any] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, content=b"\x00\x01" * 2400, headers={"content-type": "audio/pcm"})
+
+    api = api_with(httpx.MockTransport(handle))
+    speech = await api.speak(
+        "google/gemini-3.8-flash-lite-tts", "Hi.", "Puck", cost_usd=Decimal("0.00001"),
+        instructions="Act it as a hyped Australian bloke; excited", audio="pcm",
+    )  # fmt: skip
+    assert seen["response_format"] == "pcm" and seen["instructions"].endswith("; excited")
+    with wave.open(io.BytesIO(speech.data)) as file:
+        assert (file.getnchannels(), file.getsampwidth(), file.getframerate(), file.getnframes()) == (
+            1,
+            2,
+            24000,
+            2400,
+        )
 
 
 async def test_decide_asks_the_systemone_endpoint_under_zdr() -> None:

@@ -4,13 +4,14 @@ import subprocess
 from dataclasses import dataclass, field
 from decimal import Decimal
 from functools import cache
+from typing import cast
 
 from sqlalchemy import func, select
 
 from derp.agent.models import AgentRun, RunOutput
 from derp.config import Settings
 from derp.history.models import MessageMedia
-from derp.inference.api import OpenRouterError, Speech
+from derp.inference.api import OpenRouterError, Speech, as_wav
 from derp.inference.models import ProviderCall
 from derp.money.models import RunFee
 from derp.money.wallets import balance, credit, wallet
@@ -117,6 +118,55 @@ async def test_sponsored_voice_messages_count_as_heavy_effects(
     await conversation.settle(again)
     assert "used up" in results_of(model, "speak")[-1]  # the first run is replayed before it
     assert len(speech.lines) == 1 and conversation.api.calls_of("sendVoice", after=again.after) == []
+
+
+@dataclass
+class Notes(FakeSpeech):
+    """Also keeps each call's delivery note; a raw-PCM model's line comes back as WAV, like the API's."""
+
+    notes: list[str | None] = field(default_factory=list[str | None])
+
+    async def speak(self, model: str, text: str, voice: str, **options: object) -> Speech:
+        self.lines.append((model, text, voice))
+        self.notes.append(cast(str | None, options.get("instructions")))
+        data = as_wav(b"\x00\x10" * 24_000) if options.get("audio") == "pcm" else mp3()
+        return Speech(data, model, Decimal("0.000016") * len(text), len(text), "gen-tts-2")
+
+
+@needs_ffmpeg
+async def test_english_lines_without_sounds_go_to_gemini_and_the_rest_to_elevenlabs(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    speech = Notes()
+    conversation.overrides["api"] = speech
+    await conversation.restart()
+    await fund(conversation, 650)
+    whisper = "[whispers] Nobody tell Anna... the cake is from Tesco."
+    model.reply(tool_call("speak", script=whisper, voice="lily"), ".")
+    asked = await conversation.send(MAX, text="whisper the cake secret")
+    sent = await conversation.expect_reply(asked, method="sendVoice", timeout=30)
+    await conversation.settle(asked, timeout=30)
+    assert sent.attachments[0].data[:4] == b"OggS"  # the WAV became a voice message too
+    assert speech.lines == [
+        ("google/gemini-3.8-flash-lite-tts", "Nobody tell Anna... the cake is from Tesco.", "Despina")
+    ]
+    assert speech.notes == ["Act it as a velvety, theatrical woman; whispers"]
+
+    model.reply(tool_call("speak", script="[whispers] Nobody tell Anna... [giggles]", voice="lily"), ".")
+    again = await conversation.send(MAX, text="now giggle at the end")
+    await conversation.expect_reply(again, method="sendVoice", timeout=30)
+    await conversation.settle(again, timeout=30)
+    assert speech.lines[-1] == (
+        "elevenlabs/eleven-v4-turbo",
+        "[whispers] Nobody tell Anna... [giggles]",
+        "lily",
+    )
+    assert speech.notes[-1] is None
+    async with conversation.db.session() as session:
+        models = list(
+            await session.scalars(select(MessageMedia.transcript_model).where(MessageMedia.type == "voice"))
+        )
+        assert set(models) == {"elevenlabs/eleven-v4-turbo", "google/gemini-3.8-flash-lite-tts"}
 
 
 async def test_a_script_over_the_cap_is_refused_before_any_call(

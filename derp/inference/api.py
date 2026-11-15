@@ -4,12 +4,14 @@ and the management API for contributed keys (``OpenRouterManagement``).
 """
 
 import base64
+import io
 import json
 import re
+import wave
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 
@@ -86,7 +88,7 @@ class Transcript:
 
 @dataclass(frozen=True, slots=True)
 class Speech:
-    """A voice performance as MP3, priced per character (the endpoint reports no cost)."""
+    """A voice performance as MP3 or WAV, priced per character (the endpoint reports no cost)."""
 
     data: bytes
     model: str
@@ -282,17 +284,31 @@ class OpenRouterAPI:
     # Text-to-speech (raw MP3 back, no usage: priced per character by the caller)
 
     async def speak(
-        self, model: str, text: str, voice: str, *, cost_usd: Decimal, zdr: bool = True
+        self,
+        model: str,
+        text: str,
+        voice: str,
+        *,
+        cost_usd: Decimal,
+        zdr: bool = True,
+        instructions: str | None = None,
+        audio: Literal["mp3", "pcm"] = "mp3",
     ) -> Speech:
-        """``cost_usd``: what the line costs by its characters, which the response never reports."""
-        body: Json = {"model": model, "input": text, "voice": voice, "response_format": "mp3"}
+        """``cost_usd``: what the line costs by its characters, which the response never reports.
+
+        ``instructions``: a delivery note for models that take one instead of inline tags. ``audio``: what the
+        model returns; raw PCM (16-bit 24 kHz mono) comes back as WAV, which ffmpeg can read.
+        """
+        body: Json = {"model": model, "input": text, "voice": voice, "response_format": audio}
+        if instructions:
+            body["instructions"] = instructions
         if zdr:
             body["provider"] = {"zdr": True, "data_collection": "deny"}
         response = await self._send("POST", "audio/speech", json=body)
         if not response.content:
             raise OpenRouterError(502, "no audio returned")
         return Speech(
-            data=response.content,
+            data=response.content if audio == "mp3" else as_wav(response.content),
             model=model,
             cost_usd=cost_usd,
             characters=len(text),
@@ -318,6 +334,17 @@ class OpenRouterAPI:
             cost_usd=_reported_cost(result, self._decision_token_price * tokens),
             input_tokens=tokens,
         )
+
+
+def as_wav(pcm: bytes, rate: int = 24_000) -> bytes:
+    """Raw 16-bit mono PCM with a WAV header."""
+    out = io.BytesIO()
+    with wave.open(out, "wb") as file:
+        file.setnchannels(1)
+        file.setsampwidth(2)
+        file.setframerate(rate)
+        file.writeframes(pcm)
+    return out.getvalue()
 
 
 def decision_body(model: str, state: str | Json, questions: Json, *, zdr: bool = True) -> Json:

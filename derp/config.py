@@ -122,21 +122,58 @@ class Decisions(BaseModel, frozen=True):
     price_usd_per_m_input: float = 0.042  # estimate for a call without a reported cost
 
 
+class SpeechModel(BaseModel, frozen=True):
+    """What a speech model can act out and how it is asked (``agent.tools.voice``)."""
+
+    # List price, USD per 1M script characters (tags included). A token-priced model's is measured on real
+    # lines and rounded up, since the speech endpoint never reports a cost.
+    price: float
+    # "inline": tags are acted where they stand. "note": tags would be read aloud, so they are lifted out of
+    # the text into one delivery note (OpenRouter's ``instructions``) with the voice's character.
+    tags: Literal["inline", "note"] = "inline"
+    sounds: bool = True  # acts non-verbal tags and sound effects ([laughs], [sighs], [fart], [applause])
+    cyrillic: bool = True  # voices Russian (or any Cyrillic script) well
+    audio: Literal["mp3", "pcm"] = "mp3"  # what it returns: pcm is 16-bit 24 kHz mono
+    voices: dict[str, str] = Field(default_factory=dict[str, str])  # Derp's voice names to its own
+
+
+def _speech_models() -> dict[str, SpeechModel]:
+    gemini = {
+        "callum": "Algenib", "harry": "Fenrir", "bill": "Charon",
+        "charlie": "Puck", "jessica": "Zephyr", "lily": "Despina",
+    }  # fmt: skip
+    return {
+        # About 2× cheaper than Turbo on plain and delivery-only lines; no sound effects, weak in Russian.
+        "google/gemini-3.8-flash-lite-tts": SpeechModel(
+            price=16.0, tags="note", sounds=False, cyrillic=False, audio="pcm", voices=gemini
+        ),
+        "elevenlabs/eleven-v4-turbo": SpeechModel(price=40.0),
+        "elevenlabs/eleven-v4": SpeechModel(price=80.0),
+    }
+
+
 class VoiceMessages(BaseModel, frozen=True):
-    """Voice messages on the speech pin (``agent.tools.voice``): stock voices acting out inline audio tags."""
+    """Voice messages on the speech pin (``agent.tools.voice``): stock voices acting out inline audio tags.
+
+    The pin's models are tried in order, skipping any that can't act the line out (``models``): a line with
+    Cyrillic or a sound effect skips Gemini, so it goes to ElevenLabs.
+    """
 
     max_chars: int = 400  # of one performance, audio tags included (they are billed as characters)
     # The speech endpoint returns audio only, never a cost: a line is priced per character at the speech
-    # pin's price snapshot (``agent.tools.voice.rates``). Fallback, USD per 1M characters at list price: the
-    # pin's other models, and its primary until the scout snapshots it. A model missing here is priced at the
-    # dearest one, never as free.
-    prices: dict[str, float] = Field(
-        default_factory=lambda: {"elevenlabs/eleven-v4-turbo": 40.0, "elevenlabs/eleven-v4": 80.0}
-    )
+    # pin's price snapshot when the primary is priced per character, else at its list price here. A model
+    # missing here is taken as able to act anything, priced at the dearest one, never as free.
+    models: dict[str, SpeechModel] = Field(default_factory=_speech_models)
+
+    def model(self, name: str) -> SpeechModel:
+        """What ``name`` can do; an unknown model is trusted with everything at the dearest list price."""
+        return self.models.get(name) or SpeechModel(
+            price=max((m.price for m in self.models.values()), default=80.0)
+        )
 
     def list_price(self, model: str) -> float:
         """The fallback USD per 1M characters for ``model``."""
-        return self.prices.get(model, max(self.prices.values(), default=80.0))
+        return self.model(model).price
 
 
 class KeyModel(BaseModel, frozen=True):

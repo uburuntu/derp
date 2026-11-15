@@ -99,9 +99,14 @@ DEFAULT_PINS: dict[ModelRole, RolePin] = {
     # ``-latest``: the thresholds in ``settings.decisions`` were tuned against it; a new model needs re-tuning.
     ModelRole.DECISION: RolePin(model="typesafe/jev-1.14", reasoning=None, vision=False),
     # Voice messages: stock voices acting out inline audio tags (``[shouting]``, ``[sings]``, ``[applause]``).
-    # Turbo costs half of v4 per character and still follows the tags; v4 is the fallback.
+    # Tried in order, skipping a model that can't act the line (``settings.speech.models``): Gemini Flash Lite
+    # (Vertex is its ZDR route) takes English lines without sound effects; ElevenLabs v4 Turbo takes Russian
+    # and sound effects at half of v4's price per character; v4 is the last fallback.
     ModelRole.SPEECH: RolePin(
-        model="elevenlabs/eleven-v4-turbo", fallbacks=("elevenlabs/eleven-v4",), reasoning=None, vision=False
+        model="google/gemini-3.8-flash-lite-tts",
+        fallbacks=("elevenlabs/eleven-v4-turbo", "elevenlabs/eleven-v4"),
+        reasoning=None,
+        vision=False,
     ),
     # Whole clips with sound, audio and PDFs for ``inspect_media`` (``agent.watch``). Vertex only: its routes are
     # this model's ZDR ones (Google AI Studio retains prompts); the base slug leaves out the flex/priority tiers.
