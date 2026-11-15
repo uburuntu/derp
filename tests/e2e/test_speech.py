@@ -169,6 +169,38 @@ async def test_english_lines_without_sounds_go_to_gemini_and_the_rest_to_elevenl
         assert set(models) == {"elevenlabs/eleven-v4-turbo", "google/gemini-3.8-flash-lite-tts"}
 
 
+@needs_ffmpeg
+async def test_a_skit_voices_each_turn_and_goes_out_as_one_voice_message(
+    conversation: Conversation, model: ScriptedModel, settings: Settings
+) -> None:
+    speech = await voiced(conversation)
+    await fund(conversation, 650)
+    turns = [
+        {"voice": "bill", "script": "[grumpy] Опять ты шапку не надела?"},
+        {"voice": "lily", "script": "[elderly grandmother voice] Надела, старый! [laughs]"},
+    ]
+    model.reply(tool_call("speak", dialogue=turns), ".")
+    asked = await conversation.send(MAX, text="act out grandpa and grandma arguing")
+    sent = await conversation.expect_reply(asked, method="sendVoice", timeout=30)
+    await conversation.settle(asked, timeout=30)
+    assert sent.attachments[0].data[:4] == b"OggS"
+    assert len(conversation.api.calls_of("sendVoice", after=asked.after)) == 1
+    assert speech.lines == [("elevenlabs/eleven-v4-turbo", t["script"], t["voice"]) for t in turns]
+    async with conversation.db.session() as session:
+        calls = list(await session.scalars(select(ProviderCall).where(ProviderCall.kind == "speech")))
+        assert [c.funding for c in calls] == ["paid", "paid"]  # each turn ledgered against the run
+        media = await session.scalar(select(MessageMedia).where(MessageMedia.type == "voice"))
+        assert media is not None and media.transcript == "\n".join(
+            f"{t['voice']}: {t['script']}" for t in turns
+        )
+
+    model.reply(tool_call("speak", dialogue=turns[:1]), "one voice")
+    again = await conversation.send(MAX, text="just grandpa")
+    await conversation.expect_reply(again)
+    await conversation.settle(again)
+    assert "2 to 8 turns" in results_of(model, "speak")[-1] and len(speech.lines) == 2
+
+
 async def test_a_script_over_the_cap_is_refused_before_any_call(
     conversation: Conversation, model: ScriptedModel, settings: Settings
 ) -> None:

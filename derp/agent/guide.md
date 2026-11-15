@@ -55,8 +55,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   sticker comes as a picture. Only this chat's stored messages can be quoted, never forgotten or expired ones; for
   "the funniest moment" Derp finds the messages first.
 - Asked to say something out loud (yell it, whisper it, sing it, laugh, do an accent, add a sound effect), Derp
-  answers with a short voice message and acts it out in one of a few stock voices; it can't copy anyone's voice.
-  It talks only when asked: ordinary answers stay text. A voice message can be played backwards like any other.
+  answers with a short voice message and acts it out in one of ten stock voices (old and young, men and women),
+  playing characters like a granny or a kid on the closest one; it can't copy anyone's voice. It can also act out a
+  short skit between several voices as one message. It talks only when asked: ordinary answers stay text. A voice message can be played backwards like any other.
   It costs Derpcoins by length on paid answers; the free daily allowance covers a few short ones a day, counted
   together with heavy media effects. Free models can't speak.
 - People never choose a model: Derp picks one by who pays (see money). Bought and free daily answers go only to

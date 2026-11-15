@@ -2,6 +2,8 @@
 may have been made is never repeated."""
 
 import asyncio
+import io
+import wave
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, cast
@@ -10,10 +12,22 @@ import pytest
 from sqlalchemy import select
 
 from derp.agent.deps import RunDeps
-from derp.agent.tools.voice import Line, Rates, _perform, can_voice, line_for, rates, voicing
+from derp.agent.tools import voice
+from derp.agent.tools.voice import (
+    Line,
+    Rates,
+    _perform,
+    affordable,
+    can_voice,
+    is_direction,
+    joined,
+    line_for,
+    rates,
+    voicing,
+)
 from derp.config import Settings, SpeechModel
 from derp.db.engine import Database
-from derp.inference.api import OpenRouterError, Speech
+from derp.inference.api import OpenRouterError, Speech, as_wav
 from derp.inference.models import ModelPin, ProviderCall
 from derp.inference.pins import PinStore
 from derp.inference.roles import ModelRole, RolePin
@@ -142,6 +156,43 @@ def test_a_model_that_would_read_tags_aloud_gets_them_as_a_delivery_note(setting
         "Despina",
         "Act it as a velvety, theatrical woman; whispers; sarcastic",
     )
-    assert line_for(gemini, "Hello.", "bill") == Line("Hello.", "Charon", "Act it as a grumpy old man")
+    assert line_for(gemini, "Hello.", "bill") == Line("Hello.", "Charon", "Act it as a wise, grumpy old man")
     unknown = settings.speech.model("acme/tts")  # trusted with everything, at the dearest list price
     assert unknown.tags == "inline" and unknown.sounds and unknown.price == 80.0
+
+
+async def test_a_line_is_held_at_the_first_able_models_price_and_dearer_fallbacks_only_if_they_fit(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    held: list[int] = []
+    left: list[int | None] = [30]
+
+    async def heavy(ctx: object, *, price: int) -> None:
+        held.append(price)
+
+    async def hold(ctx: object, *, next_turn: bool) -> int | None:
+        return left[0]
+
+    monkeypatch.setattr(voice, "heavy_allowed", heavy)
+    monkeypatch.setattr(voice, "hold_left", hold)
+    ctx = cast(Any, SimpleNamespace(deps=SimpleNamespace(settings=settings)))
+    # 330 characters: about 8 Derpcoins on Turbo, 32 on v4. Holding the line at v4 refused it outright.
+    assert await affordable(ctx, PRICES, ELEVEN, 330) == (TURBO,)
+    assert held == [settings.credits_for_usd(float(PRICES.usd(TURBO, 330)))]
+    left[0] = None  # a run that holds nothing: every fallback stays
+    assert await affordable(ctx, PRICES, ELEVEN, 330) == ELEVEN
+
+
+def test_casting_tags_count_as_directions_but_sounds_do_not() -> None:
+    assert is_direction("elderly grandmother voice, croaky") and is_direction("Strong French accent")
+    assert is_direction("SHOUTING") and is_direction("slow, trembling")
+    assert not is_direction("squeaky horn") and not is_direction("croaky, laughs")
+
+
+def test_a_skits_turns_are_joined_into_one_recording() -> None:
+    one, two = as_wav(b"\x01\x00" * 100), as_wav(b"\x02\x00" * 50)
+    with wave.open(io.BytesIO(joined([one, two]))) as file:
+        assert file.getnframes() == 150 and file.getframerate() == 24000
+    tagged = b"ID3\x04\x00\x00\x00\x00\x00\x02ab"  # a 2-byte ID3v2 tag, then the frames
+    assert joined([tagged + b"one", tagged + b"two"]) == tagged + b"one" + b"two"  # later tags dropped
+    assert joined([one]) is one

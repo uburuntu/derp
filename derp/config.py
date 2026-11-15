@@ -139,8 +139,8 @@ class SpeechModel(BaseModel, frozen=True):
 
 def _speech_models() -> dict[str, SpeechModel]:
     gemini = {
-        "callum": "Algenib", "harry": "Fenrir", "bill": "Charon",
-        "charlie": "Puck", "jessica": "Zephyr", "lily": "Despina",
+        "bill": "Charon", "george": "Sadaltager", "callum": "Algenib", "harry": "Fenrir", "charlie": "Puck",
+        "liam": "Sadachbia", "lily": "Despina", "matilda": "Sulafat", "jessica": "Zephyr", "river": "Zubenelgenubi",
     }  # fmt: skip
     return {
         # About 2× cheaper than Turbo on plain and delivery-only lines; no sound effects, weak in Russian.
