@@ -28,7 +28,7 @@ def test_pasted_keys_are_found_whole_and_tell_their_provider() -> None:
 
 def test_a_key_is_registered_for_its_providers_curated_models_and_image_model(settings: Settings) -> None:
     openai = allowed_models(settings, "openai")
-    assert "openai/gpt-6.1-sol" in openai and openai[-1] == settings.keys.images["openai"]
+    assert "openai/gpt-6.2-sol" in openai and openai[-1] == settings.keys.images["openai"]
     assert all(m.startswith("anthropic/") for m in allowed_models(settings, "anthropic"))
 
 
@@ -64,11 +64,11 @@ def test_cycles_restart_monthly_on_the_day_the_key_was_added() -> None:
 
 
 def test_a_key_pin_serves_one_model_on_its_providers_own_endpoints_without_zdr() -> None:
-    pin = key_pin("openai", "openai/gpt-6.1-sol")
+    pin = key_pin("openai", "openai/gpt-6.2-sol")
     assert (
-        pin.models == ("openai/gpt-6.1-sol",)
+        pin.models == ("openai/gpt-6.2-sol",)
         and not pin.zdr
-        and pin.only == {"openai/gpt-6.1-sol": ("openai",)}
+        and pin.only == {"openai/gpt-6.2-sol": ("openai",)}
     )
     assert Prices(2, 10).turn(10_000, 300) == Decimal("0.023")
 

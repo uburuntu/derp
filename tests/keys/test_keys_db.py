@@ -33,7 +33,7 @@ def keyed(settings: Settings) -> Settings:
 
 async def add_key(
     database: Database, settings: Settings, user_id: int, *, chats: tuple[int, ...] = (), cap: str = "100",
-    enabled: datetime = NOW, model: str = "openai/gpt-6.1-sol",
+    enabled: datetime = NOW, model: str = "openai/gpt-6.2-sol",
 ) -> int:  # fmt: skip
     async with database.transaction() as session:
         key = ContributedKey(
@@ -52,7 +52,7 @@ async def spend(database: Database, key_id: int, usd: str, *, run_id: int | None
     async with database.transaction() as session:
         session.add(
             ProviderCall(
-                kind="chat", model="openai/gpt-6.1-sol", funding="key", key_id=key_id, upstream_usd=Decimal(usd),
+                kind="chat", model="openai/gpt-6.2-sol", funding="key", key_id=key_id, upstream_usd=Decimal(usd),
                 cost_usd=Decimal("0.0001"), run_id=run_id, chat_id=GROUP, created_at=NOW,
             )
         )  # fmt: skip
@@ -106,6 +106,16 @@ async def test_keys_serve_in_the_order_they_were_turned_on_until_their_cap_is_sp
         paused = await session.get(ContributedKey, first)
         assert paused is not None and paused.paused == "cap"
         assert paused.paused_until == next_cycle(date(2026, 11, 1), NOW)
+
+
+async def test_a_key_picked_on_a_model_that_left_the_list_serves_on_the_recommended_one(
+    database: Database, keyed: Settings
+) -> None:
+    await add_key(database, keyed, 7, chats=(GROUP,), model="openai/gpt-6.1-sol")  # before GPT-6.2
+    funds = await Funder(database, keyed).reserve(
+        chat_id=GROUP, private=False, user_id=8, operation_id="turn:1", now=NOW
+    )
+    assert funds is not None and funds.key is not None and funds.key.pin.models == ("openai/gpt-6.2-sol",)
 
 
 async def test_a_key_behind_another_says_which_answers_first(database: Database, keyed: Settings) -> None:
@@ -211,7 +221,7 @@ async def test_plugging_in_registers_the_key_behind_its_own_sub_key(
         links = list(await session.scalars(select(KeyChat).where(KeyChat.key_id == key.id)))
     assert row is not None and unseal(keyed.keys_secret, row.sub_key) == "sk-or-v1-sub"
     assert [(link.chat_id, link.state) for link in links] == [(7, "on")]
-    assert row.model == "openai/gpt-6.1-sol"  # the recommended one until they pick
+    assert row.model == "openai/gpt-6.2-sol"  # the recommended one until they pick
 
 
 async def test_startup_registers_every_live_key_for_todays_models(

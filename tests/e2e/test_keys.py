@@ -179,10 +179,10 @@ async def plug_into_crew(conversation: Conversation) -> int:
     before = conversation.seq
     await conversation.press(BO, BO.id, newest(conversation, BO.id), data_of(plugged, "$100"))
     models = await latest(conversation, "editMessageText", BO.id, before)
-    assert "$100" in markdown(models) and "GPT-6.1 Sol" in str(models["reply_markup"])
+    assert "$100" in markdown(models) and "GPT-6.2 Sol" in str(models["reply_markup"])
 
     before = conversation.seq
-    await conversation.press(BO, BO.id, int(models["message_id"]), data_of(models, "GPT-6.1 Sol"))
+    await conversation.press(BO, BO.id, int(models["message_id"]), data_of(models, "GPT-6.2 Sol"))
     card = await latest(conversation, "sendRichMessage", CREW.id, before)
     assert "Bo" in markdown(card) and "OpenAI" in markdown(card) and "30 days" in markdown(card)
     asked = await latest(conversation, "editMessageText", BO.id, before)
@@ -196,10 +196,10 @@ async def plug_into_crew(conversation: Conversation) -> int:
     )
     await conversation.press(ANA, CREW.id, card_id, data_of(card, "Turn on"))
     enabled = await latest(conversation, "editMessageText", CREW.id, before)
-    assert "key is on" in markdown(enabled) and "GPT-6.1 Sol" in markdown(enabled)
+    assert "key is on" in markdown(enabled) and "GPT-6.2 Sol" in markdown(enabled)
     async with conversation.db.session() as session:
         key = await session.scalar(select(ContributedKey))
-        assert key is not None and key.cap_usd == Decimal(100) and key.model == "openai/gpt-6.1-sol"
+        assert key is not None and key.cap_usd == Decimal(100) and key.model == "openai/gpt-6.2-sol"
         link_row = await session.get(KeyChat, (key.id, CREW.id))
         assert link_row is not None and link_row.state == "on" and link_row.enabled_by == ANA.id
         return key.id
@@ -217,7 +217,7 @@ async def test_a_key_plugged_in_privately_answers_the_group_once_an_admin_turns_
     answer = await conversation.expect_reply(asked)
     await conversation.settle(asked)
     assert "4, obviously" in markdown(answer)
-    assert key_model.sub_keys == ["sk-or-v1-bo"] and key_model.pins[-1].model == "openai/gpt-6.1-sol"
+    assert key_model.sub_keys == ["sk-or-v1-bo"] and key_model.pins[-1].model == "openai/gpt-6.2-sol"
     assert not key_model.pins[-1].zdr and not model.requests  # Derp's own model never ran
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun).order_by(AgentRun.id.desc()))
@@ -289,7 +289,7 @@ async def test_a_dead_key_is_announced_to_the_chat_and_its_owner_once(
     def revoked(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         raise ModelHTTPError(
             status_code=401,
-            model_name="openai/gpt-6.1-sol",
+            model_name="openai/gpt-6.2-sol",
             body={
                 "message": "Provider returned error",
                 "metadata": {"provider_name": "OpenAI", "is_byok": True},
@@ -375,7 +375,7 @@ async def test_a_key_failing_after_tools_ran_is_not_answered_twice(
     def out_of_credit(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         raise ModelHTTPError(
             status_code=402,
-            model_name="openai/gpt-6.1-sol",
+            model_name="openai/gpt-6.2-sol",
             body={"message": "insufficient_quota", "metadata": {"provider_name": "OpenAI", "is_byok": True}},
         )
 

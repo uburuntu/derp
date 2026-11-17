@@ -200,12 +200,19 @@ class ContributedKeys(BaseModel, frozen=True):
         default_factory=lambda: {
             "openai": (
                 KeyModel(
-                    model="openai/gpt-6.1-sol",
-                    label="GPT-6.1 Sol",
+                    model="openai/gpt-6.2-sol",
+                    label="GPT-6.2 Sol",
                     recommended=True,
                     prompt=2,
                     completion=10,
                     cache_read=0.1,
+                ),
+                KeyModel(
+                    model="openai/gpt-6.2-astra",
+                    label="GPT-6.2 Astra",
+                    prompt=8,
+                    completion=40,
+                    cache_read=0.4,
                 ),
                 KeyModel(
                     model="openai/gpt-6.1-terra",
