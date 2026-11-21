@@ -24,6 +24,7 @@ class Job(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    rule_id: Mapped[int | None] = mapped_column(ForeignKey("reply_rules.id", ondelete="CASCADE"), index=True)
     chat_id: Mapped[int]
     thread_id: Mapped[int | None]
     creator_id: Mapped[int]  # the invoker when it fires: their funding pays for prompts

@@ -73,6 +73,7 @@ class Target:
     ephemeral_to: int | None = None  # the user who alone sees the message
     ephemeral_reply_to: int | None = None  # their ephemeral message being answered
     callback_query_id: str | None = None  # or the button press it answers (also within 15 seconds)
+    require_reply: bool = False  # a linked replacement must not become an unrelated post
 
     @classmethod
     def reply_to_message(cls, message: Message) -> Target:
@@ -95,6 +96,7 @@ class Target:
             self.ephemeral_to,
             self.ephemeral_reply_to,
             self.callback_query_id,
+            self.require_reply,
         )
 
     @property
@@ -110,7 +112,7 @@ class Target:
             return ReplyParameters(ephemeral_message_id=self.ephemeral_reply_to)
         if self.reply_to is None:
             return None
-        return ReplyParameters(message_id=self.reply_to, allow_sending_without_reply=True)
+        return ReplyParameters(message_id=self.reply_to, allow_sending_without_reply=not self.require_reply)
 
     @property
     def ephemeral(self) -> EphemeralMessageParameters | None:

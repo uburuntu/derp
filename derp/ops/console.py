@@ -15,6 +15,7 @@ answers ephemerally, and a typed-out /context@Derp there goes to the owner's
 private chat.
 """
 
+import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -37,6 +38,7 @@ from derp.inference.pins import PinStore, apply_pin, rollback_pin
 from derp.inference.roles import ModelRole, RolePin
 from derp.inference.scout import cache_by_provider
 from derp.locales import resolve, t
+from derp.money.amounts import format_dc
 from derp.money.models import CreditLot, RunFee
 from derp.money.wallets import balance, credit, wallet
 from derp.ops.context import render
@@ -155,7 +157,7 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
         "### Last 7 days",
         "- **Cost by funding:** " + " · ".join(f"{f} {_usd(by_funding.get(f))}" for f in FUNDINGS),
         f"- **Contributed keys:** {_usd(keyed)} of their owners' credits",
-        f"- **Derp fees:** {fees or 0} dc",
+        f"- **Derp fees:** {format_dc(fees or 0)} dc",
         f"- **Active:** {people} people in {chats} chats",
         f"- **Blocked:** {blocked or 0} people, {blocked_chats or 0} chats",
         f"- **OpenRouter key:** {await _key_line(api)}",
@@ -271,12 +273,16 @@ async def grant(message: Message, command: CommandObject, db: Database, bot: Bot
     """``/grant <user or chat id> <Derpcoins>``: a gift lot (negative ids are chats). Repeats are idempotent."""
     target = Target.reply_to_message(message)
     parts = (command.args or "").split()
-    if len(parts) != 2 or not parts[0].lstrip("-").isdigit() or not parts[1].isdigit():
+    if (
+        len(parts) != 2
+        or not parts[0].lstrip("-").isdigit()
+        or not re.fullmatch(r"[0-9]+(?:\.[0-9]{1,6})?", parts[1])
+    ):
         await send_markdown(bot, target, "Usage: `/grant <user or chat id> <Derpcoins>`")
         return
-    owner_id, amount = int(parts[0]), int(parts[1])
+    owner_id, amount = int(parts[0]), Decimal(parts[1])
     if not 0 < amount <= MAX_GRANT:
-        await send_markdown(bot, target, f"Grant between 1 and {MAX_GRANT:,} Derpcoins.")
+        await send_markdown(bot, target, f"Grant more than zero and at most {MAX_GRANT:,} Derpcoins.")
         return
     kind = "chat" if owner_id < 0 else "user"
     operation_id = f"grant:{message.chat.id}:{message.message_id}"
@@ -302,9 +308,13 @@ async def grant(message: Message, command: CommandObject, db: Database, bot: Bot
         return
     note = ""
     if kind == "user":
-        text = t(resolve(language), "money.granted", credits=f"{amount:,}")
+        text = t(resolve(language), "money.granted", credits=format_dc(amount))
         note = " They were told." if await send_privately(bot, owner_id, text) else " Couldn't DM them."
-    await send_markdown(bot, target, f"Granted {amount:,} dc to {kind} `{owner_id}`; balance {left:,}.{note}")
+    await send_markdown(
+        bot,
+        target,
+        f"Granted {format_dc(amount)} dc to {kind} `{owner_id}`; balance {format_dc(left)}.{note}",
+    )
 
 
 async def block(message: Message, command: CommandObject, db: Database, bot: Bot) -> None:

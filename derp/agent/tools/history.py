@@ -331,10 +331,10 @@ ASKER_LINES = 10
 async def _affordable(deps: RunDeps) -> bool:
     """Side calls ledgered so far still fit under the run's hold."""
     if deps.funds.reservation_id is None:
-        return True
+        return not deps.reply_rules  # an automatic digest can only build using shared funds
     async with deps.db.session() as session:
         spent = await run_cost(session, deps.run_id)
-    return deps.settings.credits_for_usd(float(spent)) < deps.funds.credits
+    return deps.settings.credits_for_usd(spent) < deps.funds.credits
 
 
 async def _anchor(deps: RunDeps, scope: Scope, period: str, message_id: int | None) -> Message | str:

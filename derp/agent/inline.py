@@ -24,6 +24,7 @@ from aiogram.types import (
     Message,
 )
 
+from derp.agent.invocation import bot_authored
 from derp.agent.runtime import Runtime
 from derp.db.engine import Database
 from derp.locales import resolve, t
@@ -100,7 +101,9 @@ async def on_chosen(result: ChosenInlineResult, bot: Bot, runtime: Runtime) -> N
 
 
 async def on_guest(message: Message, bot: Bot, runtime: Runtime, db: Database) -> None:
-    if not message.guest_query_id or message.from_user is None or await _blocked(db, message.from_user.id):
+    if not message.guest_query_id or message.from_user is None or bot_authored(message):
+        return
+    if await _blocked(db, message.from_user.id):
         return
     locale = resolve(message.from_user.language_code)
     detached = await runtime.answer_detached(

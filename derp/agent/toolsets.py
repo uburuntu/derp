@@ -57,4 +57,9 @@ def offered(deps: RunDeps, families: Sequence[Family], *, detached: bool = False
 def toolsets_for(deps: RunDeps, families: Sequence[Family]) -> list[AbstractToolset[RunDeps]]:
     """The offered families' toolsets, deferred tools in the toolbox on free runs."""
     toolbox = deps.funding is Funding.FREE
-    return [Lenient(f.for_run(toolbox=toolbox)) for f in families]
+    sets = [Lenient(f.for_run(toolbox=toolbox)) for f in families]
+    if deps.reply_rules:
+        from derp.agent.rule_tools import RuleTools
+
+        return [RuleTools(s) for s in sets]
+    return list(sets)

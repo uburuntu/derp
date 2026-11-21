@@ -24,6 +24,7 @@ from derp.config import Settings, WatchLimits
 from derp.inference.openrouter import REASONING_ROOM
 from derp.locales import t
 from derp.memory import notes
+from derp.money.amounts import Amount, format_dc
 from derp.money.funding import Funding
 from derp.scheduler import jobs
 from derp.settings.start import EPHEMERAL_IN_GROUPS, GROUP_COMMANDS, PRIVATE_COMMANDS
@@ -75,7 +76,11 @@ def _minutes(seconds: int) -> str:
 
 
 def facts(
-    topic: Topic, settings: Settings, usernames: Sequence[str], families: Sequence[Family], voice_credits: int
+    topic: Topic,
+    settings: Settings,
+    usernames: Sequence[str],
+    families: Sequence[Family],
+    voice_credits: Amount,
 ) -> list[str]:
     """The current values for a topic, generated from what is running (``voice_credits``: the longest voice
     line at most, ``voice.rates``)."""
@@ -87,9 +92,9 @@ def facts(
             return [
                 (
                     f"- 1 Derpcoin = ${settings.usd_per_credit:g} of provider cost; answers are charged at cost × "
-                    f"{settings.markup:g}, rounded up."
+                    f"{settings.markup:g}, to six decimal places."
                 ),
-                f"- Free daily allowance: {settings.sponsored_daily_credits} Derpcoins per person per UTC day.",
+                f"- Free daily allowance: {format_dc(settings.sponsored_daily_credits)} Derpcoins per person per UTC day.",
                 "- Packs: "
                 + ", ".join(f"{p.stars}⭐ → {p.credits:,}" for p in settings.packs)
                 + f" Derpcoins ({settings.credits_per_star} per Star).",
@@ -98,19 +103,19 @@ def facts(
                     "for that period."
                 ),
                 (
-                    f"- Asks first above {settings.approval_credits} Derpcoins or "
+                    f"- Asks first above {format_dc(settings.approval_credits)} Derpcoins or "
                     f"{settings.approval_balance_fraction:.0%} of the payer's balance; the button lasts "
                     f"{settings.approval_minutes} minutes."
                 ),
-                f"- One image: up to about {settings.credits_for_usd(settings.image_price_usd)} Derpcoins.",
+                f"- One image: up to about {format_dc(settings.credits_for_usd(settings.image_price_usd))} Derpcoins.",
                 (
-                    f"- Heavy media effects (video memes, reversed clips, cutouts): +{settings.effect_credits} "
+                    f"- Heavy media effects (video memes, reversed clips, cutouts): +{format_dc(settings.effect_credits)} "
                     f"Derpcoins on paid answers; {settings.sponsored_effects_per_day} per person per day on the "
                     "free allowance, voice messages included."
                 ),
                 (
                     f"- A voice message: up to {settings.speech.max_chars} characters; the longest costs up to about "
-                    f"{voice_credits} Derpcoins."
+                    f"{format_dc(voice_credits)} Derpcoins."
                 ),
             ]
         case "keys":
@@ -205,7 +210,7 @@ def guide(
     settings: Settings,
     usernames: Sequence[str],
     families: Sequence[Family],
-    voice_credits: int,
+    voice_credits: Amount,
 ) -> str:
     parts: list[str] = []
     for topic in dict.fromkeys(topics or TOPICS):
@@ -233,7 +238,7 @@ async def about_derp(ctx: RunContext[RunDeps], topics: list[Topic]) -> str:
     longest = (await voice.rates(deps)).most(deps.settings.speech.max_chars)
     return guide(
         topics, settings=deps.settings, usernames=await bot_usernames(deps.bot), families=families,
-        voice_credits=deps.settings.credits_for_usd(float(longest)),
+        voice_credits=deps.settings.credits_for_usd(longest),
     )  # fmt: skip
 
 

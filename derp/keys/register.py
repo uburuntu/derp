@@ -32,8 +32,10 @@ def provider_of(key: str) -> str:
 
 
 def allowed_models(settings: Settings, provider: str) -> list[str]:
-    """What a provider's keys are registered for: its curated chat models and its image model."""
+    """What a provider's keys are registered for: its curated chat, image and decision models."""
     models = [m.model for m in curated(settings, provider)]
+    if provider == "openai":
+        models.append(settings.decisions.openai_model)
     if image := settings.keys.images.get(provider):
         models.append(image)
     return models

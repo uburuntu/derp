@@ -312,3 +312,35 @@ async def test_the_free_models_notice_is_the_answer_too(
     assert "may store" in notice["rich_message"]["markdown"]
     async with conversation.db.session() as session:
         assert list(await session.scalars(select(RunOutput.kind))) == ["other"]
+
+
+async def test_member_can_read_shared_spend_and_get_a_receipt_by_reply(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(REX, DEN)
+    async with conversation.db.transaction() as session:
+        await credit(session, (await wallet(session, "chat", DEN.id)).id, "shared", 800, "grant")
+        await credit(session, (await wallet(session, "user", REX.id)).id, "mine", 1234, "grant")
+    model.cost = 0.001
+    model.reply("Here is the answer.")
+    first = await conversation.send(REX, DEN, "derp, tell me")
+    await conversation.settle(first)
+    target = max(mid for cid, mid in conversation.api.messages if cid == DEN.id)
+    model.reply(tool_call("chat_accounting", view="receipt"), "It cost 1.2 dc.")
+    await conversation.settle(await conversation.send(REX, DEN, "What did this cost?", reply_to=target))
+    receipt = result_of(model, "chat_accounting")
+    assert "Charged: **1.2** dc" in receipt and "this chat's Derpcoins" in receipt
+    await ask(conversation, model, REX, tool_call("chat_accounting", view="usage", group_by="member"))
+    report = result_of(model, "chat_accounting")
+    assert "Rex" in report and "wallet_dc" in report and "cached_input_tokens" in report
+    await ask(conversation, model, REX, tool_call("chat_accounting", view="balance"))
+    balance = result_of(model, "chat_accounting")
+    assert "shared" in balance and "available_dc" in balance and "held_dc" in balance
+    assert "1,234" not in balance and "1234" not in balance
+    await ask(
+        conversation,
+        model,
+        REX,
+        tool_call("chat_accounting", view="receipt", message=f"https://t.me/c/999/{target}"),
+    )
+    assert "from this chat" in result_of(model, "chat_accounting")

@@ -32,14 +32,17 @@ async def test_long_days_are_summarized_in_parts_then_merged() -> None:
     seen: list[str] = []
 
     def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
-        seen.append(str(messages[-1]))
-        return ModelResponse(parts=[TextPart(f"summary {len(seen)}")])
+        prompt = str(messages[-1])
+        seen.append(prompt)
+        summary = next((f"summary {n}" for n in (1, 2, 3) if f"Part {n} of 3" in prompt), "merged")
+        return ModelResponse(parts=[TextPart(summary)])
 
     transcript = "\n".join("y" * 1000 for _ in range(90))  # ~3 chunks
     messages: list[ModelMessage] = []
     text = await digests.summarize(FunctionModel(respond), PIN, transcript, messages)
-    assert len(seen) == 4 and "Part 1 of 3" in seen[0] and "summary 1" in seen[-1]
-    assert text == "summary 4" and len(responses(messages)) == 4  # each one is ledgered
+    assert len(seen) == 4 and all(any(f"Part {n} of 3" in p for p in seen[:3]) for n in (1, 2, 3))
+    assert seen[-1].index("summary 1") < seen[-1].index("summary 2") < seen[-1].index("summary 3")
+    assert text == "merged" and len(responses(messages)) == 4  # each one is ledgered
 
 
 async def test_parts_are_summarized_at_once_without_reasoning() -> None:

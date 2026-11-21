@@ -1,6 +1,6 @@
 """Self-service: balances, buying, settings and feedback, without leaving the conversation.
 
-Balances are private: in groups they go to the asker by DM and the model only
+Personal balances are private: in groups they go to the asker by DM and the model only
 learns that they were sent. Purchase buttons are real Stars invoices (or the
 pack menu). Settings changes follow /settings rules — chat settings need an
 admin, re-checked here (a time zone nobody set yet is anyone's to set).
@@ -10,9 +10,9 @@ groups an admin's) own press on the notice that their providers may store
 prompts.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from functools import partial
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
@@ -23,13 +23,16 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from derp.agent.deps import RunDeps
 from derp.agent.outputs import Refused, deliver, unconfirmed
+from derp.agent.tools.sources import replied_to
 from derp.agent.toolsets import Family
 from derp.billing.menu import link_menu, pack_label, personal_menu, send_pack_invoice
 from derp.billing.patrons import lately
 from derp.history.models import Chat, User
 from derp.history.render import describe_time
+from derp.keys.routing import candidates
 from derp.memory.notes import is_admin
-from derp.money.command import credits_card
+from derp.money import accounting
+from derp.money.command import credits_card, receipt_text
 from derp.money.free import consented, offer
 from derp.ops import feedback
 from derp.settings.panel import NOTES_MODES, apply_setting, chosen_days, render, shortens
@@ -48,6 +51,79 @@ Setting = Literal[
     "name_me_when_i_chip_in",
 ]
 PERSONAL: tuple[Setting, ...] = ("my_coins_in_groups", "name_me_when_i_chip_in")
+
+
+@toolset.tool
+async def chat_accounting(
+    ctx: RunContext[RunDeps],
+    view: Literal["balance", "usage", "receipt"],
+    since: date | None = None,
+    until: date | None = None,
+    group_by: accounting.GroupBy = "total",
+    member: str | None = None,
+    model: str | None = None,
+    call_type: str | None = None,
+    funding: accounting.FundingSource | None = None,
+    message: str | None = None,
+) -> dict[str, Any] | str:
+    """Look up this chat's shared wallet, actual usage and /info receipts. Give the figures in the chat.
+
+    balance: spendable and held dc, enabled key models and recent patrons. Personal wallets in a group use wallet_status privately.
+    usage: inclusive chat-local dates (default today), with optional filters and grouping.
+    call_type: chat, image, stt, speech, media, digest, screening, decision, or a flat fee item.
+    receipt: message id, #id or same-chat Telegram link; defaults to the message the person replied to.
+    """
+    deps = ctx.deps
+    now = datetime.now(UTC)
+    if view == "receipt":
+        target = accounting.message_ref(deps.chat, message) if message else await replied_to(deps)
+        if target is None:
+            return "Reply to one of Derp's outputs or give its id or permalink from this chat."
+        async with deps.db.session() as session:
+            entries = await accounting.receipts(session, deps.chat.id, target)
+        if not entries:
+            return "There is no answer receipt for that message in this chat."
+        return {
+            "message": target,
+            "receipts": [
+                {
+                    "version": "edit" if entry.revision else "original",
+                    "receipt": receipt_text(entry, deps.locale),
+                    "cached_input_tokens": entry.run.cache_read_tokens,
+                    "provider_usd": str(entry.provider_usd),
+                    "key_usd": str(entry.upstream_usd),
+                    "tool_fees_dc": str(entry.fee_dc),
+                }
+                for entry in entries
+            ],
+        }
+    async with deps.db.session() as session:
+        if view == "balance":
+            snapshot = await accounting.wallet_snapshot(session, deps.chat, deps.user_id, now)
+            if deps.chat.type == "private":
+                return snapshot
+            return {
+                **snapshot,
+                "recent_patrons": await lately(session, deps.chat.id, now),
+                "enabled_contributed_models": [
+                    key.model for key in await candidates(session, deps.chat.id, now)
+                ],
+            }
+        try:
+            start, stop = accounting.date_range(since, until, now, deps.tz)
+            return await accounting.usage(
+                session,
+                deps.chat,
+                start,
+                stop,
+                group_by=group_by,
+                member=member,
+                model=model,
+                call_type=call_type,
+                funding=funding,
+            )
+        except ValueError as error:
+            return str(error)
 
 
 @toolset.tool

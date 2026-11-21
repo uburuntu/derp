@@ -24,6 +24,8 @@ from derp.db.engine import Database
 from derp.history.models import Chat, User
 from derp.history.render import chat_time, describe_time
 from derp.locales import resolve, t
+from derp.memory.models import ReplyRule
+from derp.memory.notes import is_admin
 from derp.ops.owner import is_blocked
 from derp.scheduler.jobs import MISS_LIMIT, SNOOZES, ResumeJob, SnoozeJob, next_after
 from derp.scheduler.models import Job
@@ -112,6 +114,17 @@ async def fire(
     async with db.session() as session:
         user = await session.get(User, job.creator_id)
         blocked = await is_blocked(session, chat.id, job.creator_id)
+        rule = await session.get(ReplyRule, job.rule_id) if job.rule_id is not None else None
+    if job.rule_id is not None and (
+        not chat.ambient
+        or rule is None
+        or rule.state != "active"
+        or rule.chat_id != chat.id
+        or rule.admin_id != job.creator_id
+        or not await is_admin(bot, chat, job.creator_id)
+    ):
+        await _set(db, job.id, state="paused")
+        return
     if blocked:
         log.info("job %s paused: an owner blocked its chat or creator", job.id)
         await _set(db, job.id, state="paused")
@@ -128,7 +141,11 @@ async def fire(
             await send_markdown(bot, target, text, trusted=False, reply_markup=markup(snooze))
             return
         outcome = await runtime.answer(
-            as_message(job, chat, user, now, since), chat, trigger="job", since=since
+            as_message(job, chat, user, now, since),
+            chat,
+            trigger="job",
+            since=since,
+            rules=(rule,) if rule else (),
         )
         if outcome is not None and outcome.refused:
             log.info("job %s paused: the chat refused the answer", job.id)

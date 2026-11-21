@@ -1,6 +1,7 @@
 """Continue after buying: an ask that ran out of Derpcoins picks up once its asker's purchase lands."""
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from pydantic_ai.messages import BinaryContent
@@ -208,7 +209,7 @@ async def test_a_patron_top_up_never_replays_someone_elses_ask(
         assert (run.chat_id, run.user_id, run.thread_id, run.funding) == (FORUM.id, CARL.id, 5, "paid")
 
 
-async def balance_of(conversation: Conversation, chat_id: int) -> int:
+async def balance_of(conversation: Conversation, chat_id: int) -> Decimal:
     async with conversation.db.session() as session:
         return await balance(session, (await wallet(session, "chat", chat_id)).id)
 

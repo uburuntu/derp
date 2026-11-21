@@ -33,6 +33,7 @@ from derp.db.engine import Database
 from derp.history.models import Chat
 from derp.history.render import one_line
 from derp.locales import resolve, t
+from derp.money.amounts import format_dc
 from derp.money.free import offer_continue
 from derp.money.funding import Funder
 from derp.money.wallets import balance
@@ -149,7 +150,7 @@ async def on_payment(message: Message, db: Database, settings: Settings, bot: Bo
         raise
     if not new:
         return
-    added, amount = f"{order.credits:,}", f"{left:,}"
+    added, amount = f"{order.credits:,}", format_dc(left)
     topic = _topic(message, order) if order.target == "chat" else None
     if order.target == "chat":
         await _thank_patron(message, db, bot, funder, order, purchase.id, locale, amount, topic)
@@ -268,7 +269,7 @@ async def on_refund_command(
         text = "Already refunded; nothing more to take back."
     else:
         p = result.purchase
-        text = f"Refunded {p.stars}⭐ ({p.product}); took back {result.clawed} of {p.credits} Derpcoins."
+        text = f"Refunded {p.stars}⭐ ({p.product}); took back {format_dc(result.clawed)} of {p.credits} Derpcoins."
     await send_markdown(bot, Target.reply_to_message(message), text)
 
 
@@ -281,7 +282,9 @@ async def on_refunded(message: Message, db: Database, settings: Settings, bot: B
         await stop_renewal(db, bot, settings, result.purchase)
         p = result.purchase
         await notify_owners(
-            bot, settings, f"Refund reported: {p.stars}⭐ {p.product}, took back {result.clawed} dc"
+            bot,
+            settings,
+            f"Refund reported: {p.stars}⭐ {p.product}, took back {format_dc(result.clawed)} dc",
         )
 
 

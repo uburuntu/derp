@@ -306,6 +306,7 @@ async def _extra(session: AsyncSession, job: Job, until: datetime) -> Job | Refu
             kind=job.kind,
             text=job.text,
             snooze_of=job.id,
+            rule_id=job.rule_id,
             state="active",
         )
         session.add(extra)

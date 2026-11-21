@@ -109,7 +109,7 @@ UNTRANSCRIBED = {
 
 def kind_label(kind: str) -> str:
     """How lines name a kind of media or message: "gif", "video note", "paid media"…"""
-    return {"animation": "gif", "live_photo": "photo"}.get(kind, kind.replace("_", " "))
+    return "gif" if kind == "animation" else kind.replace("_", " ")
 
 
 def media_note(media: MessageMedia) -> str:
@@ -175,6 +175,7 @@ def render_payload(kind: str, payload: dict[str, Any]) -> str:
         case (
             "text"
             | "photo"
+            | "live_photo"
             | "video"
             | "voice"
             | "video_note"
@@ -258,12 +259,12 @@ def external_reply(info: Any, chat_id: int) -> str:
     return f" ↩ (from {source}{suffix})"
 
 
-def render_body(view: MessageView) -> str:
+def render_body(view: MessageView, *, text_limit: int = TEXT_LIMIT) -> str:
     """Text, media notes and payload note of one message, without the header."""
     row = view.row
     parts: list[str] = []
     if row.text:
-        parts.append(_clip(row.text))
+        parts.append(_clip(row.text, text_limit))
     parts.extend(render_media(m) for m in view.media)
     if note := render_payload(row.kind, row.payload):
         parts.append(note)
@@ -278,7 +279,9 @@ def render_reactions(counts: dict[str, int]) -> str:
     return " {" + " ".join(f"{key}{count}" for key, count in ordered) + "}"
 
 
-def render_line(view: MessageView, tz: tzinfo, *, reactions: bool = True) -> str:
+def render_line(
+    view: MessageView, tz: tzinfo, *, reactions: bool = True, text_limit: int = TEXT_LIMIT
+) -> str:
     """One transcript line; a message never stored (an ephemeral command, id 0) has no ``#id`` to cite."""
     row = view.row
     reply = (
@@ -292,7 +295,7 @@ def render_line(view: MessageView, tz: tzinfo, *, reactions: bool = True) -> str
     when = row.date.astimezone(tz).strftime("%H:%M")
     cite = f" #{row.message_id}" if row.message_id else ""
     header = f"[{when}]{cite} {one_line(view.sender)}{_forward(row.forward_origin)}{reply}{quote}{edited}"
-    return neutralize(f"{header}: {render_body(view)}{totals}")
+    return neutralize(f"{header}: {render_body(view, text_limit=text_limit)}{totals}")
 
 
 def render_transcript(views: Iterable[MessageView], tz: tzinfo, *, reactions: bool = True) -> str:

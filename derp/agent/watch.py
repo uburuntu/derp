@@ -255,7 +255,7 @@ async def watch(ctx: RunContext[RunDeps], row: MessageMedia, kind: Kind, questio
         pin, model = deps.pin, deps.model
     else:
         usd = await _price(deps, input_tokens)
-        price = deps.settings.credits_for_usd(float(usd))
+        price = deps.settings.credits_for_usd(usd)
         try:
             await afford(ctx, price, next_turn=True)
         except Refused:

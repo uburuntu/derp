@@ -1,5 +1,7 @@
 """Route invocations (not commands) to the agent runtime."""
 
+import asyncio
+
 from aiogram import Bot, Router
 from aiogram.types import Message, MessageGenerationStopped
 
@@ -34,8 +36,17 @@ async def on_stop(update: MessageGenerationStopped, runtime: Runtime) -> None:
     runtime.stop(update.chat.id, update.draft_id)
 
 
+async def ambient(message: Message, rule_eligible: bool = False) -> bool:
+    return rule_eligible
+
+
+async def on_ambient(message: Message, chat_row: Chat, runtime: Runtime, rule_arrival: asyncio.Event) -> None:
+    await runtime.automatic(message, chat_row, rule_arrival)
+
+
 def build_router() -> Router:
     router = Router(name="agent")
     router.message.register(on_invocation, invoked)
+    router.message.register(on_ambient, ambient)
     router.stopped_message_generation.register(on_stop)
     return router

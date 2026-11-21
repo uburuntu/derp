@@ -4,10 +4,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, String, func
+from sqlalchemy import CheckConstraint, FetchedValue, ForeignKey, Index, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from derp.db.base import Base
+from derp.money.amounts import DC
 
 # Runs end completed, failed or cancelled. "awaiting_approval", "denied" and "expired" are never written
 # (approvals keep their own state) but stay allowed: the CHECK constraint is built from this list.
@@ -19,8 +20,9 @@ class AgentRun(Base):
     __table_args__ = (
         CheckConstraint("status in (" + ", ".join(f"'{s}'" for s in RUN_STATUSES) + ")", name="status"),
         CheckConstraint(
-            "trigger in ('message', 'command', 'job', 'inline', 'guest', 'callback')", name="trigger"
+            "trigger in ('message', 'command', 'job', 'inline', 'guest', 'callback', 'rule')", name="trigger"
         ),
+        CheckConstraint("charged_credits_dc >= 0", name="precise_charge_nonnegative"),
         CheckConstraint("charged_credits >= 0 and cost_usd >= 0", name="money_nonnegative"),
         Index("ix_agent_runs_chat_id_created_at", "chat_id", "created_at"),
     )
@@ -47,7 +49,8 @@ class AgentRun(Base):
     reasoning_tokens: Mapped[int] = mapped_column(default=0)
     tool_calls: Mapped[int] = mapped_column(default=0)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 8), default=Decimal(0))
-    charged_credits: Mapped[int] = mapped_column(default=0)
+    _whole_charged_credits: Mapped[int] = mapped_column("charged_credits", server_default=FetchedValue())
+    charged_credits: Mapped[Decimal] = mapped_column("charged_credits_dc", DC, default=Decimal(0))
     # Pydantic AI message history of this run (binary content replaced by markers); follows chat retention.
     messages: Mapped[list[Any] | None]
     error_type: Mapped[str | None] = mapped_column(String(64))
@@ -61,7 +64,7 @@ class RunOutput(Base):
     __tablename__ = "run_outputs"
     __table_args__ = (
         CheckConstraint(
-            "kind in ('message', 'image', 'poll', 'sticker', 'dice', 'reaction', 'invoice', 'other')",
+            "kind in ('message', 'image', 'poll', 'sticker', 'dice', 'reaction', 'edit', 'invoice', 'other')",
             name="kind",
         ),
         Index("ix_run_outputs_chat_id_message_id", "chat_id", "message_id"),
@@ -81,7 +84,8 @@ class Approval(Base):
     __tablename__ = "approvals"
     __table_args__ = (
         CheckConstraint("state in ('pending', 'approved', 'denied', 'expired')", name="state"),
-        CheckConstraint("kind in ('image')", name="kind"),
+        CheckConstraint("credits_dc >= 0", name="precise_credits"),
+        CheckConstraint("kind in ('image', 'rule_action')", name="kind"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -92,7 +96,8 @@ class Approval(Base):
     reply_to: Mapped[int | None]  # the message the result answers
     kind: Mapped[str] = mapped_column(String(12))
     args: Mapped[dict[str, Any]]  # what to run (prompt text: deleted with the row after a day)
-    credits: Mapped[int]  # the estimate shown on the prompt
+    _whole_credits: Mapped[int] = mapped_column("credits", server_default=FetchedValue())
+    credits: Mapped[Decimal] = mapped_column("credits_dc", DC)  # the estimate shown on the prompt
     state: Mapped[str] = mapped_column(String(10), default="pending")
     prompt_message_id: Mapped[int | None]
     expires_at: Mapped[datetime]

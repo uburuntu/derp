@@ -5,8 +5,8 @@ collected by ``ops.redaction``. Optional integrations are checked when used via
 ``Settings.require``; importing this module needs no credentials.
 """
 
+from decimal import Decimal
 from functools import cache
-from math import ceil
 from pathlib import Path
 from typing import Any, Literal
 
@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from derp.inference.roles import DEFAULT_PINS, ModelRole, RolePin
+from derp.money.amounts import priced
 
 
 class MissingIntegrationError(Exception):
@@ -46,7 +47,7 @@ class RunCaps(BaseModel, frozen=True):
     visible_outputs: int = 3
     output_tokens: int = 2_000
     timeout_seconds: float = 180
-    credits: int = 200
+    credits: Decimal = Field(default=Decimal(200), gt=0, decimal_places=6)
 
 
 class ContextWindows(BaseModel, frozen=True):
@@ -108,15 +109,16 @@ class Watching(BaseModel, frozen=True):
 
 
 class Decisions(BaseModel, frozen=True):
-    """Typed questions to the decision pin before a run (``agent.decisions``); any failure answers as if unasked.
+    """Thresholds for opt-in ambient rules and optional image/effort decisions after invocation.
 
-    Thresholds are probabilities from the pinned model (tuned on a synthetic en/ru set); they lean towards
-    running, attaching and staying at the pin's effort.
+    A failed rule check stays silent. A failed post-invocation decision keeps the answer's default settings.
     """
 
     enabled: bool = True
     timeout_seconds: float = 1.5
-    addressed: float = 0.3  # a name-only mention in a group runs at or above this chance it speaks to Derp
+    rule_match: float = Field(default=0.75, ge=0, le=1)
+    openai_model: str = "openai/gpt-6-luna-decisions"
+    openai_usd_per_m_input: float = 0.10
     images: float = 0.3  # fallback images are attached at or above this chance the answer needs them
     effort: float = 0.7  # a paid turn thinks harder only when this much probability says it is that hard
     price_usd_per_m_input: float = 0.042  # estimate for a call without a reported cost
@@ -322,8 +324,8 @@ class Settings(BaseSettings):
     )
 
     # Money — 1 Derpcoin = usd_per_credit of charged value; markup covers fees and sponsored usage
-    usd_per_credit: float = 0.001
-    markup: float = 1.2
+    usd_per_credit: Decimal = Field(default=Decimal("0.001"), gt=0)
+    markup: Decimal = Field(default=Decimal("1.2"), gt=0)
     credits_per_star: int = 13
     packs: tuple[Pack, ...] = (
         Pack(id="pack_s_v1", stars=50, credits=650),
@@ -331,15 +333,17 @@ class Settings(BaseSettings):
         Pack(id="pack_l_v1", stars=750, credits=9_750),
     )
     plan: Plan = Plan()
-    sponsored_daily_credits: int = 10
+    sponsored_daily_credits: Decimal = Field(default=Decimal(10), ge=0, decimal_places=6)
     sponsored_global_daily_usd: float = 1.0
     # Creator-paid speech-to-text per UTC day past which ambient voice is no longer transcribed
     # (invocations and the messages they reply to still are).
     ambient_stt_daily_usd: float = 0.5
     openrouter_low_usd: float = 5.0  # owner ping when the API key's spending limit has less left
-    approval_credits: int = 60  # a single action costing more asks first
-    approval_balance_fraction: float = (
-        0.25  # …as does one costing more than this share of the payer's balance
+    approval_credits: Decimal = Field(
+        default=Decimal(60), ge=0, decimal_places=6
+    )  # a single action costing more asks first
+    approval_balance_fraction: Decimal = (
+        Decimal("0.25")  # …as does one costing more than this share of the payer's balance
     )
     approval_minutes: int = 15
     waiting_minutes: int = (
@@ -350,9 +354,7 @@ class Settings(BaseSettings):
     # One web search's fee (Parallel "fast", pinned in inference.openrouter: $1 per 1,000 searches):
     # a search starts only while the run's hold still covers it.
     web_search_price_usd: float = 0.001
-    effect_credits: int = (
-        2  # flat fee on paid runs for heavy local effects (video memes, reversed clips, cutouts)
-    )
+    effect_credits: Decimal = Field(default=Decimal(2), ge=0, decimal_places=6)  # heavy local effects
     sponsored_effects_per_day: int = 3  # heavy effects (video, cutouts, voice) per person per day, sponsored
     background_model: Path = Path.home() / ".cache" / "derp" / "u2netp.onnx"  # fetched at image build
     run_caps: RunCaps = RunCaps()
@@ -397,9 +399,9 @@ class Settings(BaseSettings):
             raise MissingIntegrationError(*missing)
         return getattr(self, names[0]) if len(names) == 1 else tuple(getattr(self, name) for name in names)
 
-    def credits_for_usd(self, usd: float) -> int:
-        """Charged Derpcoins for a provider cost: ``ceil(cost × markup / usd_per_credit)``."""
-        return ceil(round(usd * self.markup / self.usd_per_credit, 9))
+    def credits_for_usd(self, usd: Decimal | float) -> Decimal:
+        """Derpcoins for a provider cost, rounded at six decimal places."""
+        return priced(usd, self.markup, self.usd_per_credit)
 
     def secret_values(self) -> list[str]:
         return [

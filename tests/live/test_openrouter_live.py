@@ -1,8 +1,10 @@
 """Real OpenRouter calls (fractions of a cent). Run with ``pytest -m live``; never in CI."""
 
+import io
 from decimal import Decimal
 
 import pytest
+from PIL import Image
 from pydantic_ai import Agent
 
 from derp.config import Settings
@@ -125,40 +127,55 @@ async def test_free_chains_with_the_free_router_are_accepted() -> None:
         assert result.output.strip()
 
 
-async def test_the_decision_pin_tells_addresses_from_passing_mentions() -> None:
-    """The synthetic en/ru set (``tests/agent/name_mentions.json``), asked as for a named trigger, under ZDR."""
-    import asyncio
-    import json
-    from pathlib import Path
-    from typing import Any
-
-    from derp.agent.decisions import ADDRESSED, EFFORT
+@pytest.mark.parametrize("provider", ["jev", "openai"])
+async def test_reply_rule_classifiers(provider: str) -> None:
+    """The two routing providers see the same synthetic positive and negative human messages."""
     from derp.inference.api import OpenRouterAPI
 
     settings = Settings()
-    pin = settings.model_pins[ModelRole.DECISION]
-    cases: list[dict[str, Any]] = json.loads(
-        (Path(__file__).parents[1] / "agent" / "name_mentions.json").read_text()
-    )
     api = OpenRouterAPI(settings)
-
-    async def ask(case: dict[str, Any]) -> float:
-        before = [f"[12:0{i}] #{100 + i} {who}: {text}" for i, (who, text) in enumerate(case["before"])]
-        line = f"[12:0{len(before)}] #{100 + len(before)} Kate: {case['text']}"
-        state = {"previous_messages": before, "new_message": line}
-        decided = await api.decide(pin.model, state, {"addressed": ADDRESSED, "effort": EFFORT}, zdr=pin.zdr)
-        return float(decided.answers["addressed"]["noul"])
-
+    model = (
+        settings.decisions.openai_model
+        if provider == "openai"
+        else settings.model_pins[ModelRole.DECISION].model
+    )
+    questions = {
+        "dog": {
+            "type": "noul",
+            "instructions": "Is Alex talking about his own dog?",
+            "criteria": {"true": "His dog is the topic.", "false": "Anything else."},
+        }
+    }
     try:
-        chances = await asyncio.gather(*(ask(case) for case in cases))
+        for text, expected in [
+            ("My dog just learned to swim!", True),
+            ("Курс евро вырос.", False),
+            ("У моей собаки сегодня день рождения", True),
+        ]:
+            result = await api.decide(
+                model, {"new_message": f"Alex: {text}"}, questions, zdr=provider == "jev"
+            )
+            assert (result.answers["dog"]["noul"] >= settings.decisions.rule_match) == expected
+        picture = {
+            "red": {
+                "type": "noul",
+                "instructions": "Does the picture show a red square?",
+                "criteria": {"true": "The square is red.", "false": "It is another colour."},
+            }
+        }
+        for colour in ("red", "blue"):
+            jpeg = io.BytesIO()
+            Image.new("RGB", (320, 320), colour).save(jpeg, "JPEG")
+            result = await api.decide(
+                model,
+                {"new_message": "My picture"},
+                picture,
+                zdr=provider == "jev",
+                image_data=jpeg.getvalue(),
+            )
+            assert (result.answers["red"]["noul"] >= settings.decisions.rule_match) == (colour == "red")
     finally:
         await api.close()
-    labels = [bool(case["addressed"]) for case in cases]
-    right = sum(
-        (p >= settings.decisions.addressed) == label for p, label in zip(chances, labels, strict=True)
-    )
-    print(f"{right}/{len(cases)}", sorted(zip(chances, labels, strict=True)))
-    assert right / len(cases) >= 0.9
 
 
 async def test_the_media_pin_hears_a_clip_on_vertex_with_timestamps() -> None:

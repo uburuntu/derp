@@ -1,18 +1,18 @@
 """Capture every message before handlers run, and tell handlers whether Derp was invoked."""
 
+import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import Message, TelegramObject
 
-from derp.agent.decisions import Decider
-from derp.agent.invocation import TriggerKind, detect_trigger, starts_with_command
+from derp.agent.invocation import bot_authored, detect_trigger, from_human, message_text, starts_with_command
 from derp.db.engine import Database
-from derp.history.capture import index_sticker, is_stored, store_message, upsert_chat, upsert_user
+from derp.history.capture import classify, index_sticker, is_stored, store_message, upsert_chat, upsert_user
 from derp.history.members import track_message
 from derp.history.models import Message as MessageRow
-from derp.history.render import chat_time
 from derp.history.transcription import Transcriber
 from derp.keys.pasted import pasted_key
 from derp.ops.feedback import details_for
@@ -35,11 +35,6 @@ class CaptureMiddleware(BaseMiddleware):
     messages and video notes are transcribed before handlers run (ambient ones only under the daily
     creator cap), audio files and videos only when they are part of an invocation.
 
-    A name-only mention in a group is an invocation only if the decision pin says it speaks to
-    Derp (``agent.decisions``), asked before anything is stored: a passing mention is an ordinary
-    message (stored only while the chat keeps ambient context, its reply not saved, no invocation
-    transcription). Nobody blocked is screened.
-
     Adds ``trigger`` (or None), ``chat_row`` and ``report_id`` (the /info report this message is the
     text of, or None: ``ops.feedback.details_for``) to handler data. Guest-mode
     messages pass through untouched: they are never stored.
@@ -47,6 +42,7 @@ class CaptureMiddleware(BaseMiddleware):
 
     def __init__(self, *, edits: bool = False) -> None:
         self.edits = edits
+        self.arrivals: dict[tuple[int, int | None], deque[asyncio.Event]] = {}
 
     async def __call__(
         self,
@@ -54,15 +50,44 @@ class CaptureMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if not isinstance(event, Message) or event.guest_query_id:
+        if not isinstance(event, Message):
+            return await handler(event, data)
+        if self.edits or event.chat.type not in {"group", "supergroup"} or not from_human(event):
+            return await self._capture(handler, event, data)
+        key = (event.chat.id, event.message_thread_id if event.is_topic_message else None)
+        queue = self.arrivals.setdefault(key, deque())
+        ticket = asyncio.Event()
+        if not queue:
+            ticket.set()
+        queue.append(ticket)
+        data["rule_arrival"] = ticket
+        try:
+            return await self._capture(handler, event, data)
+        finally:
+            queue.remove(ticket)
+            if queue:
+                queue[0].set()
+            else:
+                del self.arrivals[key]
+
+    async def _capture(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: Message,
+        data: dict[str, Any],
+    ) -> Any:
+        bot_post = bot_authored(event) or bool(event.is_automatic_forward)
+        if bot_post and (event.chat.type not in {"group", "supergroup"} or event.guest_query_id):
+            return None
+        if event.guest_query_id:
             return await handler(event, data)
         db: Database = data["db"]
         bot: Bot = data["bot"]
         me = await bot.me()
-        secret = pasted_key(event.text or event.caption) is not None  # never stored, never sent to a model
+        secret = pasted_key(message_text(event)) is not None  # never stored, never sent to a model
         trigger = (
             None
-            if self.edits or secret
+            if self.edits or secret or bot_post
             else detect_trigger(event, bot_id=me.id, usernames=await bot_usernames(bot))
         )
         command = starts_with_command(event) or secret  # edits too: an edited command is still a command
@@ -71,11 +96,6 @@ class CaptureMiddleware(BaseMiddleware):
             if event.from_user is not None:
                 await upsert_user(session, event.from_user)
             blocked = await is_blocked(session, chat.id, event.from_user.id if event.from_user else None)
-        decider: Decider | None = data.get("decider")
-        if trigger is not None and trigger.kind is TriggerKind.NAME and not blocked and decider is not None:
-            verdict = await decider.decide(event, bot_id=me.id, tz=chat_time(chat), named=True)
-            if not verdict.addressed:
-                trigger = None
         async with db.transaction() as session:
             stored = False
             keep = trigger is not None or chat.type == "private" or chat.ambient
@@ -85,6 +105,8 @@ class CaptureMiddleware(BaseMiddleware):
                 stored = await store_message(
                     session, event, capture="invocation" if trigger else "ambient", bot_id=me.id
                 )
+            if bot_post:
+                return None  # Context only. Command routers can answer independently of the agent trigger.
             replied = event.reply_to_message if trigger is not None and not command and not blocked else None
             if (  # a row already kept has more detail than the embedded copy: store only if missing
                 replied is not None
@@ -105,6 +127,16 @@ class CaptureMiddleware(BaseMiddleware):
             for message, capped in ((event if stored else None, ambient), (replied, False)):
                 if message is not None:
                     await transcriber.transcribe(message, thread_id=thread, ambient=capped)
+        data["rule_eligible"] = (
+            stored
+            and not self.edits
+            and chat.type in {"group", "supergroup"}
+            and chat.ambient
+            and trigger is None
+            and report_id is None
+            and from_human(event)
+            and classify(event) not in {"service", "invoice", "other"}
+        )
         data["trigger"] = trigger
         data["chat_row"] = chat
         data["report_id"] = report_id

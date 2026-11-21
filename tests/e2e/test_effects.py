@@ -1,6 +1,7 @@
 import io
 import shutil
 import subprocess
+from decimal import Decimal
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -144,6 +145,8 @@ async def test_a_missing_chat_photo_is_explained_to_the_model(
 async def test_a_video_meme_costs_the_flat_fee_on_paid_runs(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
+    conversation.settings = conversation.settings.model_copy(update={"effect_credits": Decimal("0.002345")})
+    await conversation.restart()
     conversation.meet(LIV, PUB)
     async with conversation.db.transaction() as session:
         wallet_id = (await wallet(session, "user", LIV.id)).id

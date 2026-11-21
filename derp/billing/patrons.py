@@ -28,6 +28,7 @@ from derp.db.engine import Database
 from derp.history.models import Chat, User
 from derp.history.render import one_line
 from derp.locales import resolve, t
+from derp.money.amounts import Amount, format_dc
 from derp.money.funding import Funder, Funding
 from derp.money.models import Wallet
 from derp.money.wallets import balance, wallet
@@ -50,13 +51,13 @@ class PatronAction(CallbackData, prefix="patron"):
 
 
 async def runway(
-    session: AsyncSession, locale: str, wallet_id: int, left: int, turn_price: int, now: datetime
+    session: AsyncSession, locale: str, wallet_id: int, left: Amount, turn_price: Amount, now: datetime
 ) -> str:
     """The wallet's balance and how long it lasts at the chat's recent pace (or in answers, early on)."""
-    amount = f"{left:,}"
+    amount = format_dc(left)
     if (pace := await daily_pace(session, wallet_id, now)) is not None:
         return t(locale, "patron.runway", balance=amount, lasts=lasts(locale, left, pace))
-    answers = left // max(1, turn_price)
+    answers = int(left // turn_price) if turn_price > 0 else 0
     if answers < 1:
         return t(locale, "patron.runway_none", balance=amount)
     return t(locale, "patron.runway_answers", balance=amount, answers=f"{answers:,}")
@@ -123,7 +124,7 @@ async def render(
     session: AsyncSession,
     post: PatronPost,
     purchases: list[tuple[Purchase, User | None]],
-    turn_price: int,
+    turn_price: Amount,
     now: datetime,
 ) -> str:
     """The post: who chipped in (named as each buyer chose; in order of their first purchase), how much, runway."""

@@ -26,6 +26,21 @@ configuration it was released with. The legacy bot is never a rollback target:
 once the first release succeeds it is retired (it would run on the old database,
 whose balances now live here).
 
+## Receiving other bots’ group messages
+
+Enable Bot-to-Bot Communication Mode in @BotFather for passive group capture. Telegram delivers ordinary
+peer-bot posts when Derp is an admin in the group or Group Privacy Mode is disabled. With privacy enabled
+and no admin role, delivery is limited to the interactions Telegram routes, such as commands addressed
+to Derp and direct replies. Group context must also be enabled in Derp. Its capture middleware consumes
+bot-authored updates before commands, reply rules and the agent can respond.
+[Telegram bot-to-bot communication](https://core.telegram.org/bots/features#bot-to-bot-communication)
+
+## Fractional Derpcoins
+
+Revision 0041 backfills six-decimal dc columns while the whole-coin poller is still running. It checks each lot against its ledger and each reservation against its holds and captures before Alembic advances. A failed reconciliation leaves the previous poller serving; inspect the mismatch before retrying the migration.
+
+After any fractional movement, choose a decimal-aware image for rollback. A legacy image reads only whole coins and the database rejects its wallet movements on accounts that have used fractions. Stars invoices and pack sizes remain integral.
+
 ## One-time host setup
 
 1. Database: `sudo -u postgres pg_create_db derp_v2` (see `postgres/`), and

@@ -33,7 +33,7 @@ async def test_paid_answer_is_charged_its_marked_up_cost(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
     wallet_id = await buy(conversation, CARL, 500)
-    model.cost = 0.01  # ceil(0.01 × 1.2 markup / $0.001) = 12 credits
+    model.cost = 0.01  # 0.01 × 1.2 markup / $0.001 = 12 credits
     model.reply("sure")
     sent = await conversation.send(CARL, text="hi derp")
     await conversation.expect_reply(sent)
@@ -89,7 +89,7 @@ async def test_run_stops_at_the_credits_it_could_hold(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
     wallet_id = await buy(conversation, CARL, 5)
-    model.cost = 0.004  # 5 credits per model turn: the first one uses up the hold
+    model.cost = 0.0042  # 5.04 dc: the first model turn exhausts the 5 dc hold
     model.reply(tool_call("search_history", queries=["cats"]), "never reached")
     sent = await conversation.send(CARL, text="find cats")
     reply = await conversation.expect_reply(sent)

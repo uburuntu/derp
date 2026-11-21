@@ -38,21 +38,25 @@ from typing import Literal
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InputFile
 from aiogram.types import Message as TgMessage
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelResponse
 
 from derp.agent.deps import RunDeps
+from derp.agent.models import RunOutput
 from derp.agent.runs import totals
 from derp.history.capture import Spoken, record_outgoing
 from derp.inference.ledger import Billed, record_made
+from derp.money.amounts import QUANTUM, Amount, format_dc
 from derp.money.funding import Funding, run_cost, run_fees, run_upstream
 from derp.money.models import RunFee
 from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import PartialDeliveryError, Target
 
-Kind = Literal["image", "poll", "sticker", "dice", "invoice", "other"]  # run_outputs kinds tools produce
+Kind = Literal[
+    "message", "image", "poll", "sticker", "dice", "invoice", "other", "edit"
+]  # run_outputs kinds tools produce
 Sendable = Literal["photo", "video", "animation", "video_note", "voice", "document", "sticker"]
 LIMIT = "Not sent: output limit for this turn reached; answer in text instead."
 
@@ -92,7 +96,14 @@ async def record(
     deps.delivered.extend((message.message_id, kind) for message in sent)
     if history and sent:
         async with deps.db.transaction() as session:
-            await record_outgoing(session, sent, deps.bot.id, spoken=spoken)
+            await record_outgoing(session, sent, deps.bot.id, spoken=spoken, existing_only=kind == "edit")
+            if kind == "edit":
+                # A second topic may revise this target before the first run finishes. Save the receipt in
+                # delivery order, in the same transaction as the revised message and its media.
+                session.add_all(
+                    RunOutput(run_id=deps.run_id, chat_id=deps.chat.id, message_id=m.message_id, kind=kind)
+                    for m in sent
+                )
 
 
 async def deliver(
@@ -131,31 +142,72 @@ async def deliver(
     return sent
 
 
-def output_kind(sendable: Sendable) -> Kind:
-    return "image" if sendable in ("photo", "document") else "sticker" if sendable == "sticker" else "other"
+def output_kind(sendable: str) -> Kind:
+    return (
+        "image"
+        if sendable in ("photo", "live_photo", "document")
+        else "sticker"
+        if sendable == "sticker"
+        else "other"
+    )
 
 
 async def send_media(bot: Bot, target: Target, kind: Sendable, data: bytes, filename: str) -> TgMessage:
     """Upload media bytes as the reply to the run's trigger."""
-    media = BufferedInputFile(data, filename=filename)
+    return await send_file(bot, target, kind, BufferedInputFile(data, filename=filename))
+
+
+async def send_file(
+    bot: Bot,
+    target: Target,
+    kind: str,
+    media: str | InputFile,
+    *,
+    caption: str | None = None,
+    cover: str | None = None,
+) -> TgMessage:
+    """Send the chosen upload or Telegram file id. Only a live photo also needs its still."""
     chat, thread, reply = target.chat_id, target.thread_id, target.reply_parameters
     match kind:
         case "photo":
-            return await bot.send_photo(chat, media, message_thread_id=thread, reply_parameters=reply)
+            return await bot.send_photo(
+                chat, media, caption=caption, message_thread_id=thread, reply_parameters=reply
+            )
         case "video":
             return await bot.send_video(
-                chat, media, message_thread_id=thread, reply_parameters=reply, supports_streaming=True
+                chat,
+                media,
+                caption=caption,
+                message_thread_id=thread,
+                reply_parameters=reply,
+                supports_streaming=True,
             )
         case "animation":
-            return await bot.send_animation(chat, media, message_thread_id=thread, reply_parameters=reply)
+            return await bot.send_animation(
+                chat, media, caption=caption, message_thread_id=thread, reply_parameters=reply
+            )
+        case "audio":
+            return await bot.send_audio(
+                chat, media, caption=caption, message_thread_id=thread, reply_parameters=reply
+            )
+        case "document":
+            return await bot.send_document(
+                chat, media, caption=caption, message_thread_id=thread, reply_parameters=reply
+            )
+        case "voice":
+            return await bot.send_voice(
+                chat, media, caption=caption, message_thread_id=thread, reply_parameters=reply
+            )
+        case "live_photo" if cover:
+            return await bot.send_live_photo(
+                chat, media, cover, caption=caption, message_thread_id=thread, reply_parameters=reply
+            )
         case "video_note":
             return await bot.send_video_note(chat, media, message_thread_id=thread, reply_parameters=reply)
-        case "voice":
-            return await bot.send_voice(chat, media, message_thread_id=thread, reply_parameters=reply)
-        case "document":
-            return await bot.send_document(chat, media, message_thread_id=thread, reply_parameters=reply)
         case "sticker":
             return await bot.send_sticker(chat, media, message_thread_id=thread, reply_parameters=reply)
+        case _:
+            raise Refused("That media cannot be sent as a replacement.")
 
 
 @dataclass(slots=True)
@@ -201,7 +253,7 @@ def pending_cost(deps: RunDeps) -> tuple[Decimal, int]:
     )
 
 
-async def hold_left(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> int | None:
+async def hold_left(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> Amount | None:
     """Credits of the run's hold not yet used; None when the run holds nothing (free models: no money cap).
 
     Used: side calls in the ledger (images, voice, media notes, digests), the run's own model turns, its fees,
@@ -221,9 +273,9 @@ async def hold_left(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> int
     own = totals(run).cost_usd if key is None else Decimal(0)
     kept_usd, kept_fees = pending_cost(deps)
     paid_fees = kept_fees * deps.settings.effect_credits if deps.funding is Funding.PAID else 0
-    spent = deps.settings.credits_for_usd(float(own + side + kept_usd)) + fees + paid_fees
+    spent = deps.settings.credits_for_usd(own + side + kept_usd) + fees + paid_fees
     latest = next((m for m in reversed(run) if isinstance(m, ModelResponse)), None)
-    turn = max(deps.settings.credits_for_usd(float(totals([latest]).cost_usd)) if latest else 0, 1)
+    turn = max(deps.settings.credits_for_usd(totals([latest]).cost_usd) if latest else 0, QUANTUM)
     return deps.funds.credits - spent - (turn if next_turn and key is None else 0)
 
 
@@ -254,7 +306,7 @@ async def out_of_money(ctx: RunContext[RunDeps], *, next_turn: bool = False) -> 
     return (held := await hold_left(ctx, next_turn=next_turn)) is not None and held <= 0
 
 
-async def afford(ctx: RunContext[RunDeps], price: int, *, next_turn: bool) -> None:
+async def afford(ctx: RunContext[RunDeps], price: Amount, *, next_turn: bool) -> None:
     """Refuse side work of ``price`` (Derpcoins) this answer's hold can't cover; ``Refused`` tells the model.
 
     ``next_turn``: side work the answer still has to talk about (a look, a search, an image, a voice line, an
@@ -264,7 +316,7 @@ async def afford(ctx: RunContext[RunDeps], price: int, *, next_turn: bool) -> No
     """
     if price and (left := await hold_left(ctx, next_turn=next_turn)) is not None and price > left:
         raise Refused(
-            f"Not enough Derpcoins left in this answer for that (about {price}). Tell them /buy gets more."
+            f"Not enough Derpcoins left in this answer for that (about {format_dc(price)}). Tell them /buy gets more."
         )
 
 

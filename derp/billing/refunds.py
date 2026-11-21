@@ -20,6 +20,7 @@ from sqlalchemy import select
 from derp.billing.models import Purchase, Subscription
 from derp.config import Settings
 from derp.db.engine import Database
+from derp.money.amounts import Amount
 from derp.money.wallets import claw_back
 from derp.ops.owner import notify_owners
 
@@ -30,7 +31,7 @@ PAGE = 100
 @dataclass(frozen=True, slots=True)
 class Refunded:
     purchase: Purchase
-    clawed: int  # credits taken back (the rest was already spent)
+    clawed: Amount  # credits taken back (the rest was already spent)
     first: bool  # False when the refund had been applied before
 
 

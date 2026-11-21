@@ -18,6 +18,7 @@ from derp.inference.api import OpenRouterAPI
 from derp.inference.openrouter import ModelFactory
 from derp.inference.pins import PinStore
 from derp.inference.roles import RolePin
+from derp.memory.models import ReplyRule
 from derp.money.funding import Funding, Funds
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import Target
@@ -58,6 +59,13 @@ class RunDeps:
     riders: int = 0  # delivered messages that went out in another one's slot (a poll series' later polls)
     kept: dict[str, Kept] = field(default_factory=dict[str, "Kept"])  # results kept for the next tool, by ref
     reacted: set[int] = field(default_factory=set[int])  # messages Derp reacted to with the react tool
+    edited_target: Target | None = None  # an optional closing acknowledgement replies to the edit target
+    uncertain_edits: set[int] = field(
+        default_factory=set[int]
+    )  # a transport failure must never replay an edit
+    reply_rules: tuple[ReplyRule, ...] = ()
+    rule_approver: int | None = None
+    authorizing_rule_id: int | None = None  # the rule that grants this tool call
     detached: bool = False  # an inline or guest answer: text only, nothing is posted
 
     @property

@@ -29,6 +29,7 @@ from derp.inference.openrouter import REASONING_ROOM
 from derp.inference.pins import snapshot_prices
 from derp.inference.roles import ModelRole
 from derp.keys.routing import KeyRoute, choose
+from derp.money.amounts import QUANTUM, Amount
 from derp.money.models import RunFee, Wallet
 from derp.money.wallets import balance, capture, credit, release, reserve, wallet
 
@@ -56,7 +57,7 @@ class Funds:
     operation_id: str
     wallet_id: int | None  # None: nothing reserved (free models)
     reservation_id: int | None
-    credits: int  # held for this run; the run's hard money cap (on a key run: for its side work only)
+    credits: Amount  # held for this run; the run's hard money cap (on a key run: for its side work only)
     key: KeyRoute | None = None  # a contributed key pays the run's turns
 
 
@@ -109,16 +110,16 @@ class Funder:
 
     async def typical_turn(
         self, session: AsyncSession, funding: Funding, output_tokens: int = TYPICAL_OUTPUT_TOKENS
-    ) -> int:
+    ) -> Decimal:
         """Credits a plain turn usually costs on this tier's model: the least worth starting a run for.
 
         Input is the prompt prefix (persona, tool schemas) plus half the window, priced uncached.
         """
         prices = await snapshot_prices(session, funding.role, None)
         if prices is None:
-            return 1
+            return Decimal(1)
         usd = estimate_cost(self.prefix.get(funding, 0) + self.window(funding) // 2, output_tokens, *prices)
-        return max(1, self.settings.credits_for_usd(float(usd)))
+        return max(QUANTUM, self.settings.credits_for_usd(usd))
 
     def turn_tokens(self, output_tokens: int = TYPICAL_OUTPUT_TOKENS) -> tuple[int, int]:
         """A typical paid turn's input (prompt prefix + half the window) and output tokens."""
@@ -142,10 +143,11 @@ class Funder:
         user_id: int,
         operation_id: str,
         free_allowed: bool = False,
-        paid_minimum: int | None = None,
+        paid_minimum: Amount | None = None,
         now: datetime | None = None,
         dry: bool = False,
         keys: bool = True,
+        group_only: bool = False,
     ) -> Funds | None:
         """Hold money for a run from the first payer that can cover a typical turn.
 
@@ -163,10 +165,11 @@ class Funder:
         cap_hit = False
         async with self.db.trial() if dry else self.db.transaction() as session:
             payers = [] if private else [(await wallet(session, "chat", chat_id)).id]
-            mine = (await wallet(session, "user", user_id)).id
-            person = await session.get(User, user_id)
-            if private or person is None or person.group_spending:
-                payers.append(mine)
+            mine = None if group_only else (await wallet(session, "user", user_id)).id
+            if mine is not None:
+                person = await session.get(User, user_id)
+                if private or person is None or person.group_spending:
+                    payers.append(mine)
             route = None
             if keys and paid_minimum is None:
                 route = await choose(
@@ -175,7 +178,13 @@ class Funder:
             if route is not None:  # its side work: from the first wallet with anything in it, if any
                 for wallet_id in payers:
                     held = await reserve(
-                        session, wallet_id, operation_id, cap, sources=PAID_SOURCES, minimum=1, now=moment
+                        session,
+                        wallet_id,
+                        operation_id,
+                        cap,
+                        sources=PAID_SOURCES,
+                        minimum=QUANTUM,
+                        now=moment,
                     )
                     if held is not None:
                         return Funds(Funding.PAID, operation_id, wallet_id, held.id, held.amount, route)
@@ -187,13 +196,13 @@ class Funder:
                 )
                 if held is not None:
                     return Funds(Funding.PAID, operation_id, wallet_id, held.id, held.amount)
-            if paid_minimum is not None:
+            if paid_minimum is not None or mine is None:
                 return None
             if await sponsored_spent_today(session, moment) >= Decimal(
                 str(self.settings.sponsored_global_daily_usd)
             ):
                 cap_hit = True
-            else:
+            elif self.settings.sponsored_daily_credits > 0:
                 await credit(
                     session,
                     mine,
@@ -239,24 +248,24 @@ class Funder:
             row.empty_noticed_at = now or datetime.now(UTC)
             return True
 
-    async def settle(self, session: AsyncSession, funds: Funds, run_id: int, *, delivered: bool) -> int:
+    async def settle(self, session: AsyncSession, funds: Funds, run_id: int, *, delivered: bool) -> Decimal:
         """Charge the run's marked-up provider cost plus its fees if Telegram accepted an output, else return the hold."""
         if funds.reservation_id is None:
-            return 0
+            return Decimal(0)
         if not delivered:
             await release(session, funds.operation_id)
-            return 0
+            return Decimal(0)
         cost = await run_cost(session, run_id)
-        price = self.settings.credits_for_usd(float(cost)) + await run_fees(session, run_id)
+        price = self.settings.credits_for_usd(cost) + await run_fees(session, run_id)
         return await capture(session, funds.operation_id, price)
 
 
-async def run_fees(session: AsyncSession, run_id: int) -> int:
+async def run_fees(session: AsyncSession, run_id: int) -> Decimal:
     """Flat Derp fees (credits) a run has incurred."""
     total = await session.scalar(
         select(func.coalesce(func.sum(RunFee.credits), 0)).where(RunFee.run_id == run_id)
     )
-    return int(total or 0)
+    return Decimal(total or 0)
 
 
 async def run_cost(session: AsyncSession, run_id: int) -> Decimal:

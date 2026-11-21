@@ -28,7 +28,7 @@ from derp.telegram.media import BOT_API_DOWNLOAD_LIMIT, TGS
 from derp.telegram.text import plain_emoji
 
 TYPED_KINDS = {
-    "text", "photo", "video", "voice", "video_note", "audio", "document", "sticker", "animation",
+    "text", "photo", "live_photo", "video", "voice", "video_note", "audio", "document", "sticker", "animation",
     "poll", "dice", "location", "venue", "contact", "checklist", "story", "game", "invoice",
     "giveaway", "paid_media",
 }  # fmt: skip
@@ -125,6 +125,11 @@ def _attachment(source: Any) -> tuple[str, Any] | None:
 
     Telegram sets ``document`` alongside ``animation`` for the same GIF, so the first kind present wins.
     """
+    if live := getattr(source, "live_photo", None):
+        # Telegram also exposes the still on Message.photo for backwards compatibility.
+        if not live.photo and (sizes := getattr(source, "photo", None)):
+            live = live.model_copy(update={"photo": sizes})
+        return "live_photo", live
     if sizes := getattr(source, "photo", None):
         return "photo", max(sizes, key=lambda size: size.width * size.height)
     for kind in FILE_KINDS:
@@ -156,6 +161,8 @@ def _file(kind: str, item: Any) -> dict[str, Any]:
     sticker = kind == "sticker"
     side = getattr(item, "length", None)  # video notes are square
     thumb = getattr(item, "thumbnail", None)
+    if kind == "live_photo" and item.photo:
+        thumb = max(item.photo, key=lambda size: size.width * size.height)
     file = _fetchable(item)
     return {
         "type": kind,
@@ -202,7 +209,7 @@ def _visible(text: Any) -> str:
     return _visible(getattr(text, "button", None))
 
 
-def _rich_text(message: TgMessage) -> str | None:
+def rich_text(message: TgMessage) -> str | None:
     """The visible text of a rich message, a line per block (table rows with ``|`` between cells)."""
     lines: list[str] = []
     for block in _rich_blocks(message):
@@ -280,6 +287,9 @@ def _people(message: TgMessage) -> Iterable[TgUser]:
 def message_values(message: TgMessage, *, capture: str) -> dict[str, Any]:
     """The ``messages`` row for a Telegram message (``capture``: invocation / ambient / derp)."""
     kind = classify(message)
+    payload = payload_for(message, kind)
+    if capture == "derp" and message.reply_markup:
+        payload["has_controls"] = True
     reply = message.reply_to_message
     return {
         "chat_id": message.chat.id,
@@ -290,7 +300,7 @@ def message_values(message: TgMessage, *, capture: str) -> dict[str, Any]:
         "date": utc(message.date),
         "edit_date": utc(message.edit_date) if message.edit_date else None,
         "kind": kind,
-        "text": redact(message.text or message.caption or _rich_text(message)),  # never a pasted API key
+        "text": redact(message.text or message.caption or rich_text(message)),  # never a pasted API key
         "entities": _dump(message.entities or message.caption_entities) or None,
         "reply_to_message_id": reply.message_id
         if reply is not None and reply.chat.id == message.chat.id
@@ -301,7 +311,7 @@ def message_values(message: TgMessage, *, capture: str) -> dict[str, Any]:
         "via_bot_id": message.via_bot.id if message.via_bot else None,
         "capture": capture,
         "is_derp": capture == "derp",
-        "payload": payload_for(message, kind),
+        "payload": payload,
         "raw": message.model_dump(mode="json", exclude_none=True, exclude=RAW_EXCLUDE)
         if kind == "other"
         else None,
@@ -321,7 +331,9 @@ def unstored_view(message: TgMessage, bot_id: int) -> MessageView:
     return MessageView(row, sender_label(row, names, titles), media)
 
 
-async def store_message(session: AsyncSession, message: TgMessage, *, capture: str, bot_id: int) -> bool:
+async def store_message(
+    session: AsyncSession, message: TgMessage, *, capture: str, bot_id: int, existing_only: bool = False
+) -> bool:
     """Insert or update (on edit) one message and its media, as received by ``bot_id``.
 
     False when not storable, or when the message was forgotten (tombstoned rows are never rewritten).
@@ -333,27 +345,45 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
     values = message_values(message, capture=capture)
     statement = insert(Message).values(values)
     updatable = ("edit_date", "text", "entities", "payload", "raw", "kind")
-    written = await session.scalar(
-        statement.on_conflict_do_update(
+    if existing_only:  # retention or a privacy purge may finish while the edit is on its way to Telegram
+        write = (
+            update(Message)
+            .where(
+                Message.chat_id == message.chat.id,
+                Message.message_id == message.message_id,
+                Message.deleted_at.is_(None),
+            )
+            .values({key: values[key] for key in updatable})
+        )
+    else:
+        write = statement.on_conflict_do_update(
             index_elements=[Message.chat_id, Message.message_id],
             set_={key: statement.excluded[key] for key in updatable},
             where=Message.deleted_at.is_(None),  # a forgotten message stays scrubbed, edits included
-        ).returning(Message.message_id)
-    )
-    if written is None:
+        )
+    if await session.scalar(write.returning(Message.message_id)) is None:
         return False
     media = media_rows(message, bot_id)
-    if media:
+    if media or message.edit_date:
         existing = {
-            r[0]: r[1]
-            for r in await session.execute(
-                select(MessageMedia.idx, MessageMedia.file_unique_id).where(
+            idx: (unique, still if kind == "live_photo" else None)
+            for idx, unique, kind, still in await session.execute(
+                select(
+                    MessageMedia.idx,
+                    MessageMedia.file_unique_id,
+                    MessageMedia.type,
+                    MessageMedia.thumb_unique_id,
+                ).where(
                     MessageMedia.chat_id == message.chat.id, MessageMedia.message_id == message.message_id
                 )
             )
         }
         replaced = {
-            r["idx"] for r in media if existing.get(r["idx"], r["file_unique_id"]) != r["file_unique_id"]
+            r["idx"]
+            for r in media
+            if r["idx"] in existing
+            and existing[r["idx"]]
+            != (r["file_unique_id"], r["thumb_unique_id"] if r["type"] == "live_photo" else None)
         }
         await session.execute(
             delete(MessageMedia).where(
@@ -375,7 +405,7 @@ async def store_message(session: AsyncSession, message: TgMessage, *, capture: s
                     | (dict.fromkeys(STALE_NOTES) if row["idx"] in replaced else {}),
                 )
             )
-        if replaced:  # an edit swapped a file: notes about the old one no longer apply
+        if replaced or len(existing) > len(media):  # files swapped or removed lose their notes
             await refresh_notes(session, message.chat.id, message.message_id)
     if message.poll is not None:
         await upsert_poll(
@@ -468,11 +498,19 @@ class Spoken:
 
 
 async def record_outgoing(
-    session: AsyncSession, messages: Iterable[TgMessage], bot_id: int, *, spoken: Spoken | None = None
+    session: AsyncSession,
+    messages: Iterable[TgMessage],
+    bot_id: int,
+    *,
+    spoken: Spoken | None = None,
+    existing_only: bool = False,
 ) -> None:
     """Derp's own messages, recorded after Telegram accepted them."""
     for message in messages:
-        await store_message(session, message, capture="derp", bot_id=bot_id)
+        if not await store_message(
+            session, message, capture="derp", bot_id=bot_id, existing_only=existing_only
+        ):
+            continue
         if spoken is not None and message.voice is not None:
             await session.execute(
                 update(MessageMedia)

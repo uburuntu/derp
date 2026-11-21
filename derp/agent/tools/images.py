@@ -106,7 +106,7 @@ async def generate_image(
                 )
             prompt_card = lambda: ask(
                 deps.db, deps.bot, deps.settings, deps.target,
-                kind="image", args=job.as_args(), price=price, user_id=deps.user_id, run_id=deps.run_id,
+                kind="image", args=job.as_args() | ({"reply_rule_id": deps.authorizing_rule_id} if deps.reply_rules else {}), price=price, user_id=deps.rule_approver or deps.user_id, run_id=deps.run_id,
                 call=ctx.tool_call_id or "", locale=deps.locale,
             )  # fmt: skip
             try:

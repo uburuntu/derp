@@ -22,7 +22,7 @@ from tests.e2e.model import Responder, ScriptedModel, tool_call
 from tests.e2e.test_effects import results_of
 from tests.e2e.test_images import JO, FakeImages, fund
 
-IMAGE_CREDITS = 48  # ceil(0.04 × 1.2 / 0.001), FakeImages' price
+IMAGE_CREDITS = 48  # 0.04 × 1.2 / 0.001, FakeImages' price
 
 
 def cutout_png() -> bytes:

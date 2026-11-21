@@ -12,8 +12,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from aiogram.types import Message as TgMessage
 from sqlalchemy import update
 
+from derp.history.capture import record_outgoing
 from derp.history.models import Chat
 from derp.scheduler.models import Job
 from tests.e2e.harness import Person
@@ -86,6 +88,15 @@ def has(*words: str) -> Callable[[Any], bool]:
     return lambda v: isinstance(v, str) and all(w.lower() in v.lower() for w in words)
 
 
+async def caption_to_correct(world: World, s: Seeded) -> None:
+    photo = world.payload(s.room, JO, 2, photo=world.photo("Birthday cake"), caption="Dinner at eight")
+    photo["from"] = world.api.bot_user
+    world.api.register_message(photo)
+    async with world.db.transaction() as session:
+        await record_outgoing(session, [TgMessage.model_validate(photo)], int(world.api.bot_user["id"]))
+    s.ids["derp_photo"] = photo["message_id"]
+
+
 async def moscow(world: World, s: Seeded) -> None:
     async with world.db.transaction() as session:
         await session.execute(update(Chat).where(Chat.id == s.room.id).values(timezone="Europe/Moscow"))
@@ -129,7 +140,15 @@ def _photo_of(key: str) -> Callable[[Result, Seeded], bool]:
 
 
 SCENARIOS: list[Scenario] = [
+    Scenario("revise_caption", "Derp, change the caption on your photo to exactly: Dinner at nine. Keep the picture.",
+             lambda r, s: ok(r.called("message_action", action="edit", message_id=s.ids["derp_photo"])
+                             and r.returned("message_action", "Edited #"), "edits the existing photo caption"),
+             setup=caption_to_correct, reply_to="derp_photo", tags=("telegram",)),
     # history: answers that live past the window
+    Scenario("usage_today", "дерп сколько токенов мы сегодня сожгли во всём чате? посмотри сам, дай числа",
+             lambda r, s: ok(r.called("chat_accounting", view="usage"), "group usage lookup"), tags=("self",)),
+    Scenario("group_balance", "derp how much is left in the shared chat wallet? Tell us here please.",
+             lambda r, s: ok(r.called("chat_accounting", view="balance"), "group balance lookup"), tags=("self",)),
     Scenario("activity_week", "дерп, кто больше всех болтал за последнюю неделю?",
              lambda r, s: ok(r.called("chat_query", preset="member_activity") or r.called("chat_query", group_by="user"),
                              "chat_query by member"), tags=("history",)),
@@ -163,6 +182,11 @@ SCENARIOS: list[Scenario] = [
              lambda r, s: ok(any(t == "inspect_media" and "Земфира" in out for t, out in r.returns),
                              "reads Lena's profile songs"), tags=("media",)),
     # memory
+    Scenario("group_reply_rule", "дерп, запомни: всегда отвечай Бобу, когда он пишет про свою собаку, и спрашивай, как она себя чувствует",
+             lambda r, s: ok(r.called("auto_reply", operation="create",
+                                     sender=lambda name: isinstance(name, str) and "bob" in name.lower())
+                             and r.returned("auto_reply", "Shown for confirmation") and not r.called("remember"), "drafts only a sender-scoped reply rule"),
+             tags=("memory",)),
     Scenario("remember_fact", "derp remember that Bob is allergic to cats",
              lambda r, s: ok(r.called("remember", text=has("bob")), "remember chat"), tags=("memory",)),
     Scenario("remember_me", "дерп, запомни, я не ем мясо",

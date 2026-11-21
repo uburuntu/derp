@@ -62,6 +62,18 @@ async def test_paid_credits_below_a_typical_turn_fall_through_to_sponsorship(
     assert await funder.reserve(chat_id=7, private=True, user_id=7, operation_id="turn:2", now=NOW) is None
 
 
+async def test_zero_sponsorship_leaves_the_optional_free_tier_available(
+    database: Database, settings: Settings
+) -> None:
+    funder = Funder(database, settings.model_copy(update={"sponsored_daily_credits": Decimal(0)}))
+    funds = await funder.reserve(
+        chat_id=8, private=True, user_id=8, operation_id="zero", now=NOW, free_allowed=True
+    )
+    assert funds is not None and funds.funding is Funding.FREE
+    async with database.session() as session:
+        assert await session.scalar(select(CreditLot.id)) is None
+
+
 async def test_a_typical_turn_counts_the_prompt_prefix(database: Database, settings: Settings) -> None:
     async with database.transaction() as session:
         # $10/M: half the 16k window + 300 out ≈ 100 credits; with an 8k persona + tools prefix ≈ 196
@@ -74,7 +86,7 @@ async def test_a_typical_turn_counts_the_prompt_prefix(database: Database, setti
     assert bare is not None and bare.funding is Funding.PAID
     prefixed = Funder(database, settings, prefix={Funding.PAID: 8_000})
     async with database.session() as session:
-        assert await prefixed.typical_turn(session, Funding.PAID) == 196
+        assert await prefixed.typical_turn(session, Funding.PAID) == Decimal("195.6")
     funds = await prefixed.reserve(chat_id=8, private=True, user_id=8, operation_id="turn:2", now=NOW)
     assert funds is not None and funds.funding is Funding.SPONSORED  # 150 can't cover a real turn
 
@@ -121,16 +133,16 @@ async def test_settle_charges_marked_up_run_cost_only_when_delivered(
     ]
     async with database.transaction() as session:
         run = await start_run(session, chat_id=7, user_id=7, trigger="message", role="chat", funding="paid")
-        for cost in ("0.01", "0.0042"):  # model turn + an image note: ceil(0.0142 × 1.2 / 0.001) = 18
+        for cost in ("0.01", "0.0042"):  # model turn + an image note: 0.0142 × 1.2 / 0.001 = 17.04
             session.add(
                 ProviderCall(kind="chat", model="m", funding="paid", run_id=run.id, cost_usd=Decimal(cost))
             )
     held: list[Funds] = [f for f in funds if f is not None]
     async with database.transaction() as session:
-        assert await funder.settle(session, held[0], run.id, delivered=True) == 18
+        assert await funder.settle(session, held[0], run.id, delivered=True) == Decimal("17.04")
         assert await funder.settle(session, held[1], run.id, delivered=False) == 0
     async with database.session() as session:
-        assert await balance(session, mine) == 500 - 18
+        assert await balance(session, mine) == 500 - Decimal("17.04")
         states = dict((await session.execute(select(Reservation.operation_id, Reservation.state))).all())
         assert states == {"turn:1": "captured", "turn:2": "released"}
 

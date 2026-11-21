@@ -20,13 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.deps import RunDeps
 from derp.agent.outputs import Refused, check_budget, deliver, unconfirmed
+from derp.agent.tools.edits import edit_message
 from derp.agent.toolsets import ALL_TIERS, Family
 from derp.history.digests import mark_stale
-from derp.history.links import message_links
 from derp.history.models import Message, MessageMedia, Sticker
 from derp.memory.notes import is_admin
 from derp.telegram.policy import AMBIGUOUS
-from derp.telegram.sender import rich, sanitize_untrusted
 from derp.telegram.text import plain_emoji
 
 toolset = FunctionToolset[RunDeps]()
@@ -246,21 +245,29 @@ async def react(ctx: RunContext[RunDeps], emoji: str, message_id: MessageId | No
     return f"Reacted {reaction} to #{target}."
 
 
-@ops.tool
+@ops.tool(sequential=True)
 async def message_action(
-    ctx: RunContext[RunDeps], action: Literal["edit", "delete", "pin"], message_id: MessageId, text: str = ""
+    ctx: RunContext[RunDeps],
+    action: Literal["edit", "delete", "pin"],
+    message_id: MessageId,
+    text: str | None = None,
+    caption: str | None = None,
+    media: str | None = None,
 ) -> str:
-    """Edit or delete one of your own messages, or pin a message (admins' asks; the tool checks).
+    """Revise your own answer in place, delete yours, or pin a message for an admin. Use edit for a clear
+    correction or update, including a table. New scenarios get a new reply.
 
     Args:
-        action: edit (your text message, rewritten as `text`), delete (yours) or pin (any message).
-        message_id: The message's #id.
-        text: For edit: the full new text (Markdown).
+        action: edit, delete or pin.
+        message_id: The original message's #id.
+        text: Edit to a full text/Markdown answer. Use caption instead to keep the attachment.
+        caption: New plain caption (empty clears it). May accompany media.
+        media: Replacement file from this chat (#id) or a generated result kept with final=False (r1).
     """
     deps = ctx.deps
     match action:
         case "edit":
-            return await _edit(deps, message_id, text)
+            return await edit_message(deps, message_id, text=text, caption=caption, media=media)
         case "delete":
             return await _delete(deps, message_id)
         case "pin":
@@ -271,28 +278,6 @@ async def _own_message(deps: RunDeps, message_id: int) -> Message | None:
     async with deps.db.session() as session:
         row = await session.get(Message, (deps.chat.id, message_id))
     return row if row is not None and row.is_derp and row.deleted_at is None else None
-
-
-async def _edit(deps: RunDeps, message_id: int, new_text: str) -> str:
-    row = await _own_message(deps, message_id)
-    if row is None or row.kind != "text":
-        return "I can only edit my own text messages that are still stored."
-    text = sanitize_untrusted(new_text)[:30000]
-    if not text.strip():
-        return "Give the full new text to edit it to."
-    async with deps.db.session() as session:  # "#id" references open the message, as in answers
-        links = await message_links(session, deps.chat, text)
-    try:
-        await deps.bot.edit_message_text(
-            chat_id=deps.chat.id, message_id=message_id, rich_message=rich(text, links)
-        )
-    except TelegramAPIError as error:
-        return f"Telegram refused the edit ({type(error).__name__})."
-    async with deps.db.transaction() as session:
-        stored = await session.get(Message, (deps.chat.id, message_id))
-        if stored is not None:
-            stored.text = text
-    return f"Edited #{message_id}."
 
 
 async def _delete(deps: RunDeps, message_id: int) -> str:

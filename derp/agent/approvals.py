@@ -33,8 +33,10 @@ from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat, User
 from derp.locales import resolve, t
+from derp.money.amounts import Amount, format_dc
 from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, rich, send_markdown
+from derp.telegram.text import literal
 
 if TYPE_CHECKING:  # the runtime imports the tools that create approvals
     from derp.agent.runtime import Runtime
@@ -48,7 +50,7 @@ class ApprovalAction(CallbackData, prefix="approve"):
     run: bool
 
 
-def needs_approval(settings: Settings, price: int, payer_balance: int) -> bool:
+def needs_approval(settings: Settings, price: Amount, payer_balance: Amount) -> bool:
     return price > settings.approval_credits or price > settings.approval_balance_fraction * payer_balance
 
 
@@ -69,11 +71,12 @@ async def ask(
     *,
     kind: str,
     args: dict[str, object],
-    price: int,
+    price: Amount,
     user_id: int,
     run_id: int,
     call: str,
     locale: str,
+    display: str = "",
 ) -> Message:
     """Store the pending action (the paused ``call`` and its priced ``args``) and post its prompt."""
     async with db.transaction() as session:
@@ -91,7 +94,11 @@ async def ask(
         session.add(approval)
         await session.flush()
         approval_id = approval.id
-    text = t(locale, f"approvals.{kind}", credits=f"{price:,}")
+    text = (
+        t(locale, "auto.authorize", action=literal(display))
+        if kind == "rule_action"
+        else t(locale, f"approvals.{kind}", credits=format_dc(price))
+    )
     sent = (await send_markdown(bot, target, text, reply_markup=keyboard(approval_id, locale)))[-1]
     async with db.transaction() as session:
         if (row := await session.get(Approval, approval_id)) is not None:

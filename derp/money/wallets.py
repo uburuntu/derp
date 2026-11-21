@@ -10,11 +10,13 @@ the caller's transaction.
 
 from collections.abc import Collection
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from derp.money.amounts import Amount, exact_dc
 from derp.money.models import CreditLot, Hold, LedgerEntry, Reservation, Wallet
 
 
@@ -49,14 +51,16 @@ async def _lock(session: AsyncSession, wallet_id: int) -> None:
     await session.execute(select(Wallet.id).where(Wallet.id == wallet_id).with_for_update())
 
 
-async def balances(session: AsyncSession, wallet_id: int, *, now: datetime | None = None) -> dict[str, int]:
+async def balances(
+    session: AsyncSession, wallet_id: int, *, now: datetime | None = None
+) -> dict[str, Decimal]:
     """Spendable credits per lot source; held credits are not included."""
     rows = await session.execute(
         select(CreditLot.source, func.sum(CreditLot.remaining))
         .where(*_spendable(wallet_id, _now(now), None))
         .group_by(CreditLot.source)
     )
-    return {row[0]: int(row[1]) for row in rows}
+    return {row[0]: Decimal(row[1]) for row in rows}
 
 
 async def balance(
@@ -65,20 +69,20 @@ async def balance(
     *,
     sources: Collection[str] | None = None,
     now: datetime | None = None,
-) -> int:
+) -> Decimal:
     total = await session.scalar(
         select(func.coalesce(func.sum(CreditLot.remaining), 0)).where(
             *_spendable(wallet_id, _now(now), sources)
         )
     )
-    return int(total or 0)
+    return Decimal(total or 0)
 
 
 async def credit(
     session: AsyncSession,
     wallet_id: int,
     operation_id: str,
-    amount: int,
+    amount: Amount,
     source: str,
     *,
     expires_at: datetime | None = None,
@@ -87,19 +91,20 @@ async def credit(
     await _lock(session, wallet_id)
     if existing := await session.scalar(select(CreditLot).where(CreditLot.operation_id == operation_id)):
         return existing
+    exact = exact_dc(amount)
     lot = CreditLot(
         wallet_id=wallet_id,
         operation_id=operation_id,
         source=source,
-        amount=amount,
-        remaining=amount,
+        amount=exact,
+        remaining=exact,
         expires_at=expires_at,
     )
     session.add(lot)
     await session.flush()
     session.add(
         LedgerEntry(
-            wallet_id=wallet_id, lot_id=lot.id, operation_id=operation_id, kind="credit", amount=amount
+            wallet_id=wallet_id, lot_id=lot.id, operation_id=operation_id, kind="credit", amount=exact
         )
     )
     await session.flush()
@@ -110,10 +115,10 @@ async def reserve(
     session: AsyncSession,
     wallet_id: int,
     operation_id: str,
-    amount: int,
+    amount: Amount,
     *,
     sources: Collection[str] | None = None,
-    minimum: int | None = None,
+    minimum: Amount | None = None,
     now: datetime | None = None,
 ) -> Reservation | None:
     """Hold up to ``amount`` credits from the given lot sources.
@@ -126,6 +131,7 @@ async def reserve(
     await _lock(session, wallet_id)
     if existing := await session.scalar(select(Reservation).where(Reservation.operation_id == operation_id)):
         return existing if existing.wallet_id == wallet_id and existing.state == "held" else None
+    exact = exact_dc(amount)
     lots = list(
         await session.scalars(
             select(CreditLot)
@@ -133,8 +139,8 @@ async def reserve(
             .order_by(CreditLot.expires_at.asc().nulls_last(), CreditLot.id)
         )
     )
-    available = sum(lot.remaining for lot in lots)
-    take = min(amount, available)
+    available = sum((lot.remaining for lot in lots), Decimal(0))
+    take = min(exact, available)
     if take <= 0 or take < (amount if minimum is None else minimum):
         return None
     reservation = Reservation(wallet_id=wallet_id, operation_id=operation_id, amount=take)
@@ -158,8 +164,8 @@ async def reserve(
 
 
 async def capture(
-    session: AsyncSession, operation_id: str, amount: int, *, now: datetime | None = None
-) -> int:
+    session: AsyncSession, operation_id: str, amount: Amount, *, now: datetime | None = None
+) -> Decimal:
     """Spend ``amount`` of a reservation and return the rest to its lots.
 
     The charge never exceeds what was held (the difference is eaten, never
@@ -174,6 +180,7 @@ async def capture(
     await session.refresh(reservation)
     if reservation.state != "held":
         return reservation.captured
+    exact = exact_dc(amount)
     moment = _now(now)
     holds = (
         await session.execute(
@@ -183,10 +190,10 @@ async def capture(
             .order_by(CreditLot.expires_at.asc().nulls_last(), CreditLot.id)
         )
     ).all()
-    spend = max(0, min(amount, reservation.amount))
+    spend = max(Decimal(0), min(exact, reservation.amount))
     wallet_id = reservation.wallet_id
 
-    def entry(lot: CreditLot, kind: str, part: int) -> None:
+    def entry(lot: CreditLot, kind: str, part: Amount) -> None:
         session.add(
             LedgerEntry(wallet_id=wallet_id, lot_id=lot.id, operation_id=operation_id, kind=kind, amount=part)
         )
@@ -229,7 +236,7 @@ async def stale_holds(session: AsyncSession, before: datetime) -> list[str]:
     )
 
 
-async def expire_lots(session: AsyncSession, *, now: datetime | None = None) -> int:
+async def expire_lots(session: AsyncSession, *, now: datetime | None = None) -> Decimal:
     """Zero out lots past their expiry; returns the credits expired."""
     moment = _now(now)
     wallet_ids = list(
@@ -240,7 +247,7 @@ async def expire_lots(session: AsyncSession, *, now: datetime | None = None) -> 
             .order_by(CreditLot.wallet_id)
         )
     )
-    total = 0
+    total = Decimal(0)
     for wallet_id in wallet_ids:
         await _lock(session, wallet_id)
         lots = await session.scalars(
@@ -259,12 +266,12 @@ async def expire_lots(session: AsyncSession, *, now: datetime | None = None) -> 
                 )
             )
             total += lot.remaining
-            lot.remaining = 0
+            lot.remaining = Decimal(0)
     await session.flush()
     return total
 
 
-async def claw_back(session: AsyncSession, lot_operation_id: str, operation_id: str) -> int:
+async def claw_back(session: AsyncSession, lot_operation_id: str, operation_id: str) -> Decimal:
     """Remove what's left of a lot (a refunded purchase); returns the credits taken.
 
     Spent credits are not recovered: there is no debt. Credits held right now
@@ -272,7 +279,7 @@ async def claw_back(session: AsyncSession, lot_operation_id: str, operation_id: 
     """
     lot = await session.scalar(select(CreditLot).where(CreditLot.operation_id == lot_operation_id))
     if lot is None:
-        return 0
+        return Decimal(0)
     await _lock(session, lot.wallet_id)
     await session.refresh(lot)
     done = await session.scalar(
@@ -296,6 +303,6 @@ async def claw_back(session: AsyncSession, lot_operation_id: str, operation_id: 
                 amount=taken,
             )
         )
-        lot.remaining = 0
+        lot.remaining = Decimal(0)
         await session.flush()
     return taken

@@ -1,4 +1,4 @@
-"""Jev's decisions before a run: passing mentions of Derp's name are ignored, unneeded follow-up photos are left
+"""Deterministic direct calls and post-trigger Jev tuning: unneeded follow-up photos are left
 out, and a hard paid question gets a deeper reasoning effort."""
 
 from collections.abc import Callable
@@ -7,13 +7,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
-from derp.agent.models import AgentRun
 from derp.config import Decisions
 from derp.history.models import Chat, Message, User
 from derp.inference.api import Decided
-from derp.inference.models import ProviderCall
 from derp.money.wallets import credit, wallet
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel
@@ -34,13 +32,21 @@ class FakeJev:
     """Stands in for OpenRouterAPI's Decisions call."""
 
     answers: Answers
+    images: list[bytes | None] = field(default_factory=list[bytes | None])
     asked: list[tuple[dict[str, Any], list[str]]] = field(
         default_factory=list[tuple[dict[str, Any], list[str]]]
     )
 
     async def decide(
-        self, model: str, state: dict[str, Any], questions: dict[str, Any], **_: object
+        self,
+        model: str,
+        state: dict[str, Any],
+        questions: dict[str, Any],
+        *,
+        image_data: bytes | None = None,
+        **_: object,
     ) -> Decided:
+        self.images.append(image_data)
         self.asked.append((state, list(questions)))
         given = self.answers(state["new_message"])
         return Decided({name: given[name] for name in questions}, model, Decimal("0.00002"), 400)
@@ -68,38 +74,21 @@ async def with_jev(conversation: Conversation, answers: Answers) -> FakeJev:
     return jev
 
 
-async def test_a_passing_mention_of_the_name_is_ignored_and_an_address_answered(
+async def test_direct_calls_invoke_without_screening(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
-    jev = await with_jev(
-        conversation,
-        lambda line: {"addressed": noul(0.95 if "17*23" in line else 0.05), "effort": EASY},
-    )
+    jev = await with_jev(conversation, lambda _line: {"effort": EASY})
     conversation.meet(FAY, PORCH)
-    passing = await conversation.send(FAY, PORCH, "classic derp moment")
-    await conversation.settle(passing)
-    assert conversation.api.calls_of("sendRichMessage", after=passing.after) == []
-    assert conversation.api.calls_of("sendChatAction", after=passing.after) == []  # not even "typing…"
-
-    model.reply("391")
-    asked = await conversation.send(FAY, PORCH, "дерп, сколько будет 17*23?")
-    reply = await conversation.expect_reply(asked)
-    assert reply["rich_message"]["markdown"] == "391"
-    await conversation.settle(asked)
-    mentioned = await conversation.send(FAY, PORCH, "@DerpRobot hi", entities=[mention(0, 10)])
-    model.reply("hey")
-    await conversation.expect_reply(mentioned)
-    await conversation.settle(mentioned)
-
-    assert [questions for _, questions in jev.asked] == [
-        ["addressed"],
-        ["addressed"],
-    ]  # free turns: no effort
-    assert jev.asked[1][0]["previous_messages"][-1].endswith("Fay: classic derp moment")  # kept as ambient
-    async with conversation.db.session() as session:
-        runs = list(await session.scalars(select(AgentRun.trigger_message_id).order_by(AgentRun.id)))
-        ledgered = await session.scalar(select(func.count()).where(ProviderCall.kind == "decision"))
-    assert runs == [asked.message_id, mentioned.message_id] and ledgered == 2
+    for text, entities in (
+        ("classic derp moment", []),
+        ("дерп от чего он собрался оберегать", []),
+        ("🐱 @DerpRobot hi", [mention(3, 10)]),
+    ):
+        model.reply("heard")
+        sent = await conversation.send(FAY, PORCH, text, entities=entities)
+        assert (await conversation.expect_reply(sent))["rich_message"]["markdown"] == "heard"
+        await conversation.settle(sent)
+    assert jev.asked == []
 
 
 def mention(offset: int, length: int) -> dict[str, Any]:
@@ -135,11 +124,10 @@ async def test_a_follow_up_photo_is_left_out_unless_the_question_needs_it(
     await conversation.expect_reply(breed)
     await conversation.settle(breed)
     assert [questions for _, questions in jev.asked] == [
-        ["addressed"],  # screened in capture, before the run knows its images
         ["images"],
         ["images"],
     ]
-    assert jev.asked[1][0]["images_from"][0].endswith(f"#{posted.message_id} Gus: [photo]")
+    assert jev.asked[0][0]["images_from"][0].endswith(f"#{posted.message_id} Gus: [photo]")
 
 
 async def test_a_hard_paid_question_reasons_deeper(conversation: Conversation, model: ScriptedModel) -> None:
@@ -167,29 +155,25 @@ async def test_a_hard_paid_question_reasons_deeper(conversation: Conversation, m
     ]  # one small call per paid turn
 
 
-async def test_in_a_mentions_only_chat_a_passing_mention_is_neither_kept_nor_heard(
+async def test_a_name_only_call_in_a_mentions_only_chat_keeps_its_recording(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
-    """Screened before capture: a passing mention isn't stored, nor is what it replies to, nor transcribed."""
-    jev = await with_jev(conversation, lambda line: {"addressed": noul(0.95 if "что там" in line else 0.05)})
+    jev = await with_jev(conversation, lambda _line: {})
     stt = FakeSTT()
     await use_stt(conversation, stt)
     async with conversation.db.transaction() as session:
         session.add(Chat(id=YARD.id, type="supergroup", title="Yard", ambient=False))
     conversation.api.register_file("memo", OGG)
     memo = await conversation.send(GUS, YARD, audio=audio("memo"))
-    passing = await conversation.send(FAY, YARD, "classic derp moment", reply_to=memo.message_id)
-    await conversation.settle(passing)
-    assert await stored(conversation, YARD) == {} and stt.calls == []
-    assert conversation.api.calls_of("sendChatAction", after=passing.after) == []
-
+    await conversation.settle(memo)
+    assert not stt.calls
     model.reply("хлеб")
     asked = await conversation.send(FAY, YARD, "дерп, что там?", reply_to=memo.message_id)
     await conversation.expect_reply(asked)
     await conversation.settle(asked)
     assert await stored(conversation, YARD) == {memo.message_id: "invocation", asked.message_id: "invocation"}
     assert len(stt.calls) == 1 and "купи хлеба" in str(model.requests[-1])
-    assert [questions for _, questions in jev.asked] == [["addressed"], ["addressed"]]
+    assert not jev.asked
 
 
 async def test_a_blocked_sender_is_not_screened(conversation: Conversation) -> None:

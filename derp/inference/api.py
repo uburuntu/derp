@@ -3,6 +3,7 @@ image generation, speech-to-text, text-to-speech, decisions, the model catalog a
 and the management API for contributed keys (``OpenRouterManagement``).
 """
 
+import asyncio
 import base64
 import io
 import json
@@ -10,10 +11,11 @@ import re
 import wave
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from typing import Any, Literal, cast
 
 import httpx
+from PIL import Image
 
 from derp.config import Settings
 
@@ -107,6 +109,16 @@ class Decided:
     model: str
     cost_usd: Decimal
     input_tokens: int
+    upstream_usd: Decimal | None = None
+    cached_tokens: int = 0
+
+
+class InvalidDecisionError(OpenRouterError):
+    """A provider responded and billed the call, but supplied unusable answers."""
+
+    def __init__(self, usage: Decided) -> None:
+        super().__init__(502, "answers do not match the questions")
+        self.usage = usage
 
 
 def _client(settings: Settings, api_key: str) -> httpx.AsyncClient:
@@ -154,6 +166,9 @@ class OpenRouterAPI:
         # Price estimates for responses without ``usage.cost``: never record a paid call as free.
         self._image_price = Decimal(str(settings.image_price_usd))
         self._stt_minute_price = Decimal(str(settings.stt_price_usd_per_minute))
+        self._openai_decision_token_price = (
+            Decimal(str(settings.decisions.openai_usd_per_m_input)) / 1_000_000
+        )
         self._decision_token_price = Decimal(str(settings.decisions.price_usd_per_m_input)) / 1_000_000
 
     async def close(self) -> None:
@@ -317,23 +332,86 @@ class OpenRouterAPI:
 
     # Decisions (System One API: Jev; output tokens are free)
 
-    async def decide(self, model: str, state: str | Json, questions: Json, *, zdr: bool = True) -> Decided:
-        """Ask typed questions (``noul``/``choice``/``score``) about ``state``; every question gets its answer.
-
-        The ``v1/systemone`` endpoint takes the same body and provider preferences as the alpha Decisions API.
-        """
+    async def decide(
+        self,
+        model: str,
+        state: str | Json,
+        questions: Json,
+        *,
+        zdr: bool = True,
+        api_key: str | None = None,
+        image_data: bytes | None = None,
+    ) -> Decided:
+        """Submit one set of typed questions. A contributed key is pinned to OpenAI with fallback disabled."""
         body = decision_body(model, state, questions, zdr=zdr)
-        result = await self._request("POST", "systemone", json=body)
-        answers = result.get("answers")
+        if api_key:
+            body["provider"] = {"only": ["openai"], "allow_fallbacks": False}
+        estimate_tokens = estimated_tokens(body, photo=bool(image_data))
+        headers = _as(api_key)
+        if image_data:
+            ref = "derp-message-photo"
+            # OpenAI accepts image references only as top-level state items.
+            body["state"] = [json.dumps(state, ensure_ascii=False) if isinstance(state, dict) else state, ref]
+            image_data = await asyncio.to_thread(_decision_photo, image_data)
+            body["assets"] = {
+                ref: {"type": "image", "format": "jpg", "data_base64": base64.b64encode(image_data).decode()}
+            }
+            headers["TypeSafe-Danger-Zone-Images"] = "true"
+        response = await self._send("POST", "systemone", json=body, headers=headers)
+        try:
+            result = response.json()
+            usage = result.get("usage") or {}
+            tokens = int(usage.get("input_tokens") or estimate_tokens)
+            cached = int((usage.get("input_tokens_details") or {}).get("cached_tokens") or 0)
+            upstream = upstream_cost(usage)
+            if api_key and upstream is None:
+                upstream = (self._openai_decision_token_price * tokens).quantize(Decimal("0.00000001"))
+            cost = _reported_cost(result, Decimal(0) if api_key else self._decision_token_price * tokens)
+            if (
+                min(tokens, cached) < 0
+                or not cost.is_finite()
+                or cost < 0
+                or (upstream is not None and (not upstream.is_finite() or upstream < 0))
+            ):
+                raise ValueError("invalid decision usage")
+            answers = result.get("answers")
+            decided = Decided(
+                answers=answers if isinstance(answers, dict) else {},
+                model=str(result.get("model") or model),
+                cost_usd=cost,
+                input_tokens=tokens,
+                cached_tokens=cached,
+                upstream_usd=upstream,
+            )
+        except ValueError, TypeError, AttributeError, OverflowError, DecimalException:
+            # The server accepted this request. An unreadable receipt can still cost the payer.
+            price = self._openai_decision_token_price if api_key else self._decision_token_price
+            estimated_cost = (price * estimate_tokens).quantize(Decimal("0.00000001"))
+            raise InvalidDecisionError(
+                Decided(
+                    {},
+                    model,
+                    Decimal(0) if api_key else estimated_cost,
+                    estimate_tokens,
+                    upstream_usd=estimated_cost if api_key else None,
+                )
+            ) from None
         if not isinstance(answers, dict) or answers.keys() != questions.keys():
-            raise OpenRouterError(502, "answers do not match the questions")
-        tokens = int((result.get("usage") or {}).get("input_tokens") or estimated_tokens(body))
-        return Decided(
-            answers=cast(dict[str, Json], answers),
-            model=str(result.get("model") or model),
-            cost_usd=_reported_cost(result, self._decision_token_price * tokens),
-            input_tokens=tokens,
-        )
+            raise InvalidDecisionError(decided)
+        return decided
+
+
+def _decision_photo(data: bytes) -> bytes:
+    """Normalized Telegram JPEG; pad a small side to the minimum accepted by Jev."""
+    with Image.open(io.BytesIO(data)) as photo:
+        if min(photo.size) >= 280:
+            return data
+        width, height = max(280, photo.width), max(280, photo.height)
+        padded = Image.new("RGB", (width, height), "white")
+        padded.paste(photo, ((width - photo.width) // 2, (height - photo.height) // 2))
+        out = io.BytesIO()
+        padded.save(out, "JPEG")
+        return out.getvalue()
 
 
 def as_wav(pcm: bytes, rate: int = 24_000) -> bytes:
@@ -354,9 +432,9 @@ def decision_body(model: str, state: str | Json, questions: Json, *, zdr: bool =
     return body
 
 
-def estimated_tokens(body: Json) -> int:
+def estimated_tokens(body: Json, *, photo: bool = False) -> int:
     """Input tokens of a request the provider reported none for: UTF-8 bytes / 4."""
-    return len(json.dumps(body).encode()) // 4
+    return max(1, len(json.dumps(body).encode()) // 4) + (2048 if photo else 0)
 
 
 def upstream_cost(usage: object) -> Decimal | None:

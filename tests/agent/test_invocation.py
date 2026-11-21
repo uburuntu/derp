@@ -75,6 +75,26 @@ def test_mention_reply_private_and_commands() -> None:
 def test_bots_never_trigger_but_anonymous_admins_do() -> None:
     bot = {"id": 9, "is_bot": True, "first_name": "Other"}
     assert kind(msg("derp hi", **{"from": bot})) is None
+    assert kind(msg("derp hi", sender_business_bot=bot)) is None
+    assert kind(msg("derp hi", guest_bot_caller_user=HUMAN)) is None
+    assert kind(msg("derp hi", via_bot=bot)) is TriggerKind.NAME
     anonymous = {"id": 1087968824, "is_bot": True, "first_name": "Group"}
     assert kind(msg("derp hi", sender_chat=GROUP, **{"from": anonymous})) is TriggerKind.NAME
     assert kind(msg("derp hi", is_automatic_forward=True)) is None
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("ask дерпа", TriggerKind.NAME),
+        ({"type": "mention", "text": "hey", "username": "DerpAgent"}, TriggerKind.MENTION),
+        (
+            {"type": "text_mention", "text": "hey", "user": {"id": BOT, "is_bot": True, "first_name": "D"}},
+            TriggerKind.MENTION,
+        ),
+        ({"type": "url", "text": "a link", "url": "https://example.org/derp"}, None),
+    ],
+)
+def test_rich_human_invocations(body: Any, expected: TriggerKind | None) -> None:
+    rich = {"blocks": [{"type": "paragraph", "text": body}]}
+    assert kind(msg(rich_message=rich)) == expected

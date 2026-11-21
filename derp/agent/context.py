@@ -168,13 +168,29 @@ def messages_tokens(messages: list[ModelMessage]) -> int:
 async def _runs_for(session: AsyncSession, chat_id: int, message_ids: list[int]) -> dict[int, AgentRun]:
     if not message_ids:
         return {}
+    # Replaying the original tool history of a multi-output run can resurrect a superseded answer.
+    # Use its currently visible messages instead, including for a run whose acknowledgement follows an edit.
+    revised = (
+        select(RunOutput.id)
+        .outerjoin(
+            Message, (Message.chat_id == RunOutput.chat_id) & (Message.message_id == RunOutput.message_id)
+        )
+        .where(
+            RunOutput.run_id == AgentRun.id,
+            RunOutput.kind != "reaction",
+            or_(RunOutput.kind == "edit", Message.edit_date.is_not(None), Message.deleted_at.is_not(None)),
+        )
+        .correlate(AgentRun)
+        .exists()
+    )
     rows = await session.execute(
         select(RunOutput.message_id, AgentRun)
         .join(AgentRun, AgentRun.id == RunOutput.run_id)
         .where(
             RunOutput.chat_id == chat_id,
             RunOutput.message_id.in_(message_ids),
-            RunOutput.kind != "reaction",
+            RunOutput.kind.not_in(("reaction", "edit")),
+            ~revised,
             AgentRun.status.in_(REPLAYABLE),
         )
     )

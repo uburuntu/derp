@@ -25,7 +25,7 @@ from derp.history.models import Message as StoredMessage
 from derp.history.render import one_line
 from derp.history.retention import forget_chat, forget_member, forget_message, purge_ambient, purge_expired
 from derp.locales import resolve, t
-from derp.memory.models import Note
+from derp.memory.models import Note, ReplyRule
 from derp.memory.notes import is_admin
 from derp.scheduler.models import Job
 from derp.telegram.buttons import Press, button, markup, on_press
@@ -63,6 +63,12 @@ async def forget_everything(db: Database, chat_id: int, user_id: int) -> int:
                 StoredMessage.chat_id == chat_id, StoredMessage.user_id == user_id
             )
         )
+        await session.execute(
+            delete(ReplyRule).where(
+                ReplyRule.chat_id == chat_id,
+                (ReplyRule.sender_id == user_id) | (ReplyRule.admin_id == user_id),
+            )
+        )
         count = await forget_member(session, chat_id, user_id, now)
         await session.execute(delete(Note).where(Note.chat_id == chat_id, Note.user_id == user_id))
         await session.execute(delete(Job).where(Job.chat_id == chat_id, Job.creator_id == user_id))
@@ -78,6 +84,7 @@ async def forget_whole_chat(db: Database, chat_id: int) -> tuple[int, int]:
     """Everything Derp knows about the chat; returns the messages and notes forgotten."""
     now = datetime.now(UTC)
     async with db.transaction() as session:
+        await session.execute(delete(ReplyRule).where(ReplyRule.chat_id == chat_id))
         count = await forget_chat(session, chat_id, now)
         notes = await session.execute(delete(Note).where(Note.chat_id == chat_id))
         await session.execute(delete(Approval).where(Approval.chat_id == chat_id))

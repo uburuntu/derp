@@ -420,6 +420,8 @@ class FakeBotAPI:
             "from": self.bot_user,
             **content,
         }
+        if "caption" in fields:
+            message["caption"] = fields["caption"]
         if thread_id := fields.get("message_thread_id"):
             message["message_thread_id"] = int(thread_id)
             message["is_topic_message"] = True
@@ -468,7 +470,7 @@ class FakeBotAPI:
                     k: v for k, v in target.items() if k not in {"reply_to_message", "pinned_message"}
                 }
             elif not reply.get("allow_sending_without_reply"):
-                raise ValueError("message to be replied not found")
+                raise Refusal(400, "Bad Request: message to be replied not found")
         self.register_message(message)
         return message
 
@@ -634,7 +636,7 @@ class FakeBotAPI:
         key = (int(fields["chat_id"]), int(fields["message_id"]))
         message = self.messages.get(key)
         if message is None:
-            raise ValueError(f"message {key} does not exist")
+            raise Refusal(400, "Bad Request: message to edit not found")
         rich = fields.get("rich_message")
         if isinstance(rich, Mapping):
             message.pop("text", None)
@@ -647,6 +649,66 @@ class FakeBotAPI:
         else:
             message.pop("reply_markup", None)
         return dict(message)
+
+    def _m_editMessageCaption(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        message = self.messages[int(fields["chat_id"]), int(fields["message_id"])]
+        if not any(
+            kind in message
+            for kind in ("photo", "animation", "video", "audio", "document", "live_photo", "voice")
+        ):
+            raise Refusal(400, "Bad Request: there is no caption in the message to edit")
+        message["caption"] = str(fields.get("caption", ""))
+        message["edit_date"] = int(datetime.now(UTC).timestamp())
+        return dict(message)
+
+    def _m_editMessageMedia(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        message = self.messages[int(fields["chat_id"]), int(fields["message_id"])]
+        media = fields["media"]
+        kind = str(media["type"])
+        compatible = {"photo", "video", "live_photo", "animation", "audio", "document"}
+        old = next(
+            (
+                key
+                for key in ("live_photo", "animation", *compatible, "text", "rich_message")
+                if key in message
+            ),
+            None,
+        )
+        if old is None or kind not in compatible:
+            raise Refusal(400, "Bad Request: media is not editable")
+        if message.get("media_group_id"):
+            allowed = {old} if old in ("audio", "document") else {"photo", "live_photo", "video"}
+            if kind not in allowed:
+                raise Refusal(400, "Bad Request: invalid album replacement")
+        for key in compatible | {"text", "rich_message", "caption", "entities", "caption_entities"}:
+            message.pop(key, None)
+        file_id = str(media["media"])
+        file = self._uploaded(kind, width=640, height=360, duration=3)
+        if file_id.startswith("attach://"):
+            upload = next(
+                item for item in self.calls[-1].attachments if item.field == file_id.removeprefix("attach://")
+            )
+            self.register_file(file["file_id"], upload.data)
+        else:
+            file["file_id"] = file_id
+            file["file_unique_id"] = f"u-{file_id}"
+        if kind == "live_photo":
+            file["photo"] = [
+                {"file_id": media["photo"], "file_unique_id": "cover", "width": 640, "height": 360}
+            ]
+        message[kind] = [file] if kind == "photo" else file
+        message["caption"] = media.get("caption")
+        message["edit_date"] = int(datetime.now(UTC).timestamp())
+        return dict(message)
+
+    def _m_sendAudio(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        return self._new_message(fields, audio=self._uploaded("audio", duration=3))
+
+    def _m_sendLivePhoto(self, fields: JsonObject) -> JsonObject:  # noqa: N802
+        still = self._uploaded("photo", width=640, height=360)
+        return self._new_message(
+            fields, live_photo=self._uploaded("live_photo", width=640, height=360, duration=3, photo=[still])
+        )
 
     def _m_editEphemeralMessageText(self, fields: JsonObject) -> bool:  # noqa: N802
         key = (int(fields["chat_id"]), int(fields["ephemeral_message_id"]))

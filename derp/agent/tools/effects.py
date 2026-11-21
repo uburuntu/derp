@@ -24,6 +24,7 @@ from derp.agent.deps import RunDeps
 from derp.agent.outputs import Made, Pending, Sendable, afford, check_budget, emit, pending_cost
 from derp.agent.tools.sources import SOUND, VISUAL, FinalArg, Refused, SourceArg, kept_ref, source_of
 from derp.agent.toolsets import Family
+from derp.money.amounts import Amount
 from derp.money.funding import Funding
 from derp.money.models import RunFee
 from derp.tools import background, effects, lookups
@@ -33,7 +34,7 @@ from derp.tools.workers import EffectError
 toolset = FunctionToolset[RunDeps]()
 
 
-async def heavy_allowed(ctx: RunContext[RunDeps], *, price: int | None = None) -> None:
+async def heavy_allowed(ctx: RunContext[RunDeps], *, price: Amount | None = None) -> None:
     """Refuse a heavy effect the answer can't cover; ``Refused`` says why.
 
     ``price`` (Derpcoins) is what it costs in this answer (default: the flat fee on paid runs, nothing on

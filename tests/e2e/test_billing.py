@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, select
@@ -7,6 +8,7 @@ from derp.agent.models import AgentRun
 from derp.billing.models import Purchase, Subscription
 from derp.billing.purchases import recover_payments
 from derp.billing.refunds import reconcile_refunds
+from derp.inference.models import ProviderCall
 from derp.money.models import CreditLot
 from derp.money.wallets import balance, capture, credit, reserve, wallet
 from tests.e2e.fake_api import Call
@@ -49,7 +51,7 @@ def paid(payload: str, stars: int, charge: str) -> dict[str, Any]:
     }
 
 
-async def wallet_balance(conversation: Conversation, kind: str, owner_id: int) -> int:
+async def wallet_balance(conversation: Conversation, kind: str, owner_id: int) -> Decimal:
     async with conversation.db.transaction() as session:
         return await balance(session, (await wallet(session, kind, owner_id)).id)
 
@@ -152,7 +154,7 @@ async def test_the_group_pack_menu_estimates_how_long_each_pack_lasts(conversati
     now = datetime.now(UTC)
     async with conversation.db.transaction() as session:
         chat_wallet = (await wallet(session, "chat", PUB.id)).id
-        for ago in (0, 1, 2):  # three active days, 130 dc a day
+        for ago in (0, 1):  # two days of answered runs and one day of standalone checks
             session.add(
                 AgentRun(
                     chat_id=PUB.id, user_id=CARL.id, trigger="message", role="chat", funding="paid",
@@ -160,6 +162,21 @@ async def test_the_group_pack_menu_estimates_how_long_each_pack_lasts(conversati
                     created_at=now - timedelta(days=ago, minutes=5),
                 )
             )  # fmt: skip
+        await credit(session, chat_wallet, "grant:screen", 140, "grant")
+        screen = await reserve(session, chat_wallet, "screen", 140)
+        assert screen is not None
+        await capture(session, "screen", Decimal("130.000012"), now=now - timedelta(days=2, minutes=5))
+        for _ in range(2):  # two calls on one settlement count as a single wallet charge
+            session.add(
+                ProviderCall(
+                    kind="decision",
+                    model="jev",
+                    funding="paid",
+                    chat_id=PUB.id,
+                    reservation_id=screen.id,
+                    cost_usd=Decimal("0.02"),
+                )
+            )
     asked = await conversation.send(CARL, PUB, "/buy")
     chooser = await conversation.expect_reply(asked)
     for_chat = chooser["reply_markup"]["inline_keyboard"][0][0]["callback_data"]

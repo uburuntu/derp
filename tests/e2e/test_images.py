@@ -71,7 +71,7 @@ async def test_a_standard_image_goes_out_and_is_charged(
     assert conversation.api.calls_of("sendRichMessage", after=asked.after) == []  # "." sends nothing else
     async with conversation.db.session() as session:
         run = await session.scalar(select(AgentRun))
-        assert run is not None and run.charged_credits == 48  # ceil(0.04 × 1.2 / 0.001)
+        assert run is not None and run.charged_credits == 48  # 0.04 × 1.2 / 0.001
         assert await session.scalar(select(RunOutput.kind)) == "image"
         assert await balance(session, wallet_id) == 650 - 48
 
@@ -565,8 +565,8 @@ async def test_a_small_balance_that_covers_the_price_gets_the_image(
     async with conversation.db.session() as session:
         approved = await session.scalar(select(AgentRun).where(AgentRun.trigger == "callback"))
         asking = await session.scalar(select(AgentRun).where(AgentRun.trigger != "callback"))
-        assert approved is not None and asking is not None and approved.charged_credits == 48 + 1
-        assert await balance(session, wallet_id) == 80 - 49 - asking.charged_credits
+        assert approved is not None and asking is not None and approved.charged_credits == Decimal("48.12")
+        assert await balance(session, wallet_id) == 80 - approved.charged_credits - asking.charged_credits
 
 
 async def test_an_approval_that_cant_be_paid_any_more_offers_buying(

@@ -26,7 +26,7 @@ commands to learn. It replies in the language it's asked in; its menus speak Eng
 
 | | |
 |---|---|
-| 💬 **Talks like one of the group** | Short replies, opinions, running jokes. In groups it answers only when called; "classic derp moment" gets nothing. |
+| 💬 **Talks like one of the group** | Short replies, opinions, running jokes. Call it by name, mention or reply. Group admins can also configure automatic replies, such as fresh prices when someone posts market data. |
 | 🧭 **Catches you up** | "What did I miss?" covers a day, a week or the time since your last message, with replies and questions for you first. It also finds half-remembered things by gist. |
 | 🎨 **Makes pictures** | Draws and edits images, puts friends into one picture from their profile photos, makes memes, cutouts, stickers and quote stickers. |
 | 👀 **Reads everything you send** | Photos, albums, stickers, voice messages, video notes, clips with sound, PDFs and links. |
@@ -34,7 +34,7 @@ commands to learn. It replies in the language it's asked in; its menus speak Eng
 | 🎲 **Runs the group** | Polls with members' photos, quizzes with a leaderboard, titles of the day, notes and chat rules. |
 | ⏰ **Remembers** | One-off and repeating reminders, and scheduled prompts ("every morning, post a fun fact"). |
 | 🗣️ **Talks back** | Short voice messages when asked: yell it, whisper it, sing it. |
-| ⭐ **Pays fairly** | Free Derpcoins every day, more with Telegram Stars or a group wallet anyone can top up. Reply `/info` to any answer to see its model, tokens and cost. |
+| ⭐ **Pays fairly** | Free Derpcoins every day, more with Telegram Stars or a group wallet anyone can top up. Ask about the group balance or spending by member, date or model. Reply `/info` to see what an answer and its edits cost. |
 | 🔑 **Brings your own key** | People with ChatGPT Pro or Claude Max can plug their OpenAI or Anthropic API key into a chat for a smarter model. |
 
 It also works inline (`@DerpRobot question` in any chat) and as a one-reply guest in chats it isn't a member of.

@@ -14,7 +14,7 @@ from pydantic_ai.messages import (
     TextPart,
     ToolCallPart,
 )
-from sqlalchemy import null, select, update
+from sqlalchemy import func, null, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.models import AgentRun, RunOutput
@@ -272,14 +272,30 @@ def finish_run(
     return result
 
 
-async def run_for_output(session: AsyncSession, chat_id: int, message_id: int) -> AgentRun | None:
-    """The run behind a delivered message (``/info`` as a reply)."""
-    return await session.scalar(
-        select(AgentRun)
+async def runs_for_output(
+    session: AsyncSession, chat_id: int, message_id: int
+) -> list[tuple[AgentRun, bool]]:
+    """Creation and subsequent revisions of this output, in order. A run appears at most once."""
+    revision = func.bool_and(RunOutput.kind == "edit")
+    rows = await session.execute(
+        select(AgentRun, revision)
         .join(RunOutput, RunOutput.run_id == AgentRun.id)
-        .where(RunOutput.chat_id == chat_id, RunOutput.message_id == message_id, RunOutput.kind != "reaction")
-        .order_by(AgentRun.id.desc())
-        .limit(1)
+        .where(
+            AgentRun.chat_id == chat_id,
+            RunOutput.chat_id == chat_id,
+            RunOutput.message_id == message_id,
+            RunOutput.kind != "reaction",
+        )
+        .group_by(AgentRun.id)
+        .order_by(revision, func.min(RunOutput.created_at), AgentRun.id)
+    )
+    return [(run, bool(edited)) for run, edited in rows]
+
+
+async def run_for_output(session: AsyncSession, chat_id: int, message_id: int) -> AgentRun | None:
+    """The run that originally posted this output."""
+    return next(
+        (run for run, revised in await runs_for_output(session, chat_id, message_id) if not revised), None
     )
 
 

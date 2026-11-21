@@ -13,6 +13,7 @@ def include_routers(dispatcher: Dispatcher) -> None:
     from derp.history import members, polls, reactions
     from derp.keys import flows as keys
     from derp.memory import command as memory
+    from derp.memory import reply_rules
     from derp.money import command as money
     from derp.money import free
     from derp.ops import console, feedback
@@ -31,6 +32,7 @@ def include_routers(dispatcher: Dispatcher) -> None:
         privacy.build_router(),
         panel.build_router(),
         memory.build_router(),
+        reply_rules.build_router(),
         money.build_router(),
         free.build_router(),
         approvals.build_router(),

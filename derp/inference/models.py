@@ -29,6 +29,7 @@ class ProviderCall(Base):
     downstream_provider: Mapped[str | None] = mapped_column(String(64))
     generation_id: Mapped[str | None] = mapped_column(String(128))
     run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"), index=True)
+    reservation_id: Mapped[int | None] = mapped_column(ForeignKey("reservations.id"), index=True)
     chat_id: Mapped[int | None]
     user_id: Mapped[int | None]
     funding: Mapped[str] = mapped_column(String(12))  # paid | sponsored | free | creator | key

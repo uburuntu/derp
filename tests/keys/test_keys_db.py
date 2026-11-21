@@ -214,7 +214,11 @@ async def test_plugging_in_registers_the_key_behind_its_own_sub_key(
     assert registered == (
         "openai",
         "a" * 64,
-        tuple(m for m in (*[x.model for x in keyed.keys.models["openai"]], keyed.keys.images["openai"])),
+        (
+            *[x.model for x in keyed.keys.models["openai"]],
+            keyed.decisions.openai_model,
+            keyed.keys.images["openai"],
+        ),
     )
     async with database.session() as session:
         row = await session.get(ContributedKey, key.id)

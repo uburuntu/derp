@@ -45,7 +45,7 @@ from derp.tools.effects import still
 from derp.tools.workers import EffectError, WorkerPool
 
 log = logging.getLogger("derp.media")
-IMAGE_LIKE = ("photo", "sticker", "document", "animation")
+IMAGE_LIKE = ("photo", "live_photo", "sticker", "document", "animation")
 CLIPS = ("animation", "video", "video_note")
 # Opened only by ``inspect_media`` (``agent.watch``); an audio file's cover is its preview picture.
 SOUNDS = ("audio", "voice")
@@ -141,7 +141,7 @@ async def preceding_media(session: AsyncSession, trigger: Message) -> list[Messa
 
 
 async def answered_media(session: AsyncSession, chat_id: int, output_id: int) -> list[MessageMedia]:
-    """When ``output_id`` is one of Derp's answers: the images its run looked at, one hop back, else nothing."""
+    """The images behind this visible answer, taken from the latest revision or its original run."""
     trigger_id = await session.scalar(
         select(AgentRun.trigger_message_id)
         .join(RunOutput, RunOutput.run_id == AgentRun.id)
@@ -151,6 +151,7 @@ async def answered_media(session: AsyncSession, chat_id: int, output_id: int) ->
             RunOutput.kind != "reaction",  # a reaction's row names the message reacted to
             AgentRun.chat_id == chat_id,
         )
+        .order_by((RunOutput.kind == "edit").desc(), RunOutput.created_at.desc(), RunOutput.id.desc())
         .limit(1)
     )
     earlier = await session.get(Message, (chat_id, trigger_id)) if trigger_id else None
@@ -199,6 +200,8 @@ async def inspect(
 
 
 async def _picture(gateway: MediaGateway, row: MessageMedia, frames: WorkerPool | None) -> Inspected:
+    if row.type == "live_photo" and row.thumb_file_id:
+        return Inspected(row, await gateway.image(row.thumb_file_id, row.bot_id, row.thumb_unique_id))
     file = row.file_id, row.bot_id, row.file_unique_id, row.file_size
     known = known_type(row.mime_type)
     failure = MediaUnavailableError("not an image")

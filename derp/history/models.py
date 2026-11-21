@@ -107,7 +107,7 @@ class ForumTopic(Base):
 
 
 MESSAGE_KINDS = (
-    "text", "photo", "video", "voice", "video_note", "audio", "document", "sticker", "animation",
+    "text", "photo", "live_photo", "video", "voice", "video_note", "audio", "document", "sticker", "animation",
     "poll", "dice", "location", "venue", "contact", "checklist", "story", "game", "invoice",
     "giveaway", "paid_media", "service", "other",
 )  # fmt: skip

@@ -37,6 +37,7 @@ from derp.history.models import Chat
 from derp.history.render import one_line
 from derp.keys.flows import chat_from_ref, open_plug
 from derp.locales import DEFAULT, LOCALES, resolve, t
+from derp.money.amounts import format_dc
 from derp.money.command import bought_total, free_left_today
 from derp.money.wallets import balances, wallet
 from derp.settings.onboarding import context_line
@@ -89,7 +90,7 @@ OWNER_COMMANDS = {
 
 async def showcase(bot: Bot, settings: Settings, locale: str) -> tuple[str, InlineKeyboardMarkup | None]:
     username = await bot_username(bot)
-    text = t(locale, "start.private", daily=settings.sponsored_daily_credits, username=username)
+    text = t(locale, "start.private", daily=format_dc(settings.sponsored_daily_credits), username=username)
     add = link(t(locale, "start.add_to_group"), f"https://t.me/{username}?startgroup=derp")
     return text, markup([add, buy_button(locale, group=False)])
 
@@ -131,18 +132,18 @@ async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user
             t(
                 locale,
                 "help.coins_plan",
-                plan=f"{plan:,}",
-                bought=f"{bought:,}",
-                free=free,
-                daily=settings.sponsored_daily_credits,
+                plan=format_dc(plan),
+                bought=format_dc(bought),
+                free=format_dc(free),
+                daily=format_dc(settings.sponsored_daily_credits),
             )
             if plan
             else t(
                 locale,
                 "help.coins",
-                free=free,
-                daily=settings.sponsored_daily_credits,
-                bought=f"{bought:,}",
+                free=format_dc(free),
+                daily=format_dc(settings.sponsored_daily_credits),
+                bought=format_dc(bought),
             )
         )
         lines = [
@@ -165,7 +166,7 @@ async def help_text(db: Database, settings: Settings, bot: Bot, chat: Chat, user
         t(locale, "help.title_group", title=literal(one_line(chat.title or t(locale, "settings.this_chat")))),
         t(locale, "onboarding.summon", username=username),
         context,
-        t(locale, "help.chat_wallet", left=f"{left:,}"),
+        t(locale, "help.chat_wallet", left=format_dc(left)),
         await lately_line(db, chat.id, locale),
         t(locale, "help.commands"),
         t(locale, "help.more_group", username=username),

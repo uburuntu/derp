@@ -11,6 +11,7 @@ or the private chat (personal ones).
 
 import asyncio
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from aiogram import Bot
@@ -23,6 +24,7 @@ from derp.billing.runway import daily_pace, lasts
 from derp.config import Pack, Settings
 from derp.db.engine import Database
 from derp.locales import t
+from derp.money.amounts import Amount, format_dc
 from derp.money.wallets import balance, wallet
 from derp.telegram.buttons import Press, Row, button, link, markup
 from derp.telegram.sender import Target, send_markdown, send_privately
@@ -51,7 +53,7 @@ def packs_keyboard(
     return markup(plan_button if plan else None, *packs, *rows)
 
 
-def group_chooser(locale: str, chat_balance: int) -> tuple[str, InlineKeyboardMarkup | None]:
+def group_chooser(locale: str, chat_balance: Amount) -> tuple[str, InlineKeyboardMarkup | None]:
     """Group /buy: the chat wallet first (its balance is the chat's to see), then the presser's own."""
     keyboard = markup(
         [
@@ -59,7 +61,7 @@ def group_chooser(locale: str, chat_balance: int) -> tuple[str, InlineKeyboardMa
             button(t(locale, "billing.for_me"), BuyAction(target="user")),
         ]
     )
-    return t(locale, "billing.who", balance=f"{chat_balance:,}"), keyboard
+    return t(locale, "billing.who", balance=format_dc(chat_balance)), keyboard
 
 
 def _invoice(title: str, description: str, order: Order, stars: int) -> dict[str, Any]:
@@ -133,7 +135,7 @@ async def links_keyboard(
     return markup(*rows)
 
 
-async def wallet_balance(db: Database, kind: str, owner_id: int) -> int:
+async def wallet_balance(db: Database, kind: str, owner_id: int) -> Decimal:
     async with db.transaction() as session:
         return await balance(session, (await wallet(session, kind, owner_id)).id)
 
@@ -144,7 +146,7 @@ async def personal_menu(
     """The private buy menu: the person's balance, Derp+ and the packs (then the ``extra`` row)."""
     mine = await wallet_balance(db, "user", user_id)
     keyboard = packs_keyboard(settings, "user", locale, extra, plan=True)
-    return t(locale, "billing.menu", balance=f"{mine:,}"), keyboard
+    return t(locale, "billing.menu", balance=format_dc(mine)), keyboard
 
 
 async def link_menu(
@@ -171,8 +173,8 @@ async def link_menu(
         bot, settings, locale, kind=kind, owner_id=owner_id, thread_id=thread_id, plan=plan
     )
     if kind == "user":
-        return t(locale, "billing.menu", balance=f"{left:,}"), keyboard
-    text = t(locale, "billing.menu_chat", balance=f"{left:,}")
+        return t(locale, "billing.menu", balance=format_dc(left)), keyboard
+    text = t(locale, "billing.menu_chat", balance=format_dc(left))
     if pace is not None:
         packs = "\n".join(
             t(locale, "billing.pace_pack", credits=f"{p.credits:,}", lasts=lasts(locale, p.credits, pace))

@@ -116,6 +116,7 @@ async def schedule(
             chat_id=deps.chat.id,
             thread_id=deps.target.thread_id,
             creator_id=deps.user_id,
+            rule_id=deps.authorizing_rule_id,
             kind=KINDS[kind],
             text=_text(text),
             repeat=None if repeat == "once" else repeat,
@@ -125,6 +126,8 @@ async def schedule(
         session.add(job)
         await session.flush()
     paid = " Each run is paid like a normal answer from their Derpcoins." if kind == "prompt" else ""
+    if kind == "prompt" and deps.reply_rules:
+        paid = " Each run uses the group key or shared Derpcoins and the originating rule’s permissions."
     return f"Scheduled job {job.id} for {show_time(when, deps.tz)}{_repeats(job)}.{paid} Show the time exactly as given."
 
 
@@ -152,6 +155,10 @@ async def _act(deps: RunDeps, job_id: int, action: JobAction | Change) -> Job | 
     """The job after ``action``, or what to tell the model instead."""
     admin = await is_admin(deps.bot, deps.chat, deps.user_id)
     async with deps.db.transaction() as session:
+        if deps.reply_rules:
+            job = await session.get(Job, job_id, with_for_update=True)
+            if job is None or job.chat_id != deps.chat.id or job.rule_id != deps.authorizing_rule_id:
+                return "An automatic reply can only change jobs created by its own rule."
         outcome = await act_on_job(session, deps.chat, job_id, deps.user_id, admin, action)
     match outcome:
         case "gone":

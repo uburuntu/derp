@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import func, select, text, update
@@ -30,7 +31,7 @@ async def assert_ledger_explains_lots(database: Database) -> None:
         lots = list(await session.scalars(select(CreditLot)))
         for lot in lots:
             sums = {
-                row[0]: int(row[1])
+                row[0]: Decimal(row[1])
                 for row in await session.execute(
                     select(LedgerEntry.kind, func.sum(LedgerEntry.amount))
                     .where(LedgerEntry.lot_id == lot.id)
@@ -161,7 +162,7 @@ async def test_concurrent_reservations_never_overspend(database: Database) -> No
     async with database.session() as session:
         assert await balance(session, wallet_id) == 10
 
-    async def settle(index: int) -> int:
+    async def settle(index: int) -> Decimal:
         async with database.transaction() as session:
             return await capture(session, f"run:{index}", 25)
 
@@ -197,3 +198,29 @@ async def test_ledger_is_append_only_and_lots_never_negative(database: Database)
     with pytest.raises(DBAPIError, match="remaining_in_range"):
         async with database.transaction() as session:
             await session.execute(update(CreditLot).values(remaining=-1))
+
+
+async def test_fractional_holds_refund_and_concurrent_retry(database: Database) -> None:
+    async with database.transaction() as session:
+        wallet_id = (await wallet(session, "chat", -100)).id
+        await credit(session, wallet_id, "stars:race", 1, "purchase")
+
+    async def hold(i: int) -> bool:
+        async with database.transaction() as session:
+            return await reserve(session, wallet_id, f"fraction:{i}", Decimal("0.333333")) is not None
+
+    accepted = await asyncio.gather(*(hold(i) for i in range(4)))
+    held = [f"fraction:{i}" for i, yes in enumerate(accepted) if yes]
+    assert len(held) == 3
+    async with database.transaction() as session:
+        assert await balance(session, wallet_id) == Decimal("0.000001")
+        assert await claw_back(session, "stars:race", "refund:race") == Decimal("0.000001")
+
+    async def settle(operation: str) -> Decimal:
+        async with database.transaction() as session:
+            return await capture(session, operation, Decimal("0.000012"))
+
+    assert await asyncio.gather(*(settle(op) for op in held for _ in range(2))) == [Decimal("0.000012")] * 6
+    async with database.session() as session:
+        assert await balance(session, wallet_id) == 0
+    await assert_ledger_explains_lots(database)

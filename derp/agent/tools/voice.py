@@ -226,9 +226,9 @@ async def affordable(
     """The models to try: the first able one must fit the hold (``Refused`` otherwise); a dearer fallback stays
     only while it fits too, so a line is never refused for what a fallback might cost."""
     coins = ctx.deps.settings.credits_for_usd
-    await heavy_allowed(ctx, price=coins(float(prices.usd(models[0], characters))))
+    await heavy_allowed(ctx, price=coins(prices.usd(models[0], characters)))
     left = await hold_left(ctx, next_turn=True)
-    fits = [m for m in models[1:] if left is None or coins(float(prices.usd(m, characters))) <= left]
+    fits = [m for m in models[1:] if left is None or coins(prices.usd(m, characters)) <= left]
     return (models[0], *fits)
 
 

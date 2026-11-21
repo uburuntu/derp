@@ -59,7 +59,16 @@ from derp.agent.decisions import Decider, Verdict
 from derp.agent.deps import RunDeps
 from derp.agent.guard import BACKSTOP, WRAP_UP_AT, Guard, KeyRefused
 from derp.agent.lanes import Lanes
-from derp.agent.media import Inspected, Referenced, as_content, inspect, note_images, run_media
+from derp.agent.media import (
+    IMAGE_LIKE,
+    Inspected,
+    Referenced,
+    as_content,
+    inspect,
+    note_images,
+    referenced_media,
+    run_media,
+)
 from derp.agent.models import AgentRun, Approval
 from derp.agent.outputs import absorb_kept, flush, out_of_money
 from derp.agent.persona import PERSONA, chat_card, situation
@@ -103,7 +112,9 @@ from derp.inference.roles import Effort, RolePin
 from derp.keys.failures import KeyFailure, classify
 from derp.keys.notices import announce, key_failed
 from derp.locales import resolve, t
-from derp.memory.notes import chat_notes, load_memory, notes_block
+from derp.memory import reply_rules
+from derp.memory.models import ReplyRule, ReplyRuleCheck
+from derp.memory.notes import chat_notes, is_admin, load_memory, notes_block
 from derp.money.free import answer_unfunded, consented, note_empty_wallet
 from derp.money.funding import Funder, Funding, Funds
 from derp.money.wallets import release
@@ -151,6 +162,8 @@ class Ask:
     seen: tuple[int, ...] = ()  # messages whose images the run looks at (``RunDeps.seen``)
     unnoted: list[Inspected] = field(default_factory=list[Inspected])  # inspected images to describe after
     effort: Effort | None = None  # a deeper reasoning effort the decision asked for (paid runs)
+    reply_rules: tuple[ReplyRule, ...] = ()
+    rule_approver: int | None = None
     approved: DeferredToolResults | None = None
     carried: list[ModelMessage] = field(default_factory=list[ModelMessage])
 
@@ -215,7 +228,7 @@ class Runtime:
         self.workers = workers
         self.transcriber = transcriber
         self.lanes = Lanes(settings.run_concurrency)
-        self.decider = Decider(db, api, pins, settings.decisions)
+        self.decider = Decider(db, api, pins, settings)
         self.active: dict[tuple[int, int], CancellationToken] = {}  # (chat, draft) → the run's stop switch
         self.in_flight: set[str] = set()  # operation ids of holds a live run still owns
         # Where each topic's last window started, and when: kept while it fits and the topic isn't idle, so
@@ -239,6 +252,7 @@ class Runtime:
         trigger: str = "message",
         again: bool = False,
         since: datetime | None = None,
+        rules: tuple[ReplyRule, ...] = (),
     ) -> Outcome | None:
         """Answer an invocation, queued per chat topic; ``since`` bounds what it sees of the chat (a job's period).
 
@@ -255,7 +269,78 @@ class Runtime:
         async with self.lanes.turn(key, message.from_user.id, message.message_id, ordered=not again) as go:
             if not go or (message.message_id and await self._answered(chat.id, message.message_id)):
                 return None
-            return await self._answer(message, chat, trigger=trigger, since=since)
+            return await self._answer(message, chat, trigger=trigger, since=since, rules=rules)
+
+    async def automatic(self, message: TgMessage, chat: Chat, arrival: asyncio.Event) -> None:
+        """Screen once, only if this chat, topic and sender have a confirmed rule. Every match gets its turn."""
+        asker = message.from_user
+        if asker is None:
+            return
+        thread = Target.reply_to_message(message).thread_id
+        async with self.db.session() as session:
+            if not await reply_rules.candidates(session, chat.id, thread, asker.id):
+                return
+        await arrival.wait()  # capture/transcription may finish in a different order from Telegram's updates
+        async with self.lanes.turn((chat.id, thread), asker.id, 0):
+            async with self.db.transaction() as session:
+                fresh = await session.get(Chat, chat.id)
+                source = await session.get(Message, (chat.id, message.message_id), with_for_update=True)
+                if (
+                    fresh is None
+                    or not fresh.ambient
+                    or source is None
+                    or source.deleted_at is not None
+                    or await is_blocked(session, chat.id, asker.id)
+                ):
+                    return
+                candidates = await reply_rules.candidates(session, chat.id, thread, asker.id)
+                if not candidates or not await reply_rules.claim(session, chat.id, message.message_id):
+                    return
+                # Only stored, undeleted media from this chat is eligible. The same reader handles
+                # photos, documents, stickers and video previews as for a direct human question.
+                media = (
+                    await referenced_media(
+                        session,
+                        chat.id,
+                        message.message_id,
+                        source.reply_to_message_id,
+                        types=(*IMAGE_LIKE, "video", "video_note"),
+                    )
+                    if any(r.needs_media for r in candidates)
+                    else []
+                )
+            image = None
+            if media:
+                inspected = await inspect(self.gateway, media[-1:])
+                if inspected:
+                    image = inspected[0].image.data
+                else:
+                    candidates = [r for r in candidates if not r.needs_media]
+            if not candidates:
+                return
+            matched = await self.decider.match_rules(
+                message, chat=fresh, candidates=candidates, bot_id=self.bot.id, image_data=image
+            )
+            if not matched:
+                return
+            async with self.db.transaction() as session:
+                current = await session.get(Chat, chat.id)
+                check = await session.get(ReplyRuleCheck, (chat.id, message.message_id))
+                source = await session.get(Message, (chat.id, message.message_id))
+                if (
+                    not current
+                    or not current.ambient
+                    or check is None
+                    or source is None
+                    or source.deleted_at is not None
+                    or await is_blocked(session, chat.id, asker.id)
+                ):
+                    return
+                active = await reply_rules.candidates(session, chat.id, thread, asker.id)
+                rules = tuple(r for r in active if r.id in matched)
+                check.matched = [r.id for r in rules]
+            if rules:
+                await self._answer(message, current, trigger="rule", rules=rules)
 
     async def _answered(self, chat_id: int, message_id: int) -> bool:
         """A redelivered update (e.g. after a restart) must not be answered twice."""
@@ -268,7 +353,13 @@ class Runtime:
         return found is not None
 
     async def _answer(
-        self, message: TgMessage, chat: Chat, *, trigger: str, since: datetime | None = None
+        self,
+        message: TgMessage,
+        chat: Chat,
+        *,
+        trigger: str,
+        since: datetime | None = None,
+        rules: tuple[ReplyRule, ...] = (),
     ) -> Outcome:
         asker = message.from_user
         if asker is None:
@@ -284,11 +375,11 @@ class Runtime:
         )
         keys = True
         while True:  # a key that failed before anything was sent: answered again without keys, once
-            funds = await self._reserve(chat, asker.id, operation_id, keys=keys)
+            funds = await self._reserve(chat, asker.id, operation_id, keys=keys, group_only=bool(rules))
             await announce(
                 self.db, self.bot, chat, target.thread_id, locale
             )  # keys that stopped serving here
-            if funds is None and trigger == "job":  # the scheduler posts its own note
+            if funds is None and (trigger == "job" or rules):  # the scheduler posts its own note
                 return Outcome(None, "unfunded", ())
             if funds is None:  # nobody can pay: offer Derpcoins or free models (consent / admin opt-in)
                 await answer_unfunded(self.db, self.bot, message, chat, target, locale)
@@ -302,7 +393,9 @@ class Runtime:
                 funds=held,
                 trigger=trigger,
                 trigger_message_id=message.message_id or None,
-                compose=lambda pin, held=held: self._compose(message, chat, held, pin, since=since),
+                compose=lambda pin, run_id, held=held: self._compose(
+                    message, chat, held, pin, since=since, rules=rules, group_run=run_id if rules else None
+                ),
                 say=lambda text: self._say(target, text),
             )
             failure = outcome.key_failure
@@ -347,6 +440,8 @@ class Runtime:
             lookups=self.lookups,
             workers=self.workers,
             seen=ask.seen,
+            reply_rules=ask.reply_rules,
+            rule_approver=ask.rule_approver,
             history_start=len(ask.history),
         )
 
@@ -417,7 +512,14 @@ class Runtime:
         return Preview(captured.bodies[0], funds.funding, pin, ask.tokens, self.prefix[funds.funding])
 
     async def _reserve(
-        self, chat: Chat, user_id: int, operation_id: str, *, dry: bool = False, keys: bool = True
+        self,
+        chat: Chat,
+        user_id: int,
+        operation_id: str,
+        *,
+        dry: bool = False,
+        keys: bool = True,
+        group_only: bool = False,
     ) -> Funds | None:
         """The first payer that covers a turn (``dry``: decided, nothing held); free models when allowed.
 
@@ -433,6 +535,7 @@ class Runtime:
             free_allowed=free_allowed,
             dry=dry,
             keys=keys,
+            group_only=group_only,
         )
 
     async def _compose(
@@ -443,6 +546,8 @@ class Runtime:
         pin: RolePin,
         *,
         preview: bool = False,
+        group_run: int | None = None,
+        rules: tuple[ReplyRule, ...] = (),
         since: datetime | None = None,
     ) -> Ask:
         """What a fresh run puts to the model for ``message``: the window before it and the request.
@@ -465,7 +570,15 @@ class Runtime:
             None
             if preview
             else asyncio.create_task(
-                self.decider.decide(message, bot_id=self.bot.id, tz=tz, images=images, effort=deeper)
+                self.decider.decide(
+                    message,
+                    bot_id=self.bot.id,
+                    tz=tz,
+                    images=images,
+                    effort=deeper,
+                    key=funds.key,
+                    group_run=group_run,
+                )
             )
         )
         try:
@@ -522,9 +635,11 @@ class Runtime:
                 tz=tz,
                 topic=topic.name if topic else None,
                 rules=chat.rules,
-                notes=notes_block(memory, asker.full_name, mode),
+                notes=None if rules else notes_block(memory, asker.full_name, mode),
                 blind=bool(inspected) and not pin.vision,
             )
+            if rules and message.message_id:
+                brief += "\n" + reply_rules.instructions(rules)
             request = f"{brief}\n\n{prompt}"  # the changing part goes last, after the cacheable prefix
             history = (
                 [ModelRequest(parts=[UserPromptPart(card)]), *window.messages] if card else window.messages
@@ -537,6 +652,7 @@ class Runtime:
                 prompt=prompt,
                 tokens=window.tokens + (estimate_tokens(card) if card else 0),
                 trigger_message_id=message.message_id,
+                reply_rules=rules,
                 seen=tuple(dict.fromkeys(row.message_id for row in images.rows)),
                 unnoted=[item for item in inspected if item.row.message_id not in images.unnoted],
                 effort=decided.effort,
@@ -555,7 +671,7 @@ class Runtime:
         funds: Funds,
         trigger: str,
         trigger_message_id: int | None,
-        compose: Callable[[RolePin], Awaitable[Ask]],
+        compose: Callable[[RolePin, int], Awaitable[Ask]],
         say: Callable[[str], Awaitable[None]],
     ) -> Outcome:
         """Run the model on what ``compose`` asks, then deliver, record and settle; notices go to ``say``."""
@@ -581,7 +697,7 @@ class Runtime:
                     key_id=key.key_id if key else None,
                 )
                 run_id = run.id
-            ask = await compose(pin)
+            ask = await compose(pin, run_id)
             factory = self._factory(funds)
             model = factory(pin)
             deps = self._deps(chat, user_id, locale, target, funds, pin, model, ask, run_id=run.id)
@@ -669,14 +785,16 @@ class Runtime:
             )
             await flush(deps)  # results kept for a next step nobody took: posted before the text answer
             silent = output.strip() in SILENT and bool(
-                deps.delivered or deps.reacted
-            )  # a sticker/poll said it all
+                deps.delivered or deps.reacted or deps.edited_target
+            )  # a visible output or an already-current edit target said it all
             if error is None and not silent and (output.strip() or not (deps.delivered or stopped)):
                 spoke = True
                 try:
                     async with self.db.session() as session:  # "#id" references open the message
                         links = await message_links(session, chat, output)
-                    sent = await send_markdown(self.bot, target, output, trusted=False, links=links)
+                    sent = await send_markdown(
+                        self.bot, deps.edited_target or target, output, trusted=False, links=links
+                    )
                 except PartialDeliveryError as exc:  # what Telegram accepted still counts
                     error, sent = exc, exc.sent
                 except TelegramAPIError as exc:
@@ -689,7 +807,8 @@ class Runtime:
             async with self.db.transaction() as session:
                 stored = await session.merge(run)
                 for message_id, kind in deps.delivered:
-                    record_output(session, stored, message_id, kind)
+                    if kind != "edit":  # edit receipts were saved alongside the updated message
+                        record_output(session, stored, message_id, kind)
                 for message_id in deps.reacted:
                     record_output(session, stored, message_id, "reaction")
                 finish_run(
@@ -893,6 +1012,27 @@ class Runtime:
         found = resumption(approval, history)
         if paused is None or found is None:  # its history is gone (privacy, retention): nothing to resume
             return await say(t(locale, "approvals.failed"))
+        rules: tuple[ReplyRule, ...] = ()
+        origin_id = approval.args.get("job", {}).get("reply_rule_id")
+        if paused.trigger == "rule" or origin_id is not None:
+            if not chat.ambient or not await is_admin(self.bot, chat, approval.user_id):
+                return await say(t(locale, "approvals.failed"))
+            async with self.db.session() as session:
+                blocked = await is_blocked(session, chat.id, paused.user_id)
+                if paused.trigger == "job":
+                    origin = await session.get(ReplyRule, origin_id)
+                    if origin and origin.state == "active" and origin.chat_id == chat.id:
+                        rules = (origin,)
+                else:
+                    check = await session.get(ReplyRuleCheck, (chat.id, paused.trigger_message_id))
+                    source = await session.get(Message, (chat.id, paused.trigger_message_id))
+                    if check and source and source.deleted_at is None:
+                        eligible = await reply_rules.candidates(
+                            session, chat.id, paused.thread_id, paused.user_id
+                        )
+                        rules = tuple(r for r in eligible if r.id in check.matched)
+            if blocked or not any(r.id == origin_id and r.admin_id == approval.user_id for r in rules):
+                return await say(t(locale, "approvals.failed"))
         frontier, approved = found
         ask = Ask(
             history=history,
@@ -900,6 +1040,8 @@ class Runtime:
             trigger_message_id=paused.trigger_message_id or 0,
             tokens=messages_tokens(history),
             approved=approved,
+            reply_rules=rules,
+            rule_approver=approval.user_id if rules else None,
             # The request turn stays at the head, so pausing again still resumes with what was asked.
             carried=[*history[:1], *history[max(frontier, 1) :]],
         )
@@ -908,24 +1050,25 @@ class Runtime:
             private=chat.type == "private",
             user_id=approval.user_id,
             operation_id=f"approval:{approval.id}",
-            paid_minimum=approval.credits,
+            paid_minimum=approval.credits if approval.kind == "image" else None,
+            group_only=bool(rules),
         )
         if funds is None:
             return await say(
                 t(locale, "approvals.no_coins"), markup(buy_button(locale, group=chat.type != "private"))
             )
 
-        async def compose(_pin: RolePin) -> Ask:
+        async def compose(_pin: RolePin, _run_id: int) -> Ask:
             return ask
 
         outcome = await self._run(
             chat=chat,
-            user_id=approval.user_id,
+            user_id=paused.user_id if rules else approval.user_id,
             locale=locale,
             target=target,
             funds=funds,
-            trigger="callback",
-            trigger_message_id=None,
+            trigger=paused.trigger if rules else "callback",
+            trigger_message_id=paused.trigger_message_id if rules else None,
             compose=compose,
             say=say,
         )

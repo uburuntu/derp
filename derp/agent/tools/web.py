@@ -41,7 +41,7 @@ async def search_budget(ctx: RunContext[RunDeps]) -> int | None:
     if left is None:
         return SEARCHES
     fee = deps.settings.credits_for_usd(deps.settings.web_search_price_usd)
-    return max(0, min(SEARCHES, left // max(fee, 1)))
+    return max(0, min(SEARCHES, int(left // fee))) if fee else SEARCHES
 
 
 async def web_search(ctx: RunContext[RunDeps]) -> WebSearchTool | None:

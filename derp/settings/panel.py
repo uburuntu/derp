@@ -39,6 +39,7 @@ from derp.history.retention import default_days, kept_days
 from derp.keys.flows import chat_keys, chat_keys_line, chat_keys_page, live_keys, plug_link
 from derp.keys.notices import KeyAction
 from derp.locales import day_count, resolve, t
+from derp.memory import reply_rules
 from derp.memory.notes import is_admin
 from derp.money.free import POLICY_VERSION, consented
 from derp.scheduler.jobs import (
@@ -173,6 +174,9 @@ async def render(
         )
         confirm = button(t(locale, "settings.context_off_confirm"), _act("ambient", "purge"), style="danger")
         return t(locale, "settings.context_off_page", count=ambient_count or 0), markup(confirm, cancel)
+    if page == "auto":
+        text, rows = await reply_rules.page(session, chat, locale)
+        return text, markup(*rows, back)
     if page == "jobs":
         text, rows = await _jobs_page(session, chat, viewer or (user.id if user else None), admin, locale)
         return text, markup(*rows, back)
@@ -250,6 +254,7 @@ async def render(
         [ambient, button(t(locale, "settings.retention_button", days=kept), _act("page", "retention"))],
         button(t(locale, "settings.notes_button", mode=mode), _act("page", "notes")),
         button(free, _act("free", "off" if free_on else "on")),
+        button(t(locale, "auto.title"), _act("page", "auto")) if group else None,
         button(t(locale, "settings.rules_clear"), _act("rules", "clear")) if chat.rules else None,
         button(t(locale, "settings.jobs_button", count=jobs), _act("page", "jobs")) if jobs else None,
         plug,

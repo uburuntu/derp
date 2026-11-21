@@ -9,15 +9,17 @@ from typing import Literal
 
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.deps import RunDeps
 from derp.agent.outputs import Refused, check_budget, deliver
 from derp.agent.toolsets import Family
-from derp.history.models import Chat, Message
+from derp.history.models import Chat, Message, User
+from derp.history.queries import members_named
 from derp.history.render import neutralize
 from derp.memory.command import rules_keyboard, rules_prompt
-from derp.memory.models import Note
+from derp.memory.models import Note, ReplyRule
 from derp.memory.notes import (
     FOUND_NOTES,
     RULES_CHARS,
@@ -28,6 +30,7 @@ from derp.memory.notes import (
     may_change,
     rewrite,
 )
+from derp.memory.reply_rules import ExactGrant, OutputTool, change, confirmation, describe
 from derp.money.funding import Funding
 from derp.telegram.sender import send_markdown
 
@@ -38,6 +41,7 @@ toolset = FunctionToolset[RunDeps]()
 async def remember(ctx: RunContext[RunDeps], text: str, about: Literal["chat", "me"] = "chat") -> str:
     """Save a short fact for future conversations in this chat.
 
+    Requests to remember when to reply in the future go directly to auto_reply; they create no note.
     Chat notes follow the chat notes policy in the situation; personal notes are saved when asked, or when
     something about the person is clearly worth keeping. A correction is edit_note, not a second note; a
     list (films to watch, places, games) is one note you edit to add or strike items.
@@ -80,6 +84,8 @@ async def find_notes(ctx: RunContext[RunDeps], queries: list[str] | None = None)
     deps = ctx.deps
     async with deps.db.session() as session:
         memory = await load_memory(session, deps.chat.id, deps.user_id)
+    if deps.reply_rules:
+        memory.my_notes.clear()
     found = matching(memory, (queries or [])[:5])
     if not found:
         return "No notes match."
@@ -147,7 +153,14 @@ async def _admin(deps: RunDeps) -> bool:
 async def _note(session: AsyncSession, deps: RunDeps, note_id: int) -> Note | None:
     """One of this chat's active notes."""
     note = await session.get(Note, note_id)
-    return note if note is not None and note.chat_id == deps.chat.id and note.state == "active" else None
+    return (
+        note
+        if note is not None
+        and note.chat_id == deps.chat.id
+        and note.state == "active"
+        and (not deps.reply_rules or note.user_id is None)
+        else None
+    )
 
 
 def _refusal(note: Note, verb: str) -> str:
@@ -219,3 +232,117 @@ def _plain(text: str) -> str:
 family = Family(
     "memory", toolset, tiers=frozenset({Funding.PAID, Funding.SPONSORED}), deferred=("set_chat_rules",)
 )
+
+
+@toolset.tool(sequential=True)
+async def auto_reply(
+    ctx: RunContext[RunDeps],
+    operation: Literal["create", "revise", "list", "pause", "resume", "remove"],
+    rule_id: int | None = None,
+    condition: str = "",
+    action: str = "",
+    sender: str | None = None,
+    outputs: list[OutputTool] | None = None,
+    needs_media: bool = False,
+    calls: list[ExactGrant] | None = None,
+) -> str:
+    """Manage automatic replies to future group messages, including "remember to reply when ...".
+    Create/revise drafts always need the admin's button. Use a standing chat rule for instructions
+    that apply only when already invoked. Number these as "rule 3".
+
+    Args:
+        condition: Topic or event only, e.g. "mentions their dog". A person belongs in sender.
+        action: Exactly what the admin wants done on a match, e.g. fetch fresh prices and reply.
+        sender: Required when drafting. Copy the exact member name or @username from chat history, or use
+            "*" if the admin wants any human member. For "when Bob talks about his dog" use sender="Bob"
+            and condition="mentions his dog". Putting Bob only in condition would screen everybody.
+        outputs: Extra output tools the admin authorizes for this action; text and lookups are included.
+        needs_media: The condition requires inspecting attached pictures or a recording's transcript.
+        calls: Fixed actions explicitly requested for every match, e.g. message_action with action=pin,
+            message_id="$message". Any additional action will ask the installing admin first.
+        rule_id: The existing rule for revise/pause/resume/remove.
+    """
+    deps = ctx.deps
+    if deps.chat.type not in {"supergroup", "group"} or not await is_admin(deps.bot, deps.chat, deps.user_id):
+        return "Only group admins can manage automatic replies."
+    async with deps.db.transaction() as session:
+        if operation == "list":
+            rows = await session.scalars(
+                select(ReplyRule)
+                .where(ReplyRule.chat_id == deps.chat.id, ReplyRule.state != "draft")
+                .order_by(ReplyRule.id)
+            )
+            return (
+                "\n".join(
+                    f"{describe(r, deps.locale)} ({r.state}; "
+                    + ("whole group" if r.whole_chat else f"topic {r.thread_id or 'General'}")
+                    + ")"
+                    for r in rows
+                )
+                or "No automatic reply rules."
+            )
+        current = await session.get(Chat, deps.chat.id, with_for_update=True)
+        if current is None:
+            return "This group is no longer available."
+        existing = None
+        if operation != "create":
+            existing = await session.scalar(
+                select(ReplyRule)
+                .where(ReplyRule.id == rule_id, ReplyRule.chat_id == deps.chat.id, ReplyRule.state != "draft")
+                .with_for_update()
+            )
+            if existing is None:
+                return "Rule not found in this group."
+            if operation != "revise":
+                return (
+                    "Updated."
+                    if await change(session, existing, operation)
+                    else "Rule already in that state."
+                )
+        if not current.ambient:
+            return "Enable ambient group context in settings before configuring automatic replies."
+        if not (0 < len(condition.strip()) <= 300 and 0 < len(action.strip()) <= 600):
+            return "Supply a condition (up to 300 characters) and the action (up to 600)."
+        if not sender or not sender.strip():
+            return 'Who can trigger it? Set sender to the exact @username/name from the chat, or "*" for any human.'
+        owner = None
+        if sender.strip() != "*":
+            found = (await members_named(session, deps.chat.id, [sender])).get(sender)
+            if found is None:
+                return "That name is missing or ambiguous in this group. Ask for an exact @username."
+            owner = await session.get(User, found)
+            if owner is None or owner.is_bot:
+                return "Only human members can trigger a reply."
+        try:
+            check_budget(deps)
+        except Refused as refusal:
+            return str(refusal)
+        rule = ReplyRule(
+            chat_id=deps.chat.id,
+            admin_id=deps.user_id,
+            thread_id=deps.target.thread_id,
+            sender_id=owner.id if owner else None,
+            sender_name=owner.label if owner else None,
+            condition=condition.strip(),
+            action=action.strip(),
+            grants=[{"tool": tool} for tool in dict.fromkeys(outputs or [])]
+            + [g.model_dump() for g in calls or []],
+            needs_media=needs_media,
+            replaces_id=existing.id if existing else None,
+        )
+        if sum(len(str(g)) for g in rule.grants) > 1000:
+            return "Use fewer permissions so the complete rule fits on its confirmation card."
+        session.add(rule)
+        await session.flush()
+        text, keyboard = await confirmation(session, rule, current, deps.locale, deps.settings)
+    try:
+        await deliver(
+            deps,
+            "other",
+            "rule confirmation",
+            lambda: send_markdown(deps.bot, deps.target, text, reply_markup=keyboard, trusted=False),
+            history=False,
+        )
+    except Refused as refusal:
+        return str(refusal)
+    return "Shown for confirmation. The admin chooses the scope on the card; no rule is active yet."

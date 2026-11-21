@@ -7,7 +7,7 @@ generated from the code, so they are always current. A test rejects digits in th
 ## overview
 
 Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pictures, memes, polls, reminders.
-- Private chat: Derp answers every message. Groups: only when called (see groups).
+- Private chat: Derp answers every message. Groups: when called or when a configured automatic reply matches (see groups).
 - Inline mode: type @username and a question in any chat; the answer is edited into the sent message.
 - Guest mode: a mention in a chat Derp isn't a member of gets one reply. Inline and guest answers see no chat
   history and nothing from them is stored except accounting. They can still look things up (weather, prices and
@@ -69,14 +69,22 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 
 ## groups
 
-- Call Derp by @mention, by name (derp, дерп and their inflections) or by replying to one of its messages. It stays
-  quiet otherwise and never joins in on its own. A message with just the name answers only when it talks to Derp
-  ("derp, settle this for us"); the word used as slang ("classic derp moment") or Derp talked about to others
-  ("derp drew a horse yesterday") gets nothing and counts as an ordinary message (in a mentions-only group it isn't
-  kept). If that check is unavailable, Derp answers as usual.
+- Call Derp by @mention, by name (derp, дерп and their inflections anywhere in a message), by a command or
+  by replying to one of its messages. These human calls reach Derp directly.
+- An admin can ask “Derp, reply to Alex when he mentions his dog” or “reply with fresh prices when someone posts
+  market data”. Derp shows the condition, sender, action and permissions for confirmation. In forums the admin
+  chooses this topic or the whole group. Manage, pause and remove rules in /settings or ask Derp to revise one.
+  While context is enabled, new ordinary human messages are screened against relevant rules. The group pays
+  for those checks even on a miss. An eligible OpenAI key or shared Derpcoins pay for checks, and the group's
+  key or shared Derpcoins pay for matched replies. Privileged actions outside the rule ask its admin first.
 - Context: while the group allows it, Derp reads the chat to keep up and remembers it for the retention period.
   Admins can switch to mentions only in /settings (that deletes the stored context). With Telegram's privacy mode
   on and Derp not an admin, it only sees messages addressed to it anyway.
+- Ask Derp to fix a typo, revise a table, change a caption, or replace a picture in one of its answers.
+  The edited message keeps its link. If Telegram requires a new message for that change, Derp posts the
+  replacement as a reply to the original. A new question or comparison gets a separate answer.
+- When Telegram delivers another bot's group posts, Derp can use them as context for a person's question.
+  Those posts follow the group's context setting. Derp stays silent even when another bot mentions it or sends a command.
 - Making Derp an admin is optional: it then sees every message, reactions and members joining or leaving, and can
   pin messages for admins. The join notice and /settings (while Derp can't read the chat) carry a button for it.
 - In forum groups each topic is its own conversation.
@@ -100,7 +108,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 
 ## money
 
-- Answers cost Derpcoins: what the AI providers actually charged plus a margin, rounded up. If nothing reached
+- Answers cost Derpcoins: what the AI providers actually charged plus a margin. Even a fraction of a coin counts. If nothing reached
   the chat, nothing is charged. If an answer breaks or gets too expensive after part of it (even just a
   reaction) reached the chat, the work so far is charged, and Derp says so. Reply /info to any answer to see its
   model, tokens, cost and who paid (and to report a problem with it).
@@ -124,6 +132,10 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   purchases. Asking Derp ("don't name me when I chip in", or the opposite) switches it either way. /help and
   /credits in a group list who chipped in lately (named buyers only, refunds excluded); Derp mentions patrons only
   when asked.
+- Ask how many Derpcoins the group has left or how much it spent on a given day. Derp can show available
+  coins, holds, shared charges by member, model usage, cached tokens, and who funded the calls. Personal
+  balances are delivered privately. Ask about the cost of a particular answer by replying or sharing its
+  message link. The receipt includes the original and later edits. Small charges use fractional Derpcoins.
 - When a group's wallet can no longer pay for an answer, Derp says so once, quietly, with a top-up button, and not
   again until someone tops it up; from then on each asker's own Derpcoins pay, as below.
 - Who pays — a key plugged into the chat comes first (see keys). Then, private chat: the person's paid Derpcoins (Derp+ first, as it expires, then bought packs), then

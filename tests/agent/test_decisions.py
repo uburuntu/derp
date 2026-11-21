@@ -47,13 +47,16 @@ def test_the_synthetic_mentions_are_all_name_only_triggers(case: dict[str, Any])
 
 
 def decider(api: object = None, db: object = None, **settings: Any) -> Decider:
-    return Decider(cast(Database, db), cast(OpenRouterAPI, api), cast(PinStore, None), Decisions(**settings))
+    return Decider(
+        cast(Database, db),
+        cast(OpenRouterAPI, api),
+        cast(PinStore, None),
+        Settings(_env_file=None, decisions=Decisions(**settings)),  # type: ignore[call-arg]
+    )
 
 
 def test_answers_become_a_verdict_at_the_thresholds() -> None:
     read = decider().read
-    assert read({"addressed": {"noul": 0.31}})[0] == Verdict(addressed=True)
-    assert read({"addressed": {"noul": 0.12}})[0] == Verdict(addressed=False)
     assert read({"images": {"noul": 0.03}})[0] == Verdict(images=False)
     assert read({"images": {"noul": 0.86}})[0] == Verdict()
     # Probabilities seen live: a multi-step word problem, a proof, a familiar explanation.
@@ -62,9 +65,8 @@ def test_answers_become_a_verdict_at_the_thresholds() -> None:
     explanation = {"probabilities": {"0": 0.78, "1": 0.22, "2": 0}}
     assert read({"effort": word_problem})[0].effort == "medium"
     assert read({"effort": proof})[0].effort == "high"
-    verdict, seen = read({"effort": explanation, "addressed": {"noul": 0.9}})
+    verdict, seen = read({"effort": explanation})
     assert verdict == Verdict() and seen == {
-        "addressed": 0.9,
         "effort_some": 0.22,
         "effort_deep": 0,
         "effort": "pin",
@@ -78,7 +80,9 @@ class FakeDecisions:
     delay: float = 0
     asked: list[tuple[Any, dict[str, Any]]] = field(default_factory=list[tuple[Any, dict[str, Any]]])
 
-    async def decide(self, model: str, state: Any, questions: dict[str, Any], *, zdr: bool = True) -> Decided:
+    async def decide(
+        self, model: str, state: Any, questions: dict[str, Any], *, zdr: bool = True, **kwargs: Any
+    ) -> Decided:
         assert model == "typesafe/jev-1.14" and zdr
         self.asked.append((state, questions))
         await asyncio.sleep(self.delay)
@@ -131,21 +135,25 @@ async def test_one_call_asks_what_applies_on_short_state_and_is_ledgered(
     await seed(database)
     api = FakeDecisions(
         {
-            "addressed": {"type": "noul", "noul": 0.95},
             "images": {"type": "noul", "noul": 0.97},
             "effort": {"type": "score", "score": 0, "probabilities": {"0": 1, "1": 0, "2": 0}},
         }
     )
-    deciding = Decider(database, cast(OpenRouterAPI, api), await pins(database, settings), Decisions())
+    deciding = Decider(
+        database,
+        cast(OpenRouterAPI, api),
+        await pins(database, settings),
+        settings.model_copy(update={"decisions": Decisions()}),
+    )
     async with database.session() as session:
         photo = await session.get(MessageMedia, (CHAT, 3, 0))
     images = Referenced([photo], fallback=True) if photo else Referenced([])
     verdict = await deciding.decide(
-        tg(6, "derp, what breed is this?"), bot_id=42, tz=UTC_TZ, named=True, images=images, effort=True
+        tg(6, "derp, what breed is this?"), bot_id=42, tz=UTC_TZ, images=images, effort=True
     )
     assert verdict == Verdict()
     ((state, questions),) = api.asked
-    assert list(questions) == ["addressed", "images", "effort"]
+    assert list(questions) == ["images", "effort"]
     assert [line.split(" ", 2)[2] for line in state["previous_messages"]] == [
         "Ann: [photo]",
         "Bob: nice pic",
@@ -169,36 +177,20 @@ async def test_effort_is_asked_only_when_the_turn_allows_it(database: Database, 
     await seed(database)
     api = FakeDecisions(
         {
-            "addressed": {"type": "noul", "noul": 0.9},
             "effort": {"type": "score", "probabilities": {"0": 0.01, "1": 0.02, "2": 0.97}},
         }
     )
-    deciding = Decider(database, cast(OpenRouterAPI, api), await pins(database, settings), Decisions())
+    deciding = Decider(
+        database,
+        cast(OpenRouterAPI, api),
+        await pins(database, settings),
+        settings.model_copy(update={"decisions": Decisions()}),
+    )
     message = tg(7, "@DerpRobot prove sqrt(2) is irrational")
     assert await deciding.decide(message, bot_id=42, tz=UTC_TZ, images=Referenced([])) == Verdict()
     assert api.asked == []  # nothing to ask on an unpaid mention without fallback images
-    assert await deciding.decide(message, bot_id=42, tz=UTC_TZ, named=True) == Verdict()
     assert (await deciding.decide(message, bot_id=42, tz=UTC_TZ, effort=True)).effort == "high"
-    assert [list(questions) for _, questions in api.asked] == [["addressed"], ["effort"]]
-
-
-@pytest.mark.db
-async def test_a_message_not_stored_yet_is_screened_with_the_lines_before_it(
-    database: Database, settings: Settings
-) -> None:
-    """Capture screens a name-only mention before storing it: the state still carries its topic's last lines."""
-    await seed(database)
-    api = FakeDecisions({"addressed": {"type": "noul", "noul": 0.02}})
-    deciding = Decider(database, cast(OpenRouterAPI, api), await pins(database, settings), Decisions())
-    verdict = await deciding.decide(tg(9, "classic derp moment"), bot_id=42, tz=UTC_TZ, named=True)
-    assert verdict == Verdict(addressed=False)
-    ((state, _),) = api.asked
-    assert [line.split(" ", 2)[2] for line in state["previous_messages"]] == [
-        "Bob: nice pic",
-        "Bob: who's coming tonight?",
-        "Ann: derp, what breed is this?",
-    ]
-    assert state["new_message"] == "[09:09] #9 Ann: classic derp moment"
+    assert [list(questions) for _, questions in api.asked] == [["effort"]]
 
 
 @pytest.mark.db
@@ -207,9 +199,9 @@ async def test_a_message_not_stored_yet_is_screened_with_the_lines_before_it(
     [
         FakeDecisions(error=OpenRouterError(503, "down")),
         FakeDecisions(delay=1),  # past the timeout
-        FakeDecisions({"addressed": {"type": "noul"}, "effort": {}}),  # unreadable answers
-        FakeDecisions({"addressed": {"noul": 0.9}, "effort": {"probabilities": [0.1, 0.9]}}),
-        FakeDecisions({"addressed": {"noul": 0.9}, "effort": {"probabilities": None}}),
+        FakeDecisions({"effort": {}}),  # unreadable answers
+        FakeDecisions({"effort": {"probabilities": [0.1, 0.9]}}),
+        FakeDecisions({"effort": {"probabilities": None}}),
     ],
 )
 async def test_failures_decide_as_if_nothing_was_asked(
@@ -217,9 +209,12 @@ async def test_failures_decide_as_if_nothing_was_asked(
 ) -> None:
     await seed(database)
     deciding = Decider(
-        database, cast(OpenRouterAPI, api), await pins(database, settings), Decisions(timeout_seconds=0.05)
+        database,
+        cast(OpenRouterAPI, api),
+        await pins(database, settings),
+        settings.model_copy(update={"decisions": Decisions(timeout_seconds=0.05)}),
     )
-    verdict = await deciding.decide(tg(6, "derp moment"), bot_id=42, tz=UTC_TZ, named=True, effort=True)
+    verdict = await deciding.decide(tg(6, "derp moment"), bot_id=42, tz=UTC_TZ, effort=True)
     assert verdict == Verdict()
     assert len(api.asked) == 1
 
@@ -230,9 +225,12 @@ async def test_a_timed_out_call_is_ledgered_at_an_estimate(database: Database, s
     await seed(database)
     api = FakeDecisions(delay=1)
     deciding = Decider(
-        database, cast(OpenRouterAPI, api), await pins(database, settings), Decisions(timeout_seconds=0.05)
+        database,
+        cast(OpenRouterAPI, api),
+        await pins(database, settings),
+        settings.model_copy(update={"decisions": Decisions(timeout_seconds=0.05)}),
     )
-    assert await deciding.decide(tg(6, "derp moment"), bot_id=42, tz=UTC_TZ, named=True) == Verdict()
+    assert await deciding.decide(tg(6, "derp moment"), bot_id=42, tz=UTC_TZ, effort=True) == Verdict()
     async with database.session() as session:
         call = await session.scalar(select(ProviderCall))
     assert call is not None and call.kind == "decision" and call.model == "typesafe/jev-1.14"
@@ -257,26 +255,39 @@ async def test_the_state_the_pin_and_the_ledger_failing_decide_as_if_unasked(
     database: Database, settings: Settings
 ) -> None:
     await seed(database)
-    api = FakeDecisions({"addressed": {"type": "noul", "noul": 0.01}})
+    api = FakeDecisions({"effort": {"probabilities": {"2": 1}}})
     store = await pins(database, settings)
     message = tg(6, "derp moment")
-    no_state = Decider(cast(Database, Broken()), cast(OpenRouterAPI, api), store, Decisions())
-    no_pin = Decider(database, cast(OpenRouterAPI, api), cast(PinStore, Broken()), Decisions())
+    no_state = Decider(
+        cast(Database, Broken()),
+        cast(OpenRouterAPI, api),
+        store,
+        settings.model_copy(update={"decisions": Decisions()}),
+    )
+    no_pin = Decider(
+        database,
+        cast(OpenRouterAPI, api),
+        cast(PinStore, Broken()),
+        settings.model_copy(update={"decisions": Decisions()}),
+    )
     for deciding in (no_state, no_pin):
-        assert await deciding.decide(message, bot_id=42, tz=UTC_TZ, named=True) == Verdict()
+        assert await deciding.decide(message, bot_id=42, tz=UTC_TZ, effort=True) == Verdict()
     assert api.asked == []
 
     class NoLedger:  # reads work, the ledger write fails
         session = database.session
         transaction = Broken.session
 
-    unledgered = Decider(cast(Database, NoLedger()), cast(OpenRouterAPI, api), store, Decisions())
-    assert await unledgered.decide(message, bot_id=42, tz=UTC_TZ, named=True) == Verdict(addressed=False)
+    unledgered = Decider(
+        cast(Database, NoLedger()),
+        cast(OpenRouterAPI, api),
+        store,
+        settings.model_copy(update={"decisions": Decisions()}),
+    )
+    assert await unledgered.decide(message, bot_id=42, tz=UTC_TZ, effort=True) == Verdict()
 
 
 async def test_disabled_decisions_ask_nothing() -> None:
     api = FakeDecisions()
-    verdict = await decider(api, enabled=False).decide(
-        tg(6, "derp lol"), bot_id=42, tz=UTC_TZ, named=True, effort=True
-    )
+    verdict = await decider(api, enabled=False).decide(tg(6, "derp lol"), bot_id=42, tz=UTC_TZ, effort=True)
     assert verdict == Verdict() and api.asked == []

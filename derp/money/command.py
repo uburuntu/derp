@@ -8,25 +8,25 @@ also see who spent the chat's Derpcoins in the last 30 days.
 """
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from aiogram import Bot, Router
 from aiogram.types import InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from derp.agent.models import AgentRun
-from derp.agent.runs import run_for_output
 from derp.billing.patrons import lately_line
 from derp.billing.purchases import current_plan
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.history.models import Chat, User
+from derp.history.models import Chat
 from derp.history.render import one_line
-from derp.keys.models import ContributedKey
 from derp.keys.notices import brand, owner_name
 from derp.locales import resolve, t
 from derp.memory.notes import is_admin
-from derp.money.funding import day_end, run_upstream, sponsored_lot_id
+from derp.money.accounting import Receipt, receipts, usage
+from derp.money.amounts import Amount, format_dc
+from derp.money.funding import day_end, sponsored_lot_id
 from derp.money.models import CreditLot, Wallet
 from derp.money.wallets import balances, wallet
 from derp.ops.feedback import report_button
@@ -58,12 +58,12 @@ async def show_credits(message: Message, db: Database, settings: Settings, bot: 
     await _reply_privately(bot, message, locale, text)
 
 
-def bought_total(balances_by_source: dict[str, int]) -> int:
+def bought_total(balances_by_source: dict[str, Decimal]) -> Amount:
     """Derpcoins that never expire: bought, granted or carried over from the previous Derp."""
     return sum(balances_by_source.get(source, 0) for source in ("purchase", "grant", "migration"))
 
 
-async def free_left_today(session: AsyncSession, settings: Settings, user_id: int, now: datetime) -> int:
+async def free_left_today(session: AsyncSession, settings: Settings, user_id: int, now: datetime) -> Amount:
     today = await session.scalar(
         select(CreditLot.remaining).where(CreditLot.operation_id == sponsored_lot_id(user_id, now))
     )
@@ -75,7 +75,7 @@ async def credits_card(
 ) -> str:
     """The person's balances (and the chat's, with its spenders for admins): private information."""
     now = datetime.now(UTC)
-    chat_left: int | None = None
+    chat_left: Amount | None = None
     async with db.transaction() as session:
         mine = await balances(session, (await wallet(session, "user", user_id)).id, now=now)
         plan = await current_plan(session, user_id, now=now)
@@ -86,85 +86,52 @@ async def credits_card(
             chat_left = sum((await balances(session, chat_wallet.id, now=now)).values())
     lines = [t(locale, "credits.title")]
     if plan is not None:
-        left = f"{mine.get('plan', 0):,}"
+        left = format_dc(mine.get("plan", 0))
         lines.append(t(locale, "credits.plan", left=left, date=f"{plan.period_end:%Y-%m-%d}"))
     bought = bought_total(mine)
-    lines.append(t(locale, "credits.bought", left=f"{bought:,}"))
+    lines.append(t(locale, "credits.bought", left=format_dc(bought)))
     lines.append(
         t(
             locale,
             "credits.free",
-            left=free,
-            daily=settings.sponsored_daily_credits,
+            left=format_dc(free),
+            daily=format_dc(settings.sponsored_daily_credits),
             time=f"{day_end(now):%H:%M} UTC",
         )
     )
     if chat_wallet is not None and chat_left is not None:
-        lines.append(t(locale, "credits.chat", left=f"{chat_left:,}"))
+        lines.append(t(locale, "credits.chat", left=format_dc(chat_left)))
         if patrons := await lately_line(db, chat_row.id, locale):
             lines.append(patrons)
         if await is_admin(bot, chat_row, user_id):
-            lines.extend(await _chat_usage(db, chat_wallet.id, locale, now))
+            lines.extend(await _chat_usage(db, chat_row, locale))
     lines.append(t(locale, "credits.hint"))
     return "\n".join(lines)
 
 
-async def _chat_usage(db: Database, wallet_id: int, locale: str, now: datetime) -> list[str]:
-    since = now - timedelta(days=USAGE_DAYS)
-    spent = func.sum(AgentRun.charged_credits)
+async def _chat_usage(db: Database, chat: Chat, locale: str) -> list[str]:
     async with db.session() as session:
-        rows = (
-            await session.execute(
-                select(User.first_name, User.last_name, spent)
-                .join(User, User.id == AgentRun.user_id)
-                .where(
-                    AgentRun.wallet_id == wallet_id,
-                    AgentRun.created_at >= since,
-                    AgentRun.charged_credits > 0,
-                )
-                .group_by(User.id, User.first_name, User.last_name)
-                .order_by(spent.desc())
-                .limit(USAGE_ROWS)
-            )
-        ).all()
-    if not rows:
+        # Historical run timestamps and stand-alone provider calls use the database clock.
+        now = (await session.execute(select(func.now()))).scalar_one()
+        report = await usage(
+            session, chat, now - timedelta(days=USAGE_DAYS), now, group_by="member", funding="chat_wallet"
+        )
+    spenders = [row for row in report["groups_top_50"] if row["wallet_dc"] != "0"]
+    if not spenders:
         return [t(locale, "credits.usage_none", days=USAGE_DAYS)]
-    lines = [f"- {literal(one_line(' '.join(p for p in (r[0], r[1]) if p)))} — {int(r[2]):,}" for r in rows]
+    lines = [f"- {literal(one_line(row['member']))} — {row['wallet_dc']}" for row in spenders[:USAGE_ROWS]]
     return [t(locale, "credits.usage", days=USAGE_DAYS), *lines]
 
 
-async def show_info(message: Message, db: Database, bot: Bot) -> None:
-    """Reply to one of Derp's messages: which model answered, the tokens, what it cost, and a way to report it."""
-    if message.from_user is None:
-        return
-    locale = resolve(message.from_user.language_code)
-    replied = message.reply_to_message
-    run: AgentRun | None = None
-    payer: str | None = None
-    keyed = ""  # a contributed key paid the turns: whose, and what its provider charged
-    if replied is not None:
-        async with db.session() as session:
-            run = await run_for_output(session, message.chat.id, replied.message_id)
-            if run is not None and run.wallet_id is not None:
-                payer = await session.scalar(select(Wallet.kind).where(Wallet.id == run.wallet_id))
-            if (
-                run is not None
-                and run.key_id is not None
-                and (key := await session.get(ContributedKey, run.key_id))
-            ):
-                owner = await session.get(User, key.user_id)
-                usd = await run_upstream(session, run.id)
-                keyed = t(
-                    locale,
-                    "info.key",
-                    who=owner_name(owner, locale),
-                    brand=brand(key.provider),
-                    usd=f"{usd:.4f}",
-                )
-    if run is None or replied is None:
-        await send_markdown(bot, Target.reply_to_message(message), t(locale, "info.how"))
-        return
-    funding = {"paid": f"info.paid_{payer or 'user'}", "sponsored": "info.sponsored", "free": "info.free"}
+def receipt_text(receipt: Receipt, locale: str) -> str:
+    run = receipt.run
+    funding = {
+        "paid": "info.by_key"
+        if receipt.key and not receipt.wallet_kind
+        else f"info.paid_{receipt.wallet_kind or 'user'}",
+        "sponsored": "info.sponsored",
+        "free": "info.free",
+    }
     text = t(
         locale,
         "info.receipt",
@@ -173,12 +140,43 @@ async def show_info(message: Message, db: Database, bot: Bot) -> None:
         output=f"{run.output_tokens:,}",
         context=f"{run.context_tokens:,}",
         tools=run.tool_calls,
-        charged=f"{run.charged_credits:,}",
+        charged=format_dc(run.charged_credits),
         funding=t(locale, funding.get(run.funding, "info.free")),
     )
-    if keyed:
-        text += "\n" + keyed
-    report = markup(report_button(locale, run.id, replied.message_id))
+    text += "\n" + t(
+        locale,
+        "info.costs",
+        cached=f"{run.cache_read_tokens:,}",
+        provider=format_dc(receipt.provider_usd),
+        fees=format_dc(receipt.fee_dc),
+    )
+    if receipt.key:
+        text += "\n" + t(
+            locale,
+            "info.key",
+            who=owner_name(receipt.contributor, locale),
+            brand=brand(receipt.key.provider),
+            usd=format_dc(receipt.upstream_usd),
+        )
+    return text
+
+
+async def show_info(message: Message, db: Database, bot: Bot) -> None:
+    """One receipt per version of the delivered message, with reporting tied to the latest version."""
+    if message.from_user is None:
+        return
+    locale = resolve(message.from_user.language_code)
+    replied = message.reply_to_message
+    async with db.session() as session:
+        entries = await receipts(session, message.chat.id, replied.message_id) if replied else []
+    if not entries or replied is None:
+        await send_markdown(bot, Target.reply_to_message(message), t(locale, "info.how"))
+        return
+    text = "\n\n".join(
+        (t(locale, "info.revision") + "\n" if entry.revision else "") + receipt_text(entry, locale)
+        for entry in entries
+    )
+    report = markup(report_button(locale, entries[-1].run.id, replied.message_id))
     await _reply_privately(bot, message, locale, text, report)
 
 

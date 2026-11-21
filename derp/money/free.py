@@ -42,6 +42,7 @@ from derp.history.models import Chat, ChatMember, User
 from derp.history.models import Message as StoredMessage
 from derp.locales import t
 from derp.memory.notes import is_admin
+from derp.money.amounts import Amount
 from derp.money.funding import Funder, Funds, day_end
 from derp.telegram.buttons import Press, button, markup, on_press
 from derp.telegram.sender import Target, send_markdown
@@ -278,7 +279,7 @@ async def _with_reply(session: AsyncSession, asked: Message) -> Message:
 
 
 async def note_empty_wallet(
-    bot: Bot, funder: Funder, chat: Chat, funds: Funds, charged: int, thread_id: int | None, locale: str
+    bot: Bot, funder: Funder, chat: Chat, funds: Funds, charged: Amount, thread_id: int | None, locale: str
 ) -> None:
     """After a charge to a group's wallet: one silent line once it can no longer pay a turn, per depletion."""
     if not charged or funds.wallet_id is None or chat.type == "private":
