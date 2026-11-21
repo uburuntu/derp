@@ -153,8 +153,11 @@ async def test_consenting_after_the_question_went_stale_says_so(
         await session.execute(update(ChatMember).values(waiting_at=datetime.now(UTC) - timedelta(hours=1)))
     consent = conversation.api.message(CARL.id, offer_id)["reply_markup"]["inline_keyboard"][0][1]
     await conversation.press(CARL, CARL.id, offer_id, consent["callback_data"])
-    assert "no longer waiting" in str(conversation.api.message(CARL.id, offer_id)["rich_message"])
-    assert model.requests == []
+    note = conversation.api.message(CARL.id, offer_id)
+    assert "no longer waiting" in str(note["rich_message"]) and "enabled free models" in str(
+        note["rich_message"]
+    )
+    assert "reply_markup" not in note and model.requests == []
 
 
 async def test_an_old_ask_gets_no_offer(

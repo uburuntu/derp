@@ -26,6 +26,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from magic_filter import MagicFilter
 
 from derp.locales import resolve, t
+from derp.telegram.bot import group_admin
 from derp.telegram.sender import NO_PREVIEW, RichRenderer, rich
 
 type Row = InlineKeyboardButton | Sequence[InlineKeyboardButton | None] | None
@@ -34,6 +35,15 @@ type Handler = Callable[..., Awaitable[Any]]
 
 def button(text: str, data: CallbackData, *, style: str | None = None) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=data.pack(), style=style)
+
+
+class Dismiss(CallbackData, prefix="dismiss"):
+    user_id: int | None = None
+
+
+def dismiss_button(locale: str, *, user_id: int | None = None) -> InlineKeyboardButton:
+    """OK for this card's recipient, a specified user, or (on a shared group card) its admins."""
+    return button(t(locale, "buttons.ok"), Dismiss(user_id=user_id))
 
 
 def link(text: str, url: str) -> InlineKeyboardButton:
@@ -69,6 +79,15 @@ class Press:
     @property
     def ephemeral(self) -> bool:
         return self.message.message_id == 0 and bool(self.message.ephemeral_message_id)
+
+    def has_pressed_button(self) -> bool:
+        """Telegram may send callback data that isn't on the originating message."""
+        keyboard = self.message.reply_markup
+        return (
+            self.query.data is not None
+            and keyboard is not None
+            and any(b.callback_data == self.query.data for row in keyboard.inline_keyboard for b in row)
+        )
 
     async def edit(
         self, text: str, keyboard: InlineKeyboardMarkup | None = None, *, render: RichRenderer | None = None
@@ -113,17 +132,54 @@ class Press:
         current = self.message.reply_markup.inline_keyboard if self.message.reply_markup else []
         keyboard = markup(*([b for b in row if keep(b)] for row in current)) if keep else None
         with contextlib.suppress(TelegramAPIError):
-            if self.ephemeral:
-                await self.bot.edit_ephemeral_message_reply_markup(
-                    chat_id=self.chat_id,
-                    receiver_user_id=self.user_id,
-                    ephemeral_message_id=self.message.ephemeral_message_id or 0,
-                    reply_markup=keyboard,
-                )
-            else:
-                await self.bot.edit_message_reply_markup(
-                    chat_id=self.chat_id, message_id=self.message.message_id, reply_markup=keyboard
-                )
+            await self.set_keyboard(keyboard)
+
+    async def take_button(self, *, clear: bool = False, allow_group: bool = False) -> bool:
+        """Consume a one-shot control before its side effect. A public-group caller checks its actor and
+        chat permissions before opting in. Telegram must accept the markup edit."""
+        if not self.has_pressed_button() or self.message.reply_markup is None:
+            return False
+        receiver = self.message.receiver_user
+        if self.ephemeral:
+            if receiver is None or receiver.id != self.user_id:
+                return False
+        elif self.message.chat.type == "private":
+            if self.chat_id != self.user_id:
+                return False
+        elif not allow_group or self.message.chat.type not in {"group", "supergroup"}:
+            return False
+        rows = self.message.reply_markup.inline_keyboard
+        keyboard = (
+            None
+            if clear
+            else markup(*([b for b in row if b.callback_data != self.query.data] for row in rows))
+        )
+        try:
+            await self.set_keyboard(keyboard)
+        except TelegramAPIError:
+            # Telegram rejects an identical markup edit on a fast double tap. An ambiguous edit
+            # also cannot authorize a second send. The command stays available to start again.
+            return False
+        return True
+
+    async def restore_keyboard(self) -> None:
+        """Return a consumed choice after Telegram explicitly refused its follow-up."""
+        with contextlib.suppress(TelegramAPIError):
+            await self.set_keyboard(self.message.reply_markup)
+
+    async def set_keyboard(self, keyboard: InlineKeyboardMarkup | None) -> None:
+        """Replace only the markup, on a public or ephemeral card. Telegram errors reach the caller."""
+        if self.ephemeral:
+            await self.bot.edit_ephemeral_message_reply_markup(
+                chat_id=self.chat_id,
+                receiver_user_id=self.user_id,
+                ephemeral_message_id=self.message.ephemeral_message_id or 0,
+                reply_markup=keyboard,
+            )
+        else:
+            await self.bot.edit_message_reply_markup(
+                chat_id=self.chat_id, message_id=self.message.message_id, reply_markup=keyboard
+            )
 
     async def deny(self, key: str, **params: object) -> None:
         """Refuse with an alert (a localized ``key``)."""
@@ -184,3 +240,22 @@ async def answer_stale(query: CallbackQuery, key: str = "buttons.stale") -> None
     """The alert for a press nothing can serve: an inaccessible message, or a button no handler knows any more."""
     with contextlib.suppress(TelegramAPIError):
         await query.answer(t(resolve(query.from_user.language_code), key), show_alert=True)
+
+
+async def on_dismiss(press: Press, data: Dismiss) -> None:
+    if not press.has_pressed_button():
+        return await press.deny("buttons.stale")
+    if data.user_id is not None and data.user_id != press.user_id:
+        return await press.deny("buttons.cannot_dismiss")
+    if press.ephemeral:
+        receiver = press.message.receiver_user
+        allowed = receiver is not None and receiver.id == press.user_id
+    elif press.message.chat.type == "private":
+        allowed = press.chat_id == press.user_id
+    else:
+        allowed = press.message.chat.type in {"group", "supergroup"} and (
+            data.user_id is not None or await group_admin(press.bot, press.chat_id, press.user_id)
+        )
+    if not allowed:
+        return await press.deny("buttons.cannot_dismiss")
+    await press.strip()

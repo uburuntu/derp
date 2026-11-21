@@ -30,14 +30,12 @@ async def test_start_showcases_and_leads_to_buying(conversation: Conversation) -
     showcase = max(mid for (cid, mid) in conversation.api.messages if cid == BEN.id)
     after = conversation.seq
     await conversation.press(BEN, BEN.id, showcase, buy["callback_data"])
-    [menu] = conversation.api.calls_of("editMessageText", after)  # the showcase becomes the menu
-    assert int(menu["message_id"]) == showcase and menu["rich_message"]["markdown"].startswith(
-        "**Derpcoins**"
-    )
-    *packs, [kept] = menu["reply_markup"]["inline_keyboard"]
-    assert kept["url"] == add["url"] and all(
-        b["callback_data"].startswith("buy:") for row in packs for b in row
-    )
+    [menu] = conversation.api.calls_of("sendRichMessage", after)
+    assert menu["rich_message"]["markdown"].startswith("**Derpcoins**")
+    entry = conversation.api.message(BEN.id, showcase)
+    assert "Pictures and memes" in str(entry["rich_message"])
+    assert entry["reply_markup"]["inline_keyboard"] == [[add]]  # the permanent showcase link survives
+    assert all(b.get("url") != add["url"] for row in menu["reply_markup"]["inline_keyboard"] for b in row)
 
     deep_link = await conversation.send(BEN, text="/start buy")
     menu = await conversation.expect_reply(deep_link)

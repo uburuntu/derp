@@ -583,11 +583,13 @@ async def test_an_approval_that_cant_be_paid_any_more_offers_buying(
     await conversation.press(JO, JO.id, prompt_id, run)
     notice = conversation.api.message(JO.id, prompt_id)  # the prompt itself becomes the note
     assert "nothing was charged" in str(notice["rich_message"]) and images.prompts == []
-    [[buy]] = notice["reply_markup"]["inline_keyboard"]
+    [[ok, buy]] = notice["reply_markup"]["inline_keyboard"]
+    assert ok["text"] == "OK"
     assert buy["callback_data"] == BuyAction(target="user").pack()
     assert not conversation.api.calls_of("sendRichMessage", after=after)
 
     after = conversation.seq
     await conversation.press(JO, JO.id, prompt_id, buy["callback_data"])
-    [menu] = conversation.api.calls_of("editMessageText", after=after)
-    assert int(menu["message_id"]) == prompt_id and "Your balance" in menu["rich_message"]["markdown"]
+    [menu] = conversation.api.calls_of("sendRichMessage", after=after)
+    assert "Your balance" in menu["rich_message"]["markdown"]
+    assert conversation.api.message(JO.id, prompt_id)["rich_message"] == notice["rich_message"]

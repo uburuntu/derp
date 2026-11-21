@@ -38,8 +38,9 @@ from derp.money.free import offer_continue
 from derp.money.funding import Funder
 from derp.money.wallets import balance
 from derp.ops.owner import notify_owners
-from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.buttons import Press, button, dismiss_button, markup, on_press
 from derp.telegram.filters import Command
+from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import Target, send_markdown, send_privately
 from derp.telegram.text import literal
 
@@ -60,31 +61,42 @@ async def show_buy(message: Message, db: Database, settings: Settings, bot: Bot)
 
 
 async def on_buy(press: Press, data: BuyAction, db: Database, settings: Settings) -> None:
+    if not press.has_pressed_button():
+        return await press.deny("buttons.stale")
     message, private = press.message, press.message.chat.type == "private"
     kind = "user" if data.target == "user" or private else "chat"
     owner_id = press.user_id if kind == "user" else press.chat_id
     if not data.product:
         if not private:
             return await open_menu(press, db, settings, kind=kind)
-        # In place; the pressed message's other buttons stay (the offer's free models, the showcase's Add to group).
-        rows = message.reply_markup.inline_keyboard if message.reply_markup else []
-        others = [b for row in rows for b in row if not _buys(b)]
-        return await press.edit(*await personal_menu(db, settings, press.user_id, press.locale, others))
+        text, keyboard = await personal_menu(db, settings, press.user_id, press.locale)
+        if not await press.take_button():
+            return await press.deny("buttons.stale")
+        try:
+            delivered = await send_privately(press.bot, press.user_id, text, reply_markup=keyboard)
+        except AMBIGUOUS:
+            return await press.deny("billing.unconfirmed")
+        if not delivered:
+            await press.restore_keyboard()
+            return await press.deny("billing.unavailable")
+        return None
     if data.product == settings.plan.id:
         return await _offer_plan(press, db, settings)
     pack = find_pack(settings, data.product)
     if pack is None:
         return await press.deny("billing.stale")
+    if private and not await press.take_button(clear=True):
+        return await press.deny("buttons.stale")
     thread = message.message_thread_id if message.is_topic_message else None
     try:
         await send_pack_invoice(press.bot, press.locale, pack, kind=kind, owner_id=owner_id, thread_id=thread)
+    except AMBIGUOUS:
+        return await press.deny("billing.unconfirmed")
     except TelegramAPIError:
+        if private:
+            await press.restore_keyboard()
         return await press.deny("billing.unavailable")
     return None
-
-
-def _buys(b: InlineKeyboardButton) -> bool:
-    return b.callback_data is not None and b.callback_data.partition(":")[0] == BuyAction.__prefix__
 
 
 async def _offer_plan(press: Press, db: Database, settings: Settings) -> None:
@@ -97,9 +109,20 @@ async def _offer_plan(press: Press, db: Database, settings: Settings) -> None:
         link = await plan_link(press.bot, settings, press.locale, press.user_id)
     except TelegramAPIError:
         return await press.deny("billing.unavailable")
-    pay = markup(InlineKeyboardButton(text=t(press.locale, "billing.plan_pay", stars=offer.stars), url=link))
+    pay = markup(
+        InlineKeyboardButton(text=t(press.locale, "billing.plan_pay", stars=offer.stars), url=link),
+        dismiss_button(press.locale, user_id=press.user_id),
+    )
     text = t(press.locale, "billing.plan_offer", credits=f"{offer.credits:,}", stars=offer.stars)
-    if not await send_privately(press.bot, press.user_id, text, reply_markup=pay):
+    if press.message.chat.type == "private" and not await press.take_button(clear=True):
+        return await press.deny("buttons.stale")
+    try:
+        delivered = await send_privately(press.bot, press.user_id, text, reply_markup=pay)
+    except AMBIGUOUS:
+        return await press.deny("billing.unconfirmed")
+    if not delivered:
+        if press.message.chat.type == "private":
+            await press.restore_keyboard()
         return await press.deny("money.dm_first")
     return None
 
@@ -248,7 +271,12 @@ async def on_subscription(update: BotSubscriptionUpdated, db: Database, settings
             t(locale, "billing.subscribe_again"), BuyAction(target="user", product=settings.plan.id)
         )
         text = t(locale, "billing.renewal_failed", date=f"{period_end:%Y-%m-%d}")
-        await send_privately(bot, update.user.id, text, reply_markup=markup(again))
+        await send_privately(
+            bot,
+            update.user.id,
+            text,
+            reply_markup=markup([dismiss_button(locale, user_id=update.user.id), again]),
+        )
     await notify_owners(bot, settings, f"Derp+ {update.state}: {plan}")
 
 

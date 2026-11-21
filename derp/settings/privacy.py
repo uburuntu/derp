@@ -4,9 +4,9 @@
 offers to forget everything the person said in this chat (reactions, votes,
 membership history and personal notes too) and, to admins (anyone in private),
 everything Derp knows about the chat: every message, notes, summaries and run
-transcripts, asked twice and then announced on the prompt itself. Rules,
-scheduled jobs, games, settings and money stay. Stored run transcripts that may
-quote what was forgotten are dropped as well; usage and charges stay.
+transcripts, automatic reply rules and jobs derived from those rules. The admin
+confirms twice. Standing chat instructions, independent scheduled jobs, games,
+settings, usage and charges stay.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -41,8 +41,8 @@ class ForgetAll(CallbackData, prefix="forget"):
 
 
 class ForgetChat(CallbackData, prefix="forgetchat"):
-    user_id: int  # the admin who asked; only they may go on
-    step: str  # ask (show what goes) | go (forget) | back (the first prompt)
+    user_id: int  # only the requester may use this card
+    step: str  # ask (show what goes) | go (forget) | back (the first prompt) | cancel
 
 
 async def forget_one(db: Database, chat_id: int, message_id: int) -> None:
@@ -134,7 +134,8 @@ async def _prompt(
     whole = (
         button(t(locale, "privacy.chat_button"), ForgetChat(user_id=user_id, step="ask")) if admin else None
     )
-    return t(locale, "privacy.confirm", count=count or 0), markup(mine, whole)
+    cancel = button(t(locale, "privacy.cancel"), ForgetChat(user_id=user_id, step="cancel"))
+    return t(locale, "privacy.confirm", count=count or 0), markup(mine, whole, cancel)
 
 
 async def on_forget(message: Message, db: Database, bot: Bot, chat_row: Chat) -> None:
@@ -159,12 +160,9 @@ async def on_forget_all(press: Press, data: ForgetAll, db: Database) -> None:
     """Only the person who asked; the prompt then says what was forgotten, without its button."""
     if data.user_id != press.user_id:
         return await press.deny("privacy.not_yours")
+    if not await press.take_button(clear=True, allow_group=True):
+        return await press.deny("buttons.stale")
     count = await forget_everything(db, press.chat_id, press.user_id)
-    if (
-        not count
-    ):  # nothing stored (or a second tap after the first one forgot it all): keep the prompt's text
-        await press.strip()
-        return await press.toast("privacy.forgot_all", count=0)
     await press.edit(t(press.locale, "privacy.forgot_all", count=count))
 
 
@@ -172,6 +170,10 @@ async def on_forget_chat(press: Press, data: ForgetChat, db: Database, bot: Bot)
     """The admin who asked, still an admin: ask with the counts, then forget and tell the chat."""
     if data.user_id != press.user_id:
         return await press.deny("privacy.not_yours")
+    if data.step == "cancel":
+        if not await press.take_button(clear=True, allow_group=True):
+            return await press.deny("buttons.stale")
+        return await press.edit(t(press.locale, "privacy.cancelled"))
     async with db.session() as session:
         chat = await session.get(Chat, press.chat_id)
     if chat is None:
@@ -179,6 +181,8 @@ async def on_forget_chat(press: Press, data: ForgetChat, db: Database, bot: Bot)
     if not await is_admin(bot, chat, press.user_id):
         return await press.deny("privacy.admins_only")
     locale = press.locale
+    if not await press.take_button(clear=True, allow_group=True):
+        return await press.deny("buttons.stale")
     if data.step == "back":
         return await press.edit(*await _prompt(db, chat, press.user_id, True, locale))
     if data.step == "ask":
@@ -198,9 +202,6 @@ async def on_forget_chat(press: Press, data: ForgetChat, db: Database, bot: Bot)
         text = t(locale, "privacy.chat_confirm", messages=messages or 0, notes=notes or 0)
         return await press.edit(text, markup([go, back]))
     messages, notes = await forget_whole_chat(db, chat.id)
-    if not (messages or notes):  # a second tap after the first one forgot it all: the notice stands
-        await press.strip()
-        return await press.toast("privacy.chat_forgotten_toast")
     name = literal(one_line(press.query.from_user.full_name))
     key = "privacy.chat_forgotten_private" if chat.type == "private" else "privacy.chat_forgotten"
     await press.edit(t(locale, key, name=name, messages=messages, notes=notes))
@@ -211,5 +212,5 @@ def build_router() -> Router:
     router = Router(name="privacy")
     router.message.register(on_forget, Command("forget"))
     on_press(router, ForgetAll, F.user_id > 0)(on_forget_all)
-    on_press(router, ForgetChat, F.step.in_({"ask", "go", "back"}))(on_forget_chat)
+    on_press(router, ForgetChat, F.step.in_({"ask", "go", "back", "cancel"}))(on_forget_chat)
     return router

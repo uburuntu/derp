@@ -120,7 +120,7 @@ from derp.money.funding import Funder, Funding, Funds
 from derp.money.wallets import release
 from derp.ops.observability import record_run_failure
 from derp.ops.owner import is_blocked, notify_owners
-from derp.telegram.buttons import markup
+from derp.telegram.buttons import dismiss_button, markup
 from derp.telegram.media import MediaGateway
 from derp.telegram.sender import PartialDeliveryError, Target, send_markdown
 from derp.tools.lookups import Lookups
@@ -1061,7 +1061,13 @@ class Runtime:
         )
         if funds is None:
             return await say(
-                t(locale, "approvals.no_coins"), markup(buy_button(locale, group=chat.type != "private"))
+                t(locale, "approvals.no_coins"),
+                markup(
+                    [
+                        dismiss_button(locale, user_id=approval.user_id),
+                        buy_button(locale, group=chat.type != "private"),
+                    ]
+                ),
             )
 
         async def compose(_pin: RolePin, _run_id: int) -> Ask:

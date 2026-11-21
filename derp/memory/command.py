@@ -5,15 +5,16 @@ import hashlib
 from aiogram import Bot, F, Router
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, Message
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.db.engine import Database
 from derp.history.models import Chat
 from derp.locales import resolve, t
 from derp.memory.models import Note
 from derp.memory.notes import decide, is_admin, load_memory, may_change
-from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.buttons import Press, button, dismiss_button, markup, on_press
 from derp.telegram.filters import Command
-from derp.telegram.sender import Target, send_markdown
+from derp.telegram.sender import Target, sanitize_untrusted, send_markdown
 
 
 class NoteAction(CallbackData, prefix="note"):
@@ -50,10 +51,6 @@ def rules_keyboard(locale: str, rules: str) -> InlineKeyboardMarkup | None:
     )
 
 
-def _decided(note_id: int) -> set[str]:
-    return {NoteAction(action=action, note_id=note_id).pack() for action in ("approve", "reject")}
-
-
 def _label(locale: str, note: Note) -> str:
     """How people see a note's number, like the model does: "note 12"; a proposed edit goes by its note's."""
     if note.replaces_id is not None:
@@ -65,12 +62,10 @@ def _lines(locale: str, notes: list[Note]) -> list[str]:
     return [f"- {_label(locale, n)}: {n.text}" for n in notes]
 
 
-async def show_memory(message: Message, bot: Bot, db: Database, chat_row: Chat) -> None:
-    if message.from_user is None:
-        return
-    locale = resolve(message.from_user.language_code)
-    async with db.session() as session:
-        memory = await load_memory(session, chat_row.id, message.from_user.id, include_proposed=True)
+async def _page(
+    session: AsyncSession, chat_row: Chat, user_id: int, locale: str, *, personal: bool
+) -> tuple[str, InlineKeyboardMarkup | None]:
+    memory = await load_memory(session, chat_row.id, user_id, include_proposed=True)
     active = [n for n in memory.chat_notes if n.state == "active"]
     proposed = [n for n in memory.chat_notes if n.state == "proposed"]
     sections = [t(locale, "memory.title")]
@@ -82,7 +77,7 @@ async def show_memory(message: Message, bot: Bot, db: Database, chat_row: Chat) 
             + "\n"
             + ("\n".join(_lines(locale, active)) or t(locale, "memory.empty"))
         )
-    if chat_row.type == "private" or message.ephemeral_message_id:
+    if personal:
         sections.append(
             t(locale, "memory.my_notes")
             + "\n"
@@ -100,39 +95,70 @@ async def show_memory(message: Message, bot: Bot, db: Database, chat_row: Chat) 
                     button(f"✖️ {_label(locale, n)}", NoteAction(action="reject", note_id=n.id)),
                 ]
                 for n in proposed[:10]
-            )
+            ),
+            dismiss_button(locale),
         )
     sections.append(t(locale, "memory.hint"))
-    await send_markdown(
-        bot, Target.reply_to_message(message), "\n\n".join(sections), trusted=False, reply_markup=keyboard
-    )
+    return sanitize_untrusted("\n\n".join(sections)), keyboard
+
+
+async def show_memory(message: Message, bot: Bot, db: Database, chat_row: Chat) -> None:
+    if message.from_user is None:
+        return
+    async with db.session() as session:
+        text, keyboard = await _page(
+            session,
+            chat_row,
+            message.from_user.id,
+            resolve(message.from_user.language_code),
+            personal=chat_row.type == "private" or bool(message.ephemeral_message_id),
+        )
+    await send_markdown(bot, Target.reply_to_message(message), text, reply_markup=keyboard)
 
 
 async def on_note_action(press: Press, data: NoteAction, bot: Bot, db: Database) -> None:
     """An admin's decision on one proposal (a new note, or an edit that rewrites its note); that proposal's
     buttons go, the others' stay."""
-    refusal: str | None = None
-    shown_id = data.note_id
-    async with db.transaction() as session:
+    async with db.session() as session:
         chat = await session.get(Chat, press.chat_id)
-        note = await session.get(Note, data.note_id)
-        if chat is None or note is None or note.chat_id != chat.id or note.state != "proposed":
-            refusal = "memory.gone"
-        elif (
-            may_change(
-                "decide", None, press.user_id, await is_admin(bot, chat, press.user_id), chat.notes_mode
-            )
-            == "refused"
-        ):
-            return await press.deny("memory.admins_only")
-        else:
-            shown_id = note.replaces_id or note.id
+    if chat is None:
+        return await press.deny("memory.gone")
+    if (
+        may_change("decide", None, press.user_id, await is_admin(bot, chat, press.user_id), chat.notes_mode)
+        == "refused"
+    ):
+        return await press.deny("memory.admins_only")
+    if not await press.take_button(clear=True, allow_group=True):
+        return await press.deny("memory.gone")
+    original = press.message.reply_to_message
+    locale = (
+        press.locale
+        if press.ephemeral or chat.type == "private"
+        else resolve(
+            (original.from_user.language_code if original and original.from_user else None)
+            or chat.locale
+            or press.locale
+        )
+    )
+    async with db.transaction() as session:
+        note = await session.get(Note, data.note_id, with_for_update=True)
+        current = note is not None and note.chat_id == chat.id and note.state == "proposed"
+        shown_id = (note.replaces_id or note.id) if note is not None else data.note_id
+        if note is not None and current:
             await decide(session, note, approve=data.action == "approve")
-    decided = _decided(data.note_id)
-    await press.strip(keep=lambda b: b.callback_data not in decided)
-    if refusal:
-        return await press.deny(refusal)
-    await press.toast("memory.approved" if data.action == "approve" else "memory.rejected", id=shown_id)
+    # Refresh the actual proposals, including ones another admin already handled. A terminal
+    # page shows the saved notes and no controls. A public edit always hides personal notes.
+    async with db.session() as session:
+        text, keyboard = await _page(
+            session, chat, press.user_id, locale, personal=press.ephemeral or chat.type == "private"
+        )
+    key = "memory.approved" if data.action == "approve" else "memory.rejected"
+    if not current:
+        allowed = {b.callback_data for row in keyboard.inline_keyboard for b in row} if keyboard else set()
+        await press.strip(keep=lambda b: b.callback_data in allowed)
+        return await press.deny("memory.gone")
+    await press.edit(t(locale, key, id=shown_id) + "\n\n" + text, keyboard)
+    await press.toast(key, id=shown_id)
 
 
 async def on_rules_action(press: Press, data: RulesAction, bot: Bot, db: Database) -> None:
@@ -144,17 +170,28 @@ async def on_rules_action(press: Press, data: RulesAction, bot: Bot, db: Databas
         return await press.deny("memory.gone")
     if chat.rules_draft_by != press.user_id or not await is_admin(bot, chat, press.user_id):
         return await press.deny("memory.rules_not_yours")
+    if not await press.take_button(clear=True, allow_group=True):
+        return await press.deny("memory.gone")
     async with db.transaction() as session:
         row = await session.get(Chat, chat.id, with_for_update=True)
-        current = row is not None and row.rules_draft is not None and _digest(row.rules_draft) == data.draft
+        current = (
+            row is not None
+            and row.rules_draft_by == press.user_id
+            and row.rules_draft is not None
+            and _digest(row.rules_draft) == data.draft
+        )
         if row is not None and current:
             if data.action == "apply":
                 row.rules = row.rules_draft or None
             row.rules_draft, row.rules_draft_by = None, None
-    await press.strip()
     if not current:
         return await press.deny("memory.gone")
-    await press.toast("memory.rules_applied" if data.action == "apply" else "memory.rules_cancelled")
+    outcome = "memory.rules_applied" if data.action == "apply" else "memory.rules_cancelled"
+    text = t(press.locale, outcome)
+    if data.action == "apply" and chat.rules_draft:
+        text += "\n\n" + sanitize_untrusted(chat.rules_draft)
+    await press.edit(text)
+    await press.toast(outcome)
 
 
 def build_router() -> Router:

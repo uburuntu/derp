@@ -14,16 +14,18 @@ them; a key's owner may unplug theirs); in private the person's own keys.
 Destructive changes ask first: turning context off deletes the chat's stored
 ambient history, and a shorter retention deletes older messages. A confirmation
 page Derp posted into a group on someone's request isn't anyone's panel: a press
-there toasts the outcome and drops the buttons instead of opening a panel. The
+there consumes the prompt and leaves its outcome without buttons. The
 jobs page lists the chat's reminders and scheduled prompts with buttons for the
 ones the viewer may touch; ``scheduler.jobs`` decides, here and for the Resume
 button on a paused job's note and the Snooze buttons on a fired reminder.
 Callback data carries only ids (and a snooze its firing and length).
 """
 
+from contextlib import suppress
 from datetime import UTC, datetime
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
@@ -55,8 +57,9 @@ from derp.scheduler.jobs import (
     rezone,
     snoozed_until,
 )
+from derp.scheduler.models import Job
 from derp.settings.privacy import switch_context
-from derp.telegram.buttons import Press, button, link, markup, on_press
+from derp.telegram.buttons import Press, button, dismiss_button, link, markup, on_press
 from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
@@ -144,6 +147,7 @@ async def render(
     *,
     admin: bool = False,
     viewer: int | None = None,
+    standalone: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup | None]:
     """The panel page for this viewer; ``admin`` decides which jobs they get buttons for.
 
@@ -158,7 +162,11 @@ async def render(
         default = day_count(locale, default_days(chat, retention))
         reset = button(t(locale, "settings.default_days", days=default), _act("retention", "0"))
         return t(locale, "settings.retention_page"), markup(choices[:2], choices[2:], reset, back)
-    cancel = button(t(locale, "settings.back"), _act("cancel"))  # a confirmation page's way out
+    cancel = (
+        button(t(locale, "settings.cancel"), _act("finish", "cancel"))
+        if standalone
+        else button(t(locale, "settings.back"), _act("cancel"))
+    )
     if page.startswith("shorten:"):
         value = page.removeprefix("shorten:")
         kept = day_count(locale, chosen_days(value, settings) or default_days(chat, retention))
@@ -172,7 +180,11 @@ async def render(
         ambient_count = await session.scalar(
             select(func.count()).where(StoredMessage.chat_id == chat.id, StoredMessage.capture == "ambient")
         )
-        confirm = button(t(locale, "settings.context_off_confirm"), _act("ambient", "purge"), style="danger")
+        confirm = button(
+            t(locale, "settings.context_off_confirm"),
+            _act("ambient", "purge"),
+            style="danger",
+        )
         return t(locale, "settings.context_off_page", count=ambient_count or 0), markup(confirm, cancel)
     if page == "auto":
         text, rows = await reply_rules.page(session, chat, locale)
@@ -259,6 +271,7 @@ async def render(
         button(t(locale, "settings.jobs_button", count=jobs), _act("page", "jobs")) if jobs else None,
         plug,
         *personal,
+        dismiss_button(locale),
     )
     return "\n".join(lines), keyboard
 
@@ -349,28 +362,69 @@ async def on_action(press: Press, data: SettingsAction, db: Database, bot: Bot, 
     if chat is None:
         return
     action, value = data.action, data.value
+    # The distinct Cancel button identifies a tool-posted prompt, including in private chats.
+    # Keep the existing confirm payloads and the public-group behavior of older prompts.
+    keyboard = press.message.reply_markup
+    finish = _act("finish", "cancel").pack()
+    standalone = action == "finish" or (
+        _ends_confirmation(data)
+        and (
+            (chat.type != "private" and not press.ephemeral)
+            or (
+                keyboard is not None
+                and any(b.callback_data == finish for row in keyboard.inline_keyboard for b in row)
+            )
+        )
+    )
+    if action == "finish":
+        if value != "cancel" or not press.has_pressed_button():
+            return await press.deny("buttons.stale")
+        action = "cancel"
     jobs = action in JOB_ACTIONS or (action == "page" and value == "jobs")
     keys = action == "page" and value == "keys"  # anyone sees it; admins get the buttons
     personal = jobs or keys or action in {"spend", "named"} or (action == "page" and value == "main")
     admin = (jobs or keys or not personal) and await is_admin(bot, chat, press.user_id)
     if not personal and not admin:
         return await press.deny("settings.admins_alert")
+    if action == "jdrop" and not press.has_pressed_button():
+        return await press.deny("settings.job_gone")
+    if standalone and not await press.take_button(clear=True, allow_group=True):
+        return await press.deny("buttons.stale")
     if action == "page":
         page = value
     elif action in JOB_ACTIONS:
         page = "jobs"
         if alert := await apply_job(db, chat, press.user_id, admin, JOB_ACTIONS[action], value):
-            await press.deny(alert)  # and the page is redrawn as it is now
+            if alert == "settings.job_gone":
+                return await press.deny(alert)  # a repeated cancellation preserves its receipt
+            await press.deny(alert)  # refresh the management page with their current permissions
+        else:
+            controls = (
+                None
+                if action == "jdrop"
+                else markup(
+                    [
+                        dismiss_button(press.locale, user_id=press.user_id),
+                        button(t(press.locale, "settings.manage_jobs"), _act("page", "jobs")),
+                    ]
+                )
+            )
+            return await press.edit(t(press.locale, f"settings.done_{action}", id=value), controls)
     elif action == "retention" and shortens(chat, settings, value):
         page = f"shorten:{value}"  # deletes older history: confirm first
     else:
         page = "main"
+        notice = (
+            await apply_setting(db, settings, chat.id, press.user_id, action, value)
+            if action != "cancel"
+            else "settings.cancelled"
+        )
+        if standalone:
+            return await press.edit(t(chat.locale or press.locale, notice or "settings.invalid"))
         if action != "cancel":
-            await press.toast(await apply_setting(db, settings, chat.id, press.user_id, action, value))
+            await press.toast(notice)
     if action == "free" and value == "on" and chat.type != "private" and not chat.free_models:
         await send_markdown(bot, Target(chat.id), t(chat.locale or press.locale, "money.free_enabled"))
-    if _ends_confirmation(data) and chat.type != "private" and not press.ephemeral:
-        return await press.strip()  # posted in the group on request: it ends here, not as someone's panel
     async with db.session() as session:
         fresh = await session.get(Chat, chat.id)
         own = chat.type == "private" or press.ephemeral  # else the whole group sees it
@@ -383,6 +437,21 @@ async def on_action(press: Press, data: SettingsAction, db: Database, bot: Bot, 
     await press.edit(text, keyboard, render=reply_rules.card_html if page == "auto" else None)
 
 
+async def _claim_job_button(press: Press, db: Database, chat: Chat, job_id: int, admin: bool) -> bool:
+    """Only someone who may act on this job can consume its reminder controls."""
+    async with db.session() as session:
+        job = await session.get(Job, job_id)
+    if job is None or job.chat_id != chat.id:
+        await press.deny("settings.job_gone")
+    elif not may_touch(job, press.user_id, admin):
+        await press.deny("settings.job_not_yours")
+    elif await press.take_button(clear=True, allow_group=True):
+        return True
+    else:
+        await press.deny("buttons.stale")
+    return False
+
+
 async def on_resume(press: Press, data: ResumeJob, db: Database, bot: Bot) -> None:
     """[▶️ Resume] on a paused job's note: its creator or an admin, checked on the press."""
     async with db.session() as session:
@@ -390,11 +459,10 @@ async def on_resume(press: Press, data: ResumeJob, db: Database, bot: Bot) -> No
     if chat is None:
         return await press.deny("settings.job_gone")
     admin = await is_admin(bot, chat, press.user_id)
+    if not await _claim_job_button(press, db, chat, data.id, admin):
+        return
     alert = await apply_job(db, chat, press.user_id, admin, "resume", str(data.id))
-    if alert == "settings.job_not_yours":
-        return await press.deny(alert)
-    if alert:  # cancelled, finished or past its time: the button can't help any more
-        await press.strip()
+    if alert:
         return await press.deny(alert)
     await press.edit(t(chat.locale or press.locale, "scheduler.resumed", id=data.id))
 
@@ -406,11 +474,17 @@ async def on_snooze(press: Press, data: SnoozeJob, db: Database, bot: Bot) -> No
     if chat is None or data.by not in SNOOZES:
         return await press.deny("settings.job_gone")
     admin = await is_admin(bot, chat, press.user_id)
+    if not await _claim_job_button(press, db, chat, data.id, admin):
+        return
     snooze = Snooze(snoozed_until(data.by, datetime.now(UTC), chat_time(chat)), data.run)
     alert = await apply_job(db, chat, press.user_id, admin, snooze, str(data.id))
-    if alert in ("settings.job_not_yours", "settings.job_full"):
-        return await press.deny(alert)
-    await press.strip()  # snoozed, or nothing left to snooze: these buttons are spent
+    if alert == "settings.job_full":
+        # No snooze was recorded. The creator can free a slot and retry the same firing.
+        async with db.session() as session:
+            job = await session.get(Job, data.id)
+        if job and job.chat_id == chat.id and job.state == "active" and job.runs == data.run:
+            with suppress(TelegramAPIError):
+                await press.set_keyboard(press.message.reply_markup)
     if alert:
         return await press.deny(alert)
     await press.toast(f"scheduler.snoozed_{data.by}")
@@ -424,6 +498,7 @@ def build_router() -> Router:
         "ambient",
         "retention",
         "shorten",
+        "finish",
         "cancel",
         "notes",
         "free",

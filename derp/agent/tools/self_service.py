@@ -246,7 +246,7 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
         case "context" if value == "off":
             async with deps.db.session() as session:
                 text, markup = await render(
-                    session, deps.bot, deps.settings, chat, None, deps.locale, "ambient_off"
+                    session, deps.bot, deps.settings, chat, None, deps.locale, "ambient_off", standalone=True
                 )
             if refused := await _card(deps, deps.target, text, markup):
                 return refused
@@ -260,7 +260,14 @@ async def change_setting(ctx: RunContext[RunDeps], setting: Setting, value: str)
             if shortens(chat, deps.settings, arg):
                 async with deps.db.session() as session:
                     text, markup = await render(
-                        session, deps.bot, deps.settings, chat, None, deps.locale, f"shorten:{arg}"
+                        session,
+                        deps.bot,
+                        deps.settings,
+                        chat,
+                        None,
+                        deps.locale,
+                        f"shorten:{arg}",
+                        standalone=True,
                     )
                 if refused := await _card(deps, deps.target, text, markup):
                     return refused

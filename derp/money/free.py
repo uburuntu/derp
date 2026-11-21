@@ -30,12 +30,12 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, Message, ReactionTypeEmoji
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.agent.models import AgentRun, RunOutput
-from derp.billing.menu import buy_button, top_up_button
+from derp.billing.menu import BuyAction, buy_button, top_up_button
 from derp.config import Settings
 from derp.db.engine import Database
 from derp.history.models import Chat, ChatMember, User
@@ -319,13 +319,32 @@ def build_router() -> Router:
             if await resume(press, db, settings, runtime) is False:
                 await press.edit(stale)
             return None
+        if not press.has_pressed_button():
+            return await press.deny("buttons.stale")
         if data.action == "consent":
+            if press.chat_id != press.user_id or press.message.chat.type != "private":
+                return await press.deny("buttons.stale")
+            # Old releases put this choice under a Stars pack menu, without the disclosure.
+            # Re-display the actual terms there before accepting anyone's consent.
+            buttons = press.message.reply_markup.inline_keyboard if press.message.reply_markup else []
+            if any(
+                b.callback_data
+                and b.callback_data.startswith("buy:")
+                and BuyAction.unpack(b.callback_data).product
+                for row in buttons
+                for b in row
+            ):
+                return await press.edit(*offer(press.locale, group=False, asked=True))
             async with db.transaction() as session:
-                user = await session.get(User, press.user_id)
+                user = await session.get(User, press.user_id, with_for_update=True)
                 if user is None:
                     return None
-                user.free_models_consent_at = datetime.now(UTC)
-                user.free_models_consent_version = POLICY_VERSION
+                changed = user.free_models_consent_version != POLICY_VERSION
+                if changed:
+                    user.free_models_consent_at = datetime.now(UTC)
+                    user.free_models_consent_version = POLICY_VERSION
+            outcome = t(press.locale, "money.free_confirmed")
+            remaining = None
             await press.toast("money.free_on")
         else:
             async with db.session() as session:
@@ -333,16 +352,26 @@ def build_router() -> Router:
             if chat is None or not await is_admin(bot, chat, press.user_id):
                 return await press.deny("money.free_admins_only")
             async with db.transaction() as session:
-                row = await session.get(Chat, chat.id)
-                if row is None:
-                    return None
-                row.free_models = True
-                chat = row
+                newly_enabled = await session.scalar(
+                    update(Chat)
+                    .where(Chat.id == chat.id, Chat.free_models.is_(False))
+                    .values(free_models=True)
+                    .returning(Chat.id)
+                )
+            public = chat.locale or press.locale
+            outcome = t(public, "money.free_enabled")
+            stale = t(public, "money.continue_stale")
+            buttons = press.message.reply_markup.inline_keyboard if press.message.reply_markup else []
+            remaining = markup(
+                *([b for b in row if b.callback_data == BuyAction(target="chat").pack()] for row in buttons)
+            )
             await press.toast()
-            await send_markdown(bot, Target(chat.id), t(chat.locale or press.locale, "money.free_enabled"))
-        await press.strip(lambda b: b.callback_data != data.pack())  # buying stays possible
-        if await resume(press, db, settings, runtime) is False:
-            await press.edit(stale)
+            changed = newly_enabled is not None
+            if changed:
+                await send_markdown(bot, Target(chat.id), outcome)
+        await press.edit(outcome, remaining)
+        if await resume(press, db, settings, runtime) is False and changed:
+            await press.edit(outcome + "\n" + stale, remaining)
         return None
 
     return router

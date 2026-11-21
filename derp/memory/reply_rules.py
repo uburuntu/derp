@@ -231,6 +231,10 @@ async def page(
     return "\n\n".join(lines), rows
 
 
+def receipt(rule: ReplyRule, locale: str) -> tuple[str, InlineKeyboardMarkup | None]:
+    return describe(rule, locale), markup([control(locale, "ok", rule.id), control(locale, "view", rule.id)])
+
+
 def manage(rule: ReplyRule, locale: str) -> tuple[str, InlineKeyboardMarkup | None]:
     return describe(rule, locale) + "\n\n" + t(locale, "auto.revise", id=rule.id), markup(
         [
@@ -258,12 +262,9 @@ async def on_rule(press: Press, data: RuleButton, db: Database, bot: Bot) -> Non
         chat = await session.get(Chat, press.chat_id)
     if chat is None or not await is_admin(bot, chat, press.user_id):
         return await press.deny("settings.admins_alert")
+    if not press.has_pressed_button():
+        return await press.deny("auto.gone")
     if data.op == "ok":
-        keyboard = press.message.reply_markup
-        if keyboard is None or not any(
-            b.callback_data == press.query.data for row in keyboard.inline_keyboard for b in row
-        ):
-            return await press.deny("auto.gone")
         return await press.strip()
     try:
         async with db.transaction() as session:
@@ -320,8 +321,7 @@ async def _apply_button(
                     await session.delete(old)
                 rule.whole_chat = data.op != "topic"
                 rule.state = "active"
-                text = describe(rule, locale)
-                keyboard = markup([control(locale, "ok", rule.id), control(locale, "view", rule.id)])
+                text, keyboard = receipt(rule, locale)
             else:
                 raise UnavailableControlError("auto.gone")
         elif data.op == "view":
@@ -329,9 +329,8 @@ async def _apply_button(
         elif await change(session, rule, data.op):
             if data.op == "remove":
                 text = t(locale, "auto.changed", id=rule.id)
-                keyboard = markup(control(locale, "ok", rule.id))
             else:
-                text, keyboard = manage(rule, locale)
+                text, keyboard = receipt(rule, locale)
         else:
             raise UnavailableControlError("auto.gone")
     return text, keyboard

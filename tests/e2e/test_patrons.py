@@ -41,7 +41,7 @@ def posts(conversation: Conversation, after: int) -> list[Call]:
 
 
 def buttons(call: Call | dict[str, Any]) -> list[str]:
-    markup = call["reply_markup"] if isinstance(call, dict) else call.fields.get("reply_markup") or {}
+    markup = (call if isinstance(call, dict) else call.fields).get("reply_markup") or {}
     return [b["text"] for row in markup.get("inline_keyboard", []) for b in row]
 
 
@@ -210,3 +210,103 @@ async def test_help_and_credits_name_recent_patrons(conversation: Conversation) 
         assert "Chipped in lately: Bob, Erin, Alice" in text, (
             command
         )  # Carl stays anonymous; refunds don't count
+
+
+async def test_invitation_and_last_buyers_privacy_window_retire_independently(
+    conversation: Conversation,
+) -> None:
+    conversation.meet(ALICE, PUB)
+    conversation.meet(OWNER)
+    await chip_in(conversation, ALICE, 650, "ch-end")
+    mid = max(mid for (cid, mid) in conversation.api.messages if cid == PUB.id)
+    assert conversation.services
+    bot = conversation.services.bot
+
+    async def expire() -> int:
+        return await expire_hide_buttons(conversation.db, bot)
+
+    now = datetime.now(UTC)
+    async with conversation.db.transaction() as session:
+        await session.execute(
+            update(PatronPost).values(
+                chip_until=now - timedelta(seconds=1), hide_until=now + timedelta(minutes=1)
+            )
+        )
+    original = conversation.api.message(PUB.id, mid)["rich_message"]
+    assert await expire() == 1
+    assert buttons(conversation.api.message(PUB.id, mid)) == ["🙈 Hide my name"]
+    async with conversation.db.transaction() as session:
+        await session.execute(update(PatronPost).values(hide_until=now - timedelta(seconds=1)))
+    conversation.api.fail_next("editMessageReplyMarkup", error_code=500, description="Temporary failure")
+    assert await expire() == 0  # retry the precise pending deadline at the next sweep
+    assert await expire() == 1 and await expire() == 0
+    final = conversation.api.message(PUB.id, mid)
+    assert final["rich_message"] == original and not buttons(final)
+
+
+async def test_preupgrade_chip_in_retires_on_next_tap_without_hiding_anothers_privacy_control(
+    conversation: Conversation,
+) -> None:
+    conversation.meet(OWNER)
+    conversation.meet(ALICE, PUB)
+    conversation.meet(CARL, PUB)
+    await chip_in(conversation, ALICE, 650, "ch-old")
+    mid = max(i for c, i in conversation.api.messages if c == PUB.id)
+    former = conversation.api.message(PUB.id, mid)
+    chip = former["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    async with conversation.db.transaction() as session:
+        await session.execute(update(PatronPost).values(chip_until=None))
+    after = conversation.seq
+    await conversation.press(CARL, PUB.id, mid, chip)
+    note = conversation.api.message(PUB.id, mid)
+    assert note["rich_message"] == former["rich_message"] and buttons(note) == ["🙈 Hide my name"]
+    assert not conversation.api.calls_of("createInvoiceLink", after=after)
+
+
+async def test_inaccessible_and_retryable_posts_do_not_starve_later_receipts(
+    conversation: Conversation,
+) -> None:
+    conversation.meet(CARL, PUB)
+    then = datetime.now(UTC) - timedelta(hours=2)
+    posts = []
+    async with conversation.db.transaction() as s:
+        for _ in range(21):
+            mid = conversation.api.take_message_id(PUB.id)
+            conversation.api.register_message(
+                {
+                    "message_id": mid,
+                    "date": int(then.timestamp()),
+                    "chat": PUB.payload(),
+                    "from": conversation.api.bot_user,
+                    "text": "Thanks",
+                    "reply_markup": {
+                        "inline_keyboard": [[{"text": "Chip in", "callback_data": "buy:chat:"}]]
+                    },
+                }
+            )
+            post = PatronPost(
+                chat_id=PUB.id,
+                message_id=mid,
+                locale="en",
+                created_at=then,
+                updated_at=then,
+                chip_until=then + timedelta(minutes=30),
+            )
+            posts.append(post)
+            s.add(post)
+    assert conversation.services
+    bot = conversation.services.bot
+    conversation.api.fail_next(
+        "editMessageReplyMarkup", error_code=403, description="Forbidden: bot was kicked"
+    )
+    for _ in range(19):
+        conversation.api.fail_next("editMessageReplyMarkup", error_code=500, description="Temporary failure")
+    assert await expire_hide_buttons(conversation.db, bot) == 1
+    async with conversation.db.session() as s:
+        first = await s.get_one(PatronPost, posts[0].id)
+        last = await s.get_one(PatronPost, posts[-1].id)
+        assert first.chip_until is None and last.chip_until is not None
+    before = conversation.seq
+    assert await expire_hide_buttons(conversation.db, bot) == 20
+    edits = conversation.api.calls_of("editMessageReplyMarkup", after=before)
+    assert int(edits[0]["message_id"]) == posts[-1].message_id

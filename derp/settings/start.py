@@ -42,7 +42,7 @@ from derp.money.command import bought_total, free_left_today
 from derp.money.wallets import balances, wallet
 from derp.settings.onboarding import context_line
 from derp.telegram.bot import bot_username
-from derp.telegram.buttons import answer_stale, link, markup
+from derp.telegram.buttons import Dismiss, answer_stale, link, markup, on_dismiss, on_press
 from derp.telegram.filters import Command, CommandStart
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
@@ -278,5 +278,6 @@ def build_fallback_router() -> Router:
     """Last among command routers: whatever no handler claimed (commands, and buttons from older versions)."""
     router = Router(name="unclaimed")
     router.message.register(on_unknown_command, is_command)
+    on_press(router, Dismiss)(on_dismiss)
     router.callback_query.register(answer_stale)
     return router

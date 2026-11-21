@@ -10,14 +10,13 @@ buttons survive deploys. Never pinned.
 """
 
 import asyncio
-import contextlib
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, Router
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, Message
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.billing.menu import top_up_button
@@ -104,7 +103,9 @@ def keyboard(post: PatronPost, now: datetime) -> InlineKeyboardMarkup | None:
     hide = post.hide_until is not None and post.hide_until > now
     return markup(
         [
-            top_up_button(post.locale, key="patron.chip_in"),
+            top_up_button(post.locale, key="patron.chip_in")
+            if post.chip_until and post.chip_until > now
+            else None,
             button(t(post.locale, "patron.hide"), PatronAction(post=post.id)) if hide else None,
         ]
     )
@@ -240,21 +241,66 @@ async def lately_line(db: Database, chat_id: int, locale: str) -> str | None:
 
 
 async def expire_hide_buttons(db: Database, bot: Bot) -> int:
-    """Drop "hide my name" from posts whose window passed; returns how many were edited."""
+    """Retire due invitation and privacy controls independently; keep retryable Telegram edits due."""
     now = datetime.now(UTC)
-    async with db.transaction() as session:
-        due = list(
+    async with db.session() as session:
+        ids = list(
             await session.scalars(
-                select(PatronPost).where(PatronPost.hide_until <= now).with_for_update(skip_locked=True)
+                select(PatronPost.id)
+                .where(
+                    PatronPost.message_id.is_not(None),
+                    or_(PatronPost.chip_until <= now, PatronPost.hide_until <= now),
+                )
+                .order_by(PatronPost.updated_at, PatronPost.id)
+                .limit(20)
             )
         )
-        for post in due:
-            post.hide_until = None
-        edits = [(p.chat_id, p.message_id, keyboard(p, now)) for p in due if p.message_id is not None]
-    for chat_id, message_id, buttons in edits:
-        with contextlib.suppress(TelegramAPIError):
-            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=buttons)
-    return len(edits)
+    finished = 0
+    for post_id in ids:
+        async with _posting:
+            async with db.session() as session:
+                post = await session.get(PatronPost, post_id)
+                if post is None or post.message_id is None:
+                    continue
+                due = {}
+                if post.chip_until is not None and post.chip_until <= now:
+                    due["chip_until"] = None
+                if post.hide_until is not None and post.hide_until <= now:
+                    due["hide_until"] = None
+                if not due:
+                    continue
+            retry = False
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=post.chat_id, message_id=post.message_id, reply_markup=keyboard(post, now)
+                )
+            except TelegramForbiddenError:
+                pass  # Derp can no longer edit messages in this chat.
+            except TelegramBadRequest as error:
+                retry = not any(
+                    reason in error.message.lower()
+                    for reason in (
+                        "message is not modified",
+                        "message to edit not found",
+                        "message can't be edited",
+                    )
+                )
+            except TelegramAPIError:
+                retry = True
+            async with db.transaction() as session:
+                await session.execute(
+                    update(PatronPost)
+                    .where(
+                        PatronPost.id == post.id,
+                        PatronPost.hide_until.is_not_distinct_from(post.hide_until),
+                        PatronPost.chip_until.is_not_distinct_from(post.chip_until),
+                    )
+                    .values({"updated_at": now} if retry else due)
+                )
+            # Order retries behind other due receipts so one failing chat cannot starve the sweep.
+            if not retry:
+                finished += 1
+    return finished
 
 
 def build_router() -> Router:

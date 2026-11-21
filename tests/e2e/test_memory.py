@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
@@ -222,7 +224,8 @@ async def test_a_decided_proposal_loses_its_buttons_and_the_rest_keep_theirs(
     listing = await conversation.send(GINA, CLUB, "/memory")
     shown = await conversation.expect_reply(listing)
     rows = shown["reply_markup"]["inline_keyboard"]
-    assert sorted(row[0]["text"] for row in rows) == [f"✅ note {i}" for i in sorted(ids)]
+    assert sorted(row[0]["text"] for row in rows[:-1]) == [f"✅ note {i}" for i in sorted(ids)]
+    assert rows[-1][0]["text"] == "OK"
     approved = int(rows[0][0]["text"].split()[-1])
     menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == CLUB.id)
 
@@ -231,7 +234,7 @@ async def test_a_decided_proposal_loses_its_buttons_and_the_rest_keep_theirs(
     toast = conversation.api.calls_of("answerCallbackQuery", after=after)[-1]
     assert toast["text"] == f"Note {approved} saved." and not toast.fields.get("show_alert")
     left = conversation.api.message(CLUB.id, menu_id)["reply_markup"]["inline_keyboard"]
-    assert left == [rows[1]]  # only the undecided proposal keeps its buttons
+    assert left == [rows[1], rows[-1]]  # only the undecided proposal keeps its buttons
 
     after = conversation.seq
     await conversation.press(GINA, CLUB.id, menu_id, rows[1][1]["callback_data"], taps=2)
@@ -407,3 +410,56 @@ async def test_notes_left_out_of_the_prompt_can_be_found(
     await conversation.settle(asked)
     [found] = results_of(model, "find_notes")
     assert "(chat): the wifi password is hunter2" in found and "lore" not in found
+
+
+async def test_public_note_decision_preserves_the_request_language(conversation: Conversation) -> None:
+    asker = Person(GINA.id, GINA.first_name, language_code="ru")
+    conversation.meet(asker, CLUB, status="administrator")
+    conversation.meet(HANK, CLUB, status="administrator")
+    await conversation.settle(await conversation.send(asker, CLUB, "привет"))
+    async with conversation.db.transaction() as session:
+        session.add(Note(chat_id=CLUB.id, text="чай в пять", author_id=HANK.id, state="proposed"))
+    listing = await conversation.send(asker, CLUB, "/memory")
+    card = await conversation.expect_reply(listing)
+    mid = max(mid for (cid, mid) in conversation.api.messages if cid == CLUB.id)
+    await conversation.press(
+        HANK, CLUB.id, mid, card["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    )
+    receipt = conversation.api.message(CLUB.id, mid)
+    async with conversation.db.session() as session:
+        note = (await session.scalars(select(Note))).one()
+    from derp.locales import t
+
+    assert t("ru", "memory.approved", id=note.id) in str(receipt["rich_message"])
+    assert not receipt.get("reply_markup")
+
+
+async def test_a_dismissed_memory_page_cannot_approve_a_still_pending_note(
+    conversation: Conversation,
+) -> None:
+    conversation.meet(GINA, CLUB, status="administrator")
+    await conversation.settle(await conversation.send(GINA, CLUB, "hello"))
+    async with conversation.db.transaction() as session:
+        session.add(Note(chat_id=CLUB.id, text="meet on Tuesday", author_id=HANK.id, state="proposed"))
+    listing = await conversation.expect_reply(await conversation.send(GINA, CLUB, "/memory"))
+    rows = listing["reply_markup"]["inline_keyboard"]
+    mid = max(mid for (cid, mid) in conversation.api.messages if cid == CLUB.id)
+    snapshot = deepcopy(conversation.api.message(CLUB.id, mid))
+    await conversation.press(GINA, CLUB.id, mid, rows[-1][0]["callback_data"])
+    conversation.api.outstanding_callbacks.add("late-approve")
+    await conversation.settle(
+        await conversation.push(
+            "callback_query",
+            {
+                "id": "late-approve",
+                "chat_instance": "c",
+                "from": GINA.payload(),
+                "message": snapshot,
+                "data": rows[0][0]["callback_data"],
+            },
+        )
+    )
+    async with conversation.db.session() as session:
+        assert (await session.scalars(select(Note.state))).one() == "proposed"
+    closed = conversation.api.message(CLUB.id, mid)
+    assert not closed.get("reply_markup") and closed["rich_message"] == snapshot["rich_message"]

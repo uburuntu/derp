@@ -62,11 +62,12 @@ async def test_private_purchase_credits_once_and_pings_the_owner(conversation: C
     menu = await conversation.expect_reply(asked)
     assert "balance: **0**" in menu["rich_message"]["markdown"]
     assert "Telegram Stars; see /terms" in menu["rich_message"]["markdown"]
-    buttons = [row[0] for row in menu["reply_markup"]["inline_keyboard"]][1:]  # Derp+ comes first
+    buttons = [row[0] for row in menu["reply_markup"]["inline_keyboard"]][1:-1]  # Derp+, packs, OK
     assert [b["text"] for b in buttons] == ["50⭐ → 650 dc", "250⭐ → 3,250 dc", "750⭐ → 9,750 dc"]
     menu_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
     after = conversation.seq
-    await press(conversation, CARL, CARL.id, menu_id, buttons[0]["callback_data"])
+    await conversation.press(CARL, CARL.id, menu_id, buttons[0]["callback_data"], taps=2)
+    assert len(conversation.api.calls_of("sendInvoice")) == 1
     invoice = conversation.api.calls_of("sendInvoice", after=after)[-1]
     payload = str(invoice["payload"])
     assert payload == f"p1:pack_s_v1:650:user:{CARL.id}" and "/terms" in str(invoice["description"])
@@ -95,7 +96,7 @@ def ephemeral_menu(conversation: Conversation, after: int) -> Call:
 
 
 def link_payloads(conversation: Conversation, menu: Call) -> list[str]:
-    urls = [row[0]["url"] for row in menu["reply_markup"]["inline_keyboard"]]
+    urls = [row[0]["url"] for row in menu["reply_markup"]["inline_keyboard"] if "url" in row[0]]
     return [str(conversation.api.invoice_links[url]["payload"]) for url in urls]
 
 
@@ -553,7 +554,7 @@ async def test_a_failed_renewal_is_told_once_with_a_way_back(conversation: Conve
         c for c in conversation.api.calls_of("sendRichMessage", after=after) if int(c["chat_id"]) == CARL.id
     ]
     assert len(notes) == 1 and "renewal didn't go through" in notes[0]["rich_message"]["markdown"]
-    again = notes[0]["reply_markup"]["inline_keyboard"][0][0]
+    again = notes[0]["reply_markup"]["inline_keyboard"][0][-1]
     assert again["text"] == "Subscribe again"
     note_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
     after = conversation.seq
@@ -564,7 +565,7 @@ async def test_a_failed_renewal_is_told_once_with_a_way_back(conversation: Conve
     assert offer["reply_markup"]["inline_keyboard"][0][0]["url"].startswith("https://t.me/$invoice")
 
 
-async def test_a_refused_ephemeral_chat_menu_turns_the_chooser_into_the_menu(
+async def test_a_refused_ephemeral_chat_menu_leaves_the_shared_chooser_available(
     conversation: Conversation,
 ) -> None:
     conversation.meet(CARL, PUB)
@@ -576,9 +577,15 @@ async def test_a_refused_ephemeral_chat_menu_turns_the_chooser_into_the_menu(
         conversation.api.fail_next(method, error_code=400, description="Bad Request: query is too old")
     after = conversation.seq
     await press(conversation, CARL, PUB.id, chooser_id, for_chat)
-    [edit] = conversation.api.calls_of("editMessageText", after=after)
-    assert int(edit["message_id"]) == chooser_id and "Chat balance" in edit["rich_message"]["markdown"]
-    url = edit["reply_markup"]["inline_keyboard"][0][0]["url"]
+    assert not conversation.api.calls_of("editMessageText", after=after)
+    assert conversation.api.message(PUB.id, chooser_id)["reply_markup"] == chooser["reply_markup"]
+    [public] = [
+        c
+        for c in conversation.api.calls_of("sendRichMessage", after=after)
+        if not c.fields.get("ephemeral_message_parameters")
+    ]
+    assert "Chat balance" in public["rich_message"]["markdown"]
+    url = public["reply_markup"]["inline_keyboard"][0][0]["url"]
     assert conversation.api.invoice_links[url]["payload"] == f"p1:pack_s_v1:650:chat:{PUB.id}"
 
 
@@ -599,3 +606,21 @@ async def test_the_sweep_recovers_a_link_payment_for_a_chat_topic(conversation: 
     [purchase] = await recover_payments(conversation.db, conversation.services.bot)
     assert (purchase.payload, purchase.credits, purchase.user_id) == (payload, 3250, DANA.id)
     assert await wallet_balance(conversation, "chat", FORUM.id) == 3250
+
+
+async def test_explicit_invoice_refusal_restores_menu_but_ambiguous_send_is_not_replayed(
+    conversation: Conversation,
+) -> None:
+    asked = await conversation.send(CARL, text="/buy")
+    menu = await conversation.expect_reply(asked)
+    mid = max(i for c, i in conversation.api.messages if c == CARL.id)
+    pay = menu["reply_markup"]["inline_keyboard"][1][0]["callback_data"]
+    conversation.api.fail_next("sendInvoice", error_code=400, description="Bad Request: refused")
+    await conversation.press(CARL, CARL.id, mid, pay)
+    assert conversation.api.message(CARL.id, mid)["reply_markup"] == menu["reply_markup"]
+    conversation.api.fail_next("sendInvoice", error_code=500, description="Server error")
+    before = conversation.seq
+    await conversation.press(CARL, CARL.id, mid, pay, taps=2)
+    assert len(conversation.api.calls_of("sendInvoice", after=before)) == 1
+    assert "reply_markup" not in conversation.api.message(CARL.id, mid)
+    assert "didn’t confirm" in str(conversation.api.calls_of("answerCallbackQuery", after=before)[0]["text"])

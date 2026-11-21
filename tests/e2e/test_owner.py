@@ -86,10 +86,12 @@ async def test_stats_show_spend_revenue_and_decide_proposals(conversation: Conve
         "| `flash` | Wafer | 2 | 67% | 91% |" in text
     )  # prompt cache: all calls, then those after a run's first
     assert "**Proposal 1** · chat: `old/model` → `new/model`  \ncheaper" in text
-    apply, _ = reply["reply_markup"]["inline_keyboard"][0]
-    assert apply["callback_data"] == ConsoleAction(action="apply", key="1").pack()
-
     stats_id = max(mid for (cid, mid) in conversation.api.messages if cid == OWNER.id)
+    manage, ok = [row[0] for row in reply["reply_markup"]["inline_keyboard"]]
+    assert manage["text"] == "Manage models" and ok["text"] == "OK"
+    await conversation.press(OWNER, OWNER.id, stats_id, manage["callback_data"])
+    apply, _ = conversation.api.message(OWNER.id, stats_id)["reply_markup"]["inline_keyboard"][0]
+    assert apply["callback_data"] == ConsoleAction(action="apply", key="1").pack()
     await conversation.press(OWNER, OWNER.id, stats_id, apply["callback_data"])
     assert conversation.api.calls_of("answerCallbackQuery")[-1]["text"] == "Proposal #1 applied."
     async with conversation.db.session() as session:
@@ -97,11 +99,20 @@ async def test_stats_show_spend_revenue_and_decide_proposals(conversation: Conve
         assert pin is not None and pin.pin["model"] == "new/model" and pin.source == "owner"
     edited = conversation.api.calls_of("editMessageText")[-1]["rich_message"]["markdown"]
     assert "Roll back" not in edited and "| chat | `new/model` | owner |" in edited
-    rollback = ConsoleAction(action="rollback", key="chat").pack()
-    await conversation.press(OWNER, OWNER.id, stats_id, rollback)
+    assert "Proposal #1 applied." in edited
+    assert conversation.api.message(OWNER.id, stats_id)["reply_markup"] == reply["reply_markup"]
+    await conversation.press(OWNER, OWNER.id, stats_id, manage["callback_data"])
+    rollback = conversation.api.message(OWNER.id, stats_id)["reply_markup"]["inline_keyboard"][0][0]
+    assert rollback["text"].startswith("Roll back chat")
+    await conversation.press(OWNER, OWNER.id, stats_id, rollback["callback_data"], taps=2)
     async with conversation.db.session() as session:
         pin = await session.get(ModelPin, "chat")
         assert pin is not None and pin.pin["model"] == "old/model"
+    snapshot = conversation.api.message(OWNER.id, stats_id)["rich_message"]
+    assert "Rolled back chat." in str(snapshot)
+    await conversation.press(OWNER, OWNER.id, stats_id, ok["callback_data"])
+    receipt = conversation.api.message(OWNER.id, stats_id)
+    assert "reply_markup" not in receipt and receipt["rich_message"] == snapshot
 
 
 async def test_a_scout_ping_carries_its_proposal_buttons(conversation: Conversation) -> None:

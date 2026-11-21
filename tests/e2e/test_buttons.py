@@ -2,10 +2,46 @@ from sqlalchemy import select
 
 from derp.history.models import Chat
 from derp.settings.panel import SettingsAction
+from derp.telegram.buttons import Dismiss, dismiss_button, markup
 from tests.e2e.harness import Conversation, Person, Room
 
 ADMIN = Person(2101, "Ada")
 LOFT = Room(-2110, title="Loft")
+
+
+async def test_dismiss_checks_the_actual_button_and_who_owns_it(conversation: Conversation) -> None:
+    member = Person(2102, "Jo")
+    conversation.meet(ADMIN, LOFT, status="administrator")
+    conversation.meet(member, LOFT)
+    assert conversation.services is not None
+    for owner, denied, allowed in [(None, member, ADMIN), (member.id, ADMIN, member)]:
+        ok = dismiss_button("ru", user_id=owner)
+        message = await conversation.services.bot.send_message(LOFT.id, "Сохранено", reply_markup=markup(ok))
+        assert ok.text == "ОК" and ok.callback_data
+        await conversation.press(denied, LOFT.id, message.message_id, ok.callback_data)
+        assert conversation.api.calls_of("answerCallbackQuery")[-1]["show_alert"]
+        assert "reply_markup" in conversation.api.message(LOFT.id, message.message_id)
+        # A client can send callback data missing from the card. Even an admin can't use it to
+        # dismiss some other workflow or replace a user-bound OK with their own.
+        cid = f"forged-{message.message_id}"
+        conversation.api.outstanding_callbacks.add(cid)
+        await conversation.settle(
+            await conversation.push(
+                "callback_query",
+                {
+                    "id": cid,
+                    "from": ADMIN.payload(),
+                    "chat_instance": "group",
+                    "message": conversation.api.message(LOFT.id, message.message_id),
+                    "data": Dismiss(user_id=ADMIN.id).pack(),
+                },
+            )
+        )
+        assert conversation.api.calls_of("answerCallbackQuery")[-1]["show_alert"]
+        assert "reply_markup" in conversation.api.message(LOFT.id, message.message_id)
+        await conversation.press(allowed, LOFT.id, message.message_id, ok.callback_data)
+        final = conversation.api.message(LOFT.id, message.message_id)
+        assert final["text"] == "Сохранено" and "reply_markup" not in final
 
 
 def data(action: str, value: str = "") -> str:

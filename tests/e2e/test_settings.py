@@ -161,7 +161,9 @@ async def test_jobs_page_lets_people_manage_their_own_and_admins_all(
     async with conversation.db.session() as session:
         assert (await session.get(Job, mine)).state == "paused"  # type: ignore[union-attr]
     shown = conversation.api.ephemerals[(CLUBHOUSE.id, panel)]
-    assert data("jresume", str(mine)) in buttons(shown["reply_markup"])
+    assert "paused" in shown["rich_markdown"]
+    assert data("jdrop", str(mine)) not in buttons(shown["reply_markup"])
+    await conversation.press_ephemeral(MEMBER, CLUBHOUSE.id, panel, data("page", "jobs"))
     await conversation.press_ephemeral(MEMBER, CLUBHOUSE.id, panel, data("jresume", str(mine)))
     async with conversation.db.session() as session:
         assert (await session.get(Job, mine)).state == "active"  # type: ignore[union-attr]
@@ -182,8 +184,13 @@ async def test_jobs_page_lets_people_manage_their_own_and_admins_all(
     await conversation.press_ephemeral(ADMIN, CLUBHOUSE.id, admin_panel, data("jdrop", str(mine)))
     async with conversation.db.session() as session:
         assert (await session.get(Job, mine)).state == "cancelled"  # type: ignore[union-attr]
+    first_receipt = conversation.api.ephemerals[(CLUBHOUSE.id, admin_panel)]
+    assert "cancelled" in first_receipt["rich_markdown"] and not first_receipt.get("reply_markup")
+    await open_panel(conversation, ADMIN, 603)
+    admin_panel = max(k[1] for k in conversation.api.ephemerals if k[0] == CLUBHOUSE.id)
+    await conversation.press_ephemeral(ADMIN, CLUBHOUSE.id, admin_panel, data("page", "jobs"))
     await conversation.press_ephemeral(ADMIN, CLUBHOUSE.id, admin_panel, data("jdrop", str(theirs)))
-    assert "Nothing scheduled" in conversation.api.ephemerals[(CLUBHOUSE.id, admin_panel)]["rich_markdown"]
+    assert not conversation.api.ephemerals[(CLUBHOUSE.id, admin_panel)].get("reply_markup")
 
 
 async def test_a_job_of_another_chat_is_never_touched(

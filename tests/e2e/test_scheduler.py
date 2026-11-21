@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from pytest import MonkeyPatch
 from sqlalchemy import select, update
 
 from derp.history.models import Message
@@ -9,6 +10,7 @@ from derp.money.wallets import claw_back, credit, wallet
 from derp.scheduler.jobs import MISS_LIMIT, ResumeJob, SnoozeJob
 from derp.scheduler.models import Job
 from derp.scheduler.worker import claim_due, run_due
+from derp.telegram.buttons import Dismiss
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 
@@ -119,7 +121,8 @@ async def test_a_fired_reminder_snoozes_for_its_creator_and_fires_again(
     async with conversation.db.session() as session:
         job_id = await session.scalar(select(Job.id))
     assert job_id is not None
-    assert buttons == [SnoozeJob(id=job_id, run=1, by=by).pack() for by in ("10m", "1h", "1d")]
+    assert buttons[:-1] == [SnoozeJob(id=job_id, run=1, by=by).pack() for by in ("10m", "1h", "1d")]
+    assert Dismiss.unpack(buttons[-1]).user_id == LEE.id
     shown = conversation.api.message(YARD.id, reminder)["reply_markup"]["inline_keyboard"]
     assert [b["text"] for b in shown[0]] == ["+10 min", "+1 h", "Tomorrow"]
 
@@ -131,7 +134,8 @@ async def test_a_fired_reminder_snoozes_for_its_creator_and_fires_again(
     after = conversation.seq
     await conversation.press(LEE, YARD.id, reminder, buttons[0], taps=2)  # a double tap snoozes once
     toasts = [c["text"] for c in conversation.api.calls_of("answerCallbackQuery", after=after)]
-    assert toasts == ["💤 Snoozed: back in 10 minutes."] * 2
+    assert toasts[0] == "💤 Snoozed: back in 10 minutes."
+    assert conversation.api.calls_of("answerCallbackQuery", after=after)[-1]["show_alert"]
     assert "reply_markup" not in conversation.api.message(YARD.id, reminder)
     async with conversation.db.session() as session:
         [job] = (await session.scalars(select(Job))).all()
@@ -277,7 +281,8 @@ async def test_a_paused_job_resumes_from_its_note_for_its_creator_only(conversat
         if cid == YARD.id and m.get("reply_markup")
     )
     assert "Paused scheduled job" in str(note["rich_message"])
-    [[resume]] = note["reply_markup"]["inline_keyboard"]
+    [[resume, done]] = note["reply_markup"]["inline_keyboard"]
+    assert done["text"] == "OK"
     assert resume["text"] == "▶️ Resume" and resume["callback_data"] == ResumeJob(id=job_id).pack()
 
     after = conversation.seq
@@ -351,3 +356,59 @@ async def test_a_daily_prompt_sees_the_chat_since_its_last_firing(
     model.reply("the fence, three days ago")  # a run of its own still sees the usual window
     await conversation.settle(await conversation.send(LEE, YARD, "derp what was that about the fence?"))
     assert "old gossip about the fence" in str(model.requests[-1])
+
+
+async def test_reminder_creator_can_dismiss_the_controls_without_snoozing(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(LEE, YARD)
+    conversation.meet(MAX, YARD)
+    model.reply(tool_call("schedule", text="stretch", in_minutes=30), ".")
+    await conversation.settle(await conversation.send(LEE, YARD, "derp remind me to stretch"))
+    await fire_now(conversation)
+    mid, controls = last_reminder(conversation, YARD.id)
+    from copy import deepcopy
+
+    snapshot = deepcopy(conversation.api.message(YARD.id, mid))
+    body = snapshot["rich_message"]
+    await conversation.press(MAX, YARD.id, mid, controls[-1])
+    assert conversation.api.message(YARD.id, mid).get("reply_markup")
+    await conversation.press(LEE, YARD.id, mid, controls[-1])
+    closed = conversation.api.message(YARD.id, mid)
+    assert not closed.get("reply_markup") and closed["rich_message"] == body
+    conversation.api.outstanding_callbacks.add("late-snooze")
+    await conversation.settle(
+        await conversation.push(
+            "callback_query",
+            {
+                "id": "late-snooze",
+                "chat_instance": "c",
+                "from": LEE.payload(),
+                "message": snapshot,
+                "data": controls[0],
+            },
+        )
+    )
+    async with conversation.db.session() as session:
+        job = (await session.scalars(select(Job))).one()
+        assert job.state == "done" and job.runs == 1
+
+
+async def test_a_full_schedule_keeps_the_same_firings_snooze_controls(
+    conversation: Conversation,
+    model: ScriptedModel,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from derp.scheduler import jobs
+
+    model.reply(tool_call("schedule", text="water plants", in_minutes=30, repeat="daily"), ".")
+    await conversation.settle(await conversation.send(LEE, text="remind me daily to water the plants"))
+    await fire_now(conversation)
+    mid, controls = last_reminder(conversation, LEE.id)
+    monkeypatch.setattr(jobs, "PERSON_LIMIT", 1)
+    await conversation.press(LEE, LEE.id, mid, controls[0])
+    assert last_reminder(conversation, LEE.id) == (mid, controls)
+    assert "Too many jobs" in conversation.api.calls_of("answerCallbackQuery")[-1]["text"]
+    monkeypatch.setattr(jobs, "PERSON_LIMIT", 2)
+    await conversation.press(LEE, LEE.id, mid, controls[0])
+    assert not conversation.api.message(LEE.id, mid).get("reply_markup")

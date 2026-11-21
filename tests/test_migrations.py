@@ -171,3 +171,42 @@ async def test_reply_rule_migrations_resume_after_interrupted_ddl_and_concurrent
             await conn.exec_driver_sql("RESET search_path")
             await conn.exec_driver_sql("DROP SCHEMA rule_upgrade CASCADE")
             await conn.commit()
+
+
+@pytest.mark.db
+async def test_cap_step_upgrade_and_rollback_preserve_pending_key_requests(database: Database) -> None:
+    def migrate(connection: Connection, *, down: bool = False) -> None:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        (command.downgrade if down else command.upgrade)(cfg, "0044" if down else "0045")
+
+    async with database.engine.connect() as conn:
+        await conn.exec_driver_sql("CREATE SCHEMA key_cap_upgrade")
+        try:
+            await conn.exec_driver_sql("SET search_path = key_cap_upgrade,public")
+            await conn.exec_driver_sql("CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY)")
+            await conn.exec_driver_sql("INSERT INTO alembic_version VALUES ('0044')")
+            await conn.exec_driver_sql("""
+                CREATE TABLE key_requests (user_id bigint PRIMARY KEY, key_id bigint, step varchar(6),
+                CONSTRAINT ck_key_requests_step CHECK (step IN ('paste','cap','model')))
+            """)
+            await conn.exec_driver_sql("INSERT INTO key_requests VALUES (1,17,'cap')")
+            await conn.commit()
+            await conn.run_sync(migrate)
+            await conn.exec_driver_sql("INSERT INTO key_requests VALUES (2,18,'adjust'), (3,19,'cap')")
+            await conn.commit()
+            await conn.run_sync(migrate, down=True)
+            assert list(
+                await conn.exec_driver_sql("SELECT key_id, step FROM key_requests ORDER BY user_id")
+            ) == [
+                (17, "cap"),
+                (18, "cap"),
+                (19, "cap"),
+            ]
+            with pytest.raises(DBAPIError, match="ck_key_requests_step"):
+                await conn.exec_driver_sql("INSERT INTO key_requests VALUES (4,20,'adjust')")
+        finally:
+            await conn.rollback()
+            await conn.exec_driver_sql("RESET search_path")
+            await conn.exec_driver_sql("DROP SCHEMA key_cap_upgrade CASCADE")
+            await conn.commit()

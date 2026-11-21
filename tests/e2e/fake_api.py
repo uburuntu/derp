@@ -737,7 +737,9 @@ class FakeBotAPI:
         return True
 
     def _m_editEphemeralMessageReplyMarkup(self, fields: JsonObject) -> bool:  # noqa: N802
-        # The same receiver and message checks apply; absent text fields preserve the body.
+        message = self.ephemerals.get((int(fields["chat_id"]), int(fields["ephemeral_message_id"])))
+        if message and message.get("reply_markup") == fields.get("reply_markup"):
+            raise Refusal(400, "Bad Request: message is not modified")
         return self._m_editEphemeralMessageText(fields)
 
     def expect_ephemeral_callback(
@@ -753,6 +755,8 @@ class FakeBotAPI:
     def _m_editMessageReplyMarkup(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         key = (int(fields["chat_id"]), int(fields["message_id"]))
         message = self.messages[key]
+        if message.get("reply_markup") == fields.get("reply_markup"):
+            raise Refusal(400, "Bad Request: message is not modified")
         if markup := fields.get("reply_markup"):
             message["reply_markup"] = markup
         else:

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, func
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from derp.db.base import Base
@@ -63,13 +63,15 @@ class PatronPost(Base):
     """The thank-you post for Derpcoins bought for a chat; purchases soon after it edit it instead of posting.
 
     The purchases it lists point at it (``purchases.patron_post_id``). ``hide_until`` is when the
-    "hide my name" button stops working (None once it was removed).
+    "hide my name" button stops working. ``chip_until`` is the collection deadline. A cleared
+    deadline means its public control was retired.
     """
 
     __tablename__ = "patron_posts"
     __table_args__ = (
         Index("ix_patron_posts_chat_id_created_at", "chat_id", "created_at"),
         Index("ix_patron_posts_hide_until", "hide_until"),
+        Index("ix_patron_posts_chip_until", "chip_until"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -77,6 +79,7 @@ class PatronPost(Base):
     thread_id: Mapped[int | None]
     message_id: Mapped[int | None]  # None until Telegram accepted the post
     locale: Mapped[str] = mapped_column(String(8))
+    chip_until: Mapped[datetime | None] = mapped_column(server_default=text("now() + interval '30 minutes'"))
     hide_until: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())

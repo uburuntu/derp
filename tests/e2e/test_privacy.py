@@ -53,7 +53,10 @@ async def test_forget_everything_after_confirming(conversation: Conversation, mo
     prompt = await conversation.expect_reply(asked)
     text = prompt["rich_message"]["markdown"]
     assert "Stored messages: **1**" in text  # commands are never stored
-    assert len(prompt["reply_markup"]["inline_keyboard"]) == 1  # the whole chat is an admin's button
+    assert [row[0]["text"] for row in prompt["reply_markup"]["inline_keyboard"]] == [
+        "Forget it all",
+        "Cancel",
+    ]
     data = prompt["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
     prompt_id = max(mid for (cid, mid) in conversation.api.messages if cid == DEN.id)
 
@@ -142,3 +145,50 @@ async def test_an_admin_forgets_the_whole_chat_and_the_chat_is_told(
         chat = await session.get(Chat, DEN.id)
         assert chat is not None and chat.rules == "Be kind."  # rules, games, settings and money stay
         assert await session.scalar(select(GameScore.points)) == 3
+
+
+async def test_cancelled_forget_cannot_replay_on_later_messages(conversation: Conversation) -> None:
+    from copy import deepcopy
+
+    asked = await conversation.send(HAL, DEN, "/forget")
+    prompt = await conversation.expect_reply(asked)
+    mid = max(mid for (cid, mid) in conversation.api.messages if cid == DEN.id)
+    original = deepcopy(conversation.api.message(DEN.id, mid))
+    rows = prompt["reply_markup"]["inline_keyboard"]
+    cancel, confirm = rows[-1][0]["callback_data"], rows[0][0]["callback_data"]
+    await conversation.press(IVY, DEN.id, mid, cancel)
+    assert conversation.api.message(DEN.id, mid).get("reply_markup")
+    await conversation.press(HAL, DEN.id, mid, cancel)
+    assert "Cancelled" in str(conversation.api.message(DEN.id, mid)["rich_message"])
+    assert not conversation.api.message(DEN.id, mid).get("reply_markup")
+    fresh = await conversation.send(HAL, DEN, "keep this after cancel")
+    await conversation.settle(fresh)
+    conversation.api.outstanding_callbacks.add("old-forget-snapshot")
+    late = await conversation.push(
+        "callback_query",
+        {
+            "id": "old-forget-snapshot",
+            "chat_instance": "c",
+            "from": HAL.payload(),
+            "message": original,
+            "data": confirm,
+        },
+    )
+    await conversation.settle(late)
+    assert (await stored(conversation, fresh.message_id)).text == "keep this after cancel"
+    assert "Cancelled" in str(conversation.api.message(DEN.id, mid)["rich_message"])
+
+
+async def test_forget_with_zero_messages_returns_a_buttonless_receipt(conversation: Conversation) -> None:
+    asked = await conversation.send(HAL, DEN, "/forget")
+    prompt = await conversation.expect_reply(asked)
+    mid = max(mid for (cid, mid) in conversation.api.messages if cid == DEN.id)
+    async with conversation.db.transaction() as session:
+        session.add(Note(chat_id=DEN.id, user_id=HAL.id, text="a private note", author_id=HAL.id))
+    await conversation.press(
+        HAL, DEN.id, mid, prompt["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    )
+    receipt = conversation.api.message(DEN.id, mid)
+    assert "your messages here (0)" in str(receipt["rich_message"]) and not receipt.get("reply_markup")
+    async with conversation.db.session() as session:
+        assert await session.scalar(select(Note.id)) is None

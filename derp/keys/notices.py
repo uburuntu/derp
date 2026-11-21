@@ -4,7 +4,7 @@ A key that hit its monthly cap, ran out of provider credits or stopped working i
 pause in every chat it serves (a silent line: the usual model answers there from now on) and once to its
 owner by DM, with what to do. Announcing happens when a chat is next asked (``announce``, called with
 each reservation), so nothing is posted into chats nobody is using. An explicit refusal from a key's
-model is shown in the chat as a reply to the ask, with Pause and Remove buttons for the key's owner and
+model is shown in the chat as a reply to the ask, with a private management menu for the key's owner and
 the chat's admins, at most once per ``refusal_notice_hours`` per key and chat; the usual model then
 answers. Money and privacy copy stays plain.
 """
@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters.callback_data import CallbackData
+from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,7 +28,7 @@ from derp.keys.failures import KeyFailure
 from derp.keys.models import ContributedKey, KeyChat
 from derp.keys.routing import curated_model, next_cycle, pause
 from derp.locales import resolve, t
-from derp.telegram.buttons import button, markup
+from derp.telegram.buttons import button, dismiss_button, markup
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
 
@@ -170,14 +171,17 @@ async def key_failed(
         public, "keys.refused", model=model_label(settings, key.model), who=owner_name(owner, public),
         said=said,
     )  # fmt: skip
-    buttons = markup(
+    with contextlib.suppress(TelegramAPIError):
+        await send_markdown(bot, target, text, reply_markup=refusal_controls(public, key.id))
+
+
+def refusal_controls(locale: str, key_id: int) -> InlineKeyboardMarkup | None:
+    return markup(
         [
-            button(t(public, "keys.pause_button"), KeyAction(action="here_pause", key=key.id)),
-            button(t(public, "keys.remove_button"), KeyAction(action="here_off", key=key.id)),
+            button(t(locale, "keys.manage_here"), KeyAction(action="manage_refusal", key=key_id)),
+            dismiss_button(locale),
         ]
     )
-    with contextlib.suppress(TelegramAPIError):
-        await send_markdown(bot, target, text, reply_markup=buttons)
 
 
 async def _rearm(session: AsyncSession, key_id: int) -> None:

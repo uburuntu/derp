@@ -84,14 +84,14 @@ class KeyChat(Base):
 
 class KeyRequest(Base):
     """The step a contributor is at in their private chat: waiting for the pasted key, a cap (a custom one is
-    typed), then the model.
+    typed), then the model; adjust waits for a custom cap on an already configured key.
 
     One per person; a plug-in link (``start=key-…``) names the chat the key is for. Expires after
     ``settings.keys.request_minutes``.
     """
 
     __tablename__ = "key_requests"
-    __table_args__ = (CheckConstraint("step in ('paste', 'cap', 'model')", name="step"),)
+    __table_args__ = (CheckConstraint("step in ('paste', 'cap', 'model', 'adjust')", name="step"),)
 
     user_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     step: Mapped[str] = mapped_column(String(6))

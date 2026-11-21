@@ -7,8 +7,9 @@ then picks a monthly cap and a model; a key meant for a group is then offered th
 when they are an admin of it, else as a card an admin turns on (``Turn on`` / ``Not now``). A key pasted
 into a group is deleted (when Derp may) with a warning to revoke it.
 
-In a chat, the key's owner and the chat's admins may pause it or unplug it there (the refusal notice's
-buttons and the /settings keys page); only admins turn one on. In private, the owner's key page changes
+In a chat, the key's owner and admins may pause or unplug it in /settings or the private manager opened
+from a refusal report. Admins enable a key; its contributor may lift their own pause on an enabled key.
+In private, the owner's key page changes
 its model and cap, pauses or resumes it, unplugs it from a chat, or removes it everywhere. Every press
 re-checks who may make it.
 """
@@ -38,7 +39,7 @@ from derp.history.models import Chat, User
 from derp.history.render import one_line
 from derp.inference.api import OpenRouterAPI, OpenRouterError, OpenRouterManagement
 from derp.keys.models import ContributedKey, KeyChat, KeyRequest
-from derp.keys.notices import KeyAction, brand, model_label, owner_name, when
+from derp.keys.notices import KeyAction, brand, model_label, owner_name, refusal_controls, when
 from derp.keys.pasted import pasted_key
 from derp.keys.register import Refused, allow_models, plug_in, take_out
 from derp.keys.routing import (
@@ -57,7 +58,7 @@ from derp.memory.notes import is_admin
 from derp.money.free import offer_continues
 from derp.money.funding import Funder
 from derp.telegram.bot import bot_username
-from derp.telegram.buttons import Press, button, link, markup, on_press
+from derp.telegram.buttons import Press, button, dismiss_button, link, markup, on_press
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
 
@@ -128,8 +129,10 @@ async def _set_request(
     session.add(KeyRequest(user_id=user_id, step=step, chat_id=chat_id, key_id=key_id, at=datetime.now(UTC)))
 
 
-async def _own_key(session: AsyncSession, user_id: int, key_id: int) -> ContributedKey | None:
-    key = await session.get(ContributedKey, key_id)
+async def _own_key(
+    session: AsyncSession, user_id: int, key_id: int, *, lock: bool = False
+) -> ContributedKey | None:
+    key = await session.get(ContributedKey, key_id, with_for_update=lock)
     return key if key is not None and key.user_id == user_id and key.removed_at is None else None
 
 
@@ -231,13 +234,19 @@ async def on_pasted(
     )
 
 
-def _cap_buttons(settings: Settings, locale: str, key_id: int) -> InlineKeyboardMarkup | None:
+def _cap_buttons(
+    settings: Settings, locale: str, key_id: int, *, back: bool = False
+) -> InlineKeyboardMarkup | None:
     caps = [
         button(f"${cap}", KeyAction(action="cap", key=key_id, value=str(cap)))
         for cap in settings.keys.caps_usd
     ]
     other = button(t(locale, "keys.cap_other_button"), KeyAction(action="cap", key=key_id, value="other"))
-    return markup(caps[:3], caps[3:], other)
+    return markup(caps[:3], caps[3:], other, _back_to_key(locale, key_id) if back else None)
+
+
+def _back_to_key(locale: str, key_id: int) -> InlineKeyboardButton:
+    return button(t(locale, "settings.back"), KeyAction(action="page", key=key_id))
 
 
 class CapAmount(Filter):
@@ -252,7 +261,7 @@ class CapAmount(Filter):
             return False
         async with db.session() as session:
             request = await _request(session, settings, message.from_user.id)
-        if request is None or request.step != "cap" or request.key_id is None:
+        if request is None or request.step not in {"cap", "adjust"} or request.key_id is None:
             return False
         try:
             return {"amount": Decimal(found.group(1).replace(",", ".")), "request": request}
@@ -303,22 +312,31 @@ async def _set_cap(
     edit: Press | None,
 ) -> None:
     async with db.transaction() as session:
-        key = await _own_key(session, user_id, key_id)
+        key = await _own_key(session, user_id, key_id, lock=True)
         if key is None:
             return
-        first = (
-            request := await _request(session, settings, user_id)
-        ) is not None and request.key_id == key_id
+        request = await _request(session, settings, user_id)
+        changing = request is not None and request.key_id == key_id
+        if edit is None and not (changing and request and request.step in {"cap", "adjust"}):
+            return  # a simultaneous amount or a newer setup already consumed this typed request
+        first = changing and request is not None and request.step in {"cap", "model"}
         key.cap_usd = amount
         if key.paused == "cap":
             await resume(session, key)  # a higher cap: serving again (re-checked on the next ask)
         if first and request is not None:
             request.step = "model"
-        text, keyboard = (
-            await _model_page(session, settings, funder, key, locale)
-            if first
-            else await key_page(session, settings, funder, key, locale)
-        )
+            text, keyboard = await _model_page(session, settings, funder, key, locale)
+        else:
+            if changing and request is not None:
+                await session.delete(request)
+            text = t(
+                locale,
+                "keys.cap_saved",
+                cap=f"{amount:g}",
+                brand=brand(key.provider),
+                label=literal(key.label),
+            )
+            keyboard = None
     if edit is not None:
         await edit.edit(text, keyboard)
     else:
@@ -326,7 +344,13 @@ async def _set_cap(
 
 
 async def _model_page(
-    session: AsyncSession, settings: Settings, funder: Funder, key: ContributedKey, locale: str
+    session: AsyncSession,
+    settings: Settings,
+    funder: Funder,
+    key: ContributedKey,
+    locale: str,
+    *,
+    back: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup | None]:
     rows: list[InlineKeyboardButton] = []
     for index, model in enumerate(await offered_models(session, settings, key.provider)):
@@ -339,20 +363,21 @@ async def _model_page(
             star=" ⭐" if model.recommended else "",
         )
         rows.append(button(label, KeyAction(action="model", key=key.id, value=str(index))))
-    return t(locale, "keys.pick_model", cap=f"{key.cap_usd:g}"), markup(*rows)
+    return t(locale, "keys.pick_model", cap=f"{key.cap_usd:g}"), markup(
+        *rows, _back_to_key(locale, key.id) if back else None
+    )
 
 
 async def _set_model(
     press: Press,
     db: Database,
     settings: Settings,
-    funder: Funder,
     management: OpenRouterManagement | None,
     key_id: int,
     index: str,
 ) -> None:
     async with db.transaction() as session:
-        key = await _own_key(session, press.user_id, key_id)
+        key = await _own_key(session, press.user_id, key_id, lock=True)
         if key is None:
             return await press.deny("keys.gone")
         models = await offered_models(session, settings, key.provider)
@@ -372,12 +397,15 @@ async def _set_model(
     if changed and not first:
         await _announce_model(press.bot, db, settings, key)
     if not first:
-        async with db.session() as session:
-            fresh = await session.get(ContributedKey, key_id)
-            if fresh is not None:
-                text, keyboard = await key_page(session, settings, funder, fresh, press.locale)
-                await press.edit(text, keyboard)
-        return None
+        return await press.edit(
+            t(
+                press.locale,
+                "keys.model_saved",
+                brand=brand(key.provider),
+                label=literal(key.label),
+                model=literal(model_label(settings, chosen)),
+            )
+        )
     if chat_id is None:
         return await press.edit(t(press.locale, "keys.ready", model=model_label(settings, chosen)))
     await offer(press, db, settings, key, chat_id)
@@ -436,8 +464,8 @@ async def offer(press: Press, db: Database, settings: Settings, key: Contributed
         )
         buttons = markup(
             [
-                button(t(public, "keys.turn_on"), KeyAction(action="here_on", key=key.id)),
-                button(t(public, "keys.not_now"), KeyAction(action="here_off", key=key.id)),
+                button(t(public, "keys.turn_on"), KeyAction(action="offer_on", key=key.id)),
+                button(t(public, "keys.not_now"), KeyAction(action="offer_decline", key=key.id)),
             ]
         )
         try:
@@ -451,7 +479,7 @@ async def offer(press: Press, db: Database, settings: Settings, key: Contributed
                     KeyChat(key_id=key.id, chat_id=chat.id, state="offered", card_message_id=sent.message_id)
                 )
             else:
-                row.state, row.card_message_id = "offered", sent.message_id
+                row.state, row.card_message_id, row.paused_by = "offered", sent.message_id, None
         text = t(press.locale, "keys.asked_admins", title=literal(one_line(chat.title or "", 60)))
     url = chat.message_link(sent.message_id) if sent is not None else None
     await press.edit(text, markup(link(t(press.locale, "keys.open_chat"), url) if url else None))
@@ -468,17 +496,34 @@ async def _enable(
     locale: str,
     *,
     card: Press | None = None,
+    offer_id: int | None = None,
+    lifting_own_pause: bool = False,
 ) -> Message | None:
     """Turn a key on in a group: the public notice (the card becomes it), then Continue for waiting asks."""
     now = datetime.now(UTC)
     async with db.transaction() as session:
         row = await session.get(KeyChat, (key.id, chat.id), with_for_update=True)
+        if card is not None:
+            if (
+                row is None
+                or row.state == "off"
+                or (offer_id is not None and (row.state != "offered" or row.card_message_id != offer_id))
+            ):
+                return await card.deny("keys.gone")
+            if lifting_own_pause and not (
+                row.state == "paused" and row.paused_by == key.user_id and row.enabled_by is not None
+            ):
+                return await card.deny("keys.gone")
+            if row.paused_by == key.user_id and admin_id != key.user_id:
+                return await card.deny("keys.owner_paused")
         if row is None:
             row = KeyChat(key_id=key.id, chat_id=chat.id)
             session.add(row)
         if row.state == "on":
             return None
-        row.state, row.enabled_by, row.enabled_at, row.off_noticed_at = "on", admin_id, now, None
+        if not lifting_own_pause:
+            row.enabled_by = admin_id
+        row.state, row.enabled_at, row.off_noticed_at = "on", now, None
         row.paused_by = None
     text = t(
         locale,
@@ -489,9 +534,9 @@ async def _enable(
         company=COMPANIES[key.provider],
     )
     sent: Message | None = None
-    if card is not None:
+    if card is not None and not card.ephemeral:
         await card.edit(text)
-    else:
+    elif not lifting_own_pause:
         with contextlib.suppress(TelegramAPIError):
             [*_, sent] = await send_markdown(bot, Target(chat.id), text)
     await offer_continues(db, bot, settings, chat.id, locale)
@@ -501,15 +546,63 @@ async def _enable(
 # Presses.
 
 
+def _legacy_card(press: Press, key_id: int, *actions: str) -> bool:
+    keyboard = press.message.reply_markup
+    return (
+        not press.ephemeral
+        and keyboard is not None
+        and [[b.callback_data for b in row] for row in keyboard.inline_keyboard]
+        == [[KeyAction(action=op, key=key_id).pack() for op in actions]]
+    )
+
+
+async def _manage_refusal(
+    press: Press, data: KeyAction, db: Database, settings: Settings, funder: Funder
+) -> None:
+    async with db.session() as session:
+        chat = await session.get(Chat, press.chat_id)
+        key = await session.get(ContributedKey, data.key)
+        if chat is None or key is None or key.removed_at is not None:
+            return await press.deny("keys.gone")
+        if chat.type == "private":
+            if press.user_id != key.user_id or press.chat_id != key.user_id:
+                return await press.deny("keys.gone")
+            text, keyboard = await key_page(session, settings, funder, key, press.locale)
+        else:
+            admin = await is_admin(press.bot, chat, press.user_id)
+            if not admin and press.user_id != key.user_id:
+                return await press.deny("keys.owner_or_admin")
+            row = await session.get(KeyChat, (key.id, chat.id))
+            if row is None or row.state == "off":
+                return await press.deny("keys.gone")
+            owner = await session.get(User, key.user_id)
+            text, actions = chat_keys_page(
+                settings, [(row, Plugged(key, owner))], press.user_id, admin, press.locale, receipt=True
+            )
+            keyboard = markup(*actions, dismiss_button(press.locale, user_id=press.user_id))
+    thread = press.message.message_thread_id if press.message.is_topic_message else None
+    target = Target.answering_press(press.chat_id, thread, press.user_id, press.query.id)
+    try:
+        await send_markdown(press.bot, target, text, reply_markup=keyboard)
+    except TelegramAPIError:
+        return await press.deny("keys.manage_settings")
+    if data.action != "manage_refusal":  # retire the old destructive-looking controls, preserving the report
+        with contextlib.suppress(TelegramAPIError):
+            await press.bot.edit_message_reply_markup(
+                chat_id=chat.id,
+                message_id=press.message.message_id,
+                reply_markup=refusal_controls(chat.locale or press.locale, key.id),
+            )
+
+
 async def _chat_press(press: Press, data: KeyAction, db: Database, settings: Settings) -> None:
-    """here_on (admins) / here_off / here_pause (the key's owner or an admin), in the chat pressed in."""
+    """Apply a group-specific key action after checking the contributor, admin and current offer."""
     bot = press.bot
     async with db.session() as session:
         chat = await session.get(Chat, press.chat_id)
         key = await session.get(ContributedKey, data.key)
         owner = await session.get(User, key.user_id) if key else None
     if chat is None or key is None or key.removed_at is not None:
-        await press.strip()
         return await press.deny("keys.gone")
     if chat.type == "private":  # a private chat's key is its owner's own, on from the start
         return await press.deny("keys.gone")
@@ -519,13 +612,19 @@ async def _chat_press(press: Press, data: KeyAction, db: Database, settings: Set
     if (
         link_row is None or link_row.state == "off"
     ):  # never offered here, or unplugged: only its owner offers it
-        await press.strip()
         return await press.deny("keys.gone")
-    if data.action == "here_on":
-        if not admin:
+    # Before offer-specific actions, an install card had exactly these two buttons. A delayed tap
+    # on its "Not now" must never unplug a key another admin just enabled.
+    legacy_offer = _legacy_card(press, key.id, "here_on", "here_off")
+    is_offer = data.action in {"offer_on", "offer_decline"} or legacy_offer
+    if is_offer and (link_row.state != "offered" or link_row.card_message_id != press.message.message_id):
+        return await press.deny("keys.gone")
+    if data.action in {"here_on", "offer_on", "here_resume"}:
+        lifting_own_pause = data.action == "here_resume" and press.user_id == key.user_id
+        if not admin and not lifting_own_pause:
             return await press.deny("keys.admins_only")
         if link_row.state == "on":
-            return await press.strip()
+            return await press.toast("keys.turned_on")
         if link_row.paused_by == key.user_id and press.user_id != key.user_id:
             return await press.deny("keys.owner_paused")
         await _enable(
@@ -537,10 +636,16 @@ async def _chat_press(press: Press, data: KeyAction, db: Database, settings: Set
             owner,
             press.user_id,
             chat.locale or press.locale,
-            card=None if press.ephemeral else press,
+            card=press,
+            offer_id=press.message.message_id if is_offer else None,
+            lifting_own_pause=lifting_own_pause,
         )
+        if press.answered:
+            return None
         await press.toast("keys.turned_on")
-        if press.ephemeral:
+        if press.ephemeral and data.value == "receipt":
+            await press.edit(t(press.locale, "keys.turned_on"))
+        elif press.ephemeral:
             await _redraw_panel(press, db, settings, chat, admin)
         return None
     if not admin and press.user_id != key.user_id:
@@ -548,15 +653,21 @@ async def _chat_press(press: Press, data: KeyAction, db: Database, settings: Set
     state = "paused" if data.action == "here_pause" else "off"
     async with db.transaction() as session:
         row = await session.get(KeyChat, (key.id, chat.id), with_for_update=True)
-        if row is None or row.state == state:
-            return await press.strip()
+        if (
+            row is None
+            or row.state == "off"
+            or (is_offer and (row.card_message_id != press.message.message_id or row.state != "offered"))
+        ):
+            return await press.deny("keys.gone")
+        if row.state == state:
+            return None
         was_offered = row.state == "offered"
         row.state, row.off_noticed_at = state, datetime.now(UTC)
         row.paused_by = press.user_id if state == "paused" else None
     public = chat.locale or press.locale
     if was_offered and state == "off":
         return await press.edit(t(public, "keys.declined"))
-    if press.ephemeral:  # the /settings keys page: redrawn as it is now
+    if press.ephemeral and data.value != "receipt":  # the /settings keys page: redrawn as it is now
         return await _redraw_panel(press, db, settings, chat, admin)
     key_text = "keys.paused_here" if state == "paused" else "keys.unplugged_here"
     await press.edit(t(public, key_text, who=owner_name(owner, public), brand=brand(key.provider)))
@@ -581,7 +692,13 @@ async def on_press_key(
     funder: Funder,
     management: OpenRouterManagement | None,
 ) -> None:
-    if data.action.startswith("here_"):
+    if not press.has_pressed_button():
+        return await press.deny("keys.gone")
+    if data.action == "manage_refusal" or (
+        data.action in {"here_pause", "here_off"} and _legacy_card(press, data.key, "here_pause", "here_off")
+    ):
+        return await _manage_refusal(press, data, db, settings, funder)
+    if data.action in {"here_on", "here_pause", "here_resume", "here_off", "offer_on", "offer_decline"}:
         return await _chat_press(press, data, db, settings)
     if press.message.chat.type != "private":
         return await press.deny("keys.gone")
@@ -605,8 +722,10 @@ async def on_press_key(
                 if await _own_key(session, press.user_id, data.key) is None:
                     return await press.deny("keys.gone")
                 request = await _request(session, settings, press.user_id)
-                chat_id = request.chat_id if request is not None and request.key_id == data.key else None
-                await _set_request(session, press.user_id, "cap", chat_id=chat_id, key_id=data.key)
+                if request and request.key_id == data.key and request.step in {"cap", "model"}:
+                    request.step = "cap"
+                else:
+                    await _set_request(session, press.user_id, "adjust", key_id=data.key)
             return await press.edit(t(press.locale, "keys.cap_other", max=settings.keys.max_cap_usd))
         case "cap" if data.value.isdigit():
             await _set_cap(
@@ -629,17 +748,17 @@ async def on_press_key(
                 return await press.deny("keys.gone")
             return await press.edit(
                 t(press.locale, "keys.cap_page", cap=f"{key.cap_usd:g}"),
-                _cap_buttons(settings, press.locale, key.id),
+                _cap_buttons(settings, press.locale, key.id, back=True),
             )
         case "models":
             async with db.session() as session:
                 key = await _own_key(session, press.user_id, data.key)
                 if key is None:
                     return await press.deny("keys.gone")
-                text, keyboard = await _model_page(session, settings, funder, key, press.locale)
+                text, keyboard = await _model_page(session, settings, funder, key, press.locale, back=True)
             return await press.edit(text, keyboard)
         case "model":
-            return await _set_model(press, db, settings, funder, management, data.key, data.value)
+            return await _set_model(press, db, settings, management, data.key, data.value)
         case "pause" | "resume":
             async with db.transaction() as session:
                 key = await _own_key(session, press.user_id, data.key)
@@ -650,15 +769,31 @@ async def on_press_key(
                     key.noticed_at = datetime.now(UTC)  # their own doing: nothing to tell them
                 else:
                     await resume(session, key)
-            return await _show_page(press, db, settings, funder, data.key)
+            return await press.edit(
+                t(
+                    press.locale,
+                    "keys.owner_paused_receipt" if data.action == "pause" else "keys.owner_resumed_receipt",
+                    brand=brand(key.provider),
+                    label=literal(key.label),
+                )
+            )
         case "unplug" if data.value.lstrip("-").isdigit():
             async with db.transaction() as session:
-                if await _own_key(session, press.user_id, data.key) is None:
-                    return await press.deny("keys.gone")
+                key = await _own_key(session, press.user_id, data.key)
                 row = await session.get(KeyChat, (data.key, int(data.value)), with_for_update=True)
-                if row is not None:
-                    row.state, row.off_noticed_at = "off", datetime.now(UTC)
-            return await _show_page(press, db, settings, funder, data.key)
+                chat = await session.get(Chat, int(data.value))
+                if key is None or row is None or chat is None or chat.type == "private":
+                    return await press.deny("keys.gone")
+                row.state, row.off_noticed_at = "off", datetime.now(UTC)
+            return await press.edit(
+                t(
+                    press.locale,
+                    "keys.owner_unplugged_receipt",
+                    brand=brand(key.provider),
+                    label=literal(key.label),
+                    title=literal(one_line(chat.title or "", 60)),
+                )
+            )
         case "remove":
             confirm = button(
                 t(press.locale, "keys.remove_confirm"),
@@ -707,7 +842,7 @@ def my_keys(keys: list[ContributedKey], locale: str) -> tuple[str, InlineKeyboar
         for k in keys
     ]
     plug = button(t(locale, "settings.keys_plug"), KeyAction(action="plug", key=0))
-    return t(locale, "keys.mine" if keys else "keys.mine_none"), markup(*rows, plug)
+    return t(locale, "keys.mine" if keys else "keys.mine_none"), markup(*rows, plug, dismiss_button(locale))
 
 
 async def _chat_state(
@@ -799,7 +934,10 @@ async def key_page(
             button(t(locale, "keys.remove"), KeyAction(action="remove", key=key.id), style="danger"),
         ],
         *unplug,
-        button(t(locale, "keys.all_keys"), KeyAction(action="page", key=0)) if many else None,
+        [
+            button(t(locale, "keys.all_keys"), KeyAction(action="page", key=0)) if many else None,
+            dismiss_button(locale),
+        ],
     )
     return "\n".join(lines), keyboard
 
@@ -839,7 +977,13 @@ def chat_keys_line(settings: Settings, keys: list[tuple[KeyChat, Plugged]], loca
 
 
 def chat_keys_page(
-    settings: Settings, keys: list[tuple[KeyChat, Plugged]], viewer: int | None, admin: bool, locale: str
+    settings: Settings,
+    keys: list[tuple[KeyChat, Plugged]],
+    viewer: int | None,
+    admin: bool,
+    locale: str,
+    *,
+    receipt: bool = False,
 ) -> tuple[str, list[list[InlineKeyboardButton]]]:
     lines = [t(locale, "settings.keys_page")]
     rows: list[list[InlineKeyboardButton]] = []
@@ -856,12 +1000,28 @@ def chat_keys_page(
             )
         )
         buttons: list[InlineKeyboardButton] = []
-        if admin and row.state != "on":
-            buttons.append(button(t(locale, "keys.turn_on"), KeyAction(action="here_on", key=key.id)))
-        if admin and row.state == "on":
-            buttons.append(button(t(locale, "keys.pause_button"), KeyAction(action="here_pause", key=key.id)))
-        if admin or viewer == key.user_id:
-            buttons.append(button(t(locale, "keys.remove_button"), KeyAction(action="here_off", key=key.id)))
+        value = "receipt" if receipt else ""
+        owns = viewer == key.user_id
+        if owns and row.state == "paused" and row.paused_by == viewer and row.enabled_by is not None:
+            buttons.append(
+                button(
+                    t(locale, "keys.resume_here"), KeyAction(action="here_resume", key=key.id, value=value)
+                )
+            )
+        elif admin and row.state != "on" and row.paused_by != key.user_id:
+            buttons.append(
+                button(t(locale, "keys.turn_on"), KeyAction(action="here_on", key=key.id, value=value))
+            )
+        if (admin or owns) and row.state == "on":
+            buttons.append(
+                button(
+                    t(locale, "keys.pause_button"), KeyAction(action="here_pause", key=key.id, value=value)
+                )
+            )
+        if admin or owns:
+            buttons.append(
+                button(t(locale, "keys.remove_button"), KeyAction(action="here_off", key=key.id, value=value))
+            )
         if buttons:
             rows.append(buttons)
     if not keys:

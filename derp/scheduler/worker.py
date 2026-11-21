@@ -29,7 +29,7 @@ from derp.memory.notes import is_admin
 from derp.ops.owner import is_blocked
 from derp.scheduler.jobs import MISS_LIMIT, SNOOZES, ResumeJob, SnoozeJob, next_after
 from derp.scheduler.models import Job
-from derp.telegram.buttons import button, markup
+from derp.telegram.buttons import button, dismiss_button, markup
 from derp.telegram.sender import Target, send_markdown
 
 if TYPE_CHECKING:
@@ -138,7 +138,13 @@ async def fire(
                 for by in SNOOZES
             ]
             text = t(locale, "scheduler.reminder", name=name, text=job.text)
-            await send_markdown(bot, target, text, trusted=False, reply_markup=markup(snooze))
+            await send_markdown(
+                bot,
+                target,
+                text,
+                trusted=False,
+                reply_markup=markup(snooze, dismiss_button(locale, user_id=job.creator_id)),
+            )
             return
         outcome = await runtime.answer(
             as_message(job, chat, user, now, since),
@@ -157,7 +163,16 @@ async def fire(
         misses = job.misses + 1
         paused = misses >= MISS_LIMIT
         await _set(db, job.id, misses=misses, **({"state": "paused"} if paused else {}))
-        resume = markup(button(t(locale, "scheduler.resume"), ResumeJob(id=job.id))) if paused else None
+        resume = (
+            markup(
+                [
+                    button(t(locale, "scheduler.resume"), ResumeJob(id=job.id)),
+                    dismiss_button(locale, user_id=job.creator_id),
+                ]
+            )
+            if paused
+            else None
+        )
         await send_markdown(
             bot,
             target,

@@ -26,6 +26,7 @@
 
 ## Working rules
 
+- Every inline-button flow has a finish. After a one-shot action, edit the card into a receipt that says what happened and clears the spent controls. If there is a useful next step, offer **OK** to dismiss and a deliberate entry into management. Put pause, undo, delete and repeat-purchase controls inside their respective flows. On shared cards, retire each person's or item's controls as its decision finishes; protect any controls that others still need. Test the final text, keyboard and stored state, including repeat presses.
 - Verify Telegram, aiogram, Pydantic AI and OpenRouter behavior in `references/` (upstream checkouts + scraped docs, gitignored) instead of memory.
 - Tests use synthetic data and never touch the network; `live`-marked tests are opt-in and spend real money. User-facing features land with an e2e journey through the fake Bot API (`tests/e2e/`). Changes to tools or the persona are A/B-tested live with `tools/eval` (three or more runs a side).
 - Integrate, don't append: build a feature or fix into the concept that already owns it (the model, the transcript format, the persona's rules, the shared helper), so it reads as if it had always been designed in. Don't add it beside that concept as an extra query, prompt line, special case or wrapper. When it replaces a path, delete the old one.

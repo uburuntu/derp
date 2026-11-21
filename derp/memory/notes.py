@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +20,7 @@ from derp.history.models import Chat
 from derp.history.queries import terms
 from derp.history.render import neutralize, one_line
 from derp.memory.models import Note
+from derp.telegram.bot import group_admin
 
 NOTE_CHARS = 1000  # room for a list kept as one note
 CHAT_NOTES_CAP = 50
@@ -31,7 +31,6 @@ PROMPT_CHARS = 5000  # notes shown to the model per run, newest first: five full
 # prompt behind it) is the same for everyone; the asker's notes also take what chat notes leave.
 MY_SHARE = 1500
 FOUND_NOTES = 20  # notes one search returns
-ADMIN_STATUSES = {"creator", "administrator"}
 
 type NoteChange = Literal["add", "edit", "forget", "decide"]  # decide: approve or reject a proposal
 type Verdict = Literal["direct", "propose", "refused"]
@@ -44,13 +43,7 @@ class Memory:
 
 
 async def is_admin(bot: Bot, chat: Chat, user_id: int) -> bool:
-    if chat.type == "private":
-        return True
-    try:
-        member = await bot.get_chat_member(chat.id, user_id)
-    except TelegramAPIError:
-        return False
-    return str(member.status) in ADMIN_STATUSES
+    return chat.type == "private" or await group_admin(bot, chat.id, user_id)
 
 
 def may_change(change: NoteChange, owner: int | None, user_id: int, admin: bool, mode: str) -> Verdict:

@@ -286,7 +286,14 @@ async def test_rule_revision_replaces_only_on_confirmation_and_obeys_management_
         async with conversation.db.session() as s:
             active = await s.get(ReplyRule, draft.id)
             assert active and active.state == state
+        if actor == ADMIN:
+            assert set(buttons(conversation.api.message(GROUP.id, mid))) == {
+                ("ok", draft.id),
+                ("view", draft.id),
+            }
+            await press("view")
     await press("remove")
+    assert "reply_markup" not in conversation.api.message(GROUP.id, mid)
     async with conversation.db.session() as s:
         assert await s.get(ReplyRule, draft.id) is None
 
@@ -388,14 +395,15 @@ async def test_a_preupgrade_public_pause_button_updates_the_original_rule_and_ke
     await conversation.press(russian_client, GROUP.id, mid, f"autoreply:pause:{rid}")
     detail = conversation.api.message(GROUP.id, mid)
     controls = buttons(detail)
+    assert set(controls) == {("ok", rid), ("view", rid)}
+    await conversation.press(ADMIN, GROUP.id, mid, controls["view", rid]["callback_data"])
+    controls = buttons(conversation.api.message(GROUP.id, mid))
     assert controls["resume", rid]["text"] == t("en", "auto.resume")
-    for op in ("resume", "remove", "ok"):
-        assert (op, rid) in controls
     async with conversation.db.session() as session:
         paused = await session.get(ReplyRule, rid)
         assert paused and paused.state == "paused"
     await conversation.press(ADMIN, GROUP.id, mid, controls["resume", rid]["callback_data"])
-    assert ("pause", rid) in buttons(conversation.api.message(GROUP.id, mid))
+    assert set(buttons(conversation.api.message(GROUP.id, mid))) == {("ok", rid), ("view", rid)}
 
 
 async def test_legacy_back_uses_the_original_request_language_for_the_shared_list(

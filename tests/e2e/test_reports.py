@@ -53,21 +53,26 @@ async def test_a_group_member_reports_an_answer_from_the_ephemeral_receipt(
     assert int(receipt["ephemeral_message_parameters"]["receiver_user_id"]) == ERIN.id
     report = keyboard(receipt["reply_markup"])["⚠️ Report a problem"]
     ephemeral = (LOFT.id, max(eid for (cid, eid) in conversation.api.ephemerals if cid == LOFT.id))
-    await conversation.press_ephemeral(ERIN, *ephemeral, report)
+    original = conversation.api.ephemerals[ephemeral]["rich_message"]
+    await conversation.press_ephemeral(ERIN, *ephemeral, report, taps=2)
+    assert conversation.api.ephemerals[ephemeral]["rich_message"] == original
+    assert "reply_markup" not in conversation.api.ephemerals[ephemeral]
+    [ephemeral] = [key for key in conversation.api.ephemerals if key != ephemeral]
     shown = conversation.api.ephemerals[ephemeral]
-    assert shown["rich_markdown"] == "What went wrong with this answer?"
+    assert "What went wrong with this answer?" in str(shown["rich_message"])
     assert list(keyboard(shown["reply_markup"])) == [
         "Wrong answer",
         "Missed context",
         "Wrong image",
         "Broken",
+        "Cancel",
     ]
 
     missed = keyboard(shown["reply_markup"])["Missed context"]
     await conversation.press_ephemeral(ERIN, *ephemeral, missed, taps=2)  # a double tap files once
     shown = conversation.api.ephemerals[ephemeral]
     assert shown["rich_markdown"].startswith("Reported — thanks.")
-    assert list(keyboard(shown["reply_markup"])) == ["Skip"]
+    assert list(keyboard(shown["reply_markup"])) == ["OK"]
     async with conversation.db.session() as session:
         run_id = await session.scalar(select(AgentRun.id))
     [filed] = await reports(conversation)
@@ -117,16 +122,18 @@ async def report_privately(conversation: Conversation, model: ScriptedModel, cat
     await conversation.press(
         ERIN, ERIN.id, receipt_id, keyboard(receipt["reply_markup"])["⚠️ Report a problem"]
     )
-    pick = keyboard(conversation.api.message(ERIN.id, receipt_id)["reply_markup"])[category]
-    await conversation.press(ERIN, ERIN.id, receipt_id, pick)
-    return receipt_id
+    assert "reply_markup" not in conversation.api.message(ERIN.id, receipt_id)
+    form_id = max(mid for (cid, mid) in conversation.api.messages if cid == ERIN.id)
+    pick = keyboard(conversation.api.message(ERIN.id, form_id)["reply_markup"])[category]
+    await conversation.press(ERIN, ERIN.id, form_id, pick)
+    return form_id
 
 
 async def test_a_private_report_can_skip_the_details(
     conversation: Conversation, model: ScriptedModel
 ) -> None:
     receipt_id = await report_privately(conversation, model, "Wrong answer")
-    skip = keyboard(conversation.api.message(ERIN.id, receipt_id)["reply_markup"])["Skip"]
+    skip = keyboard(conversation.api.message(ERIN.id, receipt_id)["reply_markup"])["OK"]
     await conversation.press(ERIN, ERIN.id, receipt_id, skip)
     edit = conversation.api.calls_of("editMessageText")[-1]
     assert edit["rich_message"]["markdown"] == "Reported — thanks."
@@ -162,11 +169,14 @@ async def test_report_details_in_private_get_a_plain_line_until_the_window_close
     assert (await reports(conversation))[0].text == ""
 
 
-async def open_report(conversation: Conversation, person: Person, chat_id: int, receipt_id: int) -> str:
+async def open_report(
+    conversation: Conversation, person: Person, chat_id: int, receipt_id: int
+) -> tuple[int, str]:
     """Open Report a problem on a receipt Derp sent in ``chat_id``; the callback data of "Wrong answer"."""
     report = keyboard(conversation.api.message(chat_id, receipt_id)["reply_markup"])["⚠️ Report a problem"]
     await conversation.press(person, chat_id, receipt_id, report)
-    return keyboard(conversation.api.message(chat_id, receipt_id)["reply_markup"])["Wrong answer"]
+    form = max(mid for (cid, mid) in conversation.api.messages if cid == chat_id)
+    return form, keyboard(conversation.api.message(chat_id, form)["reply_markup"])["Wrong answer"]
 
 
 async def test_details_come_only_from_the_chat_where_the_receipt_was_pressed(
@@ -184,6 +194,7 @@ async def test_details_come_only_from_the_chat_where_the_receipt_was_pressed(
     await conversation.press_ephemeral(
         ERIN, *ephemeral, keyboard(shown["reply_markup"])["⚠️ Report a problem"]
     )
+    ephemeral = max(conversation.api.ephemerals)
     pick = keyboard(conversation.api.ephemerals[ephemeral]["reply_markup"])["Wrong answer"]
     await conversation.press_ephemeral(ERIN, *ephemeral, pick)
     assert "everyone in the chat will see it" in conversation.api.ephemerals[ephemeral]["rich_markdown"]
@@ -213,9 +224,7 @@ async def test_a_receipt_sent_by_dm_takes_the_details_in_private_not_in_the_grou
     info = await conversation.send(ERIN, LOFT, "/info", reply_to=answer_id)  # sent the ordinary way: by DM
     await conversation.settle(info)
     receipt_id = max(mid for (cid, mid) in conversation.api.messages if cid == ERIN.id)
-    await conversation.press(
-        ERIN, ERIN.id, receipt_id, await open_report(conversation, ERIN, ERIN.id, receipt_id)
-    )
+    await conversation.press(ERIN, ERIN.id, *await open_report(conversation, ERIN, ERIN.id, receipt_id))
     [filed] = await reports(conversation)
     assert (filed.chat_id, filed.details_chat_id) == (LOFT.id, ERIN.id)
 
@@ -242,9 +251,8 @@ async def test_one_details_window_at_a_time_and_a_filled_report_keeps_its_text(
 
     answers = [await answered(conversation, model, ERIN, Room.private(ERIN)) for _ in range(2)]
     first, second = [await receipt(answer_id) for answer_id in answers]
-    await conversation.press(ERIN, ERIN.id, first, await open_report(conversation, ERIN, ERIN.id, first))
-    wrong = await open_report(conversation, ERIN, ERIN.id, second)
-    await conversation.press(ERIN, ERIN.id, second, wrong)
+    await conversation.press(ERIN, ERIN.id, *await open_report(conversation, ERIN, ERIN.id, first))
+    await conversation.press(ERIN, ERIN.id, *await open_report(conversation, ERIN, ERIN.id, second))
 
     details = await conversation.send(ERIN, text="the second one was off")
     assert (await conversation.expect_reply(details))["rich_message"]["markdown"].startswith("Added")
@@ -256,8 +264,8 @@ async def test_one_details_window_at_a_time_and_a_filled_report_keeps_its_text(
 
     # Recategorizing the filled report keeps its text and opens no window.
     again = await receipt(answers[1])
-    wrong = await open_report(conversation, ERIN, ERIN.id, again)
-    await conversation.press(ERIN, ERIN.id, again, wrong.replace("wrong_answer", "wrong_image"))
+    form, wrong = await open_report(conversation, ERIN, ERIN.id, again)
+    await conversation.press(ERIN, ERIN.id, form, wrong.replace("wrong_answer", "wrong_image"))
     assert (
         conversation.api.calls_of("editMessageText")[-1]["rich_message"]["markdown"] == "Reported — thanks."
     )
@@ -267,3 +275,28 @@ async def test_one_details_window_at_a_time_and_a_filled_report_keeps_its_text(
     await conversation.settle(asked)
     filled = (await reports(conversation))[1]
     assert (filled.kind, filled.text, filled.details_until) == ("wrong_image", "the second one was off", None)
+
+
+async def test_dismiss_info_or_cancel_reporting_keeps_the_receipt_and_files_nothing(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    answer = await answered(conversation, model, ERIN, Room.private(ERIN))
+    for open_form in [False, True]:
+        asked = await conversation.send(ERIN, text="/info", reply_to=answer)
+        await conversation.settle(asked)
+        mid = max(i for c, i in conversation.api.messages if c == ERIN.id)
+        original = conversation.api.message(ERIN.id, mid)
+        choice = "⚠️ Report a problem" if open_form else "OK"
+        await conversation.press(ERIN, ERIN.id, mid, keyboard(original["reply_markup"])[choice])
+        if open_form:
+            form = max(i for c, i in conversation.api.messages if c == ERIN.id)
+            await conversation.press(
+                ERIN,
+                ERIN.id,
+                form,
+                keyboard(conversation.api.message(ERIN.id, form)["reply_markup"])["Cancel"],
+            )
+            assert "Report cancelled" in str(conversation.api.message(ERIN.id, form)["rich_message"])
+        receipt = conversation.api.message(ERIN.id, mid)
+        assert receipt["rich_message"] == original["rich_message"] and "reply_markup" not in receipt
+        assert await reports(conversation) == []

@@ -23,7 +23,7 @@ import contextlib
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import CommandObject
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReactionTypeEmoji
@@ -39,8 +39,9 @@ from derp.history.render import one_line
 from derp.locales import resolve, t
 from derp.ops.models import FEEDBACK_KINDS, REPORT_KINDS, Feedback
 from derp.ops.owner import from_owner, is_blocked
-from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.buttons import Press, button, dismiss_button, markup, on_press
 from derp.telegram.filters import Command
+from derp.telegram.policy import AMBIGUOUS
 from derp.telegram.sender import Target, sanitize_untrusted, send_markdown, send_privately
 from derp.telegram.text import literal
 
@@ -118,7 +119,10 @@ def _categories(locale: str, data: ReportAction) -> InlineKeyboardMarkup | None:
             ReportAction(step="kind", run=data.run, message=data.message, kind=kind),
         )
 
-    return markup(*([pick(a), pick(b)] for a, b in zip(REPORT_KINDS[::2], REPORT_KINDS[1::2], strict=True)))
+    return markup(
+        *([pick(a), pick(b)] for a, b in zip(REPORT_KINDS[::2], REPORT_KINDS[1::2], strict=True)),
+        button(t(locale, "report.cancel"), ReportAction(step="cancel", run=data.run)),
+    )
 
 
 async def _file_report(db: Database, user_id: int, chat_id: int, data: ReportAction) -> bool | None:
@@ -165,9 +169,33 @@ async def _close_windows(session: AsyncSession, user_id: int, *more: ColumnEleme
 
 
 async def on_report(press: Press, data: ReportAction, db: Database) -> None:
+    if not press.has_pressed_button():
+        return await press.deny("buttons.stale")
     locale = press.locale
     if data.step == "open":
-        return await press.edit(t(locale, "report.ask"), _categories(locale, data))
+        # The receipt can contain several versions and their charges. Keep it intact and take
+        # the issue in a separate private form, even when the original answer belongs to a group.
+        if not await press.take_button(clear=True):
+            return await press.deny("buttons.stale")
+        text, keys = t(locale, "report.ask"), _categories(locale, data)
+        try:
+            if press.message.chat.type == "private":
+                delivered = await send_privately(press.bot, press.user_id, text, reply_markup=keys)
+            else:
+                thread = press.message.message_thread_id if press.message.is_topic_message else None
+                target = Target.answering_press(press.chat_id, thread, press.user_id, press.query.id)
+                try:
+                    delivered = bool(await send_markdown(press.bot, target, text, reply_markup=keys))
+                except TelegramBadRequest:
+                    delivered = await send_privately(press.bot, press.user_id, text, reply_markup=keys)
+        except AMBIGUOUS:
+            return await press.deny("report.unconfirmed")
+        if not delivered:
+            await press.restore_keyboard()
+            return await press.deny("report.unavailable")
+        return None
+    if data.step == "cancel":
+        return await press.edit(t(locale, "report.cancelled"))
     if data.step == "kind":
         opened = (
             await _file_report(db, press.user_id, press.chat_id, data) if data.kind in REPORT_KINDS else None
@@ -176,9 +204,9 @@ async def on_report(press: Press, data: ReportAction, db: Database) -> None:
             return await press.deny("buttons.stale")
         if not opened:
             return await press.edit(t(locale, "report.done"))
-        skip = button(t(locale, "report.skip"), ReportAction(step="skip", run=data.run))
+        finish = button(t(locale, "buttons.ok"), ReportAction(step="skip", run=data.run))
         private = press.message.chat.type == "private"
-        return await press.edit(t(locale, "report.filed" if private else "report.filed_here"), markup(skip))
+        return await press.edit(t(locale, "report.filed" if private else "report.filed_here"), markup(finish))
     async with db.transaction() as session:
         await _close_windows(session, press.user_id, Feedback.run_id == data.run)
     return await press.edit(t(locale, "report.done"))
@@ -273,7 +301,7 @@ async def _page(db: Database, offset: int) -> tuple[str, InlineKeyboardMarkup | 
         button("‹ Newer", newer) if offset > 0 else None,
         button("Older ›", older) if offset + PAGE < total else None,
     ]
-    return "\n".join(lines), markup(*items, nav)
+    return "\n".join(lines), markup(*items, nav, dismiss_button("en"))
 
 
 async def on_feedbacks(message: Message, db: Database, bot: Bot) -> None:
@@ -319,5 +347,5 @@ def build_router() -> Router:
     router.message.register(on_feedbacks, Command("feedbacks"), from_owner)
     router.message.register(on_details, giving_details)
     on_press(router, FeedbackAction, F.action.in_({"page", "done", "thank"}))(on_review)
-    on_press(router, ReportAction, F.step.in_({"open", "kind", "skip"}))(on_report)
+    on_press(router, ReportAction, F.step.in_({"open", "kind", "skip", "cancel"}))(on_report)
     return router

@@ -43,7 +43,7 @@ from derp.money.models import CreditLot, RunFee
 from derp.money.wallets import balance, credit, wallet
 from derp.ops.context import render
 from derp.ops.owner import from_owner, owner_here
-from derp.telegram.buttons import Press, button, markup, on_press
+from derp.telegram.buttons import Press, button, dismiss_button, markup, on_press
 from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_document, send_markdown, send_privately
 from derp.telegram.text import literal
@@ -58,7 +58,7 @@ SCOUT_PING = "Model scout:"
 
 
 class ConsoleAction(CallbackData, prefix="own"):
-    action: str  # apply | ignore (a scout proposal) | rollback (a role's pin)
+    action: str  # manage | apply | ignore (a scout proposal) | rollback (a versioned pin)
     key: str
 
 
@@ -82,7 +82,9 @@ def _table(header: list[str], align: str, rows: list[list[str]]) -> list[str]:
     return ["| " + " | ".join(header) + " |", rule, *("| " + " | ".join(row) + " |" for row in rows)]
 
 
-async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMarkup | None]:
+async def stats(
+    db: Database, api: OpenRouterAPI, *, managing: bool = False
+) -> tuple[str, InlineKeyboardMarkup | None]:
     now = datetime.now(UTC)
     week = now - timedelta(days=7)
     cost, stars, refunds, runs = [], [], [], []
@@ -196,7 +198,7 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
         buttons += [
             button(
                 f"Roll back {pin.role} → {pin.previous.get('model')}",
-                ConsoleAction(action="rollback", key=pin.role),
+                ConsoleAction(action="rollback", key=_pin_version(pin)),
             )
             for pin in pins
             if pin.previous
@@ -209,7 +211,16 @@ async def stats(db: Database, api: OpenRouterAPI) -> tuple[str, InlineKeyboardMa
                 literal(p.reason),
             ]
             buttons.append(_proposal_row(p.id))
+    if buttons:
+        if not managing:
+            buttons = [button("Manage models", ConsoleAction(action="manage", key=""))]
+        buttons.append(dismiss_button("en"))
     return "\n".join(lines), markup(*buttons)
+
+
+def _pin_version(pin: ModelPin) -> str:
+    """Bind a rollback to the revision the owner saw. A second tap cannot undo the first."""
+    return f"{pin.role}.{int(pin.updated_at.timestamp() * 1_000_000)}"
 
 
 def _proposal_row(proposal_id: int) -> list[InlineKeyboardButton]:
@@ -234,11 +245,15 @@ async def decide(action: str, key: str, db: Database, pins: PinStore) -> tuple[s
     now = datetime.now(UTC)
     async with db.transaction() as session:
         if action == "rollback":
-            if key not in {role.value for role in ModelRole} or not await rollback_pin(
-                session, ModelRole(key)
-            ):
+            role = key.partition(".")[0]
+            row = await session.get(ModelPin, role, with_for_update=True)
+            if row is None or role not in {item.value for item in ModelRole}:
                 return "Nothing to roll back.", False
-            note = f"Rolled back {key}."
+            if _pin_version(row) != key:
+                return "Open Manage models to review the current rollback.", False
+            if not await rollback_pin(session, ModelRole(role)):
+                return "Nothing to roll back.", False
+            note = f"Rolled back {role}."
         else:
             proposal = await session.get(
                 ScoutProposal, int(key) if key.isdigit() else 0, with_for_update=True
@@ -258,15 +273,25 @@ async def decide(action: str, key: str, db: Database, pins: PinStore) -> tuple[s
 async def on_console(
     press: Press, data: ConsoleAction, db: Database, api: OpenRouterAPI, pins: PinStore, settings: Settings
 ) -> None:
-    if press.user_id not in settings.owner_ids:
+    if (
+        press.user_id not in settings.owner_ids
+        or press.message.chat.type != "private"
+        or press.chat_id != press.user_id
+    ):
         return  # the console doesn't announce itself: a silent answer
+    if not press.has_pressed_button():
+        return await press.deny("buttons.stale")
+    if data.action == "manage":
+        return await press.edit(*await stats(db, api, managing=True))
     note, done = await decide(data.action, data.key, db, pins)
     await press.answer(note, alert=not done)
     if (press.message.text or "").startswith(SCOUT_PING):  # a ping: drop the decided proposal's buttons
         decided = {b.callback_data for b in _proposal_row(int(data.key))} if data.key.isdigit() else set()
         return await press.strip(keep=lambda b: b.callback_data not in decided)
+    if not done and (data.action != "rollback" or "." in data.key):
+        return  # an already-handled press must leave its success receipt intact
     text, keyboard = await stats(db, api)
-    await press.edit(text, keyboard)
+    await press.edit((note + "\n\n" if done else "") + text, keyboard)
 
 
 async def grant(message: Message, command: CommandObject, db: Database, bot: Bot) -> None:
@@ -365,5 +390,5 @@ def build_router() -> Router:
     router.message.register(show_stats, Command("stats"), from_owner)
     router.message.register(grant, Command("grant"), from_owner)
     router.message.register(block, Command("block", "unblock"), from_owner)
-    on_press(router, ConsoleAction, F.action.in_({"apply", "ignore", "rollback"}))(on_console)
+    on_press(router, ConsoleAction, F.action.in_({"manage", "apply", "ignore", "rollback"}))(on_console)
     return router

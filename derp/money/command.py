@@ -30,7 +30,7 @@ from derp.money.funding import day_end, sponsored_lot_id
 from derp.money.models import CreditLot, Wallet
 from derp.money.wallets import balances, wallet
 from derp.ops.feedback import report_button
-from derp.telegram.buttons import markup
+from derp.telegram.buttons import dismiss_button, markup
 from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_markdown, send_privately
 from derp.telegram.text import literal
@@ -176,7 +176,12 @@ async def show_info(message: Message, db: Database, bot: Bot) -> None:
         (t(locale, "info.revision") + "\n" if entry.revision else "") + receipt_text(entry, locale)
         for entry in entries
     )
-    report = markup(report_button(locale, entries[-1].run.id, replied.message_id))
+    report = markup(
+        [
+            dismiss_button(locale, user_id=message.from_user.id),
+            report_button(locale, entries[-1].run.id, replied.message_id),
+        ]
+    )
     await _reply_privately(bot, message, locale, text, report)
 
 

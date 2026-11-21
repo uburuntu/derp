@@ -22,7 +22,7 @@ from derp.history.models import Message as StoredMessage
 from derp.inference.api import Credential, GeneratedImage, OpenRouterError, SubKey
 from derp.inference.models import ProviderCall
 from derp.keys.flows import chat_ref
-from derp.keys.models import ContributedKey, KeyChat
+from derp.keys.models import ContributedKey, KeyChat, KeyRequest
 from derp.money.wallets import credit, wallet
 from tests.e2e.fake_api import Call, Failure
 from tests.e2e.harness import Conversation, Person, Room
@@ -243,7 +243,7 @@ async def test_a_refusal_is_shown_once_and_the_usual_model_answers_instead(
     keyed: tuple[Conversation, ScriptedModel, FakeManagement], model: ScriptedModel
 ) -> None:
     conversation, key_model, _ = keyed
-    await plug_into_crew(conversation)
+    key_id = await plug_into_crew(conversation)
     async with conversation.db.transaction() as session:  # the chat can pay its usual model
         await credit(session, (await wallet(session, "chat", CREW.id)).id, "stars:crew", 650, "purchase")
 
@@ -257,7 +257,7 @@ async def test_a_refusal_is_shown_once_and_the_usual_model_answers_instead(
     await conversation.settle(asked)
     replies = said(conversation, CREW.id, asked.after)
     assert "refused this one" in markdown(replies[0]) and "help with that" in markdown(replies[0])
-    assert {"Pause here", "Unplug here"} <= {b["text"].split(" ", 1)[1] for b in buttons(replies[0])}
+    assert {b["text"] for b in buttons(replies[0])} == {"Manage key", "OK"}
     refusal_id = newest(conversation, CREW.id) - 1  # the usual model's answer came after it
     assert "here's the roast" in markdown(replies[1])
     async with conversation.db.session() as session:
@@ -270,10 +270,81 @@ async def test_a_refusal_is_shown_once_and_the_usual_model_answers_instead(
     later = said(conversation, CREW.id, again.after)
     assert [markdown(c) for c in later] == ["second roast"]  # within the hours a refusal is shown once
 
-    before = conversation.seq
-    await conversation.press(ANA, CREW.id, refusal_id, data_of(replies[0], "Unplug here"))
-    unplugged = await latest(conversation, "editMessageText", CREW.id, before)
-    assert "unplugged from this chat" in markdown(unplugged)
+    report = conversation.api.message(CREW.id, refusal_id)
+    stranger = Person(1751, "Eve")
+    conversation.meet(stranger, CREW)
+    ephemerals = conversation.api.ephemerals
+    previous = len(ephemerals)
+    for label in ["Manage key", "OK"]:
+        await conversation.press(stranger, CREW.id, refusal_id, data_of(replies[0], label))
+    assert len(ephemerals) == previous
+    assert conversation.api.message(CREW.id, refusal_id) == report
+    public_ids = set(conversation.api.messages)
+
+    async def open_controls(who: Person) -> tuple[int, dict[str, Any]]:
+        await conversation.press(who, CREW.id, refusal_id, data_of(replies[0], "Manage key"))
+        mid = max(k[1] for k in ephemerals if k[0] == CREW.id)
+        panel = ephemerals[CREW.id, mid]
+        assert panel["receiver_user"]["id"] == who.id
+        return mid, panel
+
+    mid, panel = await open_controls(BO)
+    buttons_on_panel = [b for row in panel["reply_markup"]["inline_keyboard"] for b in row]
+    assert {b["text"] for b in buttons_on_panel} == {"⏸ Pause here", "🔌 Unplug here", "OK"}
+    pause = next(b["callback_data"] for b in buttons_on_panel if "Pause" in b["text"])
+    await conversation.press_ephemeral(BO, CREW.id, mid, pause)
+    assert not ephemerals[CREW.id, mid].get("reply_markup")
+    _, admin_panel = await open_controls(ANA)
+    assert "Turn on" not in str(admin_panel["reply_markup"])
+    assert "Resume here" not in str(admin_panel["reply_markup"])
+    mid, owner_panel = await open_controls(BO)
+    resume = next(
+        b["callback_data"]
+        for row in owner_panel["reply_markup"]["inline_keyboard"]
+        for b in row
+        if "Resume" in b["text"]
+    )
+    await conversation.press_ephemeral(BO, CREW.id, mid, resume)
+    async with conversation.db.session() as session:
+        link = await session.get(KeyChat, (key_id, CREW.id))
+        assert link and link.state == "on" and link.enabled_by == ANA.id
+    assert conversation.api.message(CREW.id, refusal_id) == report
+
+    # Telegram can still show older reports. Their visible action buttons open the private manager.
+    earlier = conversation.api.messages[CREW.id, refusal_id]
+    earlier["reply_markup"] = {
+        "inline_keyboard": [
+            [
+                {"text": "⏸ Pause here", "callback_data": f"key:here_pause:{key_id}:"},
+                {"text": "🔌 Unplug here", "callback_data": f"key:here_off:{key_id}:"},
+            ]
+        ]
+    }
+    previous = len(ephemerals)
+    await conversation.press(stranger, CREW.id, refusal_id, f"key:here_off:{key_id}:")
+    assert len(ephemerals) == previous
+    assert conversation.api.message(CREW.id, refusal_id)["reply_markup"] == earlier["reply_markup"]
+    await conversation.press(ANA, CREW.id, refusal_id, f"key:here_off:{key_id}:")
+    mid = max(k[1] for k in ephemerals if k[0] == CREW.id)
+    panel = ephemerals[CREW.id, mid]
+    assert panel["receiver_user"]["id"] == ANA.id
+    assert conversation.api.message(CREW.id, refusal_id) == report
+    async with conversation.db.session() as session:
+        link = await session.get(KeyChat, (key_id, CREW.id))
+        assert link and link.state == "on"
+    unplug = next(
+        b["callback_data"]
+        for row in panel["reply_markup"]["inline_keyboard"]
+        for b in row
+        if "Unplug" in b["text"]
+    )
+    await conversation.press_ephemeral(ANA, CREW.id, mid, unplug)
+    assert not ephemerals[CREW.id, mid].get("reply_markup")
+    assert "unplugged from this chat" in ephemerals[CREW.id, mid]["rich_markdown"]
+    assert conversation.api.message(CREW.id, refusal_id) == report
+    assert set(conversation.api.messages) == public_ids
+    await conversation.press(ANA, CREW.id, refusal_id, data_of(replies[0], "OK"))
+    assert not conversation.api.message(CREW.id, refusal_id).get("reply_markup")
     async with conversation.db.session() as session:
         assert await session.scalar(select(KeyChat.state).where(KeyChat.chat_id == CREW.id)) == "off"
 
@@ -447,3 +518,78 @@ async def test_a_chatgpt_key_draws_gifs_and_quick_edits_on_gpt_image_2_6(
     await conversation.expect_reply(edit, method="sendPhoto")
     await conversation.settle(edit)
     assert api.drawn[-1]["complexity"] == "low" and api.drawn[-1]["aspect_ratio"] == "1:1"  # a quick edit
+
+
+async def test_key_setting_receipts_finish_the_action_and_old_offers_cannot_unplug_an_enabled_key(
+    keyed: tuple[Conversation, ScriptedModel, FakeManagement],
+) -> None:
+    conversation, _, _ = keyed
+    key_id = await plug_into_crew(conversation)
+
+    async def private_page(control: str) -> int:
+        sent = await conversation.send(BO, text="/settings")
+        panel = await conversation.expect_reply(sent)
+        await conversation.settle(sent)
+        mid = newest(conversation, BO.id)
+        await conversation.press(BO, BO.id, mid, data_of(panel, "My keys"))
+        page = await latest(conversation, "editMessageText", BO.id, sent.after)
+        await conversation.press(BO, BO.id, mid, data_of(page, control))
+        return mid
+
+    for setting, option, expected in [("Cap", "$50", "$50"), ("Model", "GPT-6.2 Astra", "GPT-6.2 Astra")]:
+        after = conversation.seq
+        mid = await private_page(setting)
+        choices = conversation.api.calls_of("editMessageText", after=after)[-1]
+        await conversation.press(BO, BO.id, mid, data_of(choices, option))
+        receipt = conversation.api.calls_of("editMessageText", after=after)[-1]
+        assert expected in markdown(receipt).replace("\\", "")
+        assert not conversation.api.message(BO.id, mid).get("reply_markup")
+
+    after = conversation.seq
+    mid = await private_page("Cap")
+    picker = conversation.api.calls_of("editMessageText", after=after)[-1]
+    await conversation.press(BO, BO.id, mid, data_of(picker, "Other amount"))
+    amount = await conversation.send(BO, text="75")
+    await conversation.settle(amount)
+    custom = await latest(conversation, "sendRichMessage", BO.id, amount.after)
+    assert "$75" in markdown(custom) and not custom.fields.get("reply_markup")
+    async with conversation.db.session() as session:
+        assert await session.get(KeyRequest, BO.id) is None
+        key = await session.get(ContributedKey, key_id)
+        assert key and (key.cap_usd, key.model) == (75, "openai/gpt-6.2-astra")
+
+    for action in ["Pause", "Resume", "Unplug: "]:
+        mid = await private_page(action)
+        assert not conversation.api.message(BO.id, mid).get("reply_markup")
+    sent = await conversation.send(BO, text=f"/start key-{chat_ref(conversation.settings, CREW.id)}")
+    await conversation.settle(sent)
+    picker = await latest(conversation, "sendRichMessage", BO.id, sent.after)
+    await conversation.press(BO, BO.id, newest(conversation, BO.id), data_of(picker, "Use ChatGPT"))
+    card = await latest(conversation, "sendRichMessage", CREW.id, sent.after)
+    mid = newest(conversation, CREW.id)
+    original = conversation.api.message(CREW.id, mid)
+    stranger = Person(1805, "Eve")
+    conversation.meet(stranger, CREW)
+    await conversation.press(stranger, CREW.id, mid, data_of(card, "Not now"))
+    await forge(conversation, stranger, CREW.id, mid, "key:here_off:99999:")
+    assert conversation.api.message(CREW.id, mid)["reply_markup"] == original["reply_markup"]
+    await conversation.press(ANA, CREW.id, mid, data_of(card, "Turn on"))
+    assert not conversation.api.message(CREW.id, mid).get("reply_markup")
+    # Telegram may deliver an authorized tap from just before another admin enabled the key.
+    qid = "stale-key-offer"
+    conversation.api.outstanding_callbacks.add(qid)
+    await conversation.settle(
+        await conversation.push(
+            "callback_query",
+            {
+                "id": qid,
+                "from": ANA.payload(),
+                "chat_instance": "c",
+                "message": original,
+                "data": data_of(card, "Not now"),
+            },
+        )
+    )
+    async with conversation.db.session() as session:
+        link = await session.get(KeyChat, (key_id, CREW.id))
+        assert link and link.state == "on"

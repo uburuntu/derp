@@ -211,10 +211,13 @@ async def test_consenting_to_free_models_answers_the_waiting_question(
     assert (buy["text"], consent["text"]) == ("⭐ Buy Derpcoins", "🆓 Use free models")
     offer_id = max(mid for (cid, mid) in conversation.api.messages if cid == CARL.id)
     after_buy = conversation.seq
-    await conversation.press(CARL, CARL.id, offer_id, buy["callback_data"])
-    [menu] = conversation.api.calls_of("editMessageText", after=after_buy)  # in place, no new message
+    await conversation.press(CARL, CARL.id, offer_id, buy["callback_data"], taps=2)
+    [menu] = conversation.api.calls_of("sendRichMessage", after=after_buy)
     assert "Pick an option:" in menu["rich_message"]["markdown"]
-    assert consent["callback_data"] in str(menu["reply_markup"])
+    assert consent["callback_data"] not in str(menu["reply_markup"])
+    original = conversation.api.message(CARL.id, offer_id)
+    assert "may store" in str(original["rich_message"])
+    assert original["reply_markup"]["inline_keyboard"] == [[consent]]
     model.reply("4, on the house")
     after = conversation.seq
     await conversation.press(CARL, CARL.id, offer_id, consent["callback_data"])
@@ -250,9 +253,15 @@ async def test_only_an_admin_turns_free_models_on_for_a_group(
         assert chat is not None and not chat.free_models
     model.reply("free hello")
     after = conversation.seq
-    await press_button(conversation, boss, den.id, offer, row=1)
+    offered = max(mid for (cid, mid) in conversation.api.messages if cid == den.id)
+    await conversation.press(
+        boss, den.id, offered, offer["reply_markup"]["inline_keyboard"][1][0]["callback_data"], taps=2
+    )
+    confirmed = conversation.api.message(den.id, offered)
+    assert "allowed free models" in str(confirmed["rich_message"])
+    assert confirmed["reply_markup"]["inline_keyboard"] == [offer["reply_markup"]["inline_keyboard"][0]]
     texts = [c["rich_message"]["markdown"] for c in conversation.api.calls_of("sendRichMessage", after=after)]
-    assert any("allowed free models" in text for text in texts) and "free hello" in texts
+    assert sum("allowed free models" in text for text in texts) == 1 and texts.count("free hello") == 1
     async with conversation.db.session() as session:
         chat = await session.get(Chat, den.id)
         assert chat is not None and chat.free_models
@@ -389,3 +398,25 @@ async def test_an_emptied_chat_wallet_says_so_once_per_depletion(
     assert len(await ask("derp four")) == 1
     async with conversation.db.session() as session:
         assert await balance(session, chat_wallet) == 0
+
+
+async def test_a_legacy_consent_button_under_a_pack_menu_reshows_the_disclosure(
+    conversation: Conversation, settings: Settings
+) -> None:
+    await exhaust_sponsorship(conversation, settings)
+    asked = await conversation.send(CARL, text="hi")
+    offer = await conversation.expect_reply(asked)
+    await conversation.settle(asked)
+    mid = max(i for c, i in conversation.api.messages if c == CARL.id)
+    consent = offer["reply_markup"]["inline_keyboard"][0][1]
+    legacy = conversation.api.messages[CARL.id, mid]
+    legacy["reply_markup"] = {
+        "inline_keyboard": [[{"text": "Buy a pack", "callback_data": "buy:user:pack_s_v1"}], [consent]]
+    }
+    legacy["text"] = "Pick a pack"
+    legacy.pop("rich_message", None)
+    await conversation.press(CARL, CARL.id, mid, consent["callback_data"])
+    assert "may store" in str(conversation.api.message(CARL.id, mid)["rich_message"])
+    async with conversation.db.session() as session:
+        person = await session.get(User, CARL.id)
+        assert person and person.free_models_consent_version is None

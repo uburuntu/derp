@@ -34,6 +34,15 @@ def create_bot(settings: Settings) -> Bot:
     )
 
 
+async def group_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
+    """Check current Telegram membership before changing a shared group message or setting."""
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except TelegramAPIError:
+        return False
+    return member.status in {"creator", "administrator"}
+
+
 async def bot_username(bot: Bot) -> str:
     """The @username copy and deep links name the bot by."""
     return (await bot.me()).username or FALLBACK_USERNAME

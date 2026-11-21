@@ -18,7 +18,9 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message
+from sqlalchemy import func, or_, select
 
+from derp.billing.models import PatronPost
 from derp.billing.purchases import Order, current_plan, pack_order, plan_order
 from derp.billing.runway import daily_pace, lasts
 from derp.config import Pack, Settings
@@ -26,7 +28,7 @@ from derp.db.engine import Database
 from derp.locales import t
 from derp.money.amounts import Amount, format_dc
 from derp.money.wallets import balance, wallet
-from derp.telegram.buttons import Press, Row, button, link, markup
+from derp.telegram.buttons import Press, Row, button, dismiss_button, link, markup
 from derp.telegram.sender import Target, send_markdown, send_privately
 
 
@@ -141,11 +143,11 @@ async def wallet_balance(db: Database, kind: str, owner_id: int) -> Decimal:
 
 
 async def personal_menu(
-    db: Database, settings: Settings, user_id: int, locale: str, extra: Row = None
+    db: Database, settings: Settings, user_id: int, locale: str
 ) -> tuple[str, InlineKeyboardMarkup | None]:
-    """The private buy menu: the person's balance, Derp+ and the packs (then the ``extra`` row)."""
+    """The private buy menu: the person's balance, Derp+, packs and a way to close it."""
     mine = await wallet_balance(db, "user", user_id)
-    keyboard = packs_keyboard(settings, "user", locale, extra, plan=True)
+    keyboard = packs_keyboard(settings, "user", locale, dismiss_button(locale, user_id=user_id), plan=True)
     return t(locale, "billing.menu", balance=format_dc(mine)), keyboard
 
 
@@ -188,12 +190,6 @@ def _thread(message: Message) -> int | None:
     return message.message_thread_id if message.is_topic_message else None
 
 
-def _is_chooser(message: Message) -> bool:
-    rows = message.reply_markup.inline_keyboard if message.reply_markup else []
-    data = {b.callback_data for row in rows for b in row}
-    return {BuyAction(target="chat").pack(), BuyAction(target="user").pack()} <= data
-
-
 async def open_menu(press: Press, db: Database, settings: Settings, *, kind: str) -> None:
     """Show a group's presser the chat's or their own pack menu, visible only to them.
 
@@ -202,6 +198,18 @@ async def open_menu(press: Press, db: Database, settings: Settings, *, kind: str
     """
     bot, message = press.bot, press.message
     thread = _thread(message)
+    if kind == "chat" and message.message_id:
+        async with db.session() as session:
+            expired = await session.scalar(
+                select(PatronPost.id).where(
+                    PatronPost.chat_id == press.chat_id,
+                    PatronPost.message_id == message.message_id,
+                    or_(PatronPost.chip_until.is_(None), PatronPost.chip_until <= func.now()),
+                )
+            )
+        if expired is not None:
+            await press.strip(lambda b: b.callback_data != press.query.data)
+            return await press.deny("patron.closed")
     owner = press.chat_id if kind == "chat" else press.user_id
     try:
         text, keyboard = await link_menu(
@@ -211,7 +219,11 @@ async def open_menu(press: Press, db: Database, settings: Settings, *, kind: str
         return await press.deny("billing.unavailable")
     target = Target.answering_press(press.chat_id, thread, press.user_id, press.query.id)
     try:
-        await send_markdown(bot, target, text, reply_markup=keyboard)
+        private_controls = markup(
+            *(keyboard.inline_keyboard if keyboard else []),
+            dismiss_button(press.locale, user_id=press.user_id),
+        )
+        await send_markdown(bot, target, text, reply_markup=private_controls)
         return None
     except TelegramBadRequest:
         pass  # expired, or not allowed here: fall back to a menu that needs no ephemeral message
@@ -219,9 +231,6 @@ async def open_menu(press: Press, db: Database, settings: Settings, *, kind: str
         text, personal = await personal_menu(db, settings, press.user_id, press.locale)
         delivered = await send_privately(bot, press.user_id, text, reply_markup=personal)
         return await press.deny("money.sent_privately" if delivered else "money.dm_first")
-    if _is_chooser(message):
-        await press.edit(text, keyboard)
-        return None
     try:
         await send_markdown(bot, Target(press.chat_id, thread), text, reply_markup=keyboard)
     except TelegramAPIError:
