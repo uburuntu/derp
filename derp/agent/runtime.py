@@ -765,6 +765,12 @@ class Runtime:
                 if draft_key is not None:
                     self.active.pop(draft_key, None)
                 await progress.close()
+            if (
+                deps.rule_card_is_answer
+                and new_messages
+                and (new_messages[-1].metadata or {}).get("delivered_locally")
+            ):
+                new_messages.pop()  # guard's local completion made no provider call
             await price_unreported(
                 self.db, new_messages, funding.role, self.prefix[funding] + ask.tokens,
                 api=None if key else self.api, key=key.prices if key else None,
@@ -784,9 +790,9 @@ class Runtime:
                 and not isinstance(error, TimeoutError)
             )
             await flush(deps)  # results kept for a next step nobody took: posted before the text answer
-            silent = output.strip() in SILENT and bool(
-                deps.delivered or deps.reacted or deps.edited_target
-            )  # a visible output or an already-current edit target said it all
+            silent = deps.rule_card_is_answer or (
+                output.strip() in SILENT and bool(deps.delivered or deps.reacted or deps.edited_target)
+            )
             if error is None and not silent and (output.strip() or not (deps.delivered or stopped)):
                 spoke = True
                 try:

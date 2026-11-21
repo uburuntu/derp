@@ -49,6 +49,7 @@ RICH_CHUNK = RICH_LIMIT - 768  # headroom for fence repair and entity overhead
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 log = logging.getLogger("derp.sender")
 type Links = Callable[[str], str]  # rewrites message references into links (``history.links``)
+type RichRenderer = Callable[[str], InputRichMessage]
 
 
 def rich(markdown: str, links: Links | None = None) -> InputRichMessage:
@@ -178,9 +179,24 @@ async def send_markdown(
     if not trusted:
         markdown = sanitize_untrusted(markdown)
     chunks = split_rich(markdown) if markdown.strip() else ["…"]
+    return await send_formatted(
+        bot, target, chunks, render=lambda chunk: rich(chunk, links), reply_markup=reply_markup, silent=silent
+    )
+
+
+async def send_formatted(
+    bot: Bot,
+    target: Target,
+    chunks: Sequence[str],
+    *,
+    render: RichRenderer,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    silent: bool = False,
+) -> list[Message]:
+    """Send rendered chunks. The original text also serves as their plain fallback and history."""
     sent: list[Message] = []
     try:
-        await _send_chunks(bot, target, chunks, sent, links=links, reply_markup=reply_markup, silent=silent)
+        await _send_chunks(bot, target, chunks, sent, render=render, reply_markup=reply_markup, silent=silent)
     except TelegramAPIError as error:
         if sent:
             raise PartialDeliveryError(error, sent) from error
@@ -188,13 +204,18 @@ async def send_markdown(
             raise
         try:  # a refused ephemeral reply (its 15 seconds ran out): unanchored, else privately
             await _send_chunks(
-                bot, loose, chunks, sent, links=links, reply_markup=reply_markup, silent=silent
+                bot, loose, chunks, sent, render=render, reply_markup=reply_markup, silent=silent
             )
         except TelegramBadRequest as again:
             if sent:
                 raise PartialDeliveryError(again, sent) from again
             # Without its buttons: they act on the chat they were pressed in.
-            _refused(loose, await send_privately(bot, loose.ephemeral_to or 0, markdown))
+            try:
+                await send_formatted(bot, Target(loose.ephemeral_to or 0), chunks, render=render)
+            except TelegramForbiddenError, TelegramBadRequest:
+                _refused(loose, False)
+            else:
+                _refused(loose, True)
     return sent
 
 
@@ -252,10 +273,10 @@ async def send_privately(
 async def _send_chunks(
     bot: Bot,
     target: Target,
-    chunks: list[str],
+    chunks: Sequence[str],
     sent: list[Message],
     *,
-    links: Links | None,
+    render: RichRenderer,
     reply_markup: InlineKeyboardMarkup | None,
     silent: bool = False,
 ) -> None:
@@ -266,7 +287,7 @@ async def _send_chunks(
             message = await bot.send_rich_message(
                 chat_id=target.chat_id,
                 message_thread_id=target.thread_id,
-                rich_message=rich(chunk, links),
+                rich_message=render(chunk),
                 reply_parameters=target_for_chunk.reply_parameters,
                 reply_markup=reply_markup if last else None,
                 ephemeral_message_parameters=target.ephemeral,

@@ -33,7 +33,13 @@ from typing import Any, cast
 
 from pydantic_ai import RunContext
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, ModelRetry
+from pydantic_ai.exceptions import (
+    ModelAPIError,
+    ModelHTTPError,
+    ModelRetry,
+    SkipModelRequest,
+    SkipToolExecution,
+)
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -168,6 +174,10 @@ class Guard(AbstractCapability[RunDeps]):
     async def before_model_request(
         self, ctx: RunContext[RunDeps], request_context: ModelRequestContext
     ) -> ModelRequestContext:
+        if ctx.deps.rule_card_is_answer:
+            # The run has a visible answer and all tool returns are in history. Finish without another
+            # provider request. The runtime removes this local response before pricing and storing the run.
+            raise SkipModelRequest(ModelResponse(parts=[TextPart(".")], metadata={"delivered_locally": True}))
         notes: list[str] = []
         settings: dict[str, Any] = dict(request_context.model_settings or {})
         if await self.check(ctx):
@@ -198,6 +208,8 @@ class Guard(AbstractCapability[RunDeps]):
     async def before_tool_execute(
         self, ctx: RunContext[RunDeps], *, call: ToolCallPart, tool_def: ToolDefinition, args: dict[str, Any]
     ) -> dict[str, Any]:
+        if ctx.deps.rule_card_is_answer:
+            raise SkipToolExecution("The confirmation card has already answered this request.")
         if self.wrapping:  # the provider ignored tool_choice
             raise ModelRetry(WRAP_UP_NOTE)
         return args

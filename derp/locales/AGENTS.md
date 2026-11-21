@@ -1,7 +1,7 @@
 # Locales
 
 - `en.toml` and `ru.toml` hold every user-facing string; code calls `t(locale, key, **values)`. Keys and `{placeholders}` must match across catalogs (enforced by `tests/locales`).
-- Locale choice: public group messages use the chat locale; messages addressed to one person use their `language_code`; generated answers mirror the conversation instead.
+- Public group notices use the chat locale; messages addressed to one person use their `language_code`. Generated answers and reply-rule confirmation cards follow the request language. Rule buttons carry the card language across edits, including presses by a different admin.
 
 ## Voice
 

@@ -7,8 +7,10 @@ and unanswered callback queries fail the test at teardown.
 
 import asyncio
 import contextlib
+import html
 import inspect
 import json
+import re
 import time
 import typing
 from collections import defaultdict, deque
@@ -56,8 +58,14 @@ TRUE_METHODS = frozenset(
 )
 
 
-def rich_blocks(source: str) -> JsonObject:
-    """A received ``RichMessage``: one paragraph block per source paragraph."""
+def rich_blocks(rich: Mapping[str, Any]) -> JsonObject:
+    """Model paragraph text returned by Telegram, including visible literal text in native HTML."""
+    source = str(rich.get("markdown") or "")
+    if rich.get("html"):
+        # Card markup contains paragraphs, breaks and inline styles. Remove its tags before
+        # decoding entities so text supplied as &lt;tag&gt; survives as literal text.
+        value = re.sub(r"</p>|<br\s*/?>", "\n\n", str(rich["html"]), flags=re.IGNORECASE)
+        source = html.unescape(re.sub(r"<[^>]*>", "", value))
     return {"blocks": [{"type": "paragraph", "text": p} for p in source.split("\n\n") if p]}
 
 
@@ -479,9 +487,7 @@ class FakeBotAPI:
 
     def _m_sendRichMessage(self, fields: JsonObject) -> JsonObject:  # noqa: N802
         rich = fields["rich_message"]  # Telegram returns the parsed blocks, never the source text
-        return self._new_message(
-            fields, rich_message=rich_blocks(str(rich.get("markdown") or rich.get("html") or ""))
-        )
+        return self._new_message(fields, rich_message=rich_blocks(rich))
 
     def _m_sendRichMessageDraft(self, fields: JsonObject) -> bool:  # noqa: N802
         chat = self.chats.get(int(fields["chat_id"]), {})
@@ -640,8 +646,9 @@ class FakeBotAPI:
         rich = fields.get("rich_message")
         if isinstance(rich, Mapping):
             message.pop("text", None)
-            message["rich_message"] = rich_blocks(str(rich.get("markdown")))
+            message["rich_message"] = rich_blocks(rich)
         else:
+            message.pop("rich_message", None)
             message["text"] = str(fields["text"])
         message["edit_date"] = int(datetime.now(UTC).timestamp())
         if markup := fields.get("reply_markup"):
@@ -716,12 +723,22 @@ class FakeBotAPI:
         if message is None or int(message["receiver_user"]["id"]) != int(fields["receiver_user_id"]):
             raise ValueError(f"ephemeral message {key} was not sent to that user")
         if isinstance(rich := fields.get("rich_message"), Mapping):
+            message.pop("text", None)
+            message["rich_message"] = rich_blocks(rich)
             message["rich_markdown"] = rich.get("markdown")
+        elif "text" in fields:
+            message.pop("rich_markdown", None)
+            message.pop("rich_message", None)
+            message["text"] = str(fields["text"])
         if isinstance(markup := fields.get("reply_markup"), Mapping):
             message["reply_markup"] = markup
         else:
             message.pop("reply_markup", None)
         return True
+
+    def _m_editEphemeralMessageReplyMarkup(self, fields: JsonObject) -> bool:  # noqa: N802
+        # The same receiver and message checks apply; absent text fields preserve the body.
+        return self._m_editEphemeralMessageText(fields)
 
     def expect_ephemeral_callback(
         self, callback_id: str, *, chat_id: int, ephemeral_id: int, data: str

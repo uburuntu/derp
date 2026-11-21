@@ -63,6 +63,7 @@ class RunDeps:
     uncertain_edits: set[int] = field(
         default_factory=set[int]
     )  # a transport failure must never replay an edit
+    rule_card_is_answer: bool = False  # a delivered admin card fulfilled the whole request
     reply_rules: tuple[ReplyRule, ...] = ()
     rule_approver: int | None = None
     authorizing_rule_id: int | None = None  # the rule that grants this tool call

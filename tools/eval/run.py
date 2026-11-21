@@ -107,6 +107,12 @@ async def one(world: World, scenario: Scenario, index: int) -> Result:
             and call.method.startswith(SENT_METHODS)
             and call.method not in ("sendChatAction", "sendRichMessageDraft")
         ]
+        result.direct_replies = sum(
+            call.method in ("sendRichMessage", "sendMessage")
+            and str(call.fields.get("chat_id")) == str(room.id)
+            and (call.fields.get("reply_parameters") or {}).get("message_id") == sent.message_id
+            for call in world.api.calls[sent.after :]
+        )
         result.passed, why = scenario.check(result, seeded)
         result.error = result.error or ("" if result.passed else f"FAIL: {why}")
     except Exception as error:  # noqa: BLE001 - one broken scenario must not stop the others

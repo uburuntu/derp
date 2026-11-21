@@ -380,7 +380,7 @@ async def on_action(press: Press, data: SettingsAction, db: Database, bot: Bot, 
         text, keyboard = await render(
             session, bot, settings, fresh, user, press.locale, page, admin=admin, viewer=press.user_id
         )
-    await press.edit(text, keyboard)
+    await press.edit(text, keyboard, render=reply_rules.card_html if page == "auto" else None)
 
 
 async def on_resume(press: Press, data: ResumeJob, db: Database, bot: Bot) -> None:

@@ -31,6 +31,7 @@ class Result:
     retries: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
     text: str = ""
     outputs: list[str] = field(default_factory=list[str])  # Bot API methods the run called in the chat
+    direct_replies: int = 0  # text replies to this ask, excluding an unanchored group welcome
     requests: int = 0
     input_tokens: int = 0
     cache_tokens: int = 0
@@ -183,9 +184,10 @@ SCENARIOS: list[Scenario] = [
                              "reads Lena's profile songs"), tags=("media",)),
     # memory
     Scenario("group_reply_rule", "дерп, запомни: всегда отвечай Бобу, когда он пишет про свою собаку, и спрашивай, как она себя чувствует",
-             lambda r, s: ok(r.called("auto_reply", operation="create",
+             lambda r, s: ok(r.called("auto_reply", operation=lambda op: op in (None, "create"),
                                      sender=lambda name: isinstance(name, str) and "bob" in name.lower())
-                             and r.returned("auto_reply", "Shown for confirmation") and not r.called("remember"), "drafts only a sender-scoped reply rule"),
+                             and r.returned("auto_reply", "Shown for confirmation")
+                             and r.direct_replies == 1 and not r.called("remember"), "one card for a sender-scoped reply rule"),
              tags=("memory",)),
     Scenario("remember_fact", "derp remember that Bob is allergic to cats",
              lambda r, s: ok(r.called("remember", text=has("bob")), "remember chat"), tags=("memory",)),

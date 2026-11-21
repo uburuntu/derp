@@ -73,7 +73,9 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   by replying to one of its messages. These human calls reach Derp directly.
 - An admin can ask “Derp, reply to Alex when he mentions his dog” or “reply with fresh prices when someone posts
   market data”. Derp shows the condition, sender, action and permissions for confirmation. In forums the admin
-  chooses this topic or the whole group. Manage, pause and remove rules in /settings or ask Derp to revise one.
+  chooses this topic or the whole group. The same card then shows the rule's status and scope. OK hides its
+  buttons. Admins can reopen a rule in /settings, or ask Derp to list rules, revise one, pause it,
+  resume it or remove it.
   While context is enabled, new ordinary human messages are screened against relevant rules. The group pays
   for those checks even on a miss. An eligible OpenAI key or shared Derpcoins pay for checks, and the group's
   key or shared Derpcoins pay for matched replies. Privileged actions outside the rule ask its admin first.

@@ -1,14 +1,15 @@
 """Admin-confirmed group reply rules and their topic-aware Telegram controls."""
 
-import json
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Literal
+from html import escape
+from typing import Any, Literal, Self
 
 from aiogram import Bot, F, Router
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputRichMessage
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
@@ -19,12 +20,11 @@ from derp.db.engine import Database
 from derp.history.models import Chat
 from derp.keys.routing import candidates as serving_keys
 from derp.keys.routing import spent
-from derp.locales import t
+from derp.locales import catalog, resolve, t
 from derp.memory.models import ReplyRule, ReplyRuleCheck
 from derp.memory.notes import is_admin
 from derp.money.amounts import format_dc
 from derp.telegram.buttons import Press, button, markup, on_press
-from derp.telegram.text import literal
 
 # Grants are only for producing a reply. Mutations of persistent state need a separate exact-call approval.
 OutputTool = Literal[
@@ -65,29 +65,104 @@ PAGE_SIZE = 4
 class RuleButton(CallbackData, prefix="autoreply"):
     op: str
     id: int
+    locale: str | None = None
+
+    @classmethod
+    def unpack(cls, value: str) -> Self:
+        # Cards already in Telegram have just the operation and ID.
+        if value.count(":") == 2:
+            value += ":"
+        return super().unpack(value)
 
 
-def control(locale: str, op: str, rule_id: int) -> InlineKeyboardButton:
-    return button(t(locale, f"auto.{op}"), RuleButton(op=op, id=rule_id))
+def rule_language(text: str, fallback: str) -> str:
+    """Use the surrounding request's language. Quoted triggers and @handles can be in another language."""
+    prose = re.sub(r'"[^"]*"|«[^»]*»|“[^”]*”|`[^`]*`|@\w+', " ", text)
+    russian = len(re.findall(r"[а-яё]+", prose, re.IGNORECASE))
+    english = len(re.findall(r"[a-z]+", prose, re.IGNORECASE))
+    if russian == english:
+        return resolve(fallback)
+    return "ru" if russian > english else "en"
 
 
-def grant_label(grant: dict[str, Any]) -> str:
-    args = grant.get("arguments")
-    return grant["tool"] + (" " + json.dumps(args, ensure_ascii=False) if args is not None else "")
+def control(locale: str, op: str, rule_id: int, *, label: str | None = None) -> InlineKeyboardButton:
+    return button(
+        t(locale, f"auto.{label or op}", id=rule_id), RuleButton(op=op, id=rule_id, locale=resolve(locale))
+    )
+
+
+def card_html(text: str) -> InputRichMessage:
+    """Plain copy is also the fallback. Native rich HTML parses only these three trusted tags."""
+    title, _, body = text.partition("\n")
+    parts = ["<p><b>" + escape(title, quote=False) + "</b></p>"]
+    for paragraph in body.strip("\n").split("\n\n"):
+        if paragraph:
+            parts.append("<p>" + escape(paragraph, quote=False).replace("\n", "<br>") + "</p>")
+    return InputRichMessage(html="".join(parts))
+
+
+def grant_label(grant: dict[str, Any], locale: str) -> str:
+    strings = catalog(locale)
+    name = str(grant["tool"])
+    label = strings.get(f"auto.tools.{name}", name)
+    arguments = grant.get("arguments") or {}
+    if name == "schedule" and arguments.get("kind", "reminder") in {"reminder", "prompt"}:
+        label = t(locale, f"auto.schedule_{arguments.get('kind', 'reminder')}")
+    elif name == "message_action" and arguments.get("action") in {"pin", "edit", "delete"}:
+        label = t(locale, f"auto.values.{arguments['action']}")
+    fields: list[str] = []
+    for key, value in arguments.items():
+        if (name == "schedule" and key == "kind" and value in {"reminder", "prompt"}) or (
+            name == "message_action" and key == "action" and value in {"pin", "edit", "delete"}
+        ):
+            continue  # the localized verb above already names this action
+        if key == "in_minutes":
+            fields.append(t(locale, "auto.after", minutes=value))
+            continue
+        if value == "$message":
+            shown = t(locale, "auto.values.trigger")
+        elif isinstance(value, bool):
+            shown = t(locale, "auto.values.yes" if value else "auto.values.no")
+        elif key in {"action", "kind", "repeat", "about", "setting", "value"}:
+            shown = strings.get(f"auto.values.{value}", str(value))
+        else:
+            shown = str(value)
+        if key == "message_id" and value == "$message":
+            fields.append(shown)
+        else:
+            fields.append(f"{strings.get(f'auto.args.{key}', key)}: {shown}")
+    return label + (" (" + ", ".join(fields) + ")" if fields else "")
+
+
+def scope_label(rule: ReplyRule, locale: str) -> str:
+    if rule.whole_chat:
+        return t(locale, "auto.group_label")
+    return t(locale, "auto.topic_label", id=rule.thread_id) if rule.thread_id else t(locale, "auto.general")
 
 
 def describe(rule: ReplyRule, locale: str) -> str:
-    return t(
-        locale,
-        "auto.details",
-        id=rule.id,
-        condition=literal(rule.condition),
-        action=literal(rule.action),
-        sender=literal(rule.sender_name) if rule.sender_name else t(locale, "auto.anyone"),
-        tools=literal(", ".join(grant_label(grant) for grant in rule.grants))
-        if rule.grants
-        else t(locale, "auto.text"),
-    )
+    if rule.state == "draft":
+        title = (
+            t(locale, "auto.revision", id=rule.replaces_id)
+            if rule.replaces_id is not None
+            else t(locale, "auto.draft", id=rule.id)
+        )
+    else:
+        title = t(locale, f"auto.heading_{rule.state}", id=rule.id)
+    lines = [title]
+    if rule.state != "draft":
+        lines.append(scope_label(rule, locale))
+    lines.append(t(locale, "auto.sender", sender=rule.sender_name or t(locale, "auto.anyone")))
+    lines.append(t(locale, "auto.details", condition=rule.condition, action=rule.action))
+    if rule.needs_media:
+        lines.append(t(locale, "auto.media"))
+    if rule.state == "draft":
+        lines.append("\n" + t(locale, "auto.text"))
+    if rule.grants:
+        lines.append(
+            t(locale, "auto.grants", tools="\n".join("• " + grant_label(g, locale) for g in rule.grants))
+        )
+    return "\n".join(lines)
 
 
 async def confirmation(
@@ -109,7 +184,7 @@ async def confirmation(
         rate=settings.decisions.openai_usd_per_m_input,
         dc=format_dc(settings.credits_for_usd(Decimal(str(settings.decisions.price_usd_per_m_input)) / 1000)),
     )
-    text = "\n".join([describe(rule, locale), payer, t(locale, "auto.payer")])
+    text = describe(rule, locale) + "\n\n" + payer + "\n" + t(locale, "auto.payer")
     return text, markup([control(locale, op, rule.id) for op in scopes], control(locale, "cancel", rule.id))
 
 
@@ -127,12 +202,24 @@ async def page(
     )
     lines = [t(locale, "auto.panel")]
     rows: list[list[InlineKeyboardButton]] = []
+    if not rules:
+        lines.append(t(locale, "auto.empty"))
     for rule in rules[:PAGE_SIZE]:
-        area = t(
-            locale, "auto.group_label" if rule.whole_chat else "auto.topic_label", id=rule.thread_id or 1
+        sender = rule.sender_name or t(locale, "auto.anyone")
+        condition = " ".join(rule.condition.split())
+        preview = condition if len(condition) <= 80 else condition[:79].rstrip() + "…"
+        lines.append(
+            t(
+                locale,
+                "auto.entry",
+                id=rule.id,
+                condition=preview,
+                scope=scope_label(rule, locale),
+                state=t(locale, f"auto.{rule.state}"),
+                sender=sender,
+            )
         )
-        lines.append(describe(rule, locale) + "\n" + area + " · " + t(locale, f"auto.{rule.state}"))
-        rows.append([button(t(locale, "auto.manage", id=rule.id), RuleButton(op="view", id=rule.id))])
+        rows.append([control(locale, "view", rule.id, label="manage")])
     pages = []
     if offset >= PAGE_SIZE:
         pages.append(control(locale, "previous", offset - PAGE_SIZE))
@@ -140,24 +227,17 @@ async def page(
         pages.append(control(locale, "next", offset + PAGE_SIZE))
     if pages:
         rows.append(pages)
+    rows.append([control(locale, "ok", 0)])
     return "\n\n".join(lines), rows
 
 
 def manage(rule: ReplyRule, locale: str) -> tuple[str, InlineKeyboardMarkup | None]:
-    area = t(locale, "auto.group_label" if rule.whole_chat else "auto.topic_label", id=rule.thread_id or 1)
-    text = "\n".join(
-        [
-            describe(rule, locale),
-            area + " · " + t(locale, f"auto.{rule.state}"),
-            t(locale, "auto.revise", id=rule.id),
-        ]
-    )
-    return text, markup(
+    return describe(rule, locale) + "\n\n" + t(locale, "auto.revise", id=rule.id), markup(
         [
             control(locale, "pause" if rule.state == "active" else "resume", rule.id),
             control(locale, "remove", rule.id),
         ],
-        control(locale, "previous", 0),
+        [control(locale, "ok", rule.id), control(locale, "previous", 0, label="list")],
     )
 
 
@@ -178,6 +258,13 @@ async def on_rule(press: Press, data: RuleButton, db: Database, bot: Bot) -> Non
         chat = await session.get(Chat, press.chat_id)
     if chat is None or not await is_admin(bot, chat, press.user_id):
         return await press.deny("settings.admins_alert")
+    if data.op == "ok":
+        keyboard = press.message.reply_markup
+        if keyboard is None or not any(
+            b.callback_data == press.query.data for row in keyboard.inline_keyboard for b in row
+        ):
+            return await press.deny("auto.gone")
+        return await press.strip()
     try:
         async with db.transaction() as session:
             # Two replacement drafts can each cascade-delete the other. Serialize edits in chat order.
@@ -187,7 +274,7 @@ async def on_rule(press: Press, data: RuleButton, db: Database, bot: Bot) -> Non
             text, keyboard = await _apply_button(session, data, current, press)
     except UnavailableControlError as unavailable:
         return await press.deny(str(unavailable))
-    await press.edit(text, keyboard)
+    await press.edit(text, keyboard, render=card_html)
 
 
 class UnavailableControlError(ValueError):
@@ -200,8 +287,11 @@ async def _apply_button(
     chat: Chat,
     press: Press,
 ) -> tuple[str, InlineKeyboardMarkup | None]:
+    locale = resolve(data.locale or chat.locale or press.locale)
     if data.op in ("next", "previous"):
-        text, rows = await page(session, chat, press.locale, max(0, data.id))
+        if data.locale is None and (original := press.message.reply_to_message):
+            locale = rule_language(original.text or original.caption or "", locale)
+        text, rows = await page(session, chat, locale, max(0, data.id))
         keyboard = markup(*rows)
     else:
         rule = await session.scalar(
@@ -209,13 +299,15 @@ async def _apply_button(
         )
         if rule is None:
             raise UnavailableControlError("auto.gone")
+        if data.locale is None:
+            locale = rule_language(rule.condition, locale)
         keyboard = None
         if rule.state == "draft":
             if rule.admin_id != press.user_id:
                 raise UnavailableControlError("auto.author")
             if data.op == "cancel":
                 await session.delete(rule)
-                text = t(press.locale, "auto.cancelled")
+                text = t(locale, "auto.cancelled")
             elif data.op in (("all", "topic") if chat.is_forum else ("enable",)):
                 if not chat.ambient:
                     raise UnavailableControlError("auto.ambient")
@@ -228,17 +320,18 @@ async def _apply_button(
                     await session.delete(old)
                 rule.whole_chat = data.op != "topic"
                 rule.state = "active"
-                text, keyboard = manage(rule, press.locale)
+                text = describe(rule, locale)
+                keyboard = markup([control(locale, "ok", rule.id), control(locale, "view", rule.id)])
             else:
                 raise UnavailableControlError("auto.gone")
         elif data.op == "view":
-            text, keyboard = manage(rule, press.locale)
+            text, keyboard = manage(rule, locale)
         elif await change(session, rule, data.op):
             if data.op == "remove":
-                text = t(press.locale, "auto.changed", id=rule.id)
-                keyboard = markup(control(press.locale, "previous", 0))
+                text = t(locale, "auto.changed", id=rule.id)
+                keyboard = markup(control(locale, "ok", rule.id))
             else:
-                text, keyboard = manage(rule, press.locale)
+                text, keyboard = manage(rule, locale)
         else:
             raise UnavailableControlError("auto.gone")
     return text, keyboard

@@ -1,12 +1,18 @@
 """A group admin installs an automatic reply, a member triggers it, the group pays."""
 
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 
 from derp.agent.models import AgentRun, Approval
+from derp.history.models import Chat
+from derp.locales import t
 from derp.memory.models import ReplyRule, ReplyRuleCheck
+from derp.memory.reply_rules import PAGE_SIZE, RuleButton
 from derp.money.wallets import credit, wallet
+from derp.settings.panel import SettingsAction
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 from tests.e2e.test_decisions import EASY, noul, with_jev
@@ -16,6 +22,20 @@ ADMIN = Person(965, "Jo", "jo_rules")
 ALEX = Person(966, "Alex", "alex_rules")
 GROUP = Room(-10965, title="Discussion", is_forum=True)
 TOPIC = 12
+
+
+def buttons(message: Mapping[str, Any]) -> dict[tuple[str, int], dict[str, str]]:
+    controls = {}
+    for row in (message.get("reply_markup") or {}).get("inline_keyboard", []):
+        for button in row:
+            if (payload := button.get("callback_data", "")).startswith("autoreply:"):
+                decoded = RuleButton.unpack(payload)
+                controls[decoded.op, decoded.id] = button
+    return controls
+
+
+def card_text(message: Mapping[str, Any]) -> str:
+    return "\n\n".join(block["text"] for block in message["rich_message"]["blocks"]).replace("\\_", "_")
 
 
 async def fund(conversation: Conversation, kind: str = "chat") -> None:
@@ -68,7 +88,6 @@ async def test_admin_confirms_scope_and_distinct_matches_reply_in_order(
             condition="Mentions their dog",
             action="Ask how the dog is doing.",
         ),
-        "see card",
     )
     sent = await conversation.send(
         ADMIN, GROUP, "derp reply to Alex when he mentions his dog", thread_id=TOPIC
@@ -78,7 +97,7 @@ async def test_admin_confirms_scope_and_distinct_matches_reply_in_order(
     async with conversation.db.session() as s:
         rule = (await s.scalars(select(ReplyRule))).one()
         assert (rule.state, rule.sender_id, rule.thread_id) == ("draft", ALEX.id, TOPIC)
-    assert "each eligible message" in card["rich_message"]["markdown"]
+    assert "dc" in (card["rich_message"].get("html") or card["rich_message"]["markdown"])
     card_id = next(
         mid
         for (cid, mid), msg in conversation.api.messages.items()
@@ -198,8 +217,6 @@ async def test_exact_schedule_grant_inherits_authority_when_the_job_fires(
 async def test_a_visual_rule_screens_the_stored_reply_photo_but_skips_a_forgotten_one(
     conversation: Conversation,
 ) -> None:
-    from datetime import UTC, datetime
-
     from derp.history.retention import forget_message
     from tests.e2e.test_media import PNG, photo
 
@@ -236,7 +253,6 @@ async def test_rule_revision_replaces_only_on_confirmation_and_obeys_management_
             condition="mentions gold prices",
             action="get fresh prices",
         ),
-        "see card",
     )
     sent = await conversation.send(ADMIN, GROUP, "derp revise the rule", thread_id=TOPIC)
     await conversation.settle(sent)
@@ -252,13 +268,15 @@ async def test_rule_revision_replaces_only_on_confirmation_and_obeys_management_
     )
 
     async def press(op: str, actor: Person = ADMIN) -> None:
-        await conversation.press(actor, GROUP.id, mid, f"autoreply:{op}:{draft.id}")
+        controls = buttons(conversation.api.message(GROUP.id, mid))
+        await conversation.press(actor, GROUP.id, mid, controls[op, draft.id]["callback_data"])
 
     await press("all")
     async with conversation.db.session() as s:
         active = await s.get(ReplyRule, draft.id)
         assert active and active.whole_chat and active.sender_id is None
         assert await s.get(ReplyRule, old) is None
+    await press("view")
     for op, state, actor in [
         ("pause", "active", ALEX),
         ("pause", "paused", ADMIN),
@@ -271,3 +289,237 @@ async def test_rule_revision_replaces_only_on_confirmation_and_obeys_management_
     await press("remove")
     async with conversation.db.session() as s:
         assert await s.get(ReplyRule, draft.id) is None
+
+
+async def test_russian_public_card_keeps_its_language_and_admin_dismiss_keeps_its_receipt(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    await fund(conversation)
+    conversation.meet(ADMIN, GROUP, status="administrator")
+    conversation.meet(ALEX, GROUP)
+    await conversation.settle(await conversation.send(ALEX, GROUP, "hello", thread_id=TOPIC))
+    condition = "gold price < 3500.50"
+    action = "покажи график цены"
+    reminder = "проверить S&P 500 завтра"
+    model.reply(
+        tool_call(
+            "auto_reply",
+            operation="create",
+            condition=condition,
+            action=action,
+            sender="@alex_rules",
+            outputs=["market_chart"],
+            calls=[{"tool": "schedule", "arguments": {"text": reminder, "in_minutes": 10}}],
+        ),
+        "Всё включено. Ничего нажимать не нужно.",
+    )
+    sent = await conversation.send(
+        ADMIN,
+        GROUP,
+        f"Дерп, когда Алекс пишет «{condition}», покажи график цены. "
+        "И поставь напоминание через десять минут.",
+        thread_id=TOPIC,
+    )
+    await conversation.settle(sent)
+    # Onboarding may announce the bot to the group independently of its reply to this request.
+    replies = [
+        msg
+        for (chat_id, mid), msg in conversation.api.messages.items()
+        if chat_id == GROUP.id and mid > sent.message_id and msg["from"]["is_bot"]
+    ]
+    assert len(model.requests) == 1
+    assert not any("Ничего нажимать не нужно" in str(msg) for msg in replies)
+    [draft] = [
+        msg for msg in replies if (msg.get("reply_to_message") or {}).get("message_id") == sent.message_id
+    ]
+    mid = draft["message_id"]
+    async with conversation.db.session() as session:
+        rule = (await session.scalars(select(ReplyRule))).one()
+        assert rule.state == "draft" and rule.sender_id == ALEX.id
+    text = card_text(draft)
+    assert t("ru", "auto.draft", id=rule.id) in text
+    assert all(piece in text for piece in [condition, action, "@alex_rules", reminder])
+    assert "market_chart" not in text and '"in_minutes"' not in text
+    assert "0.0504" in text.replace(",", ".")
+    controls = buttons(draft)
+    for op in ("topic", "all", "cancel"):
+        assert controls[op, rule.id]["text"] == t("ru", f"auto.{op}")
+    # Public copy belongs to the original request, although the admin's Telegram client is English.
+    await conversation.press(ADMIN, GROUP.id, mid, controls["topic", rule.id]["callback_data"])
+    receipt = conversation.api.message(GROUP.id, mid)
+    assert all(piece in card_text(receipt) for piece in [condition, action, "@alex_rules"])
+    controls = buttons(receipt)
+    assert set(controls) == {("ok", rule.id), ("view", rule.id)}
+    assert t("ru", "auto.heading_active", id=rule.id) in card_text(receipt)
+    assert controls["view", rule.id]["text"] == t("ru", "auto.view")
+    assert controls["ok", rule.id]["text"] == t("ru", "auto.ok")
+    ok = controls["ok", rule.id]["callback_data"]
+    await conversation.press(ALEX, GROUP.id, mid, ok)
+    assert conversation.api.message(GROUP.id, mid) == receipt
+    before = conversation.seq
+    conversation.api.set_member_status(chat_id=GROUP.id, user_id=ALEX.id, status="administrator")
+    await conversation.press(ALEX, GROUP.id, mid, ok)
+    dismissed = conversation.api.message(GROUP.id, mid)
+    assert "reply_markup" not in dismissed
+    assert dismissed["rich_message"] == receipt["rich_message"]
+    assert len(conversation.api.calls_of("editMessageReplyMarkup", after=before)) == 1
+    assert not conversation.api.calls_of("editMessageText", after=before)
+    async with conversation.db.session() as session:
+        kept = await session.get(ReplyRule, rule.id)
+        assert kept and kept.state == "active" and not kept.whole_chat and kept.thread_id == TOPIC
+
+
+async def test_a_preupgrade_public_pause_button_updates_the_original_rule_and_keeps_controls(
+    conversation: Conversation,
+) -> None:
+    rid = await seed(conversation, sender_name="Alex")
+    # The payload and old card text are literal: newer encoders must not rewrite the legacy fixture.
+    mid = conversation.api.take_message_id(GROUP.id)
+    old = {
+        "message_id": mid,
+        "date": 1,
+        "chat": GROUP.payload(),
+        "from": conversation.api.bot_user,
+        "text": f"Rule {rid} — Active",
+        "reply_markup": {"inline_keyboard": [[{"text": "Pause", "callback_data": f"autoreply:pause:{rid}"}]]},
+    }
+    conversation.api.register_message(old)
+    russian_client = Person(ADMIN.id, ADMIN.first_name, ADMIN.username, language_code="ru")
+    await conversation.press(russian_client, GROUP.id, mid, f"autoreply:pause:{rid}")
+    detail = conversation.api.message(GROUP.id, mid)
+    controls = buttons(detail)
+    assert controls["resume", rid]["text"] == t("en", "auto.resume")
+    for op in ("resume", "remove", "ok"):
+        assert (op, rid) in controls
+    async with conversation.db.session() as session:
+        paused = await session.get(ReplyRule, rid)
+        assert paused and paused.state == "paused"
+    await conversation.press(ADMIN, GROUP.id, mid, controls["resume", rid]["callback_data"])
+    assert ("pause", rid) in buttons(conversation.api.message(GROUP.id, mid))
+
+
+async def test_legacy_back_uses_the_original_request_language_for_the_shared_list(
+    conversation: Conversation,
+) -> None:
+    rid = await seed(conversation)
+    original = await conversation.send(ADMIN, GROUP, "изменить правило для этой темы", thread_id=TOPIC)
+    await conversation.settle(original)
+    mid = conversation.api.take_message_id(GROUP.id)
+    legacy = "autoreply:previous:0"
+    conversation.api.register_message(
+        {
+            "message_id": mid,
+            "date": 1,
+            "chat": GROUP.payload(),
+            "from": conversation.api.bot_user,
+            "reply_to_message": original.message,
+            "text": "Старое правило",
+            "reply_markup": {"inline_keyboard": [[{"text": "Назад", "callback_data": legacy}]]},
+        }
+    )
+    await conversation.press(ADMIN, GROUP.id, mid, legacy)
+    listing = conversation.api.message(GROUP.id, mid)
+    assert t("ru", "auto.panel") in card_text(listing)
+    assert buttons(listing)["view", rid]["text"] == t("ru", "auto.manage", id=rid)
+
+
+async def test_settings_lists_rules_across_pages_and_opens_the_selected_rule(
+    conversation: Conversation,
+) -> None:
+    first = await seed(conversation)
+    async with conversation.db.transaction() as session:
+        extra = [
+            ReplyRule(
+                chat_id=GROUP.id,
+                admin_id=ADMIN.id,
+                whole_chat=True,
+                state="active",
+                condition=f"market {n}",
+                action=f"quoted price {n}",
+                grants=[{"tool": "market_chart"}],
+            )
+            for n in range(1, PAGE_SIZE + 1)
+        ]
+        session.add_all(extra)
+        await session.flush()
+        last = extra[-1].id
+
+    await conversation.settle(await conversation.ephemeral_command(ADMIN, GROUP, "/settings", 501))
+    key = max(k for k in conversation.api.ephemerals if k[0] == GROUP.id)
+    await conversation.press_ephemeral(ADMIN, *key, SettingsAction(action="page", value="auto").pack())
+
+    def page_buttons() -> dict[tuple[str, int], dict[str, str]]:
+        return buttons(conversation.api.ephemerals[key])
+
+    def visible() -> set[int]:
+        return {rid for op, rid in page_buttons() if op == "view"}
+
+    assert first in visible() and len(visible()) == PAGE_SIZE and last not in visible()
+    await conversation.press_ephemeral(ADMIN, *key, page_buttons()["next", PAGE_SIZE]["callback_data"])
+    assert visible() == {last}
+    await conversation.press_ephemeral(ADMIN, *key, page_buttons()["previous", 0]["callback_data"])
+    assert first in visible() and last not in visible()
+    await conversation.press_ephemeral(ADMIN, *key, page_buttons()["next", PAGE_SIZE]["callback_data"])
+    conversation.api.fail_next(
+        "editEphemeralMessageText", error_code=400, description="Bad Request: can't parse rich message"
+    )
+    await conversation.press_ephemeral(ADMIN, *key, page_buttons()["view", last]["callback_data"])
+    details = conversation.api.ephemerals[key]["text"]
+    assert "rich_message" not in conversation.api.ephemerals[key]
+    assert f"market {PAGE_SIZE}" in details and f"quoted price {PAGE_SIZE}" in details
+    assert "market_chart" not in details
+    assert ("pause", last) in page_buttons()
+    before = conversation.seq
+    await conversation.press_ephemeral(ADMIN, *key, page_buttons()["ok", last]["callback_data"])
+    assert conversation.api.ephemerals[key]["text"] == details and not page_buttons()
+    assert len(conversation.api.calls_of("editEphemeralMessageReplyMarkup", after=before)) == 1
+
+
+async def test_refused_rich_draft_falls_back_to_literal_text_and_working_controls(
+    conversation: Conversation, model: ScriptedModel
+) -> None:
+    conversation.meet(ADMIN, GROUP, status="administrator")
+    await conversation.settle(await conversation.send(ADMIN, GROUP, "hello"))
+    async with conversation.db.transaction() as session:
+        chat = await session.get(Chat, GROUP.id)
+        assert chat
+        chat.onboarded_at = datetime.now(UTC)
+    await fund(conversation)
+    condition = "gold < 3500.50 & silver > 42"
+    model.reply(
+        tool_call(
+            "auto_reply",
+            operation="create",
+            sender="*",
+            condition=condition,
+            action="reply with the current price",
+        )
+    )
+    conversation.api.fail_next(
+        "sendRichMessage", error_code=400, description="Bad Request: invalid rich text"
+    )
+    sent = await conversation.send(ADMIN, GROUP, "derp, reply to gold and silver quotes", thread_id=TOPIC)
+    await conversation.settle(sent)
+    plain = await conversation.expect_reply(sent, method="sendMessage")
+    assert condition in plain["text"] and "<p>" not in plain["text"] and "&lt;" not in plain["text"]
+    async with conversation.db.session() as session:
+        [rule] = list(await session.scalars(select(ReplyRule)))
+        assert rule.state == "draft"
+    (mid,) = (
+        mid
+        for (cid, mid), msg in conversation.api.messages.items()
+        if cid == GROUP.id and ("topic", rule.id) in buttons(msg)
+    )
+    before = conversation.seq
+    conversation.api.fail_next(
+        "editMessageText", error_code=400, description="Bad Request: can't parse rich message"
+    )
+    await conversation.press(ADMIN, GROUP.id, mid, buttons(plain.fields)["topic", rule.id]["callback_data"])
+    rich_edit, plain_edit = conversation.api.calls_of("editMessageText", after=before)
+    assert rich_edit["rich_message"].get("html") and condition in plain_edit["text"]
+    assert plain_edit["link_preview_options"]["is_disabled"]
+    receipt = conversation.api.message(GROUP.id, mid)
+    assert receipt["text"] == plain_edit["text"] and ("ok", rule.id) in buttons(receipt)
+    async with conversation.db.session() as session:
+        stored = await session.get(ReplyRule, rule.id)
+        assert stored and stored.state == "active"

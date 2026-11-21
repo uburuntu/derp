@@ -5,8 +5,9 @@ the asker's admin status, never tool arguments); the tools only word its
 verdict. Not offered to free-model runs.
 """
 
-from typing import Literal
+from typing import Annotated, Literal
 
+from pydantic import Field
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from sqlalchemy import select
@@ -30,9 +31,17 @@ from derp.memory.notes import (
     may_change,
     rewrite,
 )
-from derp.memory.reply_rules import ExactGrant, OutputTool, change, confirmation, describe
+from derp.memory.reply_rules import (
+    ExactGrant,
+    OutputTool,
+    card_html,
+    change,
+    confirmation,
+    describe,
+    rule_language,
+)
 from derp.money.funding import Funding
-from derp.telegram.sender import send_markdown
+from derp.telegram.sender import send_formatted, send_markdown
 
 toolset = FunctionToolset[RunDeps]()
 
@@ -230,40 +239,36 @@ def _plain(text: str) -> str:
 
 
 family = Family(
-    "memory", toolset, tiers=frozenset({Funding.PAID, Funding.SPONSORED}), deferred=("set_chat_rules",)
+    "memory",
+    toolset,
+    tiers=frozenset({Funding.PAID, Funding.SPONSORED}),
+    deferred=("set_chat_rules", "manage_auto_reply"),
 )
 
 
-@toolset.tool(sequential=True)
-async def auto_reply(
-    ctx: RunContext[RunDeps],
-    operation: Literal["create", "revise", "list", "pause", "resume", "remove"],
-    rule_id: int | None = None,
-    condition: str = "",
-    action: str = "",
-    sender: str | None = None,
-    outputs: list[OutputTool] | None = None,
-    needs_media: bool = False,
-    calls: list[ExactGrant] | None = None,
-) -> str:
-    """Manage automatic replies to future group messages, including "remember to reply when ...".
-    Create/revise drafts always need the admin's button. Use a standing chat rule for instructions
-    that apply only when already invoked. Number these as "rule 3".
+async def _group_admin(deps: RunDeps) -> bool:
+    return deps.chat.type in {"group", "supergroup"} and await is_admin(deps.bot, deps.chat, deps.user_id)
 
-    Args:
-        condition: Topic or event only, e.g. "mentions their dog". A person belongs in sender.
-        action: Exactly what the admin wants done on a match, e.g. fetch fresh prices and reply.
-        sender: Required when drafting. Copy the exact member name or @username from chat history, or use
-            "*" if the admin wants any human member. For "when Bob talks about his dog" use sender="Bob"
-            and condition="mentions his dog". Putting Bob only in condition would screen everybody.
-        outputs: Extra output tools the admin authorizes for this action; text and lookups are included.
-        needs_media: The condition requires inspecting attached pictures or a recording's transcript.
-        calls: Fixed actions explicitly requested for every match, e.g. message_action with action=pin,
-            message_id="$message". Any additional action will ask the installing admin first.
-        rule_id: The existing rule for revise/pause/resume/remove.
+
+async def _installed_rule(session: AsyncSession, chat_id: int, rule_id: int | None) -> ReplyRule | None:
+    return await session.scalar(
+        select(ReplyRule)
+        .where(ReplyRule.id == rule_id, ReplyRule.chat_id == chat_id, ReplyRule.state != "draft")
+        .with_for_update()
+    )
+
+
+@toolset.tool(sequential=True)
+async def manage_auto_reply(
+    ctx: RunContext[RunDeps],
+    operation: Literal["list", "pause", "resume", "remove"],
+    rule_id: int | None = None,
+) -> str:
+    """List installed automatic replies, or pause, resume or remove one by its rule number (group admins).
+    For a new rule or a revised trigger/action use auto_reply.
     """
     deps = ctx.deps
-    if deps.chat.type not in {"supergroup", "group"} or not await is_admin(deps.bot, deps.chat, deps.user_id):
+    if not await _group_admin(deps):
         return "Only group admins can manage automatic replies."
     async with deps.db.transaction() as session:
         if operation == "list":
@@ -272,38 +277,63 @@ async def auto_reply(
                 .where(ReplyRule.chat_id == deps.chat.id, ReplyRule.state != "draft")
                 .order_by(ReplyRule.id)
             )
-            return (
-                "\n".join(
-                    f"{describe(r, deps.locale)} ({r.state}; "
-                    + ("whole group" if r.whole_chat else f"topic {r.thread_id or 'General'}")
-                    + ")"
-                    for r in rows
-                )
-                or "No automatic reply rules."
-            )
+            return "\n\n".join(describe(r, deps.locale) for r in rows) or "No automatic reply rules."
+        await session.get(Chat, deps.chat.id, with_for_update=True)
+        existing = await _installed_rule(session, deps.chat.id, rule_id)
+        if existing is None:
+            return "Rule not found in this group."
+        return "Updated." if await change(session, existing, operation) else "Rule already in that state."
+
+
+@toolset.tool(sequential=True)
+async def auto_reply(
+    ctx: RunContext[RunDeps],
+    condition: Annotated[str, Field(min_length=1, max_length=300)],
+    action: Annotated[str, Field(min_length=1, max_length=600)],
+    sender: Annotated[str, Field(min_length=1)],
+    operation: Literal["create", "revise"] = "create",
+    rule_id: int | None = None,
+    more_requested_work: bool = False,
+    outputs: list[OutputTool] | None = None,
+    needs_media: bool = False,
+    calls: list[ExactGrant] | None = None,
+) -> str:
+    """Draft an automatic reply to future group messages, including "remember to reply when ...".
+    Create/revise drafts always need the admin's button. Use a standing chat rule for instructions
+    that apply only when already invoked. Write the condition and action in the admin's language.
+    Keep requested quotes and exact arguments intact. Number these as "rule 3".
+
+    Args:
+        condition: Topic or event only, e.g. "mentions their dog". A person belongs in sender.
+        action: Exactly what the admin wants done on a match, e.g. fetch fresh prices and reply.
+        sender: Required when drafting. Copy the exact member name or @username from chat history, or use
+            "*" if the admin wants any human member. For "when Bob talks about his dog" use sender="Bob"
+            and condition="mentions his dog". Putting Bob only in condition would screen everybody.
+        more_requested_work: True only if the admin also asked for a separate answer or task in this message.
+            The confirmation card completes the rule request itself. Leave false for a rule alone.
+        outputs: Extra output tools the admin authorizes for this action; text and lookups are included.
+        needs_media: The condition requires inspecting attached pictures or a recording's transcript.
+        calls: Fixed actions explicitly requested for every match, e.g. message_action with action=pin,
+            message_id="$message". Any additional action will ask the installing admin first.
+        rule_id: The existing rule number when revising.
+    """
+    deps = ctx.deps
+    if not await _group_admin(deps):
+        return "Only group admins can manage automatic replies."
+    async with deps.db.transaction() as session:
         current = await session.get(Chat, deps.chat.id, with_for_update=True)
         if current is None:
             return "This group is no longer available."
         existing = None
-        if operation != "create":
-            existing = await session.scalar(
-                select(ReplyRule)
-                .where(ReplyRule.id == rule_id, ReplyRule.chat_id == deps.chat.id, ReplyRule.state != "draft")
-                .with_for_update()
-            )
+        if operation == "revise":
+            existing = await _installed_rule(session, deps.chat.id, rule_id)
             if existing is None:
                 return "Rule not found in this group."
-            if operation != "revise":
-                return (
-                    "Updated."
-                    if await change(session, existing, operation)
-                    else "Rule already in that state."
-                )
         if not current.ambient:
             return "Enable ambient group context in settings before configuring automatic replies."
-        if not (0 < len(condition.strip()) <= 300 and 0 < len(action.strip()) <= 600):
+        if not condition.strip() or not action.strip():
             return "Supply a condition (up to 300 characters) and the action (up to 600)."
-        if not sender or not sender.strip():
+        if not sender.strip():
             return 'Who can trigger it? Set sender to the exact @username/name from the chat, or "*" for any human.'
         owner = None
         if sender.strip() != "*":
@@ -334,15 +364,24 @@ async def auto_reply(
             return "Use fewer permissions so the complete rule fits on its confirmation card."
         session.add(rule)
         await session.flush()
-        text, keyboard = await confirmation(session, rule, current, deps.locale, deps.settings)
+        request = await session.get(Message, (current.id, deps.trigger_message_id))
+        locale = rule_language(
+            request.text if request and request.text else rule.condition, current.locale or deps.locale
+        )
+        text, keyboard = await confirmation(session, rule, current, locale, deps.settings)
     try:
-        await deliver(
+        sent = await deliver(
             deps,
             "other",
             "rule confirmation",
-            lambda: send_markdown(deps.bot, deps.target, text, reply_markup=keyboard, trusted=False),
+            lambda: send_formatted(deps.bot, deps.target, [text], render=card_html, reply_markup=keyboard),
             history=False,
         )
     except Refused as refusal:
         return str(refusal)
-    return "Shown for confirmation. The admin chooses the scope on the card; no rule is active yet."
+    if not sent:
+        return "The group did not receive the confirmation buttons. Ask the admin to try again in the group."
+    deps.rule_card_is_answer = not more_requested_work
+    return (
+        "Shown for confirmation. The card answers this request; only continue with separately requested work."
+    )

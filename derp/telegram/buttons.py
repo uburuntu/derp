@@ -19,13 +19,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from aiogram import Bot, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
+from aiogram.methods import EditEphemeralMessageText, EditMessageText
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from magic_filter import MagicFilter
 
 from derp.locales import resolve, t
-from derp.telegram.sender import rich
+from derp.telegram.sender import NO_PREVIEW, RichRenderer, rich
 
 type Row = InlineKeyboardButton | Sequence[InlineKeyboardButton | None] | None
 type Handler = Callable[..., Awaitable[Any]]
@@ -69,24 +70,43 @@ class Press:
     def ephemeral(self) -> bool:
         return self.message.message_id == 0 and bool(self.message.ephemeral_message_id)
 
-    async def edit(self, markdown: str, keyboard: InlineKeyboardMarkup | None = None) -> None:
+    async def edit(
+        self, text: str, keyboard: InlineKeyboardMarkup | None = None, *, render: RichRenderer | None = None
+    ) -> None:
         """Replace the pressed message's text (and buttons: none unless given)."""
+        content = (render or rich)(text)
+        method = (
+            EditEphemeralMessageText(
+                chat_id=self.chat_id,
+                receiver_user_id=self.user_id,
+                ephemeral_message_id=self.message.ephemeral_message_id or 0,
+                rich_message=content,
+                reply_markup=keyboard,
+            )
+            if self.ephemeral
+            else EditMessageText(
+                chat_id=self.chat_id,
+                message_id=self.message.message_id,
+                rich_message=content,
+                reply_markup=keyboard,
+            )
+        )
         with contextlib.suppress(TelegramAPIError):  # unchanged, deleted or an expired ephemeral message
-            if self.ephemeral:
-                await self.bot.edit_ephemeral_message_text(
-                    chat_id=self.chat_id,
-                    receiver_user_id=self.user_id,
-                    ephemeral_message_id=self.message.ephemeral_message_id or 0,
-                    rich_message=rich(markdown),
-                    reply_markup=keyboard,
+            try:
+                await method.emit(self.bot)
+            except TelegramBadRequest as error:
+                # Formatted cards carry a plain source. A rejected parse can retry the same edit verbatim.
+                if render is None or "parse" not in error.message.lower():
+                    return
+                plain = method.model_copy(
+                    update={
+                        "rich_message": None,
+                        "text": text,
+                        "parse_mode": None,
+                        "link_preview_options": NO_PREVIEW,
+                    }
                 )
-            else:
-                await self.bot.edit_message_text(
-                    chat_id=self.chat_id,
-                    message_id=self.message.message_id,
-                    rich_message=rich(markdown),
-                    reply_markup=keyboard,
-                )
+                await plain.emit(self.bot)
 
     async def strip(self, keep: Callable[[InlineKeyboardButton], bool] | None = None) -> None:
         """Remove the pressed message's buttons, or only those ``keep`` rejects."""
