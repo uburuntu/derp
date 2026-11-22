@@ -1,49 +1,27 @@
-"""/settings: one panel for the chat's policy and the asker's own choices.
+"""/settings navigation, permission checks and changes to chat or personal policy."""
 
-Everyone sees the chat's settings; only admins (anyone, in a private chat)
-change them, and the role is checked again on every press. Personal choices
-(using my Derpcoins in groups, being named when chipping in) are each
-person's own and show only on a panel nobody else sees. In groups /settings
-is an ephemeral command, so the panel is ephemeral and its buttons edit it
-through the ephemeral edit methods; one typed out in full is public and
-leaves them out. While Telegram hides the chat from Derp,
-the panel offers the make-me-admin link. Contributed keys (``keys.flows``) show here too: in a group the
-keys plugged in, a link to plug one in privately and a keys page (admins turn keys on, pause or unplug
-them; a key's owner may unplug theirs); in private the person's own keys.
-
-Destructive changes ask first: turning context off deletes the chat's stored
-ambient history, and a shorter retention deletes older messages. A confirmation
-page Derp posted into a group on someone's request isn't anyone's panel: a press
-there consumes the prompt and leaves its outcome without buttons. The
-jobs page lists the chat's reminders and scheduled prompts with buttons for the
-ones the viewer may touch; ``scheduler.jobs`` decides, here and for the Resume
-button on a paused job's note and the Snooze buttons on a fired reminder.
-Callback data carries only ids (and a snooze its firing and length).
-"""
-
+import json
 from contextlib import suppress
 from datetime import UTC, datetime
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from derp.config import Settings
 from derp.db.engine import Database
-from derp.history.members import context_state
 from derp.history.models import Chat, User
 from derp.history.models import Message as StoredMessage
 from derp.history.render import chat_time, one_line
 from derp.history.retention import default_days, kept_days
-from derp.keys.flows import chat_keys, chat_keys_line, chat_keys_page, live_keys, plug_link
-from derp.keys.notices import KeyAction
+from derp.keys.flows import chat_keys, chat_keys_page
 from derp.locales import day_count, resolve, t
 from derp.memory import reply_rules
+from derp.memory.command import rules_digest
 from derp.memory.notes import is_admin
-from derp.money.free import POLICY_VERSION, consented
+from derp.money.free import POLICY_VERSION
 from derp.scheduler.jobs import (
     SNOOZES,
     JobAction,
@@ -58,29 +36,20 @@ from derp.scheduler.jobs import (
     snoozed_until,
 )
 from derp.scheduler.models import Job
+from derp.settings.navigation import SettingsAction, act, footer
+from derp.settings.overview import funding, overview, personal
 from derp.settings.privacy import switch_context
-from derp.telegram.buttons import Press, button, dismiss_button, link, markup, on_press
+from derp.settings.sections import behavior, history, instructions
+from derp.telegram.buttons import Press, button, dismiss_button, markup, on_press
 from derp.telegram.filters import Command
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
 from derp.tools.timezones import TimeZoneError, iana
 
 NOTES_MODES = ("auto", "members", "admins", "off")
-RULES_PREVIEW = 300
 JOB_ACTIONS: dict[str, JobAction] = {"jpause": "pause", "jresume": "resume", "jdrop": "cancel"}
 JOB_TEXT = 60  # characters of a job's text on the jobs page
 JOBS_BUDGET = 3500  # characters of job lines before "…and N more"
-
-
-class SettingsAction(CallbackData, prefix="set"):
-    # page | ambient (on / purge) | retention | shorten (confirmed) | cancel (a confirmation) | notes | free
-    # | rules | spend | named | jpause / jresume / jdrop (value: the job id)
-    action: str
-    value: str = ""
-
-
-def _act(action: str, value: str = "") -> SettingsAction:
-    return SettingsAction(action=action, value=value)
 
 
 def chosen_days(value: str, settings: Settings) -> int | None:
@@ -100,7 +69,10 @@ async def _jobs_page(
 ) -> tuple[str, list[list[InlineKeyboardButton]]]:
     rows = await live_jobs(session, chat.id)
     tz = chat_time(chat)
-    lines = [t(locale, "settings.jobs_page", zone=chat.timezone or "UTC")]
+    lines = [
+        t(locale, "settings.jobs_page"),
+        t(locale, "settings.zone", zone=chat.timezone) if chat.timezone else t(locale, "settings.zone_unset"),
+    ]
     if not rows:
         lines.append(t(locale, "settings.jobs_none"))
     buttons: list[list[InlineKeyboardButton]] = []
@@ -109,7 +81,7 @@ async def _jobs_page(
         line = t(
             locale,
             "settings.job_line",
-            kind="💬" if job.kind == "prompt" else "⏰",
+            kind=t(locale, "settings.job_prompt" if job.kind == "prompt" else "settings.job_reminder"),
             id=job.id,
             when=local_time(job.next_at, tz),
             repeat=t(locale, f"settings.repeat_{job.repeat or 'once'}"),
@@ -127,13 +99,13 @@ async def _jobs_page(
             toggle = t(locale, "settings.job_resume" if paused else "settings.job_pause", id=job.id)
             buttons.append(
                 [
-                    button(toggle, _act("jresume" if paused else "jpause", str(job.id))),
-                    button(t(locale, "settings.job_delete", id=job.id), _act("jdrop", str(job.id))),
+                    button(toggle, act("jresume" if paused else "jpause", str(job.id))),
+                    button(t(locale, "settings.job_delete", id=job.id), act("jdrop", str(job.id))),
                 ]
             )
     if rows and chat.type != "private":
         lines.append(t(locale, "settings.jobs_own"))
-    return "\n".join(lines), buttons
+    return "\n\n".join(lines), buttons
 
 
 async def render(
@@ -153,127 +125,75 @@ async def render(
 
     ``user`` is the viewer whose own choices the page shows: None on a panel the whole group sees.
     """
-    group = chat.type != "private"
-    on, off = t(locale, "settings.on"), t(locale, "settings.off")
-    back = button(t(locale, "settings.back"), _act("page", "main"))
-    retention = settings.retention
-    if page == "retention":
-        choices = [button(day_count(locale, d), _act("retention", str(d))) for d in retention.options]
-        default = day_count(locale, default_days(chat, retention))
-        reset = button(t(locale, "settings.default_days", days=default), _act("retention", "0"))
-        return t(locale, "settings.retention_page"), markup(choices[:2], choices[2:], reset, back)
-    cancel = (
-        button(t(locale, "settings.cancel"), _act("finish", "cancel"))
-        if standalone
-        else button(t(locale, "settings.back"), _act("cancel"))
-    )
-    if page.startswith("shorten:"):
-        value = page.removeprefix("shorten:")
-        kept = day_count(locale, chosen_days(value, settings) or default_days(chat, retention))
-        label = t(locale, "settings.shorten_confirm", days=kept)
-        confirm = button(label, _act("shorten", value), style="danger")
-        return t(locale, "settings.shorten_page", days=kept), markup(confirm, cancel)
-    if page == "notes":
-        modes = [button(t(locale, f"settings.notes_{mode}"), _act("notes", mode)) for mode in NOTES_MODES]
-        return t(locale, "settings.notes_page"), markup(*modes, back)
-    if page == "ambient_off":
-        ambient_count = await session.scalar(
-            select(func.count()).where(StoredMessage.chat_id == chat.id, StoredMessage.capture == "ambient")
-        )
-        confirm = button(
-            t(locale, "settings.context_off_confirm"),
-            _act("ambient", "purge"),
-            style="danger",
-        )
-        return t(locale, "settings.context_off_page", count=ambient_count or 0), markup(confirm, cancel)
+    if page == "main":
+        return await overview(session, bot, settings, chat, user, locale)
+    if page == "history":
+        return await history(session, bot, settings, chat, locale, admin=admin)
+    if page == "behavior":
+        return await behavior(session, bot, chat, locale, admin=admin)
+    if page == "instructions":
+        return instructions(chat, locale)
+    if page == "funding":
+        return await funding(session, bot, settings, chat, user, locale, admin=admin)
+    if page == "personal" and user is not None:
+        return personal(user, locale)
+    if page == "jobs":
+        text, rows = await _jobs_page(session, chat, viewer, admin, locale)
+        return text, markup(*rows, footer(locale))
+    if page == "keys":
+        keys = await chat_keys(session, chat.id)
+        text, rows = chat_keys_page(settings, keys, viewer, admin, locale)
+        return text, markup(*rows, footer(locale, "funding"))
     if page == "auto":
         text, rows = await reply_rules.page(session, chat, locale)
-        return text, markup(*rows, back)
-    if page == "jobs":
-        text, rows = await _jobs_page(session, chat, viewer or (user.id if user else None), admin, locale)
-        return text, markup(*rows, back)
-    keys = await chat_keys(session, chat.id) if group else []
-    if page == "keys":
-        text, rows = chat_keys_page(settings, keys, viewer or (user.id if user else None), admin, locale)
-        return text, markup(*rows, back)
+        return text, markup(*rows)
+    if page == "clear_rules":
+        confirm = button(
+            t(locale, "navigation.clear_confirm"), act("rules", _clear_version(chat)), style="danger"
+        )
+        parts = [t(locale, "navigation.clear_prompt"), chat.rules or t(locale, "sections.instructions_empty")]
+        if chat.rules_draft is not None:
+            parts.append(t(locale, "navigation.clear_draft"))
+        return "\n\n".join(parts), markup(confirm, footer(locale, "behavior"))
 
-    jobs = len(await live_jobs(session, chat.id))
-    context = await context_state(bot, chat)
-    lines = [
-        t(locale, "settings.title", title=literal(one_line(chat.title or t(locale, "settings.this_chat"))))
-    ]
-    if group:
-        lines.append(t(locale, f"settings.context_{context.state}"))
+    retention = settings.retention
     kept = day_count(locale, kept_days(chat, retention))
-    lines.append(t(locale, "settings.retention", days=kept))
-    if chat.timezone:
-        lines.append(t(locale, "settings.zone", zone=chat.timezone))
-    else:
-        lines.append(t(locale, "settings.zone_unset"))
-    lines.append(t(locale, "settings.notes", mode=t(locale, f"settings.notes_{chat.notes_mode}")))
-    if chat.rules:
-        lines.append(t(locale, "settings.rules", rules=literal(one_line(chat.rules, RULES_PREVIEW))))
-    else:
-        lines.append(t(locale, "settings.no_rules"))
-    if group:
-        lines.append(t(locale, "settings.free_group", state=on if chat.free_models else off))
-        lines.append(chat_keys_line(settings, keys, locale))
-    else:
-        lines.append(t(locale, "settings.free_private", state=on if consented(user) else off))
-    own_keys = len(await live_keys(session, user.id)) if user is not None and not group else 0
-    if not group:
-        lines.append(t(locale, "settings.keys_private", count=own_keys))
-    lines.append(t(locale, "settings.jobs", count=jobs))
-    personal: list[InlineKeyboardButton] = []
-    if user is not None:
-        spends, named = user.group_spending, user.patron_named
-        lines.append(t(locale, "settings.spend_on" if spends else "settings.spend_off"))
-        lines.append(t(locale, "settings.named_on" if named else "settings.named_off"))
-        personal = [
-            button(
-                t(locale, "settings.spend_button", state=on if spends else off),
-                _act("spend", "off" if spends else "on"),
-            ),
-            button(
-                t(locale, "settings.named_button", state=on if named else off),
-                _act("named", "off" if named else "on"),
-            ),
-        ]
-    if group:
-        lines.append(t(locale, "settings.admins_only"))
+    if page == "retention":
+        choices = [button(day_count(locale, d), act("retention", str(d))) for d in retention.options]
+        default = day_count(locale, default_days(chat, retention))
+        reset = button(t(locale, "settings.default_days", days=default), act("retention", "0"))
+        return t(locale, "settings.retention_page", current=kept), markup(
+            choices[:2], choices[2:], reset, footer(locale, "history")
+        )
+    if page == "notes":
+        modes = [button(t(locale, f"settings.notes_{mode}"), act("notes", mode)) for mode in NOTES_MODES]
+        current = t(locale, f"settings.notes_{chat.notes_mode}")
+        return t(locale, "settings.notes_page", current=current), markup(*modes, footer(locale, "history"))
 
-    ambient = None
-    if group:
-        label = t(locale, "settings.context_button", state=on if chat.ambient else off)
-        ambient = button(label, _act("page", "ambient_off") if chat.ambient else _act("ambient", "on"))
-    mode = t(locale, f"settings.notes_{chat.notes_mode}")
-    free_on = chat.free_models if group else consented(user)
-    free = t(locale, "settings.free_button", state=on if free_on else off)
-    if group:
-        plug = [
-            link(t(locale, "settings.keys_plug"), await plug_link(bot, settings, chat.id)),
-            button(t(locale, "settings.keys_button", count=len(keys)), _act("page", "keys"))
-            if keys
-            else None,
-        ]
-    else:
-        plug = [
-            button(t(locale, "settings.my_keys"), KeyAction(action="page", key=0)) if own_keys else None,
-            button(t(locale, "settings.keys_plug"), KeyAction(action="plug", key=0)),
-        ]
-    keyboard = markup(
-        link(t(locale, "onboarding.make_admin"), context.admin_url) if context.admin_url else None,
-        [ambient, button(t(locale, "settings.retention_button", days=kept), _act("page", "retention"))],
-        button(t(locale, "settings.notes_button", mode=mode), _act("page", "notes")),
-        button(free, _act("free", "off" if free_on else "on")),
-        button(t(locale, "auto.title"), _act("page", "auto")) if group else None,
-        button(t(locale, "settings.rules_clear"), _act("rules", "clear")) if chat.rules else None,
-        button(t(locale, "settings.jobs_button", count=jobs), _act("page", "jobs")) if jobs else None,
-        plug,
-        *personal,
-        dismiss_button(locale),
-    )
-    return "\n".join(lines), keyboard
+    cancel = button(t(locale, "settings.cancel"), act("finish", "cancel")) if standalone else None
+    if page.startswith("shorten:"):
+        value = page.removeprefix("shorten:")
+        days = day_count(locale, chosen_days(value, settings) or default_days(chat, retention))
+        confirm = button(
+            t(locale, "settings.shorten_confirm", days=days), act("shorten", value), style="danger"
+        )
+        return t(locale, "settings.shorten_page", current=kept, days=days), markup(
+            confirm, cancel or footer(locale, "retention")
+        )
+    if page == "ambient_off":
+        count = await session.scalar(
+            select(func.count()).where(StoredMessage.chat_id == chat.id, StoredMessage.capture == "ambient")
+        )
+        confirm = button(t(locale, "settings.context_off_confirm"), act("ambient", "purge"), style="danger")
+        return t(locale, "settings.context_off_page", count=count or 0), markup(
+            confirm, cancel or footer(locale, "history")
+        )
+    raise ValueError(f"Unknown settings page: {page}")
+
+
+def _clear_version(chat: Chat) -> str:
+    reviewed = json.dumps([chat.rules, chat.rules_draft, chat.rules_draft_by])
+    return f"clear-{rules_digest(reviewed)}"
 
 
 async def on_settings(message: Message, db: Database, settings: Settings, bot: Bot) -> None:
@@ -286,6 +206,8 @@ async def on_settings(message: Message, db: Database, settings: Settings, bot: B
         if chat is None:
             return
         own = chat.type == "private" or bool(message.ephemeral_message_id)  # else the whole group sees it
+        if not own:
+            locale = chat.locale or locale
         text, keyboard = await render(session, bot, settings, chat, user if own else None, locale)
     await send_markdown(bot, Target.reply_to_message(message), text, reply_markup=keyboard)
 
@@ -323,13 +245,18 @@ async def apply_setting(
             case "notes" if value in NOTES_MODES:
                 chat.notes_mode = value
             case "free" if chat.type != "private":
+                announce = value == "on" and not chat.free_models
                 chat.free_models = value == "on"
+                return "money.free_enabled" if announce else None
             case "free" if person is not None:
                 on = value == "on"
                 person.free_models_consent_at = datetime.now(UTC) if on else None
                 person.free_models_consent_version = POLICY_VERSION if on else None
             case "rules":
+                if value != _clear_version(chat):
+                    return "navigation.instructions_changed"
                 chat.rules, chat.rules_draft, chat.rules_draft_by = None, None, None
+                return "navigation.cleared"
             case "timezone":
                 try:
                     await rezone(session, chat, iana(value), datetime.now(UTC))
@@ -362,36 +289,53 @@ async def on_action(press: Press, data: SettingsAction, db: Database, bot: Bot, 
     if chat is None:
         return
     action, value = data.action, data.value
-    # The distinct Cancel button identifies a tool-posted prompt, including in private chats.
-    # Keep the existing confirm payloads and the public-group behavior of older prompts.
-    keyboard = press.message.reply_markup
-    finish = _act("finish", "cancel").pack()
+    private = chat.type == "private"
+    own = private or press.ephemeral
+    if (private and chat.id != press.user_id) or (
+        press.ephemeral
+        and (not press.message.receiver_user or press.message.receiver_user.id != press.user_id)
+    ):
+        return await press.deny("navigation.private_only")
+    if not own and (action in {"named", "spend"} or (action, value) == ("page", "personal")):
+        return await press.deny("navigation.private_only")
+    visible = {"main", "history", "behavior", "instructions", "funding", "personal", "jobs", "keys"}
+    if action == "page" and (
+        value not in visible | {"clear_rules", "retention", "notes", "ambient_off", "auto"}
+        or (private and value in {"keys", "auto", "ambient_off"})
+    ):
+        return await press.deny("buttons.stale")
+    # Even a shared panel last opened by an admin must check the person pressing it now.
+    admin = await is_admin(bot, chat, press.user_id)
+    if not (admin or action in {"spend", "named", *JOB_ACTIONS} or (action == "page" and value in visible)):
+        return await press.deny("settings.admins_alert")
+    if not press.has_pressed_button():
+        return await press.deny("settings.job_gone" if action == "jdrop" else "buttons.stale")
+    locale = press.locale if own else chat.locale or press.locale
+    callbacks = (
+        {b.callback_data for row in press.message.reply_markup.inline_keyboard for b in row}
+        if press.message.reply_markup
+        else set()
+    )
+    # Old public tool prompts used the panel's Cancel, new ones have a distinct Finish.
     standalone = action == "finish" or (
         _ends_confirmation(data)
-        and (
-            (chat.type != "private" and not press.ephemeral)
-            or (
-                keyboard is not None
-                and any(b.callback_data == finish for row in keyboard.inline_keyboard for b in row)
-            )
-        )
+        and (act("finish", "cancel").pack() in callbacks or (not own and act("cancel").pack() in callbacks))
     )
     if action == "finish":
-        if value != "cancel" or not press.has_pressed_button():
+        if value != "cancel":
             return await press.deny("buttons.stale")
         action = "cancel"
-    jobs = action in JOB_ACTIONS or (action == "page" and value == "jobs")
-    keys = action == "page" and value == "keys"  # anyone sees it; admins get the buttons
-    personal = jobs or keys or action in {"spend", "named"} or (action == "page" and value == "main")
-    admin = (jobs or keys or not personal) and await is_admin(bot, chat, press.user_id)
-    if not personal and not admin:
-        return await press.deny("settings.admins_alert")
-    if action == "jdrop" and not press.has_pressed_button():
-        return await press.deny("settings.job_gone")
-    if standalone and not await press.take_button(clear=True, allow_group=True):
+    destructive = (
+        action == "shorten"
+        or (action, value) == ("ambient", "purge")
+        or (action == "rules" and value.startswith("clear-"))
+    )
+    if (standalone or destructive) and not await press.take_button(clear=True, allow_group=True):
         return await press.deny("buttons.stale")
     if action == "page":
         page = value
+    elif (action, value) == ("rules", "clear"):
+        page = "clear_rules"  # Older panels have a direct Clear button. Show the review first.
     elif action in JOB_ACTIONS:
         page = "jobs"
         if alert := await apply_job(db, chat, press.user_id, admin, JOB_ACTIONS[action], value):
@@ -404,37 +348,50 @@ async def on_action(press: Press, data: SettingsAction, db: Database, bot: Bot, 
                 if action == "jdrop"
                 else markup(
                     [
-                        dismiss_button(press.locale, user_id=press.user_id),
-                        button(t(press.locale, "settings.manage_jobs"), _act("page", "jobs")),
+                        dismiss_button(locale, user_id=press.user_id),
+                        button(t(locale, "settings.manage_jobs"), act("page", "jobs")),
                     ]
                 )
             )
-            return await press.edit(t(press.locale, f"settings.done_{action}", id=value), controls)
+            return await press.edit(t(locale, f"settings.done_{action}", id=value), controls)
     elif action == "retention" and shortens(chat, settings, value):
         page = f"shorten:{value}"  # deletes older history: confirm first
     else:
-        page = "main"
+        page = {
+            "retention": "history",
+            "notes": "history",
+            "ambient": "history",
+            "shorten": "history",
+            "rules": "behavior",
+            "free": "funding",
+            "spend": "personal",
+            "named": "personal",
+        }.get(action, "main")
         notice = (
             await apply_setting(db, settings, chat.id, press.user_id, action, value)
             if action != "cancel"
             else "settings.cancelled"
         )
-        if standalone:
-            return await press.edit(t(chat.locale or press.locale, notice or "settings.invalid"))
-        if action != "cancel":
+        if standalone or destructive:
+            keyboard = None if standalone else markup(footer(locale, page))
+            return await press.edit(t(locale, notice or "settings.invalid"), keyboard)
+        if notice == "money.free_enabled":
+            await send_markdown(bot, Target(chat.id), t(chat.locale or locale, notice))
+        elif action != "cancel":
             await press.toast(notice)
-    if action == "free" and value == "on" and chat.type != "private" and not chat.free_models:
-        await send_markdown(bot, Target(chat.id), t(chat.locale or press.locale, "money.free_enabled"))
     async with db.session() as session:
         fresh = await session.get(Chat, chat.id)
-        own = chat.type == "private" or press.ephemeral  # else the whole group sees it
         user = await session.get(User, press.user_id) if own else None
-        if fresh is None:
-            return
+        if fresh is None or (page == "personal" and user is None):
+            return await press.deny("buttons.stale")
         text, keyboard = await render(
-            session, bot, settings, fresh, user, press.locale, page, admin=admin, viewer=press.user_id
+            session, bot, settings, fresh, user, locale, page, admin=admin, viewer=press.user_id
         )
-    await press.edit(text, keyboard, render=reply_rules.card_html if page == "auto" else None)
+    await press.edit(
+        text,
+        keyboard,
+        render=reply_rules.card_html if page in {"auto", "behavior", "instructions", "clear_rules"} else None,
+    )
 
 
 async def _claim_job_button(press: Press, db: Database, chat: Chat, job_id: int, admin: bool) -> bool:

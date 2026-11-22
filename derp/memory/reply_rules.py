@@ -24,6 +24,7 @@ from derp.locales import catalog, resolve, t
 from derp.memory.models import ReplyRule, ReplyRuleCheck
 from derp.memory.notes import is_admin
 from derp.money.amounts import format_dc
+from derp.settings.navigation import page_button
 from derp.telegram.buttons import Press, button, markup, on_press
 
 # Grants are only for producing a reply. Mutations of persistent state need a separate exact-call approval.
@@ -227,7 +228,7 @@ async def page(
         pages.append(control(locale, "next", offset + PAGE_SIZE))
     if pages:
         rows.append(pages)
-    rows.append([control(locale, "ok", 0)])
+    rows.append([page_button(locale, "behavior", label=t(locale, "settings.back")), control(locale, "ok", 0)])
     return "\n\n".join(lines), rows
 
 

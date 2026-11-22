@@ -27,7 +27,7 @@ class RulesAction(CallbackData, prefix="rules"):
     draft: str  # digest of the draft the buttons were shown for
 
 
-def _digest(text: str) -> str:
+def rules_digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:10]
 
 
@@ -38,7 +38,7 @@ def rules_prompt(locale: str, rules: str) -> str:
 
 
 def rules_keyboard(locale: str, rules: str) -> InlineKeyboardMarkup | None:
-    draft = _digest(rules)
+    draft = rules_digest(rules)
     return markup(
         [
             button(
@@ -165,7 +165,7 @@ async def on_rules_action(press: Press, data: RulesAction, bot: Bot, db: Databas
     """Only the admin who asked can apply or cancel, and only the draft these buttons showed."""
     async with db.session() as session:
         chat = await session.get(Chat, press.chat_id)
-    if chat is None or chat.rules_draft is None or _digest(chat.rules_draft) != data.draft:
+    if chat is None or chat.rules_draft is None or rules_digest(chat.rules_draft) != data.draft:
         await press.strip()
         return await press.deny("memory.gone")
     if chat.rules_draft_by != press.user_id or not await is_admin(bot, chat, press.user_id):
@@ -178,7 +178,7 @@ async def on_rules_action(press: Press, data: RulesAction, bot: Bot, db: Databas
             row is not None
             and row.rules_draft_by == press.user_id
             and row.rules_draft is not None
-            and _digest(row.rules_draft) == data.draft
+            and rules_digest(row.rules_draft) == data.draft
         )
         if row is not None and current:
             if data.action == "apply":

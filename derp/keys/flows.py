@@ -841,7 +841,7 @@ def my_keys(keys: list[ContributedKey], locale: str) -> tuple[str, InlineKeyboar
         )
         for k in keys
     ]
-    plug = button(t(locale, "settings.keys_plug"), KeyAction(action="plug", key=0))
+    plug = button(t(locale, "overview.plug_key"), KeyAction(action="plug", key=0))
     return t(locale, "keys.mine" if keys else "keys.mine_none"), markup(*rows, plug, dismiss_button(locale))
 
 
@@ -957,23 +957,6 @@ async def chat_keys(session: AsyncSession, chat_id: int) -> list[tuple[KeyChat, 
         )
     ).all()
     return [(row, Plugged(key, owner)) for row, key, owner in rows]
-
-
-def chat_keys_line(settings: Settings, keys: list[tuple[KeyChat, Plugged]], locale: str) -> str:
-    on = [p for row, p in keys if row.state == "on"]
-    if not on:
-        return t(locale, "settings.keys_off")
-    named = ", ".join(
-        t(
-            locale,
-            "settings.key_name",
-            who=owner_name(p.owner, locale),
-            brand=brand(p.key.provider),
-            model=model_label(settings, p.key.model),
-        )
-        for p in on
-    )
-    return t(locale, "settings.keys_on", keys=named)
 
 
 def chat_keys_page(

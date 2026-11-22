@@ -1,6 +1,8 @@
 from sqlalchemy import select
 
-from derp.history.models import Chat
+from derp.history.models import Chat, User
+from derp.locales import t
+from derp.memory.models import ReplyRule
 from derp.settings.panel import SettingsAction
 from derp.telegram.buttons import Dismiss, dismiss_button, markup
 from tests.e2e.harness import Conversation, Person, Room
@@ -57,6 +59,7 @@ async def test_a_double_tap_is_answered_twice_and_applied_once(conversation: Con
     conversation.meet(ADMIN, LOFT, status="administrator")
     await conversation.settle(await conversation.send(ADMIN, LOFT, "hi"))
     panel = await open_panel(conversation, ADMIN, 901)
+    await conversation.press_ephemeral(ADMIN, LOFT.id, panel, data("page", "funding"))
     after = conversation.seq
     await conversation.press_ephemeral(ADMIN, LOFT.id, panel, data("free", "on"), taps=2)
     assert len(conversation.api.calls_of("answerCallbackQuery", after=after)) == 2
@@ -97,11 +100,72 @@ async def test_settings_offer_the_admin_link_when_derp_cant_read_the_chat(conver
     conversation.meet(ADMIN, LOFT, status="administrator")
     await conversation.settle(await conversation.send(ADMIN, LOFT, "/settings@DerpRobot"))
     panel = conversation.api.calls_of("sendRichMessage")[-1]
-    assert "make me an admin" in panel["rich_message"]["markdown"]
-    first = panel["reply_markup"]["inline_keyboard"][0][0]
-    assert first["url"] == "https://t.me/DerpRobot?startgroup=derp&admin=invite_users+pin_messages"
-    assert first["text"] == "👀 Let me read the chat (make me admin)"
-    # Typed out in full, the panel is public: nobody's own choices are on it.
-    assert "Your Derpcoins in groups" not in panel["rich_message"]["markdown"]
-    labels = [b["text"] for row in panel["reply_markup"]["inline_keyboard"] for b in row]
-    assert not any(label.startswith(("💰", "🎖")) for label in labels)
+    assert "mentions and replies" in panel["rich_message"]["markdown"].lower()
+    panel_id = max(mid for cid, mid in conversation.api.messages if cid == LOFT.id)
+    public = conversation.api.message(LOFT.id, panel_id)
+
+    def controls() -> list[dict[str, str]]:
+        return [
+            b
+            for row in conversation.api.message(LOFT.id, panel_id)["reply_markup"]["inline_keyboard"]
+            for b in row
+        ]
+
+    assert not any(b.get("callback_data") == data("page", "personal") for b in controls())
+    # An old client may send a personal callback on a public card. Never change anybody's choice
+    # or turn that shared message into a personal panel.
+    for action, value in [("page", "personal"), ("spend", "off"), ("named", "off")]:
+        cid = f"private-on-public-{action}"
+        conversation.api.outstanding_callbacks.add(cid)
+        await conversation.settle(
+            await conversation.push(
+                "callback_query",
+                {
+                    "id": cid,
+                    "from": ADMIN.payload(),
+                    "chat_instance": "group",
+                    "message": public,
+                    "data": data(action, value),
+                },
+            )
+        )
+        assert conversation.api.calls_of("answerCallbackQuery")[-1]["show_alert"]
+    assert not conversation.api.calls_of("editMessageText")
+    async with conversation.db.session() as session:
+        user = await session.get(User, ADMIN.id)
+        assert user and user.patron_named and user.group_spending
+
+    await conversation.press(ADMIN, LOFT.id, panel_id, data("page", "history"))
+    history = conversation.api.calls_of("editMessageText")[-1]["rich_message"]["markdown"]
+    assert "messages addressed to me" in history
+    assert any(
+        b.get("url") == "https://t.me/DerpRobot?startgroup=derp&admin=invite_users+pin_messages"
+        for b in controls()
+    )
+    member = Person(2102, "Jo")
+    conversation.meet(member, LOFT)
+    # This public admin button is real, but the actual viewer changed.
+    await conversation.press(member, LOFT.id, panel_id, data("page", "retention"))
+    assert conversation.api.calls_of("answerCallbackQuery")[-1]["show_alert"]
+    await conversation.press(member, LOFT.id, panel_id, data("page", "main"))
+    await conversation.press(member, LOFT.id, panel_id, data("page", "history"))
+    assert not any(b.get("url") or b.get("callback_data") == data("page", "retention") for b in controls())
+
+    async with conversation.db.transaction() as session:
+        session.add(
+            ReplyRule(
+                chat_id=LOFT.id,
+                admin_id=ADMIN.id,
+                condition="a dog photo",
+                action="ask about the dog",
+                state="active",
+            )
+        )
+    await conversation.press(member, LOFT.id, panel_id, data("page", "main"))
+    overview = conversation.api.calls_of("editMessageText")[-1]["rich_message"]["markdown"]
+    assert t("en", "overview.rules_limited", count=1) in overview
+    await conversation.press(member, LOFT.id, panel_id, data("page", "behavior"))
+    behavior = conversation.api.message(LOFT.id, panel_id)
+    assert t("en", "sections.triggers_context_needs_admin") in "\n".join(
+        b["text"] for b in behavior["rich_message"]["blocks"]
+    )

@@ -531,8 +531,11 @@ async def test_key_setting_receipts_finish_the_action_and_old_offers_cannot_unpl
         panel = await conversation.expect_reply(sent)
         await conversation.settle(sent)
         mid = newest(conversation, BO.id)
-        await conversation.press(BO, BO.id, mid, data_of(panel, "My keys"))
-        page = await latest(conversation, "editMessageText", BO.id, sent.after)
+        await conversation.press(BO, BO.id, mid, data_of(panel, "Coins & models"))
+        funding = await latest(conversation, "editMessageText", BO.id, sent.after)
+        after = conversation.seq
+        await conversation.press(BO, BO.id, mid, data_of(funding, "My API keys"))
+        page = await latest(conversation, "editMessageText", BO.id, after)
         await conversation.press(BO, BO.id, mid, data_of(page, control))
         return mid
 

@@ -71,12 +71,18 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 
 ## groups
 
+- /settings opens a short overview of what Derp sees and keeps, when it may reply on its own,
+  the next scheduled job, and the available chat wallet. Open Memory & history, Rules & replies,
+  Coins & models or Schedule to inspect the details. Members can review group policy; admins
+  can change it. My preferences is available in a private chat or a group menu visible only to its recipient.
+  Back returns to the previous section. OK leaves the text and dismisses the controls.
+
 - Call Derp by @mention, by name (derp, дерп and their inflections anywhere in a message), by a command or
   by replying to one of its messages. These human calls reach Derp directly.
 - An admin can ask “Derp, reply to Alex when he mentions his dog” or “reply with fresh prices when someone posts
   market data”. Derp shows the condition, sender, action and permissions for confirmation. In forums the admin
   chooses this topic or the whole group. The same card then shows the rule's status and scope. OK hides its
-  buttons. Admins can reopen a rule in /settings, or ask Derp to list rules, revise one, pause it,
+  buttons. Admins can reopen a rule under Rules & replies in /settings, or ask Derp to list rules, revise one, pause it,
   resume it or remove it.
   While context is enabled, new ordinary human messages are screened against relevant rules. The group pays
   for those checks even on a miss. An eligible OpenAI key or shared Derpcoins pay for checks, and the group's
@@ -90,7 +96,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - When Telegram delivers another bot's group posts, Derp can use them as context for a person's question.
   Those posts follow the group's context setting. Derp stays silent even when another bot mentions it or sends a command.
 - Making Derp an admin is optional: it then sees every message, reactions and members joining or leaving, and can
-  pin messages for admins. The join notice and /settings (while Derp can't read the chat) carry a button for it.
+  pin messages for admins. The join notice and Memory & history in /settings offer the admin link when Telegram restricts delivery.
 - In forum groups each topic is its own conversation.
 - When Derp cites an earlier message it links it (supergroups and channels), and it can @mention someone
   when asked to tag them.
@@ -143,8 +149,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 - When a group's wallet can no longer pay for an answer, Derp says so once, quietly, with a top-up button, and not
   again until someone tops it up; from then on each asker's own Derpcoins pay, as below.
 - Who pays — a key plugged into the chat comes first (see keys). Then, private chat: the person's paid Derpcoins (Derp+ first, as it expires, then bought packs), then
-  their free daily ones. Group: the group wallet, then the asker's paid Derpcoins (unless they turned off "my
-  Derpcoins in groups" in /settings), then the asker's free daily ones.
+  their free daily ones. Group: the group wallet, then the asker's paid Derpcoins (unless they disabled that under
+  My preferences in /settings), then the asker's free daily ones.
 - When nobody can pay, Derp offers free models: opt-in (an admin turns them on for a group), and their providers
   may store what they get. The offer says when the free daily Derpcoins refill and offers buying first (in a group,
   topping up the group's wallet). In a group each person sees it at most once a UTC day; after that Derp only
@@ -177,7 +183,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   one. A list (films to watch, places, games) lives in one note that Derp edits to add or strike items.
 - Derp sees the newest notes with every message, with room kept for the asker's own; it searches older ones
   when they matter.
-- Admins choose the chat notes mode in /settings: auto (Derp also saves lasting chat lore on its own,
+- Admins choose the chat notes mode under Memory & history in /settings: auto (Derp also saves lasting chat lore on its own,
   sparingly), members (saved only when someone asks), admins (only when asked; others' new notes and changes
   become proposals approved in /memory) or off (only admins change or remove the chat notes left). Personal
   notes work in every mode.
@@ -198,7 +204,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   Derpcoins still refill on the UTC day.
 - Anyone can schedule one-offs; repeating jobs in groups need an admin. Creators manage their own jobs and
   admins any: Derp moves, rewords, re-repeats, pauses, resumes or cancels them on request ("move that one to
-  tomorrow at six", "pause the morning one"), changing the job in place, and /settings has a page of the chat's reminders (beside the zone) with
+  tomorrow at six", "pause the morning one"), changing the job in place, and Schedule in /settings shows the time zone and the chat's jobs with
   pause, resume and delete buttons. Moving a one-off that already fired brings it back. A scheduled prompt is
   paid by its creator, so only they can make one, reword it or change how often it runs; admins can still move,
   pause or cancel it.
@@ -212,13 +218,13 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
 ## keys
 
 - People with a ChatGPT Pro or Claude Max or Ultra plan get monthly API credits from OpenAI or Anthropic. They
-  can plug their API key into Derp ("Plug in your Claude/ChatGPT" in /settings), and chats it is on in get
+  can plug their API key into Derp (Connect an API key under Coins & models in /settings), and chats it is on in get
   answers from a smarter model, paid from those credits instead of Derpcoins. Derp never stores the key:
   OpenRouter keeps it, locked so only the owner's chats can spend it.
 - Plugging in happens only in the owner's private chat: they paste the key there (Derp deletes the message at
   once and never stores it; a key pasted in a group is deleted with a warning to revoke it), pick a monthly cap
   and a model from a short list (each with its price per typical reply). It serves their private chat at once.
-- In a group, the "Plug in" link in /settings leads there; a key offered to a group is turned on by an admin (on
+- In a group, the Connect an API key link under Coins & models leads there; a key offered to a group is turned on by an admin (on
   at once when the owner is an admin), with a public notice naming whose key it is, the model, and that what Derp
   sends through it goes to OpenAI or Anthropic, which keep it for a while: unlike Derp's usual models, it is not
   zero data retention. Requests run under the owner's provider account, so its usage policy applies to what
@@ -233,7 +239,7 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   something outright, Derp shows the refusal (at most every few hours) and its usual model answers instead.
   Manage key opens private controls for the contributor or a group admin. An admin can dismiss the public
   buttons while preserving the report.
-- The owner manages keys in /settings → My keys: model, cap, spend this month per chat, pause, unplug from a
+- The owner manages keys in /settings → Coins & models → My API keys: model, cap, spend this month per chat, pause, unplug from a
   chat, remove. Admins and the owner can pause or unplug a key in a group (its /settings keys page); leaving a
   group unplugs the leaver's keys there. A key that stays dead is removed after a while.
 

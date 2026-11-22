@@ -454,7 +454,8 @@ async def test_settings_lists_rules_across_pages_and_opens_the_selected_rule(
 
     await conversation.settle(await conversation.ephemeral_command(ADMIN, GROUP, "/settings", 501))
     key = max(k for k in conversation.api.ephemerals if k[0] == GROUP.id)
-    await conversation.press_ephemeral(ADMIN, *key, SettingsAction(action="page", value="auto").pack())
+    for section in ("behavior", "auto"):
+        await conversation.press_ephemeral(ADMIN, *key, SettingsAction(action="page", value=section).pack())
 
     def page_buttons() -> dict[tuple[str, int], dict[str, str]]:
         return buttons(conversation.api.ephemerals[key])
