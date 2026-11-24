@@ -31,7 +31,7 @@ class ContributedKey(Base):
 
     Derp never stores the provider key: OpenRouter holds it. The sub-key that reaches it is stored encrypted
     (``keys.vault``). Spend is never stored here: it is summed from ``provider_calls.upstream_usd`` since the
-    current cycle began (the cycle restarts monthly on the day the key was added).
+    current cycle began (the cycle restarts monthly on the day the key was added, or the day its owner picked).
     """
 
     __tablename__ = "contributed_keys"
@@ -48,7 +48,7 @@ class ContributedKey(Base):
     label: Mapped[str] = mapped_column(String(32))  # OpenRouter's masked form of the key ("sk-...AbCd")
     model: Mapped[str] = mapped_column(String(128))  # the contributor's pick from ``settings.keys.models``
     cap_usd: Mapped[Decimal] = mapped_column(Numeric(10, 2))  # per cycle
-    cycle_anchor: Mapped[date]  # cycles start on this day of each month (clamped to short months)
+    cycle_anchor: Mapped[date]  # cycles start on this day of each month (clamped to short months); owner-set
     sub_key_hash: Mapped[str] = mapped_column(String(64), unique=True)
     sub_key: Mapped[bytes] = mapped_column(LargeBinary)  # encrypted (``keys.vault``)
     credential_id: Mapped[str] = mapped_column(String(64))  # OpenRouter's id of the registered provider key

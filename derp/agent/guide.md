@@ -240,7 +240,8 @@ Derp is an AI friend that lives in Telegram chats: answers, banter, lookups, pic
   Manage key opens private controls for the contributor or a group admin. An admin can dismiss the public
   buttons while preserving the report.
 - The owner manages keys in /settings → Coins & models → My API keys: model, cap, spend this month per chat, pause, unplug from a
-  chat, remove. Admins and the owner can pause or unplug a key in a group (its /settings keys page); leaving a
+  chat, remove. The cap resets monthly on the day the key was plugged in; the owner can pick another reset day
+  (📅 Reset day), such as the day their ChatGPT or Claude plan renews, since Derp can't read that date from the key. Admins and the owner can pause or unplug a key in a group (its /settings keys page); leaving a
   group unplugs the leaver's keys there. A key that stays dead is removed after a while.
 
 ## privacy

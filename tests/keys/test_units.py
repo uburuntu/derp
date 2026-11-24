@@ -13,7 +13,7 @@ from derp.keys.failures import classify
 from derp.keys.flows import chat_from_ref, chat_ref
 from derp.keys.pasted import pasted_key, redact
 from derp.keys.register import allowed_models, provider_of
-from derp.keys.routing import Prices, cycle_start, key_pin, next_cycle
+from derp.keys.routing import Prices, anchor_on, cycle_start, key_pin, next_cycle
 from derp.keys.vault import seal, unseal
 
 
@@ -61,6 +61,16 @@ def test_cycles_restart_monthly_on_the_day_the_key_was_added() -> None:
     assert next_cycle(date(2026, 11, 4), datetime(2026, 12, 20, tzinfo=UTC)) == datetime(
         2027, 1, 4, tzinfo=UTC
     )
+
+
+def test_an_owner_picked_reset_day_keeps_its_day_through_short_months() -> None:
+    now = datetime(2026, 11, 24, tzinfo=UTC)
+    assert anchor_on(9, now) == date(2026, 11, 9)
+    assert anchor_on(28, now) == date(2026, 10, 28)
+    assert anchor_on(31, now) == date(2026, 10, 31)
+    assert anchor_on(31, datetime(2026, 3, 5, tzinfo=UTC)) == date(2026, 1, 31)
+    assert cycle_start(anchor_on(9, now), now) == datetime(2026, 11, 9, tzinfo=UTC)
+    assert next_cycle(anchor_on(9, now), now) == datetime(2026, 12, 9, tzinfo=UTC)
 
 
 def test_a_key_pin_serves_one_model_on_its_providers_own_endpoints_without_zdr() -> None:

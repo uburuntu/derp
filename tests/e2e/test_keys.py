@@ -5,6 +5,7 @@ import io
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -560,6 +561,25 @@ async def test_key_setting_receipts_finish_the_action_and_old_offers_cannot_unpl
         assert await session.get(KeyRequest, BO.id) is None
         key = await session.get(ContributedKey, key_id)
         assert key and (key.cap_usd, key.model) == (75, "openai/gpt-6.2-astra")
+
+    async with conversation.db.transaction() as session:  # the provider's credits ran out mid-cycle
+        key = await session.get(ContributedKey, key_id)
+        assert key is not None
+        key.paused, key.paused_until = "exhausted", datetime.now(UTC) + timedelta(days=20)
+    after = conversation.seq
+    mid = await private_page("Reset day")
+    grid = conversation.api.calls_of("editMessageText", after=after)[-1]
+    assert "day it renews" in markdown(grid) and len(buttons(grid)) == 32  # days 1–31 and Back
+    await conversation.press(
+        BO, BO.id, mid, next(b["callback_data"] for b in buttons(grid) if b["text"] == "9")
+    )
+    receipt = conversation.api.calls_of("editMessageText", after=after)[-1]
+    assert "resets on day **9**" in markdown(receipt) and not conversation.api.message(BO.id, mid).get(
+        "reply_markup"
+    )
+    async with conversation.db.session() as session:
+        key = await session.get(ContributedKey, key_id)
+        assert key and key.cycle_anchor.day == 9 and key.paused is None
 
     for action in ["Pause", "Resume", "Unplug: "]:
         mid = await private_page(action)

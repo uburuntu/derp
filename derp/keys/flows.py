@@ -10,7 +10,7 @@ into a group is deleted (when Derp may) with a warning to revoke it.
 In a chat, the key's owner and admins may pause or unplug it in /settings or the private manager opened
 from a refusal report. Admins enable a key; its contributor may lift their own pause on an enabled key.
 In private, the owner's key page changes
-its model and cap, pauses or resumes it, unplugs it from a chat, or removes it everywhere. Every press
+its model, cap and reset day (to match a subscription's renewal, when its provider credits refresh), pauses or resumes it, unplugs it from a chat, or removes it everywhere. Every press
 re-checks who may make it.
 """
 
@@ -44,6 +44,7 @@ from derp.keys.pasted import pasted_key
 from derp.keys.register import Refused, allow_models, plug_in, take_out
 from derp.keys.routing import (
     Prices,
+    anchor_on,
     candidates,
     cycle_start,
     next_cycle,
@@ -750,6 +751,14 @@ async def on_press_key(
                 t(press.locale, "keys.cap_page", cap=f"{key.cap_usd:g}"),
                 _cap_buttons(settings, press.locale, key.id, back=True),
             )
+        case "reset" if data.value.isdigit() and 1 <= int(data.value) <= 31:
+            return await _set_reset_day(press, db, data.key, int(data.value))
+        case "reset":
+            async with db.session() as session:
+                key = await _own_key(session, press.user_id, data.key)
+            if key is None:
+                return await press.deny("keys.gone")
+            return await press.edit(*_reset_page(press.locale, key))
         case "models":
             async with db.session() as session:
                 key = await _own_key(session, press.user_id, data.key)
@@ -814,6 +823,43 @@ async def on_press_key(
             return await press.edit(t(press.locale, "keys.removed"))
         case _:
             return await press.deny("keys.gone")
+
+
+def _reset_page(locale: str, key: ContributedKey) -> tuple[str, InlineKeyboardMarkup | None]:
+    """The day of the month the cap resets on, as a calendar-like grid (the current day marked)."""
+    now = datetime.now(UTC)
+    current = key.cycle_anchor.day
+    days = [
+        button(
+            f"•{day}•" if day == current else str(day), KeyAction(action="reset", key=key.id, value=str(day))
+        )
+        for day in range(1, 32)
+    ]
+    text = t(locale, "keys.reset_page", day=current, reset=when(next_cycle(key.cycle_anchor, now)))
+    return text, markup(*(days[row : row + 7] for row in range(0, 31, 7)), _back_to_key(locale, key.id))
+
+
+async def _set_reset_day(press: Press, db: Database, key_id: int, day: int) -> None:
+    """Restart the key's cycles on ``day``; a cap or out-of-credits pause lifts, re-checked on the next ask."""
+    now = datetime.now(UTC)
+    async with db.transaction() as session:
+        key = await _own_key(session, press.user_id, key_id, lock=True)
+        if key is None:
+            return await press.deny("keys.gone")
+        key.cycle_anchor = anchor_on(day, now)
+        if key.paused in ("cap", "exhausted"):
+            await resume(session, key)
+        text = t(
+            press.locale,
+            "keys.reset_saved",
+            brand=brand(key.provider),
+            label=literal(key.label),
+            day=day,
+            spent=f"{await spent(session, key, now):.2f}",
+            since=when(cycle_start(key.cycle_anchor, now)),
+            reset=when(next_cycle(key.cycle_anchor, now)),
+        )
+    return await press.edit(text)
 
 
 async def _show_page(press: Press, db: Database, settings: Settings, funder: Funder, key_id: int) -> None:
@@ -925,6 +971,7 @@ async def key_page(
         [
             button(t(locale, "keys.model_change"), KeyAction(action="models", key=key.id)),
             button(t(locale, "keys.cap_change"), KeyAction(action="cap", key=key.id)),
+            button(t(locale, "keys.reset_change"), KeyAction(action="reset", key=key.id)),
         ],
         [
             button(

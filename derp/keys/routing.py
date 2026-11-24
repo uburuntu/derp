@@ -5,7 +5,7 @@ its owner's own private chat has it on from the start), in the order keys were t
 or its provider's credits gone, until the next cycle; or paused by its owner), once it stopped working, and
 when what is left of its cap can't cover a typical turn on its model. Spend is what the provider charged
 (``provider_calls.upstream_usd``) since the cycle began; the cycle restarts monthly on the day the key was
-added.
+added, or on the day its owner picked (a subscription's renewal day, when its provider credits refresh).
 """
 
 import calendar
@@ -119,6 +119,16 @@ def cycle_start(anchor: date, now: datetime) -> datetime:
         year, month = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
         start = on(year, month)
     return datetime.combine(start, time(), tzinfo=UTC)
+
+
+def anchor_on(day: int, now: datetime) -> date:
+    """An anchor for cycles restarting on ``day`` of each month: its latest occurrence up to today (a month that
+    has that day, so the day itself is kept)."""
+    today = now.astimezone(UTC).date()
+    year, month = today.year, today.month
+    while day > calendar.monthrange(year, month)[1] or date(year, month, day) > today:
+        year, month = (year, month - 1) if month > 1 else (year - 1, 12)
+    return date(year, month, day)
 
 
 def next_cycle(anchor: date, now: datetime) -> datetime:
