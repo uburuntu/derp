@@ -132,7 +132,7 @@ async def test_a_key_behind_another_says_which_answers_first(database: Database,
             session, keyed, funder, await session.get_one(ContributedKey, first), "en"
         )
     assert "Crew: $0.00 · on, waiting: **Ana**'s key answers here first" in waiting
-    assert "Crew: $0.00 · on\n" in serving + "\n"
+    assert "Crew: $0.00 · on <tg-button" in serving
 
 
 async def test_the_owners_key_serves_their_private_chat_and_nobody_elses(

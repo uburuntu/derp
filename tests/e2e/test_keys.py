@@ -2,6 +2,7 @@
 and the chat falling back to its usual funding when the key refuses or stops working."""
 
 import io
+import json
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -25,7 +26,7 @@ from derp.inference.models import ProviderCall
 from derp.keys.flows import chat_ref
 from derp.keys.models import ContributedKey, KeyChat, KeyRequest
 from derp.money.wallets import credit, wallet
-from tests.e2e.fake_api import Call, Failure
+from tests.e2e.fake_api import RICH_BUTTON, Call, Failure
 from tests.e2e.harness import Conversation, Person, Room
 from tests.e2e.model import ScriptedModel, tool_call
 from tests.e2e.test_effects import jpeg
@@ -98,7 +99,16 @@ def markdown(call: Call) -> str:
 
 
 def buttons(call: Call) -> list[dict[str, Any]]:
-    return [b for row in call["reply_markup"]["inline_keyboard"] for b in row]
+    """A card's controls: its inline keyboard and the rich buttons placed in its Markdown."""
+    keyboard = call.fields.get("reply_markup") or {"inline_keyboard": []}
+    source = str((call.fields.get("rich_message") or {}).get("markdown") or "")
+    placed = [{"text": text, "callback_data": data} for data, text in RICH_BUTTON.findall(source)]
+    return [b for row in keyboard["inline_keyboard"] for b in row] + placed
+
+
+def controls_left(conversation: Conversation, chat_id: int, message_id: int) -> bool:
+    message = conversation.api.message(chat_id, message_id)
+    return bool(message.get("reply_markup")) or '"callback_data"' in json.dumps(message.get("rich_message"))
 
 
 def data_of(call: Call, label: str) -> str:
@@ -540,17 +550,17 @@ async def test_key_setting_receipts_finish_the_action_and_old_offers_cannot_unpl
         await conversation.press(BO, BO.id, mid, data_of(page, control))
         return mid
 
-    for setting, option, expected in [("Cap", "$50", "$50"), ("Model", "GPT-6.2 Astra", "GPT-6.2 Astra")]:
+    for setting, option, expected in [("adjust", "$50", "$50"), ("change", "GPT-6.2 Astra", "GPT-6.2 Astra")]:
         after = conversation.seq
         mid = await private_page(setting)
         choices = conversation.api.calls_of("editMessageText", after=after)[-1]
         await conversation.press(BO, BO.id, mid, data_of(choices, option))
         receipt = conversation.api.calls_of("editMessageText", after=after)[-1]
         assert expected in markdown(receipt).replace("\\", "")
-        assert not conversation.api.message(BO.id, mid).get("reply_markup")
+        assert not controls_left(conversation, BO.id, mid)
 
     after = conversation.seq
-    mid = await private_page("Cap")
+    mid = await private_page("adjust")
     picker = conversation.api.calls_of("editMessageText", after=after)[-1]
     await conversation.press(BO, BO.id, mid, data_of(picker, "Other amount"))
     amount = await conversation.send(BO, text="75")
@@ -567,23 +577,25 @@ async def test_key_setting_receipts_finish_the_action_and_old_offers_cannot_unpl
         assert key is not None
         key.paused, key.paused_until = "exhausted", datetime.now(UTC) + timedelta(days=20)
     after = conversation.seq
-    mid = await private_page("Reset day")
+    mid = await private_page("another day")
     grid = conversation.api.calls_of("editMessageText", after=after)[-1]
     assert "day it renews" in markdown(grid) and len(buttons(grid)) == 32  # days 1–31 and Back
     await conversation.press(
         BO, BO.id, mid, next(b["callback_data"] for b in buttons(grid) if b["text"] == "9")
     )
     receipt = conversation.api.calls_of("editMessageText", after=after)[-1]
-    assert "resets on day **9**" in markdown(receipt) and not conversation.api.message(BO.id, mid).get(
-        "reply_markup"
-    )
+    assert "resets on day **9**" in markdown(receipt) and not controls_left(conversation, BO.id, mid)
     async with conversation.db.session() as session:
         key = await session.get(ContributedKey, key_id)
         assert key and key.cycle_anchor.day == 9 and key.paused is None
 
-    for action in ["Pause", "Resume", "Unplug: "]:
+    for action in ["OK", "Pause", "Resume", "unplug"]:
+        after = conversation.seq
         mid = await private_page(action)
-        assert not conversation.api.message(BO.id, mid).get("reply_markup")
+        assert not controls_left(conversation, BO.id, mid)
+        if action == "OK":  # the page stays, without its controls
+            closed = conversation.api.calls_of("editMessageText", after=after)[-1]
+            assert "Spent" in markdown(closed) and "tg-button" not in markdown(closed)
     sent = await conversation.send(BO, text=f"/start key-{chat_ref(conversation.settings, CREW.id)}")
     await conversation.settle(sent)
     picker = await latest(conversation, "sendRichMessage", BO.id, sent.after)

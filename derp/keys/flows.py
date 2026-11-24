@@ -59,7 +59,7 @@ from derp.memory.notes import is_admin
 from derp.money.free import offer_continues
 from derp.money.funding import Funder
 from derp.telegram.bot import bot_username
-from derp.telegram.buttons import Press, button, dismiss_button, link, markup, on_press
+from derp.telegram.buttons import Press, button, dismiss_button, link, markup, on_press, rich_button, rich_row
 from derp.telegram.sender import Target, send_markdown
 from derp.telegram.text import literal
 
@@ -753,6 +753,13 @@ async def on_press_key(
             )
         case "reset" if data.value.isdigit() and 1 <= int(data.value) <= 31:
             return await _set_reset_day(press, db, data.key, int(data.value))
+        case "close":
+            async with db.session() as session:
+                key = await _own_key(session, press.user_id, data.key)
+                if key is None:
+                    return await press.deny("keys.gone")
+                text, _ = await key_page(session, settings, funder, key, press.locale, controls=False)
+            return await press.edit(text)
         case "reset":
             async with db.session() as session:
                 key = await _own_key(session, press.user_id, data.key)
@@ -826,17 +833,23 @@ async def on_press_key(
 
 
 def _reset_page(locale: str, key: ContributedKey) -> tuple[str, InlineKeyboardMarkup | None]:
-    """The day of the month the cap resets on, as a calendar-like grid (the current day marked)."""
-    now = datetime.now(UTC)
+    """The day of the month the cap resets on: a compact calendar of rich buttons, the current day marked."""
     current = key.cycle_anchor.day
-    days = [
-        button(
-            f"•{day}•" if day == current else str(day), KeyAction(action="reset", key=key.id, value=str(day))
-        )
-        for day in range(1, 32)
-    ]
-    text = t(locale, "keys.reset_page", day=current, reset=when(next_cycle(key.cycle_anchor, now)))
-    return text, markup(*(days[row : row + 7] for row in range(0, 31, 7)), _back_to_key(locale, key.id))
+
+    def cell(day: int) -> str:
+        if day > 31:
+            return "<td></td>"
+        pick = KeyAction(action="reset", key=key.id, value=str(day))
+        return f'<td align="center">{rich_button(str(day), pick, style="primary" if day == current else None)}</td>'
+
+    weeks = "".join(
+        "<tr>" + "".join(cell(day) for day in range(row, row + 7)) + "</tr>" for row in range(1, 32, 7)
+    )
+    back = rich_button(t(locale, "settings.back"), KeyAction(action="page", key=key.id), style="link")
+    text = t(
+        locale, "keys.reset_page", day=current, reset=when(next_cycle(key.cycle_anchor, datetime.now(UTC)))
+    )
+    return f"{text}\n\n<table compact>{weeks}</table>\n\n{rich_row(back, align='left')}", None
 
 
 async def _set_reset_day(press: Press, db: Database, key_id: int, day: int) -> None:
@@ -911,8 +924,13 @@ async def key_page(
     locale: str,
     *,
     many: bool = False,
+    controls: bool = True,
 ) -> tuple[str, InlineKeyboardMarkup | None]:
-    """The owner's page for one key: model, cap and this cycle's spend, its state, and its chats."""
+    """The owner's page for one key: its state, model, cap and this cycle's spend, and its chats.
+
+    Each control is a rich button on the line it changes; pause, remove and OK close the card. OK
+    (``controls=False``) leaves the same page without buttons.
+    """
     now = datetime.now(UTC)
     priced = await prices(session, settings, key.model)
     if key.dead_at is not None:
@@ -923,6 +941,14 @@ async def key_page(
         state = t(locale, f"keys.state_{key.paused}", date=when(key.paused_until))
     else:
         state = t(locale, "keys.state_on")
+
+    def control(name: str, action: str, value: str = "") -> str:
+        return (
+            rich_button(t(locale, name), KeyAction(action=action, key=key.id, value=value))
+            if controls
+            else ""
+        )
+
     lines = [
         t(
             locale,
@@ -936,7 +962,12 @@ async def key_page(
             since=when(cycle_start(key.cycle_anchor, now)),
             reset=when(next_cycle(key.cycle_anchor, now)),
             state=state,
-        )
+            model_button=control("keys.model_change", "models"),
+            cap_button=control("keys.cap_change", "cap"),
+            reset_button=control("keys.reset_change", "reset"),
+        ).rstrip(),
+        "",
+        t(locale, "keys.chats_title"),
     ]
     chats = (
         await session.execute(
@@ -946,47 +977,37 @@ async def key_page(
             .order_by(KeyChat.created_at)
         )
     ).all()
-    unplug: list[InlineKeyboardButton] = []
     for row, chat in chats:
-        title = literal(one_line(chat.title or "?", 40))
         lines.append(
             t(
                 locale,
                 "keys.chat_line",
-                title=title,
+                title=literal(one_line(chat.title or "?", 40)),
                 spent=f"{await spent(session, key, now, chat.id):.2f}",
                 state=await _chat_state(session, key, row, locale, now),
-            )
-        )
-        unplug.append(
-            button(
-                t(locale, "keys.unplug_button", title=one_line(chat.title or "?", 24)),
-                KeyAction(action="unplug", key=key.id, value=str(chat.id)),
-            )
+                unplug=control("keys.unplug_button", "unplug", str(chat.id)),
+            ).rstrip()
         )
     if not chats:
         lines.append(t(locale, "keys.no_chats"))
-    paused = key.paused == "owner"
-    keyboard = markup(
-        [
-            button(t(locale, "keys.model_change"), KeyAction(action="models", key=key.id)),
-            button(t(locale, "keys.cap_change"), KeyAction(action="cap", key=key.id)),
-            button(t(locale, "keys.reset_change"), KeyAction(action="reset", key=key.id)),
-        ],
-        [
-            button(
-                t(locale, "keys.resume" if paused else "keys.pause"),
-                KeyAction(action="resume" if paused else "pause", key=key.id),
+    if controls:
+        paused = key.paused == "owner"
+        lines += [
+            "",
+            rich_row(
+                control("keys.resume" if paused else "keys.pause", "resume" if paused else "pause"),
+                rich_button(t(locale, "keys.remove"), KeyAction(action="remove", key=key.id), style="danger"),
+                rich_button(t(locale, "buttons.ok"), KeyAction(action="close", key=key.id), style="primary"),
             ),
-            button(t(locale, "keys.remove"), KeyAction(action="remove", key=key.id), style="danger"),
-        ],
-        *unplug,
-        [
-            button(t(locale, "keys.all_keys"), KeyAction(action="page", key=0)) if many else None,
-            dismiss_button(locale),
-        ],
-    )
-    return "\n".join(lines), keyboard
+        ]
+        if many:
+            lines.append(
+                rich_row(
+                    rich_button(t(locale, "keys.all_keys"), KeyAction(action="page", key=0), style="link"),
+                    align="left",
+                )
+            )
+    return "\n".join(lines), None
 
 
 # The /settings keys page of a group (rendered inside the panel).

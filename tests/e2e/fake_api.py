@@ -66,7 +66,27 @@ def rich_blocks(rich: Mapping[str, Any]) -> JsonObject:
         # decoding entities so text supplied as &lt;tag&gt; survives as literal text.
         value = re.sub(r"</p>|<br\s*/?>", "\n\n", str(rich["html"]), flags=re.IGNORECASE)
         source = html.unescape(re.sub(r"<[^>]*>", "", value))
-    return {"blocks": [{"type": "paragraph", "text": p} for p in source.split("\n\n") if p]}
+    return {"blocks": [_paragraph(p) for p in source.split("\n\n") if p]}
+
+
+RICH_BUTTON = re.compile(r'<tg-button\b[^>]*?\bdata="([^"]*)"[^>]*>(.*?)</tg-button>', re.DOTALL)
+
+
+def _paragraph(text: str) -> JsonObject:
+    """A paragraph; rich buttons in it (on a line, in a row or a table) come back as button nodes."""
+    if "<tg-button" not in text:
+        return {"type": "paragraph", "text": text}
+    parts: list[Any] = []
+    position = 0
+    for found in RICH_BUTTON.finditer(text):
+        if before := re.sub(r"<[^>]*>", "", text[position : found.start()]):
+            parts.append(before)
+        button = {"text": html.unescape(found.group(2)), "callback_data": html.unescape(found.group(1))}
+        parts.append({"type": "button", "button": button})
+        position = found.end()
+    if tail := re.sub(r"<[^>]*>", "", text[position:]):
+        parts.append(tail)
+    return {"type": "paragraph", "text": parts}
 
 
 class Refusal(Exception):  # noqa: N818 - Telegram's answer, not a fake failure
@@ -211,6 +231,7 @@ class FakeBotAPI:
         message = self.message(chat_id, message_id)
         rows = (message.get("reply_markup") or {}).get("inline_keyboard", [])
         visible = {button.get("callback_data") for row in rows for button in row}
+        visible |= set(re.findall(r'"callback_data": "([^"]*)"', json.dumps(message.get("rich_message"))))
         if data not in visible:
             raise AssertionError(f"callback data {data!r} is not on the live message")
         self.outstanding_callbacks.add(callback_id)

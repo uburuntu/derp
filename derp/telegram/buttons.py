@@ -1,4 +1,8 @@
-"""Inline buttons: building keyboards and handling presses the same way everywhere.
+"""Buttons: building keyboards and rich-message buttons, and handling presses the same way everywhere.
+
+A card's controls are either an inline keyboard (``button``/``markup``) or rich buttons placed in its
+Markdown (``rich_button`` on the line it changes, in a table cell, or in a ``rich_row``); Telegram treats
+both as callback buttons of the message.
 
 State lives in callback data and database rows, never in memory, so buttons keep
 working across deploys. ``on_press`` registers a handler that receives a ``Press``:
@@ -13,8 +17,9 @@ instead of raising, so it never rolls back the handler's transaction.
 
 import annotationlib
 import contextlib
+import html
 import inspect
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +40,32 @@ type Handler = Callable[..., Awaitable[Any]]
 
 def button(text: str, data: CallbackData, *, style: str | None = None) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=data.pack(), style=style)
+
+
+def rich_button(text: str, data: CallbackData, *, style: str | None = None) -> str:
+    """A button placed in rich Markdown (``style``: danger, success, primary, or link for a borderless one).
+    Its text may hold only plain text, custom emoji and dates."""
+    styled = f' style="{style}"' if style else ""
+    label = html.escape(text, quote=False)
+    return f'<tg-button type="callback_data"{styled} data="{html.escape(data.pack())}">{label}</tg-button>'
+
+
+def rich_row(*buttons: str | None, align: str = "center") -> str:
+    """One row of rich buttons (Telegram takes 1–8; a phone fits about five short ones)."""
+    placed = "".join(b for b in buttons if b)
+    return f'<tg-button-row align="{align}">{placed}</tg-button-row>' if placed else ""
+
+
+def _callbacks(node: object) -> Iterator[str]:
+    """Callback data of every button in a received rich message (rows, lines, table cells)."""
+    if isinstance(node, dict):
+        if isinstance(data := node.get("callback_data"), str):
+            yield data
+        for value in node.values():
+            yield from _callbacks(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _callbacks(item)
 
 
 class Dismiss(CallbackData, prefix="dismiss"):
@@ -81,13 +112,16 @@ class Press:
         return self.message.message_id == 0 and bool(self.message.ephemeral_message_id)
 
     def has_pressed_button(self) -> bool:
-        """Telegram may send callback data that isn't on the originating message."""
-        keyboard = self.message.reply_markup
-        return (
-            self.query.data is not None
-            and keyboard is not None
-            and any(b.callback_data == self.query.data for row in keyboard.inline_keyboard for b in row)
-        )
+        """Telegram may send callback data that isn't on the originating message (its keyboard or its rich
+        buttons)."""
+        data, keyboard, body = self.query.data, self.message.reply_markup, self.message.rich_message
+        if data is None:
+            return False
+        if keyboard is not None and any(
+            b.callback_data == data for row in keyboard.inline_keyboard for b in row
+        ):
+            return True
+        return body is not None and data in _callbacks(body.model_dump(exclude_none=True))
 
     async def edit(
         self, text: str, keyboard: InlineKeyboardMarkup | None = None, *, render: RichRenderer | None = None
